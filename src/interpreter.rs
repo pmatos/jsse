@@ -110,7 +110,6 @@ impl Environment {
     }
 }
 
-#[derive(Debug, Clone)]
 pub enum JsFunction {
     User {
         name: Option<String>,
@@ -118,7 +117,38 @@ pub enum JsFunction {
         body: Vec<Statement>,
         closure: EnvRef,
     },
-    Native(String, fn(&mut Interpreter, &[JsValue]) -> Completion),
+    Native(
+        String,
+        Rc<dyn Fn(&mut Interpreter, &[JsValue]) -> Completion>,
+    ),
+}
+
+impl Clone for JsFunction {
+    fn clone(&self) -> Self {
+        match self {
+            JsFunction::User {
+                name,
+                params,
+                body,
+                closure,
+            } => JsFunction::User {
+                name: name.clone(),
+                params: params.clone(),
+                body: body.clone(),
+                closure: closure.clone(),
+            },
+            JsFunction::Native(name, f) => JsFunction::Native(name.clone(), f.clone()),
+        }
+    }
+}
+
+impl std::fmt::Debug for JsFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JsFunction::User { name, .. } => write!(f, "JsFunction::User({name:?})"),
+            JsFunction::Native(name, _) => write!(f, "JsFunction::Native({name:?})"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -196,12 +226,14 @@ impl Interpreter {
     fn setup_globals(&mut self) {
         let console = self.create_object();
         {
-            let log_fn =
-                self.create_function(JsFunction::Native("log".to_string(), |_interp, args| {
+            let log_fn = self.create_function(JsFunction::Native(
+                "log".to_string(),
+                Rc::new(|_interp, args| {
                     let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
                     println!("{}", parts.join(" "));
                     Completion::Normal(JsValue::Undefined)
-                }));
+                }),
+            ));
             console
                 .borrow_mut()
                 .properties
@@ -218,29 +250,93 @@ impl Interpreter {
         self.register_global_fn(
             "Error",
             BindingKind::Var,
-            JsFunction::Native("Error".to_string(), |_interp, args| {
-                let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                Completion::Normal(msg)
-            }),
+            JsFunction::Native(
+                "Error".to_string(),
+                Rc::new(|_interp, args| {
+                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    Completion::Normal(msg)
+                }),
+            ),
         );
 
         self.register_global_fn(
             "Test262Error",
             BindingKind::Var,
-            JsFunction::Native("Test262Error".to_string(), |_interp, args| {
-                let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                Completion::Normal(msg)
-            }),
+            JsFunction::Native(
+                "Test262Error".to_string(),
+                Rc::new(|_interp, args| {
+                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    Completion::Normal(msg)
+                }),
+            ),
+        );
+
+        // Error constructors
+        for name in [
+            "SyntaxError",
+            "TypeError",
+            "ReferenceError",
+            "RangeError",
+            "URIError",
+            "EvalError",
+        ] {
+            let error_name = name.to_string();
+            self.register_global_fn(
+                name,
+                BindingKind::Var,
+                JsFunction::Native(
+                    error_name.clone(),
+                    Rc::new(move |interp, args| {
+                        let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let obj = interp.create_object();
+                        {
+                            let mut o = obj.borrow_mut();
+                            o.class_name = error_name.clone();
+                            o.properties.insert("message".to_string(), msg);
+                            o.properties.insert(
+                                "name".to_string(),
+                                JsValue::String(JsString::from_str(&error_name)),
+                            );
+                        }
+                        Completion::Normal(JsValue::Object(crate::types::JsObject {
+                            id: interp.objects.len() as u64 - 1,
+                        }))
+                    }),
+                ),
+            );
+        }
+
+        // Object constructor (minimal)
+        self.register_global_fn(
+            "Object",
+            BindingKind::Var,
+            JsFunction::Native(
+                "Object".to_string(),
+                Rc::new(|interp, args| {
+                    if let Some(val) = args.first() {
+                        if matches!(val, JsValue::Object(_)) {
+                            return Completion::Normal(val.clone());
+                        }
+                    }
+                    let obj = interp.create_object();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject {
+                        id: interp.objects.len() as u64 - 1,
+                    }))
+                }),
+            ),
         );
 
         self.register_global_fn(
             "$DONOTEVALUATE",
             BindingKind::Var,
-            JsFunction::Native("$DONOTEVALUATE".to_string(), |_interp, _args| {
-                Completion::Throw(JsValue::String(JsString::from_str(
-                    "Test262: $DONOTEVALUATE was called",
-                )))
-            }),
+            JsFunction::Native(
+                "$DONOTEVALUATE".to_string(),
+                Rc::new(|_interp, _args| {
+                    Completion::Throw(JsValue::String(JsString::from_str(
+                        "Test262: $DONOTEVALUATE was called",
+                    )))
+                }),
+            ),
         );
     }
 
@@ -263,6 +359,22 @@ impl Interpreter {
 
     fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
         self.objects.get(id as usize).cloned()
+    }
+
+    fn create_arguments_object(&mut self, args: &[JsValue]) -> JsValue {
+        let obj = self.create_object();
+        {
+            let mut o = obj.borrow_mut();
+            o.class_name = "Arguments".to_string();
+            o.properties
+                .insert("length".to_string(), JsValue::Number(args.len() as f64));
+            for (i, val) in args.iter().enumerate() {
+                o.properties.insert(i.to_string(), val.clone());
+            }
+        }
+        JsValue::Object(crate::types::JsObject {
+            id: self.objects.len() as u64 - 1,
+        })
     }
 
     pub fn run(&mut self, program: &Program) -> Completion {
@@ -1105,6 +1217,10 @@ impl Interpreter {
                                 let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
                                 let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
                             }
+                            // Create arguments object
+                            let arguments_obj = self.create_arguments_object(args);
+                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                             let result = self.exec_statements(&body, &func_env);
                             match result {
                                 Completion::Return(v) | Completion::Normal(v) => {
