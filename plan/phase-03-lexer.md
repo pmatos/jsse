@@ -10,7 +10,7 @@ Implement a complete lexer that tokenizes ECMAScript source text according to th
 ### 3.1 Source Text (§12.1, §11)
 - [x] Unicode code point handling
 - [x] UTF-16 encoding/decoding
-- [ ] Source text normalization
+- [x] Source text normalization (N/A: spec doesn't require NFC normalization, UTF-8 input handled natively by Rust)
 - [x] Hashbang comments (`#!`)
 
 ### 3.2 White Space (§12.2)
@@ -33,7 +33,7 @@ Implement a complete lexer that tokenizes ECMAScript source text according to th
   - [x] Unicode ID_Start / ID_Continue
   - [x] Unicode escape sequences in identifiers (`\uXXXX`, `\u{XXXXX}`)
   - [x] Reserved words (§12.7.1): `await`, `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default`, `delete`, `do`, `else`, `enum`, `export`, `extends`, `false`, `finally`, `for`, `function`, `if`, `import`, `in`, `instanceof`, `new`, `null`, `of`, `return`, `super`, `switch`, `this`, `throw`, `true`, `try`, `typeof`, `var`, `void`, `while`, `with`, `yield`
-  - [ ] Strict mode additional reserved words: `implements`, `interface`, `package`, `private`, `protected`, `public` (`let` and `static` already handled)
+  - [x] Strict mode additional reserved words: `implements`, `interface`, `package`, `private`, `protected`, `public` (`let` and `static` already handled)
   - [ ] `await` and `yield` context-sensitive keywords
 - [x] Punctuators (§12.8): all standard punctuators
 - [x] NumericLiteral (§12.9.3)

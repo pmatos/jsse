@@ -24,6 +24,7 @@ pub struct Parser<'a> {
     current: Token,
     prev_line_terminator: bool,
     pushback: Option<(Token, bool)>, // (token, had_line_terminator_before)
+    strict: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -43,6 +44,7 @@ impl<'a> Parser<'a> {
             current,
             prev_line_terminator: had_lt,
             pushback: None,
+            strict: false,
         })
     }
 
@@ -106,11 +108,47 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn is_strict_reserved_word(name: &str) -> bool {
+        matches!(
+            name,
+            "implements" | "interface" | "package" | "private" | "protected" | "public"
+        )
+    }
+
+    fn check_strict_identifier(&self, name: &str) -> Result<(), ParseError> {
+        if self.strict && Self::is_strict_reserved_word(name) {
+            return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
+        }
+        Ok(())
+    }
+
+    fn is_directive_prologue(stmt: &Statement) -> Option<&str> {
+        match stmt {
+            Statement::Expression(Expression::Literal(Literal::String(s))) => Some(s.as_str()),
+            _ => None,
+        }
+    }
+
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut body = Vec::new();
+        let mut in_directive_prologue = true;
+
         while self.current != Token::Eof {
-            body.push(self.parse_statement_or_declaration()?);
+            let stmt = self.parse_statement_or_declaration()?;
+
+            if in_directive_prologue {
+                if let Some(directive) = Self::is_directive_prologue(&stmt) {
+                    if directive == "use strict" {
+                        self.strict = true;
+                    }
+                } else {
+                    in_directive_prologue = false;
+                }
+            }
+
+            body.push(stmt);
         }
+
         Ok(Program { body })
     }
 
@@ -238,6 +276,7 @@ impl<'a> Parser<'a> {
         match &self.current {
             Token::Identifier(name) => {
                 let name = name.clone();
+                self.check_strict_identifier(&name)?;
                 self.advance()?;
                 Ok(Pattern::Identifier(name))
             }
@@ -635,6 +674,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_with_statement(&mut self) -> Result<Statement, ParseError> {
+        if self.strict {
+            return Err(self.error("Strict mode code may not include a with statement"));
+        }
         self.advance()?; // with
         self.eat(&Token::LeftParen)?;
         let expr = self.parse_expression()?;
@@ -660,6 +702,7 @@ impl<'a> Parser<'a> {
         let name = match &self.current {
             Token::Identifier(n) => {
                 let n = n.clone();
+                self.check_strict_identifier(&n)?;
                 self.advance()?;
                 n
             }
@@ -702,6 +745,8 @@ impl<'a> Parser<'a> {
 
     fn parse_class_body(&mut self) -> Result<Vec<ClassElement>, ParseError> {
         self.eat(&Token::LeftBrace)?;
+        let prev_strict = self.strict;
+        self.strict = true; // class bodies are always strict
         let mut elements = Vec::new();
         while self.current != Token::RightBrace {
             if self.current == Token::Semicolon {
@@ -711,6 +756,7 @@ impl<'a> Parser<'a> {
             elements.push(self.parse_class_element()?);
         }
         self.eat(&Token::RightBrace)?;
+        self.strict = prev_strict;
         Ok(elements)
     }
 
@@ -883,11 +929,28 @@ impl<'a> Parser<'a> {
 
     fn parse_function_body(&mut self) -> Result<Vec<Statement>, ParseError> {
         self.eat(&Token::LeftBrace)?;
+        let prev_strict = self.strict;
         let mut stmts = Vec::new();
+        let mut in_directive_prologue = true;
+
         while self.current != Token::RightBrace {
-            stmts.push(self.parse_statement_or_declaration()?);
+            let stmt = self.parse_statement_or_declaration()?;
+
+            if in_directive_prologue {
+                if let Some(directive) = Self::is_directive_prologue(&stmt) {
+                    if directive == "use strict" {
+                        self.strict = true;
+                    }
+                } else {
+                    in_directive_prologue = false;
+                }
+            }
+
+            stmts.push(stmt);
         }
+
         self.eat(&Token::RightBrace)?;
+        self.strict = prev_strict;
         Ok(stmts)
     }
 
@@ -1343,6 +1406,7 @@ impl<'a> Parser<'a> {
             }
             Token::Identifier(name) => {
                 let name = name.clone();
+                self.check_strict_identifier(&name)?;
                 self.advance()?;
                 // Arrow function: (ident) => or ident =>
                 if self.current == Token::Arrow && !self.prev_line_terminator {
@@ -1393,7 +1457,11 @@ impl<'a> Parser<'a> {
             }
             Token::Slash | Token::SlashAssign => {
                 // Re-lex as regex literal
-                let prefix = if matches!(self.current, Token::SlashAssign) { "=" } else { "" };
+                let prefix = if matches!(self.current, Token::SlashAssign) {
+                    "="
+                } else {
+                    ""
+                };
                 let regex_tok = self.lexer.lex_regex()?;
                 if let Token::RegExpLiteral { pattern, flags } = regex_tok {
                     let full_pattern = format!("{}{}", prefix, pattern);
@@ -1403,7 +1471,9 @@ impl<'a> Parser<'a> {
                     }
                     Ok(Expression::Literal(Literal::RegExp(full_pattern, flags)))
                 } else {
-                    Err(ParseError { message: "Expected regex literal".to_string() })
+                    Err(ParseError {
+                        message: "Expected regex literal".to_string(),
+                    })
                 }
             }
             Token::LeftParen => {
@@ -1555,7 +1625,11 @@ impl<'a> Parser<'a> {
         if let Token::Identifier(n) = &self.current
             && (n == "get" || n == "set")
         {
-            let saved_kind = if n == "get" { PropertyKind::Get } else { PropertyKind::Set };
+            let saved_kind = if n == "get" {
+                PropertyKind::Get
+            } else {
+                PropertyKind::Set
+            };
             let saved_lt = self.prev_line_terminator;
             let saved = self.advance()?; // consume get/set, current is now next token
             let is_accessor = matches!(
@@ -1638,7 +1712,6 @@ impl<'a> Parser<'a> {
             shorthand: false,
         })
     }
-
 
     fn parse_function_expression(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // function

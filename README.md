@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 10,559  | 31,517  | 25.10%    |
+| 48,257      | 42,076  | 6,181   | 10,569  | 31,507  | 25.12%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -25,7 +25,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 - `--version` and `--help` flags
 - Exit codes: 0 (success), 1 (runtime error), 2 (syntax error)
 - Lexer: all ES2024 tokens, keywords, numeric/string/template literals, Unicode identifiers
-- Parser: recursive descent, all statements, expressions, destructuring, arrow functions, classes
+- Parser: recursive descent, all statements, expressions, destructuring, arrow functions, classes, strict mode
 - Interpreter: tree-walking execution with environment chain scoping
   - Variable declarations (`var`, `let`, `const` with TDZ)
   - Control flow (`if`, `while`, `do-while`, `for`, `for-in`, `for-of`, `switch`, `try/catch/finally`)

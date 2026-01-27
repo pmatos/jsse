@@ -627,21 +627,32 @@ impl<'a> Lexer<'a> {
         loop {
             match self.peek() {
                 None | Some('\n') | Some('\r') => {
-                    return Err(LexError { message: "Unterminated regular expression".to_string(), location: self.location() });
+                    return Err(LexError {
+                        message: "Unterminated regular expression".to_string(),
+                        location: self.location(),
+                    });
                 }
                 Some('/') if !in_class => {
                     self.advance();
                     break;
                 }
-                Some('[') => { in_class = true; pattern.push(self.advance().unwrap()); }
-                Some(']') => { in_class = false; pattern.push(self.advance().unwrap()); }
+                Some('[') => {
+                    in_class = true;
+                    pattern.push(self.advance().unwrap());
+                }
+                Some(']') => {
+                    in_class = false;
+                    pattern.push(self.advance().unwrap());
+                }
                 Some('\\') => {
                     pattern.push(self.advance().unwrap());
                     if let Some(c) = self.peek() {
                         pattern.push(self.advance().unwrap());
                     }
                 }
-                Some(_) => { pattern.push(self.advance().unwrap()); }
+                Some(_) => {
+                    pattern.push(self.advance().unwrap());
+                }
             }
         }
         let mut flags = String::new();
