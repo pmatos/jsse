@@ -563,6 +563,90 @@ impl Interpreter {
             ),
         );
 
+        // Number static properties
+        {
+            let is_finite_fn = self.create_function(JsFunction::Native(
+                "isFinite".to_string(),
+                Rc::new(|_interp, _this, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let result = matches!(&val, JsValue::Number(n) if n.is_finite());
+                    Completion::Normal(JsValue::Boolean(result))
+                }),
+            ));
+            let is_nan_fn = self.create_function(JsFunction::Native(
+                "isNaN".to_string(),
+                Rc::new(|_interp, _this, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let result = matches!(&val, JsValue::Number(n) if n.is_nan());
+                    Completion::Normal(JsValue::Boolean(result))
+                }),
+            ));
+            let is_integer_fn = self.create_function(JsFunction::Native(
+                "isInteger".to_string(),
+                Rc::new(|_interp, _this, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let result = if let JsValue::Number(n) = &val {
+                        n.is_finite() && *n == n.trunc()
+                    } else {
+                        false
+                    };
+                    Completion::Normal(JsValue::Boolean(result))
+                }),
+            ));
+            let is_safe_fn = self.create_function(JsFunction::Native(
+                "isSafeInteger".to_string(),
+                Rc::new(|_interp, _this, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let result = if let JsValue::Number(n) = &val {
+                        n.is_finite() && *n == n.trunc() && n.abs() <= 9007199254740991.0
+                    } else {
+                        false
+                    };
+                    Completion::Normal(JsValue::Boolean(result))
+                }),
+            ));
+            let parse_int = self.global_env.borrow().get("parseInt");
+            let parse_float = self.global_env.borrow().get("parseFloat");
+
+            if let Some(num_val) = self.global_env.borrow().get("Number") {
+                if let JsValue::Object(o) = &num_val {
+                    if let Some(num_obj) = self.get_object(o.id) {
+                        let mut n = num_obj.borrow_mut();
+                        n.insert_value(
+                            "POSITIVE_INFINITY".to_string(),
+                            JsValue::Number(f64::INFINITY),
+                        );
+                        n.insert_value(
+                            "NEGATIVE_INFINITY".to_string(),
+                            JsValue::Number(f64::NEG_INFINITY),
+                        );
+                        n.insert_value("MAX_VALUE".to_string(), JsValue::Number(f64::MAX));
+                        n.insert_value("MIN_VALUE".to_string(), JsValue::Number(f64::MIN_POSITIVE));
+                        n.insert_value("NaN".to_string(), JsValue::Number(f64::NAN));
+                        n.insert_value("EPSILON".to_string(), JsValue::Number(f64::EPSILON));
+                        n.insert_value(
+                            "MAX_SAFE_INTEGER".to_string(),
+                            JsValue::Number(9007199254740991.0),
+                        );
+                        n.insert_value(
+                            "MIN_SAFE_INTEGER".to_string(),
+                            JsValue::Number(-9007199254740991.0),
+                        );
+                        n.insert_value("isFinite".to_string(), is_finite_fn);
+                        n.insert_value("isNaN".to_string(), is_nan_fn);
+                        n.insert_value("isInteger".to_string(), is_integer_fn);
+                        n.insert_value("isSafeInteger".to_string(), is_safe_fn);
+                        if let Some(pi) = parse_int {
+                            n.insert_value("parseInt".to_string(), pi);
+                        }
+                        if let Some(pf) = parse_float {
+                            n.insert_value("parseFloat".to_string(), pf);
+                        }
+                    }
+                }
+            }
+        }
+
         // Boolean constructor/converter
         self.register_global_fn(
             "Boolean",
@@ -802,6 +886,128 @@ impl Interpreter {
         math_obj
             .borrow_mut()
             .insert_value("random".to_string(), random_fn);
+
+        // Math.atan2
+        let atan2_fn = self.create_function(JsFunction::Native(
+            "atan2".to_string(),
+            Rc::new(|_interp, _this, args| {
+                let y = args.first().map(to_number).unwrap_or(f64::NAN);
+                let x = args.get(1).map(to_number).unwrap_or(f64::NAN);
+                Completion::Normal(JsValue::Number(y.atan2(x)))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .insert_value("atan2".to_string(), atan2_fn);
+
+        // Math.hypot
+        let hypot_fn = self.create_function(JsFunction::Native(
+            "hypot".to_string(),
+            Rc::new(|_interp, _this, args| {
+                if args.is_empty() {
+                    return Completion::Normal(JsValue::Number(0.0));
+                }
+                let mut sum = 0.0f64;
+                for a in args {
+                    let n = to_number(a);
+                    if n.is_infinite() {
+                        return Completion::Normal(JsValue::Number(f64::INFINITY));
+                    }
+                    if n.is_nan() {
+                        return Completion::Normal(JsValue::Number(f64::NAN));
+                    }
+                    sum += n * n;
+                }
+                Completion::Normal(JsValue::Number(sum.sqrt()))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .insert_value("hypot".to_string(), hypot_fn);
+
+        // Math.log2, Math.log10
+        let log2_fn = self.create_function(JsFunction::Native(
+            "log2".to_string(),
+            Rc::new(|_interp, _this, args| {
+                let x = args.first().map(to_number).unwrap_or(f64::NAN);
+                Completion::Normal(JsValue::Number(x.log2()))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .insert_value("log2".to_string(), log2_fn);
+        let log10_fn = self.create_function(JsFunction::Native(
+            "log10".to_string(),
+            Rc::new(|_interp, _this, args| {
+                let x = args.first().map(to_number).unwrap_or(f64::NAN);
+                Completion::Normal(JsValue::Number(x.log10()))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .insert_value("log10".to_string(), log10_fn);
+
+        // Math.fround
+        let fround_fn = self.create_function(JsFunction::Native(
+            "fround".to_string(),
+            Rc::new(|_interp, _this, args| {
+                let x = args.first().map(to_number).unwrap_or(f64::NAN);
+                Completion::Normal(JsValue::Number((x as f32) as f64))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .insert_value("fround".to_string(), fround_fn);
+
+        // Math.clz32
+        let clz32_fn = self.create_function(JsFunction::Native(
+            "clz32".to_string(),
+            Rc::new(|_interp, _this, args| {
+                let x = args.first().map(to_number).unwrap_or(0.0);
+                let n = number_ops::to_uint32(x);
+                Completion::Normal(JsValue::Number(n.leading_zeros() as f64))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .insert_value("clz32".to_string(), clz32_fn);
+
+        // Math.imul
+        let imul_fn = self.create_function(JsFunction::Native(
+            "imul".to_string(),
+            Rc::new(|_interp, _this, args| {
+                let a = args.first().map(to_number).unwrap_or(0.0);
+                let b = args.get(1).map(to_number).unwrap_or(0.0);
+                let ia = number_ops::to_int32(a);
+                let ib = number_ops::to_int32(b);
+                Completion::Normal(JsValue::Number(ia.wrapping_mul(ib) as f64))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .insert_value("imul".to_string(), imul_fn);
+
+        // Math.expm1, Math.log1p, Math.cosh, Math.sinh, Math.tanh, Math.acosh, Math.asinh, Math.atanh
+        let extra_math_fns: Vec<(&str, fn(f64) -> f64)> = vec![
+            ("expm1", f64::exp_m1),
+            ("log1p", f64::ln_1p),
+            ("cosh", f64::cosh),
+            ("sinh", f64::sinh),
+            ("tanh", f64::tanh),
+            ("acosh", f64::acosh),
+            ("asinh", f64::asinh),
+            ("atanh", f64::atanh),
+        ];
+        for (name, op) in extra_math_fns {
+            let fn_val = self.create_function(JsFunction::Native(
+                name.to_string(),
+                Rc::new(move |_interp, _this, args| {
+                    let x = args.first().map(to_number).unwrap_or(f64::NAN);
+                    Completion::Normal(JsValue::Number(op(x)))
+                }),
+            ));
+            math_obj.borrow_mut().insert_value(name.to_string(), fn_val);
+        }
 
         let math_val = JsValue::Object(crate::types::JsObject { id: math_id });
         self.global_env
