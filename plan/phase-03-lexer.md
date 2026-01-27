@@ -49,7 +49,7 @@ Implement a complete lexer that tokenizes ECMAScript source text according to th
   - [x] Hex escape `\xHH`
   - [x] Unicode escape `\uHHHH` and `\u{HHHH}`
   - [x] Line continuation (`\` + line terminator)
-  - [ ] Legacy octal escapes (non-strict only)
+  - [x] Legacy octal escapes (non-strict only)
 - [x] Template Literal tokens (§12.9.6)
   - [x] NoSubstitutionTemplate
   - [x] TemplateHead / TemplateMiddle / TemplateTail

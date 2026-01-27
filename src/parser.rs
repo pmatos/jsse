@@ -108,6 +108,11 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn set_strict(&mut self, strict: bool) {
+        self.strict = strict;
+        self.lexer.strict = strict;
+    }
+
     fn is_strict_reserved_word(name: &str) -> bool {
         matches!(
             name,
@@ -139,7 +144,7 @@ impl<'a> Parser<'a> {
             if in_directive_prologue {
                 if let Some(directive) = Self::is_directive_prologue(&stmt) {
                     if directive == "use strict" {
-                        self.strict = true;
+                        self.set_strict(true);
                     }
                 } else {
                     in_directive_prologue = false;
@@ -746,7 +751,7 @@ impl<'a> Parser<'a> {
     fn parse_class_body(&mut self) -> Result<Vec<ClassElement>, ParseError> {
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
-        self.strict = true; // class bodies are always strict
+        self.set_strict(true); // class bodies are always strict
         let mut elements = Vec::new();
         while self.current != Token::RightBrace {
             if self.current == Token::Semicolon {
@@ -756,7 +761,7 @@ impl<'a> Parser<'a> {
             elements.push(self.parse_class_element()?);
         }
         self.eat(&Token::RightBrace)?;
-        self.strict = prev_strict;
+        self.set_strict(prev_strict);
         Ok(elements)
     }
 
@@ -942,7 +947,7 @@ impl<'a> Parser<'a> {
             if in_directive_prologue {
                 if let Some(directive) = Self::is_directive_prologue(&stmt) {
                     if directive == "use strict" {
-                        self.strict = true;
+                        self.set_strict(true);
                     }
                 } else {
                     in_directive_prologue = false;
@@ -953,7 +958,7 @@ impl<'a> Parser<'a> {
         }
 
         self.eat(&Token::RightBrace)?;
-        self.strict = prev_strict;
+        self.set_strict(prev_strict);
         Ok(stmts)
     }
 

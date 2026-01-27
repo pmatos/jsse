@@ -253,6 +253,7 @@ pub struct Lexer<'a> {
     offset: usize,
     line: u32,
     column: u32,
+    pub strict: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -266,6 +267,7 @@ impl<'a> Lexer<'a> {
             offset: 0,
             line: 1,
             column: 0,
+            strict: false,
         }
     }
 
@@ -401,13 +403,21 @@ impl<'a> Lexer<'a> {
             Some('b') => Ok("\u{0008}".to_string()),
             Some('f') => Ok("\u{000C}".to_string()),
             Some('v') => Ok("\u{000B}".to_string()),
-            Some('0') => {
-                // \0 but not \0[0-9]
-                if self.peek().is_some_and(|c| c.is_ascii_digit()) {
-                    Err(self.error("Octal escape sequences are not allowed in strict mode"))
-                } else {
-                    Ok("\0".to_string())
+            Some(ch @ '0'..='7') => {
+                if ch == '0' && !self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    return Ok("\0".to_string()); // \0 (null character, not octal)
                 }
+                if self.strict {
+                    return Err(self.error("Octal escape sequences are not allowed in strict mode"));
+                }
+                let mut val = (ch as u32) - ('0' as u32);
+                if self.peek().is_some_and(|c| ('0'..='7').contains(&c)) {
+                    val = val * 8 + (self.advance().unwrap() as u32 - '0' as u32);
+                    if ch <= '3' && self.peek().is_some_and(|c| ('0'..='7').contains(&c)) {
+                        val = val * 8 + (self.advance().unwrap() as u32 - '0' as u32);
+                    }
+                }
+                Ok(char::from_u32(val).map(|c| c.to_string()).unwrap_or_default())
             }
             Some('x') => {
                 let h1 = self
