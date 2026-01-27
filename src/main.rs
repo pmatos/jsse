@@ -1,3 +1,4 @@
 fn main() {
-    std::process::exit(0);
+    // Exit with failure — engine not yet implemented.
+    std::process::exit(1);
 }

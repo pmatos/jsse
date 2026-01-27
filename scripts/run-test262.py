@@ -19,7 +19,7 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
+FRONTMATTER_RE = re.compile(r"/\*---\s*\n(.*?)\n---\*/", re.DOTALL)
 NEGATIVE_RE = re.compile(r"^negative:", re.MULTILINE)
 
 
@@ -67,7 +67,7 @@ def is_negative_test(test_file: Path) -> bool:
             head = f.read(4096)
     except OSError:
         return False
-    m = FRONTMATTER_RE.match(head)
+    m = FRONTMATTER_RE.search(head)
     if m:
         return bool(NEGATIVE_RE.search(m.group(1)))
     return False
