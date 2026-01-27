@@ -9,6 +9,7 @@ pub enum Token {
 
     // Literals
     NumericLiteral(f64),
+    LegacyOctalLiteral(f64),
     BigIntLiteral(String),
     StringLiteral(String),
     BooleanLiteral(bool),
@@ -479,6 +480,9 @@ impl<'a> Lexer<'a> {
                 Some('x' | 'X') => return self.read_hex_literal(s),
                 Some('o' | 'O') => return self.read_octal_literal(s),
                 Some('b' | 'B') => return self.read_binary_literal(s),
+                Some(c) if c.is_ascii_digit() => {
+                    return self.read_legacy_octal_or_decimal(s);
+                }
                 _ => {}
             }
         }
@@ -564,6 +568,43 @@ impl<'a> Lexer<'a> {
         let val =
             u64::from_str_radix(&oct_part, 8).map_err(|_| self.error("Invalid octal literal"))?;
         Ok(Token::NumericLiteral(val as f64))
+    }
+
+    fn read_legacy_octal_or_decimal(&mut self, mut s: String) -> Result<Token, LexError> {
+        let mut is_octal = true;
+        while let Some(ch) = self.peek() {
+            if ch.is_ascii_digit() {
+                if ch >= '8' {
+                    is_octal = false;
+                }
+                s.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        if is_octal && self.peek() != Some('.') && self.peek() != Some('e') && self.peek() != Some('E') {
+            let oct_part = &s[1..]; // skip leading 0
+            let val = u64::from_str_radix(oct_part, 8)
+                .map_err(|_| self.error("Invalid octal literal"))?;
+            Ok(Token::LegacyOctalLiteral(val as f64))
+        } else {
+            // Non-octal decimal (e.g. 09, 0.5 after leading zero digits)
+            if self.peek() == Some('.') {
+                s.push('.');
+                self.advance();
+                self.read_decimal_digits(&mut s);
+            }
+            if self.peek().is_some_and(|c| c == 'e' || c == 'E') {
+                s.push(self.advance().unwrap());
+                if self.peek().is_some_and(|c| c == '+' || c == '-') {
+                    s.push(self.advance().unwrap());
+                }
+                self.read_decimal_digits(&mut s);
+            }
+            let val: f64 = s.parse().map_err(|_| self.error("Invalid numeric literal"))?;
+            Ok(Token::NumericLiteral(val))
+        }
     }
 
     fn read_binary_literal(&mut self, mut s: String) -> Result<Token, LexError> {

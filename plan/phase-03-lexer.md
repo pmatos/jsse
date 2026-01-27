@@ -42,7 +42,7 @@ Implement a complete lexer that tokenizes ECMAScript source text according to th
   - [x] NonDecimalIntegerLiteral (binary `0b`, octal `0o`, hex `0x`)
   - [x] NonDecimalIntegerLiteral + BigInt suffix
   - [x] Numeric separators (`_`)
-  - [ ] Legacy octal (in non-strict mode)
+  - [x] Legacy octal (in non-strict mode)
 - [x] StringLiteral (§12.9.4)
   - [x] Single and double quoted strings
   - [x] Escape sequences: `\\`, `\'`, `\"`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\0`

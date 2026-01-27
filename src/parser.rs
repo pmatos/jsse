@@ -870,7 +870,10 @@ impl<'a> Parser<'a> {
             let s = s.clone();
             self.advance()?;
             Ok((PropertyKey::String(s), false))
-        } else if let Token::NumericLiteral(n) = &self.current {
+        } else if let Token::NumericLiteral(n) | Token::LegacyOctalLiteral(n) = &self.current {
+            if matches!(&self.current, Token::LegacyOctalLiteral(_)) && self.strict {
+                return Err(self.error("Octal literals are not allowed in strict mode"));
+            }
             let n = *n;
             self.advance()?;
             Ok((PropertyKey::Number(n), false))
@@ -1439,6 +1442,14 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Literal(Literal::Number(n)))
             }
+            Token::LegacyOctalLiteral(n) => {
+                if self.strict {
+                    return Err(self.error("Octal literals are not allowed in strict mode"));
+                }
+                let n = *n;
+                self.advance()?;
+                Ok(Expression::Literal(Literal::Number(n)))
+            }
             Token::StringLiteral(s) => {
                 let s = s.clone();
                 self.advance()?;
@@ -1637,6 +1648,7 @@ impl<'a> Parser<'a> {
                 Token::Identifier(_)
                     | Token::StringLiteral(_)
                     | Token::NumericLiteral(_)
+                    | Token::LegacyOctalLiteral(_)
                     | Token::LeftBracket
                     | Token::Keyword(_)
             );
