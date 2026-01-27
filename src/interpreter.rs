@@ -1215,8 +1215,22 @@ impl Interpreter {
                         Completion::Normal(JsValue::String(JsString::from_str(&s)))
                     }),
                 ));
+                let from_code_point = self.create_function(JsFunction::Native(
+                    "fromCodePoint".to_string(),
+                    Rc::new(|_interp, _this, args: &[JsValue]| {
+                        let mut s = String::new();
+                        for a in args {
+                            let n = to_number(a) as u32;
+                            if let Some(c) = char::from_u32(n) {
+                                s.push(c);
+                            }
+                        }
+                        Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                    }),
+                ));
                 if let Some(obj) = self.get_object(o.id) {
                     obj.borrow_mut().insert_value("fromCharCode".to_string(), from_char_code);
+                    obj.borrow_mut().insert_value("fromCodePoint".to_string(), from_code_point);
                 }
             }
         }
@@ -1397,18 +1411,24 @@ impl Interpreter {
                         let obj_tostring_fn = self.create_function(JsFunction::Native(
                             "toString".to_string(),
                             Rc::new(|interp, this_val, _args| {
-                                let tag = if let JsValue::Object(o) = this_val {
-                                    if let Some(obj) = interp.get_object(o.id) {
-                                        obj.borrow().class_name.clone()
-                                    } else {
-                                        "Object".to_string()
+                                let tag = match this_val {
+                                    JsValue::Object(o) => {
+                                        if let Some(obj) = interp.get_object(o.id) {
+                                            let cn = obj.borrow().class_name.clone();
+                                            if cn == "Object" && obj.borrow().callable.is_some() {
+                                                "Function".to_string()
+                                            } else {
+                                                cn
+                                            }
+                                        } else { "Object".to_string() }
                                     }
-                                } else if this_val.is_undefined() {
-                                    "Undefined".to_string()
-                                } else if this_val.is_null() {
-                                    "Null".to_string()
-                                } else {
-                                    "Object".to_string()
+                                    JsValue::Undefined => "Undefined".to_string(),
+                                    JsValue::Null => "Null".to_string(),
+                                    JsValue::Boolean(_) => "Boolean".to_string(),
+                                    JsValue::Number(_) => "Number".to_string(),
+                                    JsValue::String(_) => "String".to_string(),
+                                    JsValue::Symbol(_) => "Symbol".to_string(),
+                                    JsValue::BigInt(_) => "BigInt".to_string(),
                                 };
                                 Completion::Normal(JsValue::String(JsString::from_str(&format!(
                                     "[object {tag}]"
@@ -3664,16 +3684,37 @@ impl Interpreter {
             .borrow_mut()
             .insert_value("bind".to_string(), bind_fn);
 
-        // Function.prototype.toString
-        let to_string_fn = self.create_function(JsFunction::Native(
+        // Merge Function.prototype.toString into Object.prototype.toString
+        // The existing Object.prototype.toString already handles [object Type] for non-functions.
+        // We override it with a combined version that handles both functions and objects.
+        let combined_tostring = self.create_function(JsFunction::Native(
             "toString".to_string(),
-            Rc::new(|_interp, _this_val, _args: &[JsValue]| {
-                Completion::Normal(JsValue::String(JsString::from_str("function() { [native code] }")))
+            Rc::new(|interp, this_val, _args: &[JsValue]| {
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        if obj.borrow().callable.is_some() {
+                            return Completion::Normal(JsValue::String(JsString::from_str("function() { [native code] }")));
+                        }
+                        let cn = obj.borrow().class_name.clone();
+                        return Completion::Normal(JsValue::String(JsString::from_str(&format!("[object {cn}]"))));
+                    }
+                }
+                let tag = match this_val {
+                    JsValue::Undefined => "Undefined",
+                    JsValue::Null => "Null",
+                    JsValue::Boolean(_) => "Boolean",
+                    JsValue::Number(_) => "Number",
+                    JsValue::String(_) => "String",
+                    JsValue::Symbol(_) => "Symbol",
+                    JsValue::BigInt(_) => "BigInt",
+                    JsValue::Object(_) => "Object",
+                };
+                Completion::Normal(JsValue::String(JsString::from_str(&format!("[object {tag}]"))))
             }),
         ));
         obj_proto
             .borrow_mut()
-            .insert_value("toString".to_string(), to_string_fn);
+            .insert_value("toString".to_string(), combined_tostring);
     }
 
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
@@ -4760,6 +4801,31 @@ impl Interpreter {
         right: &Expression,
         env: &EnvRef,
     ) -> Completion {
+        // Logical assignments are short-circuit
+        if matches!(op, AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign) {
+            let lval = match self.eval_expr(left, env) {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
+            let should_assign = match op {
+                AssignOp::LogicalAndAssign => to_boolean(&lval),
+                AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                _ => unreachable!(),
+            };
+            if !should_assign {
+                return Completion::Normal(lval);
+            }
+            let rval = match self.eval_expr(right, env) {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
+            if let Expression::Identifier(name) = left {
+                let _ = env.borrow_mut().set(name, rval.clone());
+            }
+            return Completion::Normal(rval);
+        }
+
         let rval = match self.eval_expr(right, env) {
             Completion::Normal(v) => v,
             other => return other,
@@ -4819,6 +4885,122 @@ impl Interpreter {
                     }
                     obj.borrow_mut().insert_value(key, final_val.clone());
                     return Completion::Normal(final_val);
+                }
+                Completion::Normal(rval)
+            }
+            Expression::Array(elements) if op == AssignOp::Assign => {
+                // Destructuring array assignment
+                for (i, elem) in elements.iter().enumerate() {
+                    if let Some(expr) = elem {
+                        if let Expression::Spread(inner) = expr {
+                            let rest: Vec<JsValue> = if let JsValue::Object(o) = &rval {
+                                if let Some(obj) = self.get_object(o.id) {
+                                    obj.borrow().array_elements.as_ref()
+                                        .map(|e| e.get(i..).unwrap_or(&[]).to_vec())
+                                        .unwrap_or_default()
+                                } else { vec![] }
+                            } else { vec![] };
+                            let arr = self.create_array(rest);
+                            let result = self.eval_assign(AssignOp::Assign, inner, &Expression::Literal(Literal::Null), env);
+                            // Assign directly
+                            if let Expression::Identifier(name) = inner.as_ref() {
+                                if !env.borrow().has(name) {
+                                    env.borrow_mut().declare(name, BindingKind::Var);
+                                }
+                                let _ = env.borrow_mut().set(name, arr);
+                            }
+                            break;
+                        }
+                        let item = if let JsValue::Object(o) = &rval {
+                            if let Some(obj) = self.get_object(o.id) {
+                                obj.borrow().array_elements.as_ref()
+                                    .and_then(|e| e.get(i).cloned())
+                                    .unwrap_or(JsValue::Undefined)
+                            } else { JsValue::Undefined }
+                        } else { JsValue::Undefined };
+                        // Check for default value: `[a = defaultVal] = arr`
+                        let (target, val) = if let Expression::Assign(AssignOp::Assign, target, default) = expr {
+                            let v = if item.is_undefined() {
+                                match self.eval_expr(default, env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else { item };
+                            (target.as_ref(), v)
+                        } else {
+                            (expr, item)
+                        };
+                        match target {
+                            Expression::Identifier(name) => {
+                                if !env.borrow().has(name) {
+                                    env.borrow_mut().declare(name, BindingKind::Var);
+                                }
+                                let _ = env.borrow_mut().set(name, val);
+                            }
+                            Expression::Member(..) => {
+                                // Create a temp to hold the val, assign to member
+                                let temp_lit = Expression::Literal(Literal::Null);
+                                // We'd need to manually do the member assign here
+                                // For now, skip complex member destructuring
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Completion::Normal(rval)
+            }
+            Expression::Object(props) if op == AssignOp::Assign => {
+                // Destructuring object assignment
+                for prop in props {
+                    let (key, target, default_val) = match &prop.kind {
+                        PropertyKind::Init => {
+                            let key = match &prop.key {
+                                PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
+                                PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                                PropertyKey::Computed(expr) => {
+                                    match self.eval_expr(expr, env) {
+                                        Completion::Normal(v) => to_js_string(&v),
+                                        other => return other,
+                                    }
+                                }
+                            };
+                            // Check if shorthand ({a} = obj) or key-value ({a: b} = obj)
+                            if let Expression::Identifier(name) = &prop.value {
+                                if name == &key {
+                                    (key, prop.value.clone(), None)
+                                } else {
+                                    (key, prop.value.clone(), None)
+                                }
+                            } else if let Expression::Assign(AssignOp::Assign, target, default) = &prop.value {
+                                (key, *target.clone(), Some(*default.clone()))
+                            } else {
+                                (key, prop.value.clone(), None)
+                            }
+                        }
+                        _ => continue,
+                    };
+                    let val = if let JsValue::Object(o) = &rval {
+                        if let Some(obj) = self.get_object(o.id) {
+                            obj.borrow().get_property(&key)
+                        } else { JsValue::Undefined }
+                    } else { JsValue::Undefined };
+                    let val = if val.is_undefined() {
+                        if let Some(default) = default_val {
+                            match self.eval_expr(&default, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else { val }
+                    } else { val };
+                    match &target {
+                        Expression::Identifier(name) => {
+                            if !env.borrow().has(name) {
+                                env.borrow_mut().declare(name, BindingKind::Var);
+                            }
+                            let _ = env.borrow_mut().set(name, val);
+                        }
+                        _ => {}
+                    }
                 }
                 Completion::Normal(rval)
             }
