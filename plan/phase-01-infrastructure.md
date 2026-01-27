@@ -41,7 +41,7 @@ Set up the Rust project, CLI interface, test262 runner, and CI pipeline.
 
 ### 1.6 Documentation
 - [x] Update README.md with build/run instructions
-- [ ] Architecture overview in docs/
+- [x] Architecture overview in docs/
 
 ## Dependencies
 None — this is the foundation.
