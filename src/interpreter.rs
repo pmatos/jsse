@@ -315,12 +315,11 @@ impl Interpreter {
             JsFunction::Native(
                 "Object".to_string(),
                 Rc::new(|interp, args| {
-                    if let Some(val) = args.first() {
-                        if matches!(val, JsValue::Object(_)) {
+                    if let Some(val) = args.first()
+                        && matches!(val, JsValue::Object(_)) {
                             return Completion::Normal(val.clone());
                         }
-                    }
-                    let obj = interp.create_object();
+                    let _obj = interp.create_object();
                     Completion::Normal(JsValue::Object(crate::types::JsObject {
                         id: interp.objects.len() as u64 - 1,
                     }))
@@ -410,7 +409,7 @@ impl Interpreter {
             JsFunction::Native(
                 "parseInt".to_string(),
                 Rc::new(|_interp, args| {
-                    let s = args.first().map(|v| to_js_string(v)).unwrap_or_default();
+                    let s = args.first().map(to_js_string).unwrap_or_default();
                     let radix = args.get(1).map(|v| to_number(v) as i32).unwrap_or(10);
                     let s = s.trim();
                     let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
@@ -453,7 +452,7 @@ impl Interpreter {
             JsFunction::Native(
                 "parseFloat".to_string(),
                 Rc::new(|_interp, args| {
-                    let s = args.first().map(|v| to_js_string(v)).unwrap_or_default();
+                    let s = args.first().map(to_js_string).unwrap_or_default();
                     let s = s.trim();
                     match s.parse::<f64>() {
                         Ok(n) => Completion::Normal(JsValue::Number(n)),
@@ -543,7 +542,7 @@ impl Interpreter {
             let fn_val = self.create_function(JsFunction::Native(
                 name.to_string(),
                 Rc::new(move |_interp, args| {
-                    let x = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let x = args.first().map(to_number).unwrap_or(f64::NAN);
                     Completion::Normal(JsValue::Number(op(x)))
                 }),
             ));
@@ -602,8 +601,8 @@ impl Interpreter {
         let pow_fn = self.create_function(JsFunction::Native(
             "pow".to_string(),
             Rc::new(|_interp, args| {
-                let base = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
-                let exp = args.get(1).map(|v| to_number(v)).unwrap_or(f64::NAN);
+                let base = args.first().map(to_number).unwrap_or(f64::NAN);
+                let exp = args.get(1).map(to_number).unwrap_or(f64::NAN);
                 Completion::Normal(JsValue::Number(base.powf(exp)))
             }),
         ));
@@ -667,7 +666,7 @@ impl Interpreter {
         obj_data.class_name = "Function".to_string();
         // Non-arrow functions get a prototype property
         if !is_arrow {
-            let proto = self.create_object();
+            let _proto = self.create_object();
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: self.objects.len() as u64 - 1,
             });
@@ -681,16 +680,14 @@ impl Interpreter {
         let func_id = self.objects.len() as u64 - 1;
         let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
         // Set prototype.constructor = func
-        if !is_arrow {
-            if let Some(JsValue::Object(proto_ref)) = obj.borrow().properties.get("prototype") {
-                if let Some(proto_obj) = self.get_object(proto_ref.id) {
+        if !is_arrow
+            && let Some(JsValue::Object(proto_ref)) = obj.borrow().properties.get("prototype")
+                && let Some(proto_obj) = self.get_object(proto_ref.id) {
                     proto_obj
                         .borrow_mut()
                         .properties
                         .insert("constructor".to_string(), func_val.clone());
                 }
-            }
-        }
         func_val
     }
 
@@ -1005,8 +1002,8 @@ impl Interpreter {
         if obj_val.is_nullish() {
             return Completion::Normal(JsValue::Undefined);
         }
-        if let JsValue::Object(ref o) = obj_val {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = obj_val
+            && let Some(obj) = self.get_object(o.id) {
                 let keys: Vec<String> = obj.borrow().properties.keys().cloned().collect();
                 for key in keys {
                     let key_val = JsValue::String(JsString::from_str(&key));
@@ -1018,13 +1015,12 @@ impl Interpreter {
                                 VarKind::Let => BindingKind::Let,
                                 VarKind::Const => BindingKind::Const,
                             };
-                            if let Some(d) = decl.declarations.first() {
-                                if let Err(e) =
+                            if let Some(d) = decl.declarations.first()
+                                && let Err(e) =
                                     self.bind_pattern(&d.pattern, key_val, kind, &for_env)
                                 {
                                     return Completion::Throw(e);
                                 }
-                            }
                         }
                         ForInOfLeft::Pattern(pat) => {
                             if let Pattern::Identifier(name) = pat {
@@ -1039,7 +1035,6 @@ impl Interpreter {
                     }
                 }
             }
-        }
         Completion::Normal(JsValue::Undefined)
     }
 
@@ -1050,12 +1045,11 @@ impl Interpreter {
             Completion::Throw(val) => {
                 if let Some(handler) = &t.handler {
                     let catch_env = Environment::new(Some(env.clone()));
-                    if let Some(param) = &handler.param {
-                        if let Err(e) = self.bind_pattern(param, val, BindingKind::Let, &catch_env)
+                    if let Some(param) = &handler.param
+                        && let Err(e) = self.bind_pattern(param, val, BindingKind::Let, &catch_env)
                         {
                             return Completion::Throw(e);
                         }
-                    }
                     self.exec_statements(&handler.body, &catch_env)
                 } else {
                     Completion::Throw(val)
@@ -1105,8 +1099,8 @@ impl Interpreter {
                 }
             }
         }
-        if !found {
-            if let Some(idx) = default_idx {
+        if !found
+            && let Some(idx) = default_idx {
                 for case in &s.cases[idx..] {
                     for stmt in &case.consequent {
                         match self.exec_statement(stmt, &switch_env) {
@@ -1119,7 +1113,6 @@ impl Interpreter {
                     }
                 }
             }
-        }
         Completion::Normal(JsValue::Undefined)
     }
 
@@ -1445,8 +1438,8 @@ impl Interpreter {
                         to_js_string(&v)
                     }
                 };
-                if let JsValue::Object(ref o) = obj_val {
-                    if let Some(obj) = self.get_object(o.id) {
+                if let JsValue::Object(ref o) = obj_val
+                    && let Some(obj) = self.get_object(o.id) {
                         let final_val = if op == AssignOp::Assign {
                             rval
                         } else {
@@ -1456,7 +1449,6 @@ impl Interpreter {
                         obj.borrow_mut().properties.insert(key, final_val.clone());
                         return Completion::Normal(final_val);
                     }
-                }
                 Completion::Normal(rval)
             }
             _ => Completion::Normal(rval),
@@ -1541,8 +1533,8 @@ impl Interpreter {
         _this_val: &JsValue,
         args: &[JsValue],
     ) -> Completion {
-        if let JsValue::Object(o) = func_val {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(o) = func_val
+            && let Some(obj) = self.get_object(o.id) {
                 let callable = obj.borrow().callable.clone();
                 if let Some(func) = callable {
                     return match func {
@@ -1586,7 +1578,6 @@ impl Interpreter {
                     };
                 }
             }
-        }
         Completion::Throw(JsValue::String(JsString::from_str("is not a function")))
     }
 
@@ -1606,21 +1597,19 @@ impl Interpreter {
         // Create new object for 'this'
         let new_obj = self.create_object();
         // Set prototype from constructor.prototype if available
-        if let JsValue::Object(o) = &callee_val {
-            if let Some(func_obj) = self.get_object(o.id) {
+        if let JsValue::Object(o) = &callee_val
+            && let Some(func_obj) = self.get_object(o.id) {
                 let proto = func_obj.borrow().properties.get("prototype").cloned();
-                if let Some(JsValue::Object(proto_obj)) = proto {
-                    if let Some(proto_rc) = self.get_object(proto_obj.id) {
+                if let Some(JsValue::Object(proto_obj)) = proto
+                    && let Some(proto_rc) = self.get_object(proto_obj.id) {
                         new_obj.borrow_mut().prototype = Some(proto_rc);
                     }
-                }
                 // Store constructor reference
                 new_obj
                     .borrow_mut()
                     .properties
                     .insert("constructor".to_string(), callee_val.clone());
             }
-        }
         let this_val = JsValue::Object(crate::types::JsObject {
             id: self.objects.len() as u64 - 1,
         });
@@ -1727,13 +1716,12 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if let JsValue::Object(ref o) = spread_val {
-                    if let Some(src) = self.get_object(o.id) {
+                if let JsValue::Object(ref o) = spread_val
+                    && let Some(src) = self.get_object(o.id) {
                         for (k, v) in &src.borrow().properties {
                             obj_data.properties.insert(k.clone(), v.clone());
                         }
                     }
-                }
                 continue;
             }
             obj_data.properties.insert(key, value);
@@ -1844,11 +1832,10 @@ fn typeof_val<'a>(val: &JsValue, objects: &[Rc<RefCell<JsObjectData>>]) -> &'a s
         JsValue::Symbol(_) => "symbol",
         JsValue::BigInt(_) => "bigint",
         JsValue::Object(o) => {
-            if let Some(obj) = objects.get(o.id as usize) {
-                if obj.borrow().callable.is_some() {
+            if let Some(obj) = objects.get(o.id as usize)
+                && obj.borrow().callable.is_some() {
                     return "function";
                 }
-            }
             "object"
         }
     }
