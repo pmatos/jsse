@@ -113,6 +113,48 @@ impl<'a> Parser<'a> {
         self.lexer.strict = strict;
     }
 
+    fn collect_bound_names(pattern: &Pattern, names: &mut Vec<String>) {
+        match pattern {
+            Pattern::Identifier(n) => names.push(n.clone()),
+            Pattern::Array(elems) => {
+                for elem in elems.iter().flatten() {
+                    match elem {
+                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                            Self::collect_bound_names(p, names);
+                        }
+                    }
+                }
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                            Self::collect_bound_names(p, names);
+                        }
+                        ObjectPatternProperty::Shorthand(n) => names.push(n.clone()),
+                    }
+                }
+            }
+            Pattern::Assign(p, _) | Pattern::Rest(p) => Self::collect_bound_names(p, names),
+        }
+    }
+
+    fn check_duplicate_params_strict(&self, params: &[Pattern]) -> Result<(), ParseError> {
+        let mut seen = std::collections::HashSet::new();
+        let mut names = Vec::new();
+        for p in params {
+            Self::collect_bound_names(p, &mut names);
+        }
+        for name in &names {
+            if !seen.insert(name.as_str()) {
+                return Err(self.error(
+                    "Duplicate parameter name not allowed in this context",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn is_strict_reserved_word(name: &str) -> bool {
         matches!(
             name,
@@ -714,7 +756,10 @@ impl<'a> Parser<'a> {
             _ => return Err(self.error("Expected function name")),
         };
         let params = self.parse_formal_parameters()?;
-        let body = self.parse_function_body()?;
+        let (body, body_strict) = self.parse_function_body()?;
+        if body_strict {
+            self.check_duplicate_params_strict(&params)?;
+        }
         Ok(Statement::FunctionDeclaration(FunctionDecl {
             name,
             params,
@@ -898,7 +943,10 @@ impl<'a> Parser<'a> {
         is_generator: bool,
     ) -> Result<FunctionExpr, ParseError> {
         let params = self.parse_formal_parameters()?;
-        let body = self.parse_function_body()?;
+        let (body, body_strict) = self.parse_function_body()?;
+        if body_strict {
+            self.check_duplicate_params_strict(&params)?;
+        }
         Ok(FunctionExpr {
             name: None,
             params,
@@ -935,7 +983,7 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn parse_function_body(&mut self) -> Result<Vec<Statement>, ParseError> {
+    fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
         let mut stmts = Vec::new();
@@ -957,9 +1005,10 @@ impl<'a> Parser<'a> {
             stmts.push(stmt);
         }
 
+        let was_strict = self.strict;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
-        Ok(stmts)
+        Ok((stmts, was_strict))
     }
 
     fn parse_expression_statement(&mut self) -> Result<Statement, ParseError> {
@@ -1420,7 +1469,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Arrow && !self.prev_line_terminator {
                     self.advance()?;
                     let body = if self.current == Token::LeftBrace {
-                        let stmts = self.parse_function_body()?;
+                        let (stmts, _) = self.parse_function_body()?;
                         ArrowBody::Block(stmts)
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
@@ -1501,7 +1550,7 @@ impl<'a> Parser<'a> {
                     if self.current == Token::Arrow {
                         self.advance()?;
                         let body = if self.current == Token::LeftBrace {
-                            ArrowBody::Block(self.parse_function_body()?)
+                            ArrowBody::Block(self.parse_function_body()?.0)
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
@@ -1522,7 +1571,7 @@ impl<'a> Parser<'a> {
                     self.eat(&Token::RightParen)?;
                     self.eat(&Token::Arrow)?;
                     let body = if self.current == Token::LeftBrace {
-                        ArrowBody::Block(self.parse_function_body()?)
+                        ArrowBody::Block(self.parse_function_body()?.0)
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                     };
@@ -1556,7 +1605,7 @@ impl<'a> Parser<'a> {
                             .map(expr_to_pattern)
                             .collect::<Result<_, _>>()?;
                         let body = if self.current == Token::LeftBrace {
-                            ArrowBody::Block(self.parse_function_body()?)
+                            ArrowBody::Block(self.parse_function_body()?.0)
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
@@ -1660,7 +1709,7 @@ impl<'a> Parser<'a> {
             if is_accessor {
                 let (key, computed) = self.parse_property_name()?;
                 let params = self.parse_formal_parameters()?;
-                let body = self.parse_function_body()?;
+                let (body, _) = self.parse_function_body()?;
                 return Ok(Property {
                     key,
                     value: Expression::Function(FunctionExpr {
@@ -1702,7 +1751,7 @@ impl<'a> Parser<'a> {
         // Method: { foo() {} }
         if self.current == Token::LeftParen {
             let params = self.parse_formal_parameters()?;
-            let body = self.parse_function_body()?;
+            let (body, _) = self.parse_function_body()?;
             return Ok(Property {
                 key,
                 value: Expression::Function(FunctionExpr {
@@ -1746,7 +1795,10 @@ impl<'a> Parser<'a> {
             None
         };
         let params = self.parse_formal_parameters()?;
-        let body = self.parse_function_body()?;
+        let (body, body_strict) = self.parse_function_body()?;
+        if body_strict {
+            self.check_duplicate_params_strict(&params)?;
+        }
         Ok(Expression::Function(FunctionExpr {
             name,
             params,
