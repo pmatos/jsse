@@ -28,36 +28,17 @@ fi
 
 pass=0
 fail=0
-skip=0
 total=0
 
 while IFS= read -r -d '' test_file; do
     total=$((total + 1))
 
-    # Read the first 50 lines to extract YAML frontmatter
-    header=$(head -50 "$test_file")
+    # Extract YAML frontmatter (between first and second --- markers)
+    header=$(sed -n '/^---$/,/^---$/p' "$test_file" | tr -d '\0')
 
-    # Skip tests requiring features we can't handle yet in the runner
-    # (module tests, async tests need special handling)
-    flags=""
-    if echo "$header" | grep -q "^flags:"; then
-        flags=$(echo "$header" | sed -n '/^flags:/,/^[a-z]/p' | head -10)
-    fi
-
-    # Check for negative test expectations
     is_negative=false
-    negative_phase=""
-    negative_type=""
     if echo "$header" | grep -q "^negative:"; then
         is_negative=true
-        negative_phase=$(echo "$header" | sed -n '/^negative:/,/^[a-z]/p' | grep 'phase:' | sed 's/.*phase: *//' | tr -d '[:space:]')
-        negative_type=$(echo "$header" | sed -n '/^negative:/,/^[a-z]/p' | grep 'type:' | sed 's/.*type: *//' | tr -d '[:space:]')
-    fi
-
-    # Check if this is a module test
-    is_module=false
-    if echo "$flags" | grep -q "module"; then
-        is_module=true
     fi
 
     # Run the test with timeout
@@ -93,7 +74,7 @@ done < <(find "$TEST_DIR/language" "$TEST_DIR/built-ins" -name '*.js' -not -path
 while IFS= read -r -d '' test_file; do
     total=$((total + 1))
 
-    header=$(head -50 "$test_file")
+    header=$(sed -n '/^---$/,/^---$/p' "$test_file" | tr -d '\0')
 
     is_negative=false
     if echo "$header" | grep -q "^negative:"; then
