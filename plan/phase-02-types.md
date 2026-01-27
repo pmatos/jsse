@@ -100,56 +100,56 @@ Implement all ECMAScript language types, specification types, and type conversio
   - [ ] RoundMVResult
 - [x] ToIntegerOrInfinity
 - [x] ToInt32 / ToUint32
-- [ ] ToInt16 / ToUint16
-- [ ] ToInt8 / ToUint8 / ToUint8Clamp
+- [ ] ToInt16 / ToUint16 (deferred: needs TypedArrays)
+- [ ] ToInt8 / ToUint8 / ToUint8Clamp (deferred: needs TypedArrays)
 - [ ] ToBigInt
 - [ ] StringToBigInt
-- [ ] ToBigInt64 / ToBigUint64
+- [ ] ToBigInt64 / ToBigUint64 (deferred: needs TypedArrays)
 - [x] ToString
 - [x] ToObject
 - [x] ToPropertyKey
 - [x] ToLength
-- [ ] CanonicalNumericIndexString
-- [ ] ToIndex
+- [x] CanonicalNumericIndexString
+- [x] ToIndex
 
 ### 2.4 Testing Abstract Operations (§7.2)
 - [x] RequireObjectCoercible
 - [x] IsArray
 - [x] IsCallable
-- [ ] IsConstructor
+- [x] IsConstructor (inline: callable.is_some() + !is_arrow check)
 - [x] IsExtensible
-- [ ] IsIntegralNumber
+- [x] IsIntegralNumber (inline: Number.isInteger)
 - [x] IsPropertyKey
 - [ ] IsRegExp
 - [x] SameValue
 - [x] SameValueZero
-- [ ] SameValueNonNumber
+- [x] SameValueNonNumber (inline in strict equality)
 - [x] IsLessThan
 - [x] IsLooselyEqual
 - [x] IsStrictlyEqual
 
 ### 2.5 Operations on Objects (§7.3)
-- [ ] MakeBasicObject
-- [ ] Get / Set
-- [ ] CreateDataProperty / CreateMethodProperty
-- [ ] CreateDataPropertyOrThrow
-- [ ] CreateNonEnumerableDataPropertyOrThrow
-- [ ] DefinePropertyOrThrow
-- [ ] DeletePropertyOrThrow
-- [ ] GetMethod
-- [ ] HasProperty / HasOwnProperty
-- [ ] Call
-- [ ] Construct
-- [ ] SetIntegrityLevel / TestIntegrityLevel
-- [ ] CreateArrayFromList
-- [ ] LengthOfArrayLike
+- [x] MakeBasicObject (JsObjectData::new)
+- [x] Get / Set (get_property / set_property_value)
+- [x] CreateDataProperty / CreateMethodProperty (insert_value / insert_builtin)
+- [x] CreateDataPropertyOrThrow (insert_value)
+- [x] CreateNonEnumerableDataPropertyOrThrow (insert_builtin)
+- [x] DefinePropertyOrThrow (define_own_property)
+- [x] DeletePropertyOrThrow (delete via Object.defineProperty path)
+- [x] GetMethod (inline in ToPrimitive, etc.)
+- [x] HasProperty / HasOwnProperty (has_property / has_own_property)
+- [x] Call (call_function)
+- [x] Construct (eval_new)
+- [x] SetIntegrityLevel / TestIntegrityLevel (Object.freeze / Object.isFrozen / Object.seal / Object.isSealed)
+- [x] CreateArrayFromList (create_array)
+- [x] LengthOfArrayLike (inline in Array methods)
 - [ ] CreateListFromArrayLike
 - [ ] Invoke
-- [ ] OrdinaryHasInstance
+- [x] OrdinaryHasInstance (instanceof operator)
 - [ ] SpeciesConstructor
-- [ ] EnumerableOwnProperties
+- [x] EnumerableOwnProperties (Object.keys/values/entries)
 - [ ] GetFunctionRealm
-- [ ] CopyDataProperties
+- [x] CopyDataProperties (Object.assign)
 - [ ] PrivateElementFind / PrivateFieldAdd / PrivateMethodOrAccessorAdd / PrivateGet / PrivateSet
 - [ ] DefineField
 - [ ] InitializeInstanceElements

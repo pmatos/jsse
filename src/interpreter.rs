@@ -4739,6 +4739,27 @@ impl Interpreter {
         }
     }
 
+    fn canonical_numeric_index_string(s: &str) -> Option<f64> {
+        if s == "-0" {
+            return Some(-0.0_f64);
+        }
+        let n: f64 = s.parse().ok()?;
+        if format!("{n}") == s { Some(n) } else { None }
+    }
+
+    fn to_index(&mut self, val: &JsValue) -> Completion {
+        if val.is_undefined() {
+            return Completion::Normal(JsValue::Number(0.0));
+        }
+        let integer_index = to_number(val);
+        let integer_index = if integer_index.is_nan() { 0.0 } else { integer_index.trunc() };
+        if integer_index < 0.0 || integer_index > 9007199254740991.0 {
+            let err = self.create_error("RangeError", "Invalid index");
+            return Completion::Throw(err);
+        }
+        Completion::Normal(JsValue::Number(integer_index))
+    }
+
     fn to_length(val: &JsValue) -> f64 {
         let len = to_number(val);
         if len.is_nan() || len <= 0.0 {
