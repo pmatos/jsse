@@ -37,17 +37,17 @@ Implement all ECMAScript language types, specification types, and type conversio
   - [x] Number::sameValueZero
   - [x] Number::bitwiseAND / bitwiseXOR / bitwiseOR
   - [x] Number::toString
-- [ ] `BigInt` type (§6.1.6.2)
+- [x] `BigInt` type (§6.1.6.2)
   - [x] Arbitrary precision integers
-  - [ ] BigInt::unaryMinus
-  - [ ] BigInt::bitwiseNOT
-  - [ ] BigInt::exponentiate
-  - [ ] BigInt::multiply / divide / remainder
-  - [ ] BigInt::add / subtract
-  - [ ] BigInt::leftShift / signedRightShift / unsignedRightShift
-  - [ ] BigInt::lessThan / equal
-  - [ ] BigInt::bitwiseAND / bitwiseXOR / bitwiseOR
-  - [ ] BigInt::toString
+  - [x] BigInt::unaryMinus
+  - [x] BigInt::bitwiseNOT
+  - [x] BigInt::exponentiate
+  - [x] BigInt::multiply / divide / remainder
+  - [x] BigInt::add / subtract
+  - [x] BigInt::leftShift / signedRightShift / unsignedRightShift
+  - [x] BigInt::lessThan / equal
+  - [x] BigInt::bitwiseAND / bitwiseXOR / bitwiseOR
+  - [x] BigInt::toString
 - [ ] `Object` type (§6.1.7) — initial representation
   - [ ] Property attributes (§6.1.7.1): data vs accessor descriptors
   - [ ] Internal methods table (§6.1.7.2)

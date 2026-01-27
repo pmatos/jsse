@@ -283,6 +283,102 @@ pub mod number_ops {
     }
 }
 
+// §6.1.6.2 BigInt type operations
+pub mod bigint_ops {
+    use num_bigint::BigInt;
+
+    pub fn unary_minus(x: &BigInt) -> BigInt {
+        -x
+    }
+
+    pub fn bitwise_not(x: &BigInt) -> BigInt {
+        // ~x = -(x + 1) for arbitrary precision
+        let result: BigInt = x + 1;
+        -result
+    }
+
+    pub fn exponentiate(base: &BigInt, exp: &BigInt) -> Result<BigInt, &'static str> {
+        use num_bigint::Sign;
+        if exp.sign() == Sign::Minus {
+            return Err("BigInt exponent must be non-negative");
+        }
+        let exp_u32: u32 = exp.try_into().map_err(|_| "BigInt exponent too large")?;
+        Ok(base.pow(exp_u32))
+    }
+
+    pub fn multiply(x: &BigInt, y: &BigInt) -> BigInt {
+        x * y
+    }
+
+    pub fn divide(x: &BigInt, y: &BigInt) -> Result<BigInt, &'static str> {
+        if y.sign() == num_bigint::Sign::NoSign {
+            return Err("Division by zero");
+        }
+        Ok(x / y)
+    }
+
+    pub fn remainder(x: &BigInt, y: &BigInt) -> Result<BigInt, &'static str> {
+        if y.sign() == num_bigint::Sign::NoSign {
+            return Err("Division by zero");
+        }
+        Ok(x % y)
+    }
+
+    pub fn add(x: &BigInt, y: &BigInt) -> BigInt {
+        x + y
+    }
+
+    pub fn subtract(x: &BigInt, y: &BigInt) -> BigInt {
+        x - y
+    }
+
+    pub fn left_shift(x: &BigInt, y: &BigInt) -> BigInt {
+        let shift: i64 = y.try_into().unwrap_or(0);
+        if shift >= 0 {
+            x << (shift as u64)
+        } else {
+            x >> ((-shift) as u64)
+        }
+    }
+
+    pub fn signed_right_shift(x: &BigInt, y: &BigInt) -> BigInt {
+        let shift: i64 = y.try_into().unwrap_or(0);
+        if shift >= 0 {
+            x >> (shift as u64)
+        } else {
+            x << ((-shift) as u64)
+        }
+    }
+
+    pub fn unsigned_right_shift(_x: &BigInt, _y: &BigInt) -> Result<BigInt, &'static str> {
+        Err("Cannot use >>> on BigInt")
+    }
+
+    pub fn less_than(x: &BigInt, y: &BigInt) -> Option<bool> {
+        Some(x < y)
+    }
+
+    pub fn equal(x: &BigInt, y: &BigInt) -> bool {
+        x == y
+    }
+
+    pub fn bitwise_and(x: &BigInt, y: &BigInt) -> BigInt {
+        x & y
+    }
+
+    pub fn bitwise_xor(x: &BigInt, y: &BigInt) -> BigInt {
+        x ^ y
+    }
+
+    pub fn bitwise_or(x: &BigInt, y: &BigInt) -> BigInt {
+        x | y
+    }
+
+    pub fn to_string(x: &BigInt) -> String {
+        x.to_string()
+    }
+}
+
 impl fmt::Display for JsValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -371,6 +467,72 @@ mod tests {
         assert_eq!(number_ops::left_shift(1.0, 4.0), 16.0);
         assert_eq!(number_ops::signed_right_shift(16.0, 2.0), 4.0);
         assert_eq!(number_ops::unsigned_right_shift(-1.0, 0.0), 4294967295.0);
+    }
+
+    #[test]
+    fn bigint_basic_ops() {
+        use num_bigint::BigInt;
+        let a = BigInt::from(10);
+        let b = BigInt::from(3);
+        assert_eq!(bigint_ops::add(&a, &b), BigInt::from(13));
+        assert_eq!(bigint_ops::subtract(&a, &b), BigInt::from(7));
+        assert_eq!(bigint_ops::multiply(&a, &b), BigInt::from(30));
+        assert_eq!(bigint_ops::divide(&a, &b).unwrap(), BigInt::from(3));
+        assert_eq!(bigint_ops::remainder(&a, &b).unwrap(), BigInt::from(1));
+        assert_eq!(bigint_ops::unary_minus(&a), BigInt::from(-10));
+    }
+
+    #[test]
+    fn bigint_bitwise_ops() {
+        use num_bigint::BigInt;
+        let a = BigInt::from(15);
+        let b = BigInt::from(9);
+        assert_eq!(bigint_ops::bitwise_and(&a, &b), BigInt::from(9));
+        assert_eq!(bigint_ops::bitwise_or(&a, &b), BigInt::from(15));
+        assert_eq!(bigint_ops::bitwise_xor(&a, &b), BigInt::from(6));
+        assert_eq!(bigint_ops::bitwise_not(&BigInt::from(0)), BigInt::from(-1));
+    }
+
+    #[test]
+    fn bigint_shift_ops() {
+        use num_bigint::BigInt;
+        assert_eq!(
+            bigint_ops::left_shift(&BigInt::from(1), &BigInt::from(4)),
+            BigInt::from(16)
+        );
+        assert_eq!(
+            bigint_ops::signed_right_shift(&BigInt::from(16), &BigInt::from(2)),
+            BigInt::from(4)
+        );
+        assert!(bigint_ops::unsigned_right_shift(&BigInt::from(1), &BigInt::from(1)).is_err());
+    }
+
+    #[test]
+    fn bigint_exponentiate() {
+        use num_bigint::BigInt;
+        assert_eq!(
+            bigint_ops::exponentiate(&BigInt::from(2), &BigInt::from(10)).unwrap(),
+            BigInt::from(1024)
+        );
+        assert!(bigint_ops::exponentiate(&BigInt::from(2), &BigInt::from(-1)).is_err());
+    }
+
+    #[test]
+    fn bigint_comparison() {
+        use num_bigint::BigInt;
+        assert_eq!(
+            bigint_ops::less_than(&BigInt::from(1), &BigInt::from(2)),
+            Some(true)
+        );
+        assert!(bigint_ops::equal(&BigInt::from(5), &BigInt::from(5)));
+        assert!(!bigint_ops::equal(&BigInt::from(5), &BigInt::from(6)));
+    }
+
+    #[test]
+    fn bigint_division_by_zero() {
+        use num_bigint::BigInt;
+        assert!(bigint_ops::divide(&BigInt::from(1), &BigInt::from(0)).is_err());
+        assert!(bigint_ops::remainder(&BigInt::from(1), &BigInt::from(0)).is_err());
     }
 
     #[test]
