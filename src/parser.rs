@@ -326,11 +326,85 @@ impl<'a> Parser<'a> {
     fn parse_block_statement(&mut self) -> Result<Statement, ParseError> {
         self.eat(&Token::LeftBrace)?;
         let mut stmts = Vec::new();
+        let mut lexical_names: Vec<String> = Vec::new();
         while self.current != Token::RightBrace && self.current != Token::Eof {
-            stmts.push(self.parse_statement_or_declaration()?);
+            let stmt = self.parse_statement_or_declaration()?;
+            Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
+            stmts.push(stmt);
         }
         self.eat(&Token::RightBrace)?;
         Ok(Statement::Block(stmts))
+    }
+
+    fn collect_lexical_names(
+        stmt: &Statement,
+        names: &mut Vec<String>,
+        _strict: bool,
+    ) -> Result<(), ParseError> {
+        let new_names: Vec<String> = match stmt {
+            Statement::Variable(decl) if decl.kind != VarKind::Var => {
+                Self::bound_names_from_decl(decl)
+            }
+            Statement::ClassDeclaration(cls) => {
+                vec![cls.name.clone()]
+            }
+            Statement::FunctionDeclaration(f) => {
+                vec![f.name.clone()]
+            }
+            _ => vec![],
+        };
+        for name in &new_names {
+            if names.contains(name) {
+                return Err(ParseError {
+                    message: format!("Identifier '{name}' has already been declared"),
+                });
+            }
+        }
+        names.extend(new_names);
+        Ok(())
+    }
+
+    fn bound_names_from_decl(decl: &VariableDeclaration) -> Vec<String> {
+        let mut names = Vec::new();
+        for d in &decl.declarations {
+            Self::bound_names_from_pattern(&d.pattern, &mut names);
+        }
+        names
+    }
+
+    fn bound_names_from_pattern(pat: &Pattern, names: &mut Vec<String>) {
+        match pat {
+            Pattern::Identifier(name) => names.push(name.clone()),
+            Pattern::Array(elems) => {
+                for elem in elems.iter().flatten() {
+                    match elem {
+                        ArrayPatternElement::Pattern(p) => {
+                            Self::bound_names_from_pattern(p, names);
+                        }
+                        ArrayPatternElement::Rest(p) => {
+                            Self::bound_names_from_pattern(p, names);
+                        }
+                    }
+                }
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::KeyValue(_, p) => {
+                            Self::bound_names_from_pattern(p, names);
+                        }
+                        ObjectPatternProperty::Shorthand(name) => {
+                            names.push(name.clone());
+                        }
+                        ObjectPatternProperty::Rest(p) => {
+                            Self::bound_names_from_pattern(p, names);
+                        }
+                    }
+                }
+            }
+            Pattern::Assign(inner, _) => Self::bound_names_from_pattern(inner, names),
+            Pattern::Rest(inner) => Self::bound_names_from_pattern(inner, names),
+        }
     }
 
     fn parse_variable_statement(&mut self) -> Result<Statement, ParseError> {
@@ -767,6 +841,7 @@ impl<'a> Parser<'a> {
         self.eat(&Token::LeftBrace)?;
         self.in_switch += 1;
         let mut cases = Vec::new();
+        let mut lexical_names: Vec<String> = Vec::new();
         while self.current != Token::RightBrace {
             let test = if self.current == Token::Keyword(Keyword::Case) {
                 self.advance()?;
@@ -783,7 +858,9 @@ impl<'a> Parser<'a> {
                 && self.current != Token::Keyword(Keyword::Case)
                 && self.current != Token::Keyword(Keyword::Default)
             {
-                consequent.push(self.parse_statement_or_declaration()?);
+                let stmt = self.parse_statement_or_declaration()?;
+                Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
+                consequent.push(stmt);
             }
             cases.push(SwitchCase { test, consequent });
         }
