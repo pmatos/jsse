@@ -316,9 +316,10 @@ impl Interpreter {
                 "Object".to_string(),
                 Rc::new(|interp, args| {
                     if let Some(val) = args.first()
-                        && matches!(val, JsValue::Object(_)) {
-                            return Completion::Normal(val.clone());
-                        }
+                        && matches!(val, JsValue::Object(_))
+                    {
+                        return Completion::Normal(val.clone());
+                    }
                     let _obj = interp.create_object();
                     Completion::Normal(JsValue::Object(crate::types::JsObject {
                         id: interp.objects.len() as u64 - 1,
@@ -682,12 +683,13 @@ impl Interpreter {
         // Set prototype.constructor = func
         if !is_arrow
             && let Some(JsValue::Object(proto_ref)) = obj.borrow().properties.get("prototype")
-                && let Some(proto_obj) = self.get_object(proto_ref.id) {
-                    proto_obj
-                        .borrow_mut()
-                        .properties
-                        .insert("constructor".to_string(), func_val.clone());
-                }
+            && let Some(proto_obj) = self.get_object(proto_ref.id)
+        {
+            proto_obj
+                .borrow_mut()
+                .properties
+                .insert("constructor".to_string(), func_val.clone());
+        }
         func_val
     }
 
@@ -1003,38 +1005,38 @@ impl Interpreter {
             return Completion::Normal(JsValue::Undefined);
         }
         if let JsValue::Object(ref o) = obj_val
-            && let Some(obj) = self.get_object(o.id) {
-                let keys: Vec<String> = obj.borrow().properties.keys().cloned().collect();
-                for key in keys {
-                    let key_val = JsValue::String(JsString::from_str(&key));
-                    let for_env = Environment::new(Some(env.clone()));
-                    match &fi.left {
-                        ForInOfLeft::Variable(decl) => {
-                            let kind = match decl.kind {
-                                VarKind::Var => BindingKind::Var,
-                                VarKind::Let => BindingKind::Let,
-                                VarKind::Const => BindingKind::Const,
-                            };
-                            if let Some(d) = decl.declarations.first()
-                                && let Err(e) =
-                                    self.bind_pattern(&d.pattern, key_val, kind, &for_env)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                        }
-                        ForInOfLeft::Pattern(pat) => {
-                            if let Pattern::Identifier(name) = pat {
-                                let _ = env.borrow_mut().set(name, key_val);
-                            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let keys: Vec<String> = obj.borrow().properties.keys().cloned().collect();
+            for key in keys {
+                let key_val = JsValue::String(JsString::from_str(&key));
+                let for_env = Environment::new(Some(env.clone()));
+                match &fi.left {
+                    ForInOfLeft::Variable(decl) => {
+                        let kind = match decl.kind {
+                            VarKind::Var => BindingKind::Var,
+                            VarKind::Let => BindingKind::Let,
+                            VarKind::Const => BindingKind::Const,
+                        };
+                        if let Some(d) = decl.declarations.first()
+                            && let Err(e) = self.bind_pattern(&d.pattern, key_val, kind, &for_env)
+                        {
+                            return Completion::Throw(e);
                         }
                     }
-                    match self.exec_statement(&fi.body, &for_env) {
-                        Completion::Normal(_) | Completion::Continue(None) => {}
-                        Completion::Break(None) => break,
-                        other => return other,
+                    ForInOfLeft::Pattern(pat) => {
+                        if let Pattern::Identifier(name) = pat {
+                            let _ = env.borrow_mut().set(name, key_val);
+                        }
                     }
                 }
+                match self.exec_statement(&fi.body, &for_env) {
+                    Completion::Normal(_) | Completion::Continue(None) => {}
+                    Completion::Break(None) => break,
+                    other => return other,
+                }
             }
+        }
         Completion::Normal(JsValue::Undefined)
     }
 
@@ -1047,9 +1049,9 @@ impl Interpreter {
                     let catch_env = Environment::new(Some(env.clone()));
                     if let Some(param) = &handler.param
                         && let Err(e) = self.bind_pattern(param, val, BindingKind::Let, &catch_env)
-                        {
-                            return Completion::Throw(e);
-                        }
+                    {
+                        return Completion::Throw(e);
+                    }
                     self.exec_statements(&handler.body, &catch_env)
                 } else {
                     Completion::Throw(val)
@@ -1099,20 +1101,19 @@ impl Interpreter {
                 }
             }
         }
-        if !found
-            && let Some(idx) = default_idx {
-                for case in &s.cases[idx..] {
-                    for stmt in &case.consequent {
-                        match self.exec_statement(stmt, &switch_env) {
-                            Completion::Normal(_) => {}
-                            Completion::Break(None) => {
-                                return Completion::Normal(JsValue::Undefined);
-                            }
-                            other => return other,
+        if !found && let Some(idx) = default_idx {
+            for case in &s.cases[idx..] {
+                for stmt in &case.consequent {
+                    match self.exec_statement(stmt, &switch_env) {
+                        Completion::Normal(_) => {}
+                        Completion::Break(None) => {
+                            return Completion::Normal(JsValue::Undefined);
                         }
+                        other => return other,
                     }
                 }
             }
+        }
         Completion::Normal(JsValue::Undefined)
     }
 
@@ -1439,16 +1440,17 @@ impl Interpreter {
                     }
                 };
                 if let JsValue::Object(ref o) = obj_val
-                    && let Some(obj) = self.get_object(o.id) {
-                        let final_val = if op == AssignOp::Assign {
-                            rval
-                        } else {
-                            let lval = obj.borrow().get_property(&key);
-                            self.apply_compound_assign(op, &lval, &rval)
-                        };
-                        obj.borrow_mut().properties.insert(key, final_val.clone());
-                        return Completion::Normal(final_val);
-                    }
+                    && let Some(obj) = self.get_object(o.id)
+                {
+                    let final_val = if op == AssignOp::Assign {
+                        rval
+                    } else {
+                        let lval = obj.borrow().get_property(&key);
+                        self.apply_compound_assign(op, &lval, &rval)
+                    };
+                    obj.borrow_mut().properties.insert(key, final_val.clone());
+                    return Completion::Normal(final_val);
+                }
                 Completion::Normal(rval)
             }
             _ => Completion::Normal(rval),
@@ -1534,50 +1536,49 @@ impl Interpreter {
         args: &[JsValue],
     ) -> Completion {
         if let JsValue::Object(o) = func_val
-            && let Some(obj) = self.get_object(o.id) {
-                let callable = obj.borrow().callable.clone();
-                if let Some(func) = callable {
-                    return match func {
-                        JsFunction::Native(_, f) => f(self, args),
-                        JsFunction::User {
-                            params,
-                            body,
-                            closure,
-                            is_arrow,
-                            ..
-                        } => {
-                            let func_env = Environment::new(Some(closure));
-                            // Bind parameters
-                            for (i, param) in params.iter().enumerate() {
-                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
-                            }
-                            // Bind this (arrow functions inherit from closure)
-                            if !is_arrow {
-                                func_env.borrow_mut().bindings.insert(
-                                    "this".to_string(),
-                                    Binding {
-                                        value: _this_val.clone(),
-                                        kind: BindingKind::Const,
-                                        initialized: true,
-                                    },
-                                );
-                            }
-                            // Create arguments object
-                            let arguments_obj = self.create_arguments_object(args);
-                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            let result = self.exec_statements(&body, &func_env);
-                            match result {
-                                Completion::Return(v) | Completion::Normal(v) => {
-                                    Completion::Normal(v)
-                                }
-                                other => other,
-                            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let callable = obj.borrow().callable.clone();
+            if let Some(func) = callable {
+                return match func {
+                    JsFunction::Native(_, f) => f(self, args),
+                    JsFunction::User {
+                        params,
+                        body,
+                        closure,
+                        is_arrow,
+                        ..
+                    } => {
+                        let func_env = Environment::new(Some(closure));
+                        // Bind parameters
+                        for (i, param) in params.iter().enumerate() {
+                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                            let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
                         }
-                    };
-                }
+                        // Bind this (arrow functions inherit from closure)
+                        if !is_arrow {
+                            func_env.borrow_mut().bindings.insert(
+                                "this".to_string(),
+                                Binding {
+                                    value: _this_val.clone(),
+                                    kind: BindingKind::Const,
+                                    initialized: true,
+                                },
+                            );
+                        }
+                        // Create arguments object
+                        let arguments_obj = self.create_arguments_object(args);
+                        func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                        let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                        let result = self.exec_statements(&body, &func_env);
+                        match result {
+                            Completion::Return(v) | Completion::Normal(v) => Completion::Normal(v),
+                            other => other,
+                        }
+                    }
+                };
             }
+        }
         Completion::Throw(JsValue::String(JsString::from_str("is not a function")))
     }
 
@@ -1598,18 +1599,20 @@ impl Interpreter {
         let new_obj = self.create_object();
         // Set prototype from constructor.prototype if available
         if let JsValue::Object(o) = &callee_val
-            && let Some(func_obj) = self.get_object(o.id) {
-                let proto = func_obj.borrow().properties.get("prototype").cloned();
-                if let Some(JsValue::Object(proto_obj)) = proto
-                    && let Some(proto_rc) = self.get_object(proto_obj.id) {
-                        new_obj.borrow_mut().prototype = Some(proto_rc);
-                    }
-                // Store constructor reference
-                new_obj
-                    .borrow_mut()
-                    .properties
-                    .insert("constructor".to_string(), callee_val.clone());
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            let proto = func_obj.borrow().properties.get("prototype").cloned();
+            if let Some(JsValue::Object(proto_obj)) = proto
+                && let Some(proto_rc) = self.get_object(proto_obj.id)
+            {
+                new_obj.borrow_mut().prototype = Some(proto_rc);
             }
+            // Store constructor reference
+            new_obj
+                .borrow_mut()
+                .properties
+                .insert("constructor".to_string(), callee_val.clone());
+        }
         let this_val = JsValue::Object(crate::types::JsObject {
             id: self.objects.len() as u64 - 1,
         });
@@ -1717,11 +1720,12 @@ impl Interpreter {
                     other => return other,
                 };
                 if let JsValue::Object(ref o) = spread_val
-                    && let Some(src) = self.get_object(o.id) {
-                        for (k, v) in &src.borrow().properties {
-                            obj_data.properties.insert(k.clone(), v.clone());
-                        }
+                    && let Some(src) = self.get_object(o.id)
+                {
+                    for (k, v) in &src.borrow().properties {
+                        obj_data.properties.insert(k.clone(), v.clone());
                     }
+                }
                 continue;
             }
             obj_data.properties.insert(key, value);
@@ -1833,9 +1837,10 @@ fn typeof_val<'a>(val: &JsValue, objects: &[Rc<RefCell<JsObjectData>>]) -> &'a s
         JsValue::BigInt(_) => "bigint",
         JsValue::Object(o) => {
             if let Some(obj) = objects.get(o.id as usize)
-                && obj.borrow().callable.is_some() {
-                    return "function";
-                }
+                && obj.borrow().callable.is_some()
+            {
+                return "function";
+            }
             "object"
         }
     }
