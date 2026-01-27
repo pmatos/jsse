@@ -87,6 +87,7 @@ pub enum Token {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keyword {
+    Async,
     Await,
     Break,
     Case,
@@ -130,6 +131,7 @@ pub enum Keyword {
 impl Keyword {
     pub fn from_str(s: &str) -> Option<Keyword> {
         match s {
+            "async" => Some(Keyword::Async),
             "await" => Some(Keyword::Await),
             "break" => Some(Keyword::Break),
             "case" => Some(Keyword::Case),
@@ -176,6 +178,7 @@ impl Keyword {
 impl fmt::Display for Keyword {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
+            Keyword::Async => "async",
             Keyword::Await => "await",
             Keyword::Break => "break",
             Keyword::Case => "case",
