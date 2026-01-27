@@ -8,117 +8,120 @@ Build a complete recursive descent parser producing an AST from the token stream
 ## Tasks
 
 ### 4.1 AST Node Types
-- [ ] Design AST node hierarchy
+- [x] Design AST node hierarchy
 - [ ] Source location tracking (line, column, byte offset) for all nodes
 - [ ] Implement `Display` / debug printing for AST
 
 ### 4.2 Primary Expressions (§13.2)
-- [ ] `this`
-- [ ] IdentifierReference
-- [ ] Literal (null, boolean, numeric, string)
-- [ ] ArrayLiteral (including elision and spread)
-- [ ] ObjectLiteral (property definitions, computed properties, shorthand, spread)
-- [ ] FunctionExpression
-- [ ] ClassExpression
-- [ ] GeneratorExpression
+- [x] `this`
+- [x] IdentifierReference
+- [x] Literal (null, boolean, numeric, string)
+- [x] ArrayLiteral (including elision and spread)
+- [x] ObjectLiteral (property definitions, computed properties, shorthand, spread)
+- [x] FunctionExpression
+- [x] ClassExpression
+- [x] GeneratorExpression
 - [ ] AsyncFunctionExpression
 - [ ] AsyncGeneratorExpression
-- [ ] RegularExpressionLiteral
-- [ ] TemplateLiteral
-- [ ] CoverParenthesizedExpressionAndArrowParameterList (parenthesized / arrow params)
+- [x] RegularExpressionLiteral
+- [x] TemplateLiteral
+- [x] CoverParenthesizedExpressionAndArrowParameterList (parenthesized / arrow params)
 
 ### 4.3 Left-Hand Side Expressions (§13.3)
-- [ ] MemberExpression (dot, bracket, tagged template, `super` property, `import.meta`, `new` with args)
-- [ ] `new` expression
-- [ ] CallExpression (function call, `super()`, `import()`)
-- [ ] OptionalExpression / OptionalChaining (`?.`)
+- [x] MemberExpression (dot, bracket, tagged template, `super` property, `new` with args)
+- [ ] `import.meta`
+- [x] `new` expression
+- [x] CallExpression (function call, `super()`)
+- [ ] `import()` dynamic import
+- [x] OptionalExpression / OptionalChaining (`?.`)
 
 ### 4.4 Update Expressions (§13.4)
-- [ ] Postfix `++` / `--`
-- [ ] Prefix `++` / `--`
+- [x] Postfix `++` / `--`
+- [x] Prefix `++` / `--`
 
 ### 4.5 Unary Expressions (§13.5)
-- [ ] `delete`
-- [ ] `void`
-- [ ] `typeof`
-- [ ] Unary `+` / `-`
-- [ ] Bitwise NOT `~`
-- [ ] Logical NOT `!`
+- [x] `delete`
+- [x] `void`
+- [x] `typeof`
+- [x] Unary `+` / `-`
+- [x] Bitwise NOT `~`
+- [x] Logical NOT `!`
 - [ ] `await`
 
 ### 4.6 Binary Expressions (§13.6–13.12)
-- [ ] Exponentiation `**` (§13.6)
-- [ ] Multiplicative `*`, `/`, `%` (§13.7)
-- [ ] Additive `+`, `-` (§13.8)
-- [ ] Shift `<<`, `>>`, `>>>` (§13.9)
-- [ ] Relational `<`, `>`, `<=`, `>=`, `instanceof`, `in` (§13.10)
-- [ ] Equality `==`, `!=`, `===`, `!==` (§13.11)
-- [ ] Bitwise AND `&`, XOR `^`, OR `|` (§13.12)
+- [x] Exponentiation `**` (§13.6)
+- [x] Multiplicative `*`, `/`, `%` (§13.7)
+- [x] Additive `+`, `-` (§13.8)
+- [x] Shift `<<`, `>>`, `>>>` (§13.9)
+- [x] Relational `<`, `>`, `<=`, `>=`, `instanceof`, `in` (§13.10)
+- [x] Equality `==`, `!=`, `===`, `!==` (§13.11)
+- [x] Bitwise AND `&`, XOR `^`, OR `|` (§13.12)
 
 ### 4.7 Logical & Conditional Expressions (§13.13–13.14)
-- [ ] Logical AND `&&` / OR `||` (§13.13)
-- [ ] Nullish coalescing `??` (§13.13)
-- [ ] Conditional (ternary) `? :` (§13.14)
+- [x] Logical AND `&&` / OR `||` (§13.13)
+- [x] Nullish coalescing `??` (§13.13)
+- [x] Conditional (ternary) `? :` (§13.14)
 
 ### 4.8 Assignment Expressions (§13.15)
-- [ ] Simple assignment `=`
-- [ ] Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `<<=`, `>>=`, `>>>=`, `&=`, `^=`, `|=`, `&&=`, `||=`, `??=`)
-- [ ] Destructuring assignment (array / object patterns)
+- [x] Simple assignment `=`
+- [x] Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `<<=`, `>>=`, `>>>=`, `&=`, `^=`, `|=`, `&&=`, `||=`, `??=`)
+- [x] Destructuring assignment (array / object patterns)
 - [ ] AssignmentTargetType validation
 
 ### 4.9 Comma & Sequence Expressions (§13.16)
-- [ ] Comma operator
+- [x] Comma operator
 
 ### 4.10 Statements (§14)
-- [ ] Block statement `{ ... }` (§14.2)
-- [ ] Variable statement `var` (§14.3.2)
-- [ ] Empty statement `;` (§14.4)
-- [ ] Expression statement (§14.5)
-- [ ] `if` / `else` (§14.6)
-- [ ] Iteration statements (§14.7)
-  - [ ] `do`-`while`
-  - [ ] `while`
-  - [ ] `for`
-  - [ ] `for`-`in`
-  - [ ] `for`-`of`
+- [x] Block statement `{ ... }` (§14.2)
+- [x] Variable statement `var` (§14.3.2)
+- [x] Empty statement `;` (§14.4)
+- [x] Expression statement (§14.5)
+- [x] `if` / `else` (§14.6)
+- [x] Iteration statements (§14.7)
+  - [x] `do`-`while`
+  - [x] `while`
+  - [x] `for`
+  - [x] `for`-`in`
+  - [x] `for`-`of`
   - [ ] `for await`-`of`
-- [ ] `continue` (§14.8)
-- [ ] `break` (§14.9)
-- [ ] `return` (§14.10)
-- [ ] `with` (§14.11) — sloppy mode only
-- [ ] `switch` (§14.12)
-- [ ] Labelled statements (§14.13)
-- [ ] `throw` (§14.14)
-- [ ] `try` / `catch` / `finally` (§14.15)
-- [ ] `debugger` (§14.16)
+- [x] `continue` (§14.8)
+- [x] `break` (§14.9)
+- [x] `return` (§14.10)
+- [x] `with` (§14.11) — sloppy mode only
+- [x] `switch` (§14.12)
+- [x] Labelled statements (§14.13)
+- [x] `throw` (§14.14)
+- [x] `try` / `catch` / `finally` (§14.15)
+- [x] `debugger` (§14.16)
 
 ### 4.11 Declarations (§14.3)
-- [ ] `let` declarations (§14.3.1)
-- [ ] `const` declarations (§14.3.1)
-- [ ] Binding patterns (array/object destructuring) (§14.3.3)
+- [x] `let` declarations (§14.3.1)
+- [x] `const` declarations (§14.3.1)
+- [x] Binding patterns (array/object destructuring) (§14.3.3)
 - [ ] `using` / `await using` declarations
 
 ### 4.12 Function Definitions (§15.2–15.8)
-- [ ] FunctionDeclaration / FunctionExpression
-- [ ] Arrow function `=>`
-- [ ] GeneratorDeclaration / GeneratorExpression
+- [x] FunctionDeclaration / FunctionExpression
+- [x] Arrow function `=>`
+- [x] GeneratorDeclaration / GeneratorExpression
 - [ ] AsyncFunctionDeclaration / AsyncFunctionExpression
 - [ ] AsyncGeneratorDeclaration / AsyncGeneratorExpression
-- [ ] Method definitions (get/set/generator/async)
-- [ ] Default parameters
-- [ ] Rest parameters `...`
+- [x] Method definitions (get/set/generator/async)
+- [x] Default parameters
+- [x] Rest parameters `...`
 
 ### 4.13 Class Definitions (§15.7)
-- [ ] ClassDeclaration / ClassExpression
-- [ ] `extends` clause
-- [ ] ClassBody
-- [ ] Method definitions (static, instance, computed)
-- [ ] Field declarations (public, private `#`)
-- [ ] Static initialization blocks
+- [x] ClassDeclaration / ClassExpression
+- [x] `extends` clause
+- [x] ClassBody
+- [x] Method definitions (static, instance, computed)
+- [x] Field declarations (public)
+- [ ] Field declarations (private `#`)
+- [x] Static initialization blocks
 - [ ] Private names (`#name`)
 
 ### 4.14 Scripts & Modules (§16)
-- [ ] Script goal parsing
+- [x] Script goal parsing
 - [ ] Module goal parsing
 - [ ] `import` declarations (§16.2.2)
   - [ ] Named imports
@@ -149,7 +152,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [ ] Labelled function declarations (strict mode restrictions)
 
 ### 4.16 Operator Precedence
-- [ ] Correct precedence for all operators (comma < assignment < conditional < nullish < or < and < bitwise-or < bitwise-xor < bitwise-and < equality < relational < shift < additive < multiplicative < exponentiation < unary < update < LHS)
+- [x] Correct precedence for all operators
 
 ## test262 Tests
 - All `language/expressions/` — 11,093 tests (syntax parsing subset)
