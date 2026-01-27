@@ -1615,6 +1615,19 @@ impl<'a> Parser<'a> {
 
     fn parse_new_expression(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // new
+        if self.current == Token::Dot {
+            self.advance()?; // .
+            if let Token::Identifier(ref name) = self.current {
+                if name == "target" {
+                    if self.in_function == 0 {
+                        return Err(self.error("new.target expression is not allowed here"));
+                    }
+                    self.advance()?; // target
+                    return Ok(Expression::NewTarget);
+                }
+            }
+            return Err(self.error("Expected 'target' after 'new.'"));
+        }
         if self.current == Token::Keyword(Keyword::New) {
             let inner = self.parse_new_expression()?;
             return Ok(Expression::New(Box::new(inner), Vec::new()));

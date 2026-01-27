@@ -104,6 +104,7 @@ pub enum Expression {
     Delete(Box<Expression>),
     Sequence(Vec<Expression>),
     Import(Box<Expression>), // dynamic import
+    NewTarget,
 }
 
 #[derive(Clone, Debug)]

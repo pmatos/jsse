@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 11,378  | 30,698  | 27.04%    |
+| 48,257      | 42,076  | 6,181   | 11,384  | 30,692  | 27.06%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -35,6 +35,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Objects and arrays (literals, member access, computed properties)
   - Template literals
   - `new` operator with prototype chain setup
+  - `new.target` meta-property
   - `this` binding (method calls, constructors, arrow lexical scoping)
   - Property descriptors (data properties with writable/enumerable/configurable)
   - Prototype chain inheritance (Object.prototype on all objects)

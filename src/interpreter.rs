@@ -361,6 +361,7 @@ pub struct Interpreter {
     boolean_prototype: Option<Rc<RefCell<JsObjectData>>>,
     regexp_prototype: Option<Rc<RefCell<JsObjectData>>>,
     next_symbol_id: u64,
+    new_target: Option<JsValue>,
 }
 
 impl Interpreter {
@@ -395,6 +396,7 @@ impl Interpreter {
             boolean_prototype: None,
             regexp_prototype: None,
             next_symbol_id: 1,
+            new_target: None,
         };
         interp.setup_globals();
         interp
@@ -4520,6 +4522,31 @@ impl Interpreter {
         self.exec_statements(&program.body, &self.global_env.clone())
     }
 
+    pub fn format_value(&self, val: &JsValue) -> String {
+        match val {
+            JsValue::Object(o) => {
+                if let Some(obj) = self.get_object(o.id) {
+                    let obj = obj.borrow();
+                    let name = obj.get_property("name");
+                    let message = obj.get_property("message");
+                    if let JsValue::String(ref msg) = message {
+                        let msg_str = msg.to_rust_string();
+                        if let JsValue::String(ref n) = name {
+                            let n_str = n.to_rust_string();
+                            if n_str.is_empty() {
+                                return msg_str;
+                            }
+                            return format!("{n_str}: {msg_str}");
+                        }
+                        return msg_str;
+                    }
+                }
+                format!("{val}")
+            }
+            _ => format!("{val}"),
+        }
+    }
+
     fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
         // Hoist var and function declarations
         for stmt in stmts {
@@ -5125,6 +5152,9 @@ impl Interpreter {
             }
             Expression::Super => {
                 Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::Undefined))
+            }
+            Expression::NewTarget => {
+                Completion::Normal(self.new_target.clone().unwrap_or(JsValue::Undefined))
             }
             Expression::Unary(op, operand) => {
                 let val = match self.eval_expr(operand, env) {
@@ -6307,10 +6337,12 @@ impl Interpreter {
         let this_val = JsValue::Object(crate::types::JsObject {
             id: self.objects.len() as u64 - 1,
         });
+        let prev_new_target = self.new_target.take();
+        self.new_target = Some(callee_val.clone());
         let result = self.call_function(&callee_val, &this_val, &evaluated_args);
+        self.new_target = prev_new_target;
         match result {
             Completion::Normal(v) => {
-                // If constructor returns an object, use it; otherwise return this
                 if matches!(v, JsValue::Object(_)) {
                     Completion::Normal(v)
                 } else {

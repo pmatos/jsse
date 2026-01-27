@@ -33,7 +33,7 @@ fn run_source(source: &str) -> Result<(), EngineError> {
     let mut interp = interpreter::Interpreter::new();
     match interp.run(&program) {
         interpreter::Completion::Throw(val) => {
-            Err(EngineError::Runtime(interpreter::to_js_string(&val)))
+            Err(EngineError::Runtime(interp.format_value(&val)))
         }
         _ => Ok(()),
     }
