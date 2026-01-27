@@ -5258,6 +5258,14 @@ impl Interpreter {
                 Completion::Normal(result)
             }
             Expression::Spread(_) => Completion::Normal(JsValue::Undefined), // handled by caller
+            Expression::Yield(expr, _delegate) => {
+                // Stub: generators not yet implemented, evaluate the expression and return it
+                if let Some(expr) = expr {
+                    self.eval_expr(expr, env)
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
             Expression::Template(tmpl) => {
                 let mut s = String::new();
                 for (i, quasi) in tmpl.quasis.iter().enumerate() {

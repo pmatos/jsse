@@ -34,7 +34,7 @@ Implement a complete lexer that tokenizes ECMAScript source text according to th
   - [x] Unicode escape sequences in identifiers (`\uXXXX`, `\u{XXXXX}`)
   - [x] Reserved words (§12.7.1): `await`, `break`, `case`, `catch`, `class`, `const`, `continue`, `debugger`, `default`, `delete`, `do`, `else`, `enum`, `export`, `extends`, `false`, `finally`, `for`, `function`, `if`, `import`, `in`, `instanceof`, `new`, `null`, `of`, `return`, `super`, `switch`, `this`, `throw`, `true`, `try`, `typeof`, `var`, `void`, `while`, `with`, `yield`
   - [x] Strict mode additional reserved words: `implements`, `interface`, `package`, `private`, `protected`, `public` (`let` and `static` already handled)
-  - [ ] `await` and `yield` context-sensitive keywords
+  - [x] `await` and `yield` context-sensitive keywords
 - [x] Punctuators (§12.8): all standard punctuators
 - [x] NumericLiteral (§12.9.3)
   - [x] DecimalLiteral (integer, float, exponential)

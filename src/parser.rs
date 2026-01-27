@@ -26,6 +26,8 @@ pub struct Parser<'a> {
     pushback: Option<(Token, bool)>, // (token, had_line_terminator_before)
     strict: bool,
     in_function: u32,
+    in_generator: bool,
+    in_async: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -47,6 +49,8 @@ impl<'a> Parser<'a> {
             pushback: None,
             strict: false,
             in_function: 0,
+            in_generator: false,
+            in_async: false,
         })
     }
 
@@ -113,6 +117,36 @@ impl<'a> Parser<'a> {
     fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
         self.lexer.strict = strict;
+    }
+
+    fn eat_star(&mut self) -> Result<bool, ParseError> {
+        if self.current == Token::Star {
+            self.advance()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn parse_optional_label(&mut self) -> Result<Option<String>, ParseError> {
+        if !self.prev_line_terminator {
+            if let Some(name) = self.current_identifier_name() {
+                self.advance()?;
+                return Ok(Some(name));
+            }
+        }
+        Ok(None)
+    }
+
+    fn current_identifier_name(&self) -> Option<String> {
+        match &self.current {
+            Token::Identifier(name) => Some(name.clone()),
+            Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => {
+                Some("yield".to_string())
+            }
+            Token::Keyword(Keyword::Await) if !self.in_async => Some("await".to_string()),
+            _ => None,
+        }
     }
 
     fn collect_bound_names(pattern: &Pattern, names: &mut Vec<String>) {
@@ -258,8 +292,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expression_statement_or_labeled(&mut self) -> Result<Statement, ParseError> {
-        if let Token::Identifier(name) = &self.current {
-            let name = name.clone();
+        if let Some(name) = self.current_identifier_name() {
+            let orig_token = self.current.clone();
             let ident_lt = self.prev_line_terminator;
             self.advance()?;
             if self.current == Token::Colon {
@@ -268,7 +302,7 @@ impl<'a> Parser<'a> {
                 return Ok(Statement::Labeled(name, Box::new(stmt)));
             }
             // Not a label — push back current and restore identifier
-            let after_tok = std::mem::replace(&mut self.current, Token::Identifier(name));
+            let after_tok = std::mem::replace(&mut self.current, orig_token);
             let after_lt = std::mem::replace(&mut self.prev_line_terminator, ident_lt);
             self.pushback = Some((after_tok, after_lt));
         }
@@ -331,18 +365,17 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_binding_pattern(&mut self) -> Result<Pattern, ParseError> {
-        match &self.current {
-            Token::Identifier(name) => {
-                let name = name.clone();
-                self.check_strict_identifier(&name)?;
-                if self.strict && (name == "eval" || name == "arguments") {
-                    return Err(self.error(format!(
-                        "'{name}' can't be defined or assigned to in strict mode code"
-                    )));
-                }
-                self.advance()?;
-                Ok(Pattern::Identifier(name))
+        if let Some(name) = self.current_identifier_name() {
+            self.check_strict_identifier(&name)?;
+            if self.strict && (name == "eval" || name == "arguments") {
+                return Err(self.error(format!(
+                    "'{name}' can't be defined or assigned to in strict mode code"
+                )));
             }
+            self.advance()?;
+            return Ok(Pattern::Identifier(name));
+        }
+        match &self.current {
             Token::LeftBracket => self.parse_array_pattern(),
             Token::LeftBrace => self.parse_object_pattern(),
             _ => Err(self.error(format!("Expected binding pattern, got {:?}", self.current))),
@@ -612,35 +645,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_break_statement(&mut self) -> Result<Statement, ParseError> {
-        self.advance()?; // break
-        let label = if !self.prev_line_terminator {
-            if let Token::Identifier(name) = &self.current {
-                let name = name.clone();
-                self.advance()?;
-                Some(name)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        self.advance()?;
+        let label = self.parse_optional_label()?;
         self.eat_semicolon()?;
         Ok(Statement::Break(label))
     }
 
     fn parse_continue_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?;
-        let label = if !self.prev_line_terminator {
-            if let Token::Identifier(name) = &self.current {
-                let name = name.clone();
-                self.advance()?;
-                Some(name)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let label = self.parse_optional_label()?;
         self.eat_semicolon()?;
         Ok(Statement::Continue(label))
     }
@@ -752,30 +765,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function_declaration(&mut self) -> Result<Statement, ParseError> {
-        let is_async = if self.current == Token::Keyword(Keyword::Async) {
+        let is_async = self.current == Token::Keyword(Keyword::Async);
+        if is_async {
             self.advance()?;
-            true
-        } else {
-            false
-        };
+        }
         self.eat(&Token::Keyword(Keyword::Function))?;
-        let is_generator = if self.current == Token::Star {
-            self.advance()?;
-            true
-        } else {
-            false
-        };
-        let name = match &self.current {
-            Token::Identifier(n) => {
-                let n = n.clone();
+        let is_generator = self.eat_star()?;
+        let name = match self.current_identifier_name() {
+            Some(n) => {
                 self.check_strict_identifier(&n)?;
                 self.advance()?;
                 n
             }
-            _ => return Err(self.error("Expected function name")),
+            None => return Err(self.error("Expected function name")),
         };
         let params = self.parse_formal_parameters()?;
-        let (body, body_strict) = self.parse_function_body()?;
+        let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
         if body_strict {
             self.check_duplicate_params_strict(&params)?;
         }
@@ -790,13 +795,12 @@ impl<'a> Parser<'a> {
 
     fn parse_class_declaration(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // class
-        let name = match &self.current {
-            Token::Identifier(n) => {
-                let n = n.clone();
+        let name = match self.current_identifier_name() {
+            Some(n) => {
                 self.advance()?;
                 n
             }
-            _ => return Err(self.error("Expected class name")),
+            None => return Err(self.error("Expected class name")),
         };
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
             self.advance()?;
@@ -830,10 +834,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_class_element(&mut self) -> Result<ClassElement, ParseError> {
-        let is_static = if self.current == Token::Keyword(Keyword::Static) {
+        let is_static = self.current == Token::Keyword(Keyword::Static);
+        if is_static {
             self.advance()?;
             if self.current == Token::LeftBrace {
-                // static block
                 self.eat(&Token::LeftBrace)?;
                 let mut stmts = Vec::new();
                 while self.current != Token::RightBrace {
@@ -842,10 +846,7 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::RightBrace)?;
                 return Ok(ClassElement::StaticBlock(stmts));
             }
-            true
-        } else {
-            false
-        };
+        }
 
         let kind = match &self.current {
             Token::Identifier(n) if n == "get" => {
@@ -882,12 +883,7 @@ impl<'a> Parser<'a> {
             _ => ClassMethodKind::Method,
         };
 
-        let is_generator = if self.current == Token::Star {
-            self.advance()?;
-            true
-        } else {
-            false
-        };
+        let is_generator = self.eat_star()?;
 
         let (key, computed) = self.parse_property_name()?;
         let is_constructor = !is_static
@@ -962,7 +958,7 @@ impl<'a> Parser<'a> {
         is_generator: bool,
     ) -> Result<FunctionExpr, ParseError> {
         let params = self.parse_formal_parameters()?;
-        let (body, body_strict) = self.parse_function_body()?;
+        let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
         if body_strict {
             self.check_duplicate_params_strict(&params)?;
         }
@@ -1002,9 +998,17 @@ impl<'a> Parser<'a> {
         Ok(params)
     }
 
-    fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
+    fn parse_function_body_with_context(
+        &mut self,
+        is_generator: bool,
+        is_async: bool,
+    ) -> Result<(Vec<Statement>, bool), ParseError> {
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
+        let prev_generator = self.in_generator;
+        let prev_async = self.in_async;
+        self.in_generator = is_generator;
+        self.in_async = is_async;
         self.in_function += 1;
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
@@ -1027,9 +1031,15 @@ impl<'a> Parser<'a> {
 
         let was_strict = self.strict;
         self.in_function -= 1;
+        self.in_generator = prev_generator;
+        self.in_async = prev_async;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))
+    }
+
+    fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
+        self.parse_function_body_with_context(false, false)
     }
 
     fn parse_expression_statement(&mut self) -> Result<Statement, ParseError> {
@@ -1052,7 +1062,38 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parse_yield_expression(&mut self) -> Result<Expression, ParseError> {
+        self.advance()?;
+        if self.prev_line_terminator
+            || matches!(
+                self.current,
+                Token::RightBrace
+                    | Token::Semicolon
+                    | Token::RightParen
+                    | Token::RightBracket
+                    | Token::Colon
+                    | Token::Comma
+                    | Token::Eof
+            )
+        {
+            return Ok(Expression::Yield(None, false));
+        }
+        let delegate = if self.current == Token::Star {
+            self.advance()?;
+            true
+        } else {
+            false
+        };
+        let expr = self.parse_assignment_expression()?;
+        Ok(Expression::Yield(Some(Box::new(expr)), delegate))
+    }
+
     fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
+        // YieldExpression in generator context
+        if self.in_generator && self.current == Token::Keyword(Keyword::Yield) {
+            return self.parse_yield_expression();
+        }
+
         let left = self.parse_conditional_expression()?;
 
         let op = match &self.current {
@@ -1321,7 +1362,7 @@ impl<'a> Parser<'a> {
                     Box::new(expr),
                 ))
             }
-            Token::Keyword(Keyword::Await) => {
+            Token::Keyword(Keyword::Await) if self.in_async => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
                 Ok(Expression::Await(Box::new(expr)))
@@ -1484,6 +1525,14 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Super) => {
                 self.advance()?;
                 Ok(Expression::Super)
+            }
+            Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => {
+                self.advance()?;
+                Ok(Expression::Identifier("yield".to_string()))
+            }
+            Token::Keyword(Keyword::Await) if !self.in_async => {
+                self.advance()?;
+                Ok(Expression::Identifier("await".to_string()))
             }
             Token::Identifier(name) => {
                 let name = name.clone();
@@ -1804,22 +1853,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function_expression(&mut self) -> Result<Expression, ParseError> {
-        self.advance()?; // function
-        let is_generator = if self.current == Token::Star {
-            self.advance()?;
-            true
-        } else {
-            false
-        };
-        let name = if let Token::Identifier(n) = &self.current {
-            let n = n.clone();
+        self.advance()?;
+        let is_generator = self.eat_star()?;
+        let name = if let Some(n) = self.current_identifier_name() {
             self.advance()?;
             Some(n)
         } else {
             None
         };
         let params = self.parse_formal_parameters()?;
-        let (body, body_strict) = self.parse_function_body()?;
+        let (body, body_strict) = self.parse_function_body_with_context(is_generator, false)?;
         if body_strict {
             self.check_duplicate_params_strict(&params)?;
         }
@@ -1834,10 +1877,13 @@ impl<'a> Parser<'a> {
 
     fn parse_class_expression(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // class
-        let name = if let Token::Identifier(n) = &self.current {
-            let n = n.clone();
-            self.advance()?;
-            Some(n)
+        let name = if self.current != Token::Keyword(Keyword::Extends) && self.current != Token::LeftBrace {
+            if let Some(n) = self.current_identifier_name() {
+                self.advance()?;
+                Some(n)
+            } else {
+                None
+            }
         } else {
             None
         };
