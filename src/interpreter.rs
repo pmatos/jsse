@@ -359,6 +359,8 @@ pub struct Interpreter {
     object_prototype: Option<Rc<RefCell<JsObjectData>>>,
     array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     string_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    number_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    boolean_prototype: Option<Rc<RefCell<JsObjectData>>>,
     regexp_prototype: Option<Rc<RefCell<JsObjectData>>>,
     next_symbol_id: u64,
 }
@@ -391,6 +393,8 @@ impl Interpreter {
             object_prototype: None,
             array_prototype: None,
             string_prototype: None,
+            number_prototype: None,
+            boolean_prototype: None,
             regexp_prototype: None,
             next_symbol_id: 1,
         };
@@ -747,6 +751,9 @@ impl Interpreter {
                 }),
             ),
         );
+
+        self.setup_number_prototype();
+        self.setup_boolean_prototype();
 
         // Array constructor
         self.register_global_fn(
@@ -3693,6 +3700,179 @@ impl Interpreter {
         self.string_prototype = Some(proto);
     }
 
+    fn setup_number_prototype(&mut self) {
+        let proto = self.create_object();
+        proto.borrow_mut().class_name = "Number".to_string();
+        proto.borrow_mut().primitive_value = Some(JsValue::Number(0.0));
+
+        fn this_number_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
+            match this {
+                JsValue::Number(n) => Some(*n),
+                JsValue::Object(o) => {
+                    interp.get_object(o.id).and_then(|obj| {
+                        let b = obj.borrow();
+                        if b.class_name == "Number" {
+                            if let Some(JsValue::Number(n)) = &b.primitive_value {
+                                return Some(*n);
+                            }
+                        }
+                        None
+                    })
+                }
+                _ => None,
+            }
+        }
+
+        let methods: Vec<(&str, Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>)> = vec![
+            ("toString", Rc::new(|interp, this, args| {
+                let Some(n) = this_number_value(interp, this) else {
+                    let err = interp.create_type_error("Number.prototype.toString requires a Number");
+                    return Completion::Throw(err);
+                };
+                let radix = args.first().map(|v| {
+                    if v.is_undefined() { 10 } else { to_number(v) as u32 }
+                }).unwrap_or(10);
+                if radix < 2 || radix > 36 {
+                    let err = interp.create_error("RangeError", "radix must be between 2 and 36");
+                    return Completion::Throw(err);
+                }
+                if radix == 10 {
+                    Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(&JsValue::Number(n)))))
+                } else {
+                    let s = format_radix(n as i64, radix);
+                    Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                }
+            })),
+            ("valueOf", Rc::new(|interp, this, _args| {
+                let Some(n) = this_number_value(interp, this) else {
+                    let err = interp.create_type_error("Number.prototype.valueOf requires a Number");
+                    return Completion::Throw(err);
+                };
+                Completion::Normal(JsValue::Number(n))
+            })),
+            ("toFixed", Rc::new(|interp, this, args| {
+                let Some(n) = this_number_value(interp, this) else {
+                    let err = interp.create_type_error("Number.prototype.toFixed requires a Number");
+                    return Completion::Throw(err);
+                };
+                let digits = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
+                Completion::Normal(JsValue::String(JsString::from_str(&format!("{n:.digits$}"))))
+            })),
+            ("toExponential", Rc::new(|interp, this, args| {
+                let Some(n) = this_number_value(interp, this) else {
+                    let err = interp.create_type_error("Number.prototype.toExponential requires a Number");
+                    return Completion::Throw(err);
+                };
+                let has_arg = args.first().is_some_and(|v| !v.is_undefined());
+                if has_arg {
+                    let digits = to_number(args.first().unwrap()) as usize;
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!("{n:.digits$e}"))))
+                } else {
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!("{n:e}"))))
+                }
+            })),
+            ("toPrecision", Rc::new(|interp, this, args| {
+                let Some(n) = this_number_value(interp, this) else {
+                    let err = interp.create_type_error("Number.prototype.toPrecision requires a Number");
+                    return Completion::Throw(err);
+                };
+                let has_arg = args.first().is_some_and(|v| !v.is_undefined());
+                if has_arg {
+                    let precision = to_number(args.first().unwrap()) as usize;
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!("{n:.prec$}", prec = precision.saturating_sub(1)))))
+                } else {
+                    Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(&JsValue::Number(n)))))
+                }
+            })),
+            ("toLocaleString", Rc::new(|interp, this, _args| {
+                let Some(n) = this_number_value(interp, this) else {
+                    let err = interp.create_type_error("Number.prototype.toLocaleString requires a Number");
+                    return Completion::Throw(err);
+                };
+                Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(&JsValue::Number(n)))))
+            })),
+        ];
+
+        for (name, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
+            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        // Set Number.prototype on the Number constructor
+        if let Some(num_val) = self.global_env.borrow().get("Number") {
+            if let JsValue::Object(o) = &num_val {
+                if let Some(num_obj) = self.get_object(o.id) {
+                    let proto_val = JsValue::Object(crate::types::JsObject {
+                        id: self.objects.iter().position(|o| Rc::ptr_eq(o, &proto)).unwrap() as u64,
+                    });
+                    num_obj.borrow_mut().insert_value("prototype".to_string(), proto_val);
+                }
+            }
+        }
+
+        self.number_prototype = Some(proto);
+    }
+
+    fn setup_boolean_prototype(&mut self) {
+        let proto = self.create_object();
+        proto.borrow_mut().class_name = "Boolean".to_string();
+        proto.borrow_mut().primitive_value = Some(JsValue::Boolean(false));
+
+        fn this_boolean_value(interp: &Interpreter, this: &JsValue) -> Option<bool> {
+            match this {
+                JsValue::Boolean(b) => Some(*b),
+                JsValue::Object(o) => {
+                    interp.get_object(o.id).and_then(|obj| {
+                        let b = obj.borrow();
+                        if b.class_name == "Boolean" {
+                            if let Some(JsValue::Boolean(v)) = &b.primitive_value {
+                                return Some(*v);
+                            }
+                        }
+                        None
+                    })
+                }
+                _ => None,
+            }
+        }
+
+        let methods: Vec<(&str, Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>)> = vec![
+            ("toString", Rc::new(|interp, this, _args| {
+                let Some(b) = this_boolean_value(interp, this) else {
+                    let err = interp.create_type_error("Boolean.prototype.toString requires a Boolean");
+                    return Completion::Throw(err);
+                };
+                Completion::Normal(JsValue::String(JsString::from_str(if b { "true" } else { "false" })))
+            })),
+            ("valueOf", Rc::new(|interp, this, _args| {
+                let Some(b) = this_boolean_value(interp, this) else {
+                    let err = interp.create_type_error("Boolean.prototype.valueOf requires a Boolean");
+                    return Completion::Throw(err);
+                };
+                Completion::Normal(JsValue::Boolean(b))
+            })),
+        ];
+
+        for (name, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
+            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        // Set Boolean.prototype on the Boolean constructor
+        if let Some(bool_val) = self.global_env.borrow().get("Boolean") {
+            if let JsValue::Object(o) = &bool_val {
+                if let Some(bool_obj) = self.get_object(o.id) {
+                    let proto_val = JsValue::Object(crate::types::JsObject {
+                        id: self.objects.iter().position(|o| Rc::ptr_eq(o, &proto)).unwrap() as u64,
+                    });
+                    bool_obj.borrow_mut().insert_value("prototype".to_string(), proto_val);
+                }
+            }
+        }
+
+        self.boolean_prototype = Some(proto);
+    }
+
     fn create_type_error(&mut self, msg: &str) -> JsValue {
         self.create_error("TypeError", msg)
     }
@@ -4793,8 +4973,18 @@ impl Interpreter {
                             obj_data.prototype = Some(sp.clone());
                         }
                     }
-                    JsValue::Number(_) => obj_data.class_name = "Number".to_string(),
-                    JsValue::Boolean(_) => obj_data.class_name = "Boolean".to_string(),
+                    JsValue::Number(_) => {
+                        obj_data.class_name = "Number".to_string();
+                        if let Some(ref np) = self.number_prototype {
+                            obj_data.prototype = Some(np.clone());
+                        }
+                    }
+                    JsValue::Boolean(_) => {
+                        obj_data.class_name = "Boolean".to_string();
+                        if let Some(ref bp) = self.boolean_prototype {
+                            obj_data.prototype = Some(bp.clone());
+                        }
+                    }
                     JsValue::Symbol(_) => obj_data.class_name = "Symbol".to_string(),
                     JsValue::BigInt(_) => obj_data.class_name = "BigInt".to_string(),
                     _ => unreachable!(),
@@ -5373,99 +5563,18 @@ impl Interpreter {
                     } else {
                         (JsValue::Undefined, obj_val)
                     }
-                } else if matches!(&obj_val, JsValue::Number(_) | JsValue::Boolean(_)) {
-                    // Handle toString/valueOf inline for Number/Boolean primitives
-                    if key == "toString"
-                        || key == "valueOf"
-                        || key == "toFixed"
-                        || key == "toLocaleString"
-                        || key == "toExponential"
-                        || key == "toPrecision"
-                    {
-                        // We'll handle these built-in methods directly in call_function
-                        // by creating inline native functions
-                        let captured_val = obj_val.clone();
-                        let method_name = key.clone();
-                        let inline_fn = self.create_function(JsFunction::Native(
-                            key.clone(),
-                            Rc::new(move |_interp, _this, args| match method_name.as_str() {
-                                "toString" => {
-                                    if let JsValue::Number(n) = &captured_val {
-                                        let radix =
-                                            args.first().map(|v| to_number(v) as u32).unwrap_or(10);
-                                        if radix == 10 {
-                                            Completion::Normal(JsValue::String(JsString::from_str(
-                                                &to_js_string(&captured_val),
-                                            )))
-                                        } else {
-                                            let i = *n as i64;
-                                            let s = format_radix(i, radix);
-                                            Completion::Normal(JsValue::String(JsString::from_str(
-                                                &s,
-                                            )))
-                                        }
-                                    } else {
-                                        Completion::Normal(JsValue::String(JsString::from_str(
-                                            &to_js_string(&captured_val),
-                                        )))
-                                    }
-                                }
-                                "valueOf" | "toLocaleString" => {
-                                    Completion::Normal(captured_val.clone())
-                                }
-                                "toFixed" => {
-                                    if let JsValue::Number(n) = &captured_val {
-                                        let digits = args
-                                            .first()
-                                            .map(|v| to_number(v) as usize)
-                                            .unwrap_or(0);
-                                        Completion::Normal(JsValue::String(JsString::from_str(
-                                            &format!("{n:.digits$}"),
-                                        )))
-                                    } else {
-                                        Completion::Normal(captured_val.clone())
-                                    }
-                                }
-                                "toExponential" => {
-                                    if let JsValue::Number(n) = &captured_val {
-                                        let has_arg = args.first().map(|v| !matches!(v, JsValue::Undefined)).unwrap_or(false);
-                                        if has_arg {
-                                            let digits = to_number(args.first().unwrap()) as usize;
-                                            Completion::Normal(JsValue::String(JsString::from_str(
-                                                &format!("{n:.digits$e}"),
-                                            )))
-                                        } else {
-                                            Completion::Normal(JsValue::String(JsString::from_str(
-                                                &format!("{n:e}"),
-                                            )))
-                                        }
-                                    } else {
-                                        Completion::Normal(captured_val.clone())
-                                    }
-                                }
-                                "toPrecision" => {
-                                    if let JsValue::Number(n) = &captured_val {
-                                        let has_arg = args.first().map(|v| !matches!(v, JsValue::Undefined)).unwrap_or(false);
-                                        if has_arg {
-                                            let precision = to_number(args.first().unwrap()) as usize;
-                                            Completion::Normal(JsValue::String(JsString::from_str(
-                                                &format!("{n:.prec$}", prec = precision.saturating_sub(1)),
-                                            )))
-                                        } else {
-                                            Completion::Normal(JsValue::String(JsString::from_str(
-                                                &to_js_string(&captured_val),
-                                            )))
-                                        }
-                                    } else {
-                                        Completion::Normal(captured_val.clone())
-                                    }
-                                }
-                                _ => Completion::Normal(JsValue::Undefined),
-                            }),
-                        ));
-                        (inline_fn, obj_val)
-                    } else if let Some(ref op) = self.object_prototype {
-                        let method = op.borrow().get_property(&key);
+                } else if matches!(&obj_val, JsValue::Number(_)) {
+                    let proto = self.number_prototype.clone().or(self.object_prototype.clone());
+                    if let Some(ref p) = proto {
+                        let method = p.borrow().get_property(&key);
+                        (method, obj_val)
+                    } else {
+                        (JsValue::Undefined, obj_val)
+                    }
+                } else if matches!(&obj_val, JsValue::Boolean(_)) {
+                    let proto = self.boolean_prototype.clone().or(self.object_prototype.clone());
+                    if let Some(ref p) = proto {
+                        let method = p.borrow().get_property(&key);
                         (method, obj_val)
                     } else {
                         (JsValue::Undefined, obj_val)
