@@ -35,5 +35,7 @@ jobs:
       - name: Run unit tests
         run: cargo test
 
+      - uses: astral-sh/setup-uv@v6
+
       - name: Run test262
-        run: python3 ./scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262
+        run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262

@@ -17,3 +17,20 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 - `spec/` — ECMAScript specification (submodule from [tc39/ecma262](https://github.com/tc39/ecma262))
 - `test262/` — Official test suite (submodule from [tc39/test262](https://github.com/tc39/test262))
 - `tests/` — Additional custom tests
+- `scripts/` — Test runner and tooling
+
+## Building & Running
+
+```bash
+cargo build --release
+./target/release/jsse <file.js>
+```
+
+## Running test262
+
+```bash
+cargo build --release
+uv run python scripts/run-test262.py
+```
+
+Options: `-j <n>` for parallelism (default: nproc), `--timeout <s>` (default: 60).

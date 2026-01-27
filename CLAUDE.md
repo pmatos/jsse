@@ -21,3 +21,6 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Primary validation: test262 suite
 - Custom tests: `tests/` directory
 - After any implementation work, run the full test262 suite and update README.md progress.
+- Run test262: `uv run python scripts/run-test262.py`
+- Run linter: `./scripts/lint.sh`
+- Python scripts are run via `uv run python` (no virtualenv setup needed).
