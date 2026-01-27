@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 6,228   | 35,848  | 14.80%    |
+| 48,257      | 42,076  | 6,181   | 6,909   | 35,167  | 16.42%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -43,6 +43,8 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - `instanceof` and `in` operators
   - Array prototype methods (`push`, `pop`, `shift`, `unshift`, `indexOf`, `lastIndexOf`, `includes`, `join`, `toString`, `concat`, `slice`, `splice`, `reverse`, `fill`, `forEach`, `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`)
   - `Array.isArray`
+  - String prototype methods (`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `repeat`, `padStart`, `padEnd`, `concat`, `split`, `replace`, `replaceAll`, `at`)
+  - Proper Error objects (`TypeError`, `ReferenceError`, `SyntaxError`, `RangeError`) with prototype chains and `instanceof` support
   - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
 ## Building & Running

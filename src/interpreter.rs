@@ -295,6 +295,7 @@ pub struct Interpreter {
     objects: Vec<Rc<RefCell<JsObjectData>>>,
     object_prototype: Option<Rc<RefCell<JsObjectData>>>,
     array_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    string_prototype: Option<Rc<RefCell<JsObjectData>>>,
 }
 
 impl Interpreter {
@@ -324,6 +325,7 @@ impl Interpreter {
             objects: Vec::new(),
             object_prototype: None,
             array_prototype: None,
+            string_prototype: None,
         };
         interp.setup_globals();
         interp
@@ -355,31 +357,121 @@ impl Interpreter {
             .declare("console", BindingKind::Const);
         let _ = self.global_env.borrow_mut().set("console", console_val);
 
-        self.register_global_fn(
-            "Error",
-            BindingKind::Var,
-            JsFunction::Native(
-                "Error".to_string(),
-                Rc::new(|_interp, _this, args| {
-                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    Completion::Normal(msg)
-                }),
-            ),
-        );
+        // Error constructor
+        {
+            let error_name = "Error".to_string();
+            self.register_global_fn(
+                "Error",
+                BindingKind::Var,
+                JsFunction::Native(
+                    error_name.clone(),
+                    Rc::new(move |interp, _this, args| {
+                        let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let obj = interp.create_object();
+                        {
+                            let mut o = obj.borrow_mut();
+                            o.class_name = "Error".to_string();
+                            o.insert_value("message".to_string(), msg);
+                            o.insert_value(
+                                "name".to_string(),
+                                JsValue::String(JsString::from_str("Error")),
+                            );
+                        }
+                        Completion::Normal(JsValue::Object(crate::types::JsObject {
+                            id: interp.objects.len() as u64 - 1,
+                        }))
+                    }),
+                ),
+            );
+        }
 
-        self.register_global_fn(
-            "Test262Error",
-            BindingKind::Var,
-            JsFunction::Native(
-                "Test262Error".to_string(),
-                Rc::new(|_interp, _this, args| {
-                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    Completion::Normal(msg)
-                }),
-            ),
-        );
+        // Get Error.prototype for inheritance
+        let error_prototype = {
+            let env = self.global_env.borrow();
+            if let Some(error_val) = env.get("Error") {
+                if let JsValue::Object(o) = &error_val {
+                    if let Some(ctor) = self.get_object(o.id) {
+                        let proto_val = ctor.borrow().get_property("prototype");
+                        if let JsValue::Object(p) = &proto_val {
+                            self.get_object(p.id)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
 
-        // Error constructors
+        // Add toString to Error.prototype
+        if let Some(ref ep) = error_prototype {
+            let tostring_fn = self.create_function(JsFunction::Native(
+                "toString".to_string(),
+                Rc::new(|interp, this_val, _args| {
+                    if let JsValue::Object(o) = this_val {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            let obj_ref = obj.borrow();
+                            let name = match obj_ref.get_property("name") {
+                                JsValue::Undefined => "Error".to_string(),
+                                v => to_js_string(&v),
+                            };
+                            let msg = match obj_ref.get_property("message") {
+                                JsValue::Undefined => String::new(),
+                                v => to_js_string(&v),
+                            };
+                            return if msg.is_empty() {
+                                Completion::Normal(JsValue::String(JsString::from_str(&name)))
+                            } else {
+                                Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                                    "{name}: {msg}"
+                                ))))
+                            };
+                        }
+                    }
+                    Completion::Normal(JsValue::String(JsString::from_str("Error")))
+                }),
+            ));
+            ep.borrow_mut()
+                .insert_value("toString".to_string(), tostring_fn);
+        }
+
+        // Test262Error
+        {
+            let error_proto_clone = error_prototype.clone();
+            self.register_global_fn(
+                "Test262Error",
+                BindingKind::Var,
+                JsFunction::Native(
+                    "Test262Error".to_string(),
+                    Rc::new(move |interp, _this, args| {
+                        let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let obj = interp.create_object();
+                        {
+                            let mut o = obj.borrow_mut();
+                            o.class_name = "Test262Error".to_string();
+                            if let Some(ref ep) = error_proto_clone {
+                                o.prototype = Some(ep.clone());
+                            }
+                            o.insert_value("message".to_string(), msg);
+                            o.insert_value(
+                                "name".to_string(),
+                                JsValue::String(JsString::from_str("Test262Error")),
+                            );
+                        }
+                        Completion::Normal(JsValue::Object(crate::types::JsObject {
+                            id: interp.objects.len() as u64 - 1,
+                        }))
+                    }),
+                ),
+            );
+        }
+
+        // Error subtype constructors
         for name in [
             "SyntaxError",
             "TypeError",
@@ -389,6 +481,7 @@ impl Interpreter {
             "EvalError",
         ] {
             let error_name = name.to_string();
+            let error_proto_clone = error_prototype.clone();
             self.register_global_fn(
                 name,
                 BindingKind::Var,
@@ -400,6 +493,9 @@ impl Interpreter {
                         {
                             let mut o = obj.borrow_mut();
                             o.class_name = error_name.clone();
+                            if let Some(ref ep) = error_proto_clone {
+                                o.prototype = Some(ep.clone());
+                            }
                             o.insert_value("message".to_string(), msg);
                             o.insert_value(
                                 "name".to_string(),
@@ -436,6 +532,7 @@ impl Interpreter {
 
         self.setup_object_statics();
         self.setup_array_prototype();
+        self.setup_string_prototype();
 
         // String constructor/converter
         self.register_global_fn(
@@ -1454,9 +1551,9 @@ impl Interpreter {
                         } else if !elems.is_empty() {
                             (elems[0].clone(), 1)
                         } else {
-                            return Completion::Throw(JsValue::String(JsString::from_str(
-                                "Reduce of empty array with no initial value",
-                            )));
+                            let err = interp
+                                .create_type_error("Reduce of empty array with no initial value");
+                            return Completion::Throw(err);
                         };
                         for i in start..elems.len() {
                             let call_args = vec![
@@ -1730,6 +1827,385 @@ impl Interpreter {
         obj_data.array_elements = Some(values);
         let obj = Rc::new(RefCell::new(obj_data));
         self.objects.push(obj);
+        JsValue::Object(crate::types::JsObject {
+            id: self.objects.len() as u64 - 1,
+        })
+    }
+
+    fn setup_string_prototype(&mut self) {
+        let proto = self.create_object();
+        proto.borrow_mut().class_name = "String".to_string();
+
+        let methods: Vec<(
+            &str,
+            Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
+        )> = vec![
+            (
+                "charAt",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let idx = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
+                    let ch = s
+                        .chars()
+                        .nth(idx)
+                        .map(|c| c.to_string())
+                        .unwrap_or_default();
+                    Completion::Normal(JsValue::String(JsString::from_str(&ch)))
+                }),
+            ),
+            (
+                "charCodeAt",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let idx = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
+                    let code = s
+                        .encode_utf16()
+                        .nth(idx)
+                        .map(|c| c as f64)
+                        .unwrap_or(f64::NAN);
+                    Completion::Normal(JsValue::Number(code))
+                }),
+            ),
+            (
+                "codePointAt",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let idx = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
+                    let cp = s
+                        .chars()
+                        .nth(idx)
+                        .map(|c| c as u32 as f64)
+                        .unwrap_or(f64::NAN);
+                    Completion::Normal(JsValue::Number(cp))
+                }),
+            ),
+            (
+                "indexOf",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let search = args.first().map(to_js_string).unwrap_or_default();
+                    let from = args.get(1).map(|v| to_number(v) as usize).unwrap_or(0);
+                    let result = s[from..]
+                        .find(&search)
+                        .map(|i| (i + from) as f64)
+                        .unwrap_or(-1.0);
+                    Completion::Normal(JsValue::Number(result))
+                }),
+            ),
+            (
+                "lastIndexOf",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let search = args.first().map(to_js_string).unwrap_or_default();
+                    let result = s.rfind(&search).map(|i| i as f64).unwrap_or(-1.0);
+                    Completion::Normal(JsValue::Number(result))
+                }),
+            ),
+            (
+                "includes",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let search = args.first().map(to_js_string).unwrap_or_default();
+                    Completion::Normal(JsValue::Boolean(s.contains(&search)))
+                }),
+            ),
+            (
+                "startsWith",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let search = args.first().map(to_js_string).unwrap_or_default();
+                    Completion::Normal(JsValue::Boolean(s.starts_with(&search)))
+                }),
+            ),
+            (
+                "endsWith",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let search = args.first().map(to_js_string).unwrap_or_default();
+                    Completion::Normal(JsValue::Boolean(s.ends_with(&search)))
+                }),
+            ),
+            (
+                "slice",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let len = s.len() as i64;
+                    let start = args
+                        .first()
+                        .map(|v| {
+                            let n = to_number(v) as i64;
+                            if n < 0 {
+                                (len + n).max(0) as usize
+                            } else {
+                                n.min(len) as usize
+                            }
+                        })
+                        .unwrap_or(0);
+                    let end = args
+                        .get(1)
+                        .map(|v| {
+                            if matches!(v, JsValue::Undefined) {
+                                len as usize
+                            } else {
+                                let n = to_number(v) as i64;
+                                if n < 0 {
+                                    (len + n).max(0) as usize
+                                } else {
+                                    n.min(len) as usize
+                                }
+                            }
+                        })
+                        .unwrap_or(len as usize);
+                    let result = if start < end { &s[start..end] } else { "" };
+                    Completion::Normal(JsValue::String(JsString::from_str(result)))
+                }),
+            ),
+            (
+                "substring",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let len = s.len();
+                    let mut start = args
+                        .first()
+                        .map(|v| (to_number(v) as usize).min(len))
+                        .unwrap_or(0);
+                    let mut end = args
+                        .get(1)
+                        .map(|v| {
+                            if matches!(v, JsValue::Undefined) {
+                                len
+                            } else {
+                                (to_number(v) as usize).min(len)
+                            }
+                        })
+                        .unwrap_or(len);
+                    if start > end {
+                        std::mem::swap(&mut start, &mut end);
+                    }
+                    Completion::Normal(JsValue::String(JsString::from_str(&s[start..end])))
+                }),
+            ),
+            (
+                "toLowerCase",
+                Rc::new(|_interp, this_val, _args| {
+                    Completion::Normal(JsValue::String(JsString::from_str(
+                        &to_js_string(this_val).to_lowercase(),
+                    )))
+                }),
+            ),
+            (
+                "toUpperCase",
+                Rc::new(|_interp, this_val, _args| {
+                    Completion::Normal(JsValue::String(JsString::from_str(
+                        &to_js_string(this_val).to_uppercase(),
+                    )))
+                }),
+            ),
+            (
+                "trim",
+                Rc::new(|_interp, this_val, _args| {
+                    Completion::Normal(JsValue::String(JsString::from_str(
+                        to_js_string(this_val).trim(),
+                    )))
+                }),
+            ),
+            (
+                "trimStart",
+                Rc::new(|_interp, this_val, _args| {
+                    Completion::Normal(JsValue::String(JsString::from_str(
+                        to_js_string(this_val).trim_start(),
+                    )))
+                }),
+            ),
+            (
+                "trimEnd",
+                Rc::new(|_interp, this_val, _args| {
+                    Completion::Normal(JsValue::String(JsString::from_str(
+                        to_js_string(this_val).trim_end(),
+                    )))
+                }),
+            ),
+            (
+                "repeat",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let count = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
+                    Completion::Normal(JsValue::String(JsString::from_str(&s.repeat(count))))
+                }),
+            ),
+            (
+                "padStart",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let target_len = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
+                    let fill = args
+                        .get(1)
+                        .map(to_js_string)
+                        .unwrap_or_else(|| " ".to_string());
+                    if s.len() >= target_len || fill.is_empty() {
+                        return Completion::Normal(JsValue::String(JsString::from_str(&s)));
+                    }
+                    let pad_len = target_len - s.len();
+                    let pad: String = fill.chars().cycle().take(pad_len).collect();
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!("{pad}{s}"))))
+                }),
+            ),
+            (
+                "padEnd",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let target_len = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
+                    let fill = args
+                        .get(1)
+                        .map(to_js_string)
+                        .unwrap_or_else(|| " ".to_string());
+                    if s.len() >= target_len || fill.is_empty() {
+                        return Completion::Normal(JsValue::String(JsString::from_str(&s)));
+                    }
+                    let pad_len = target_len - s.len();
+                    let pad: String = fill.chars().cycle().take(pad_len).collect();
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!("{s}{pad}"))))
+                }),
+            ),
+            (
+                "concat",
+                Rc::new(|_interp, this_val, args| {
+                    let mut s = to_js_string(this_val);
+                    for arg in args {
+                        s.push_str(&to_js_string(arg));
+                    }
+                    Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                }),
+            ),
+            (
+                "toString",
+                Rc::new(|_interp, this_val, _args| {
+                    Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(this_val))))
+                }),
+            ),
+            (
+                "valueOf",
+                Rc::new(|_interp, this_val, _args| {
+                    Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(this_val))))
+                }),
+            ),
+            (
+                "split",
+                Rc::new(|interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let separator = args.first();
+                    let parts: Vec<JsValue> = if let Some(sep) = separator {
+                        if matches!(sep, JsValue::Undefined) {
+                            vec![JsValue::String(JsString::from_str(&s))]
+                        } else {
+                            let sep_str = to_js_string(sep);
+                            if sep_str.is_empty() {
+                                s.chars()
+                                    .map(|c| JsValue::String(JsString::from_str(&c.to_string())))
+                                    .collect()
+                            } else {
+                                s.split(&sep_str)
+                                    .map(|p| JsValue::String(JsString::from_str(p)))
+                                    .collect()
+                            }
+                        }
+                    } else {
+                        vec![JsValue::String(JsString::from_str(&s))]
+                    };
+                    let arr = interp.create_array(parts);
+                    Completion::Normal(arr)
+                }),
+            ),
+            (
+                "replace",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let search = args.first().map(to_js_string).unwrap_or_default();
+                    let replacement = args.get(1).map(to_js_string).unwrap_or_default();
+                    let result = s.replacen(&search, &replacement, 1);
+                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                }),
+            ),
+            (
+                "replaceAll",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let search = args.first().map(to_js_string).unwrap_or_default();
+                    let replacement = args.get(1).map(to_js_string).unwrap_or_default();
+                    Completion::Normal(JsValue::String(JsString::from_str(
+                        &s.replace(&search, &replacement),
+                    )))
+                }),
+            ),
+            (
+                "at",
+                Rc::new(|_interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let len = s.len() as i64;
+                    let idx = args.first().map(|v| to_number(v) as i64).unwrap_or(0);
+                    let actual = if idx < 0 { len + idx } else { idx };
+                    if actual < 0 || actual >= len {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                    let ch = s
+                        .chars()
+                        .nth(actual as usize)
+                        .map(|c| c.to_string())
+                        .unwrap_or_default();
+                    Completion::Normal(JsValue::String(JsString::from_str(&ch)))
+                }),
+            ),
+        ];
+
+        for (name, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
+            proto.borrow_mut().insert_value(name.to_string(), fn_val);
+        }
+
+        self.string_prototype = Some(proto);
+    }
+
+    fn create_type_error(&mut self, msg: &str) -> JsValue {
+        self.create_error("TypeError", msg)
+    }
+
+    fn create_reference_error(&mut self, msg: &str) -> JsValue {
+        self.create_error("ReferenceError", msg)
+    }
+
+    fn create_error(&mut self, name: &str, msg: &str) -> JsValue {
+        let env = self.global_env.borrow();
+        let error_proto = env.get(name).and_then(|v| {
+            if let JsValue::Object(o) = &v {
+                self.get_object(o.id).and_then(|ctor| {
+                    let pv = ctor.borrow().get_property("prototype");
+                    if let JsValue::Object(p) = &pv {
+                        self.get_object(p.id)
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        });
+        drop(env);
+        let obj = self.create_object();
+        {
+            let mut o = obj.borrow_mut();
+            o.class_name = name.to_string();
+            if let Some(proto) = error_proto {
+                o.prototype = Some(proto);
+            }
+            o.insert_value(
+                "message".to_string(),
+                JsValue::String(JsString::from_str(msg)),
+            );
+            o.insert_value(
+                "name".to_string(),
+                JsValue::String(JsString::from_str(name)),
+            );
+        }
         JsValue::Object(crate::types::JsObject {
             id: self.objects.len() as u64 - 1,
         })
@@ -2191,7 +2667,8 @@ impl Interpreter {
                 .map(|c| JsValue::String(JsString::from_str(&c.to_string())))
                 .collect()
         } else {
-            return Completion::Throw(JsValue::String(JsString::from_str("is not iterable")));
+            let err = self.create_type_error("is not iterable");
+            return Completion::Throw(err);
         };
 
         for val in values {
@@ -2306,17 +2783,13 @@ impl Interpreter {
     fn eval_expr(&mut self, expr: &Expression, env: &EnvRef) -> Completion {
         match expr {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
-            Expression::Identifier(name) => {
-                match env.borrow().get(name) {
-                    Some(val) => Completion::Normal(val),
-                    None => {
-                        // Check if it's a well-known global that might not be declared
-                        Completion::Throw(JsValue::String(JsString::from_str(&format!(
-                            "{name} is not defined"
-                        ))))
-                    }
+            Expression::Identifier(name) => match env.borrow().get(name) {
+                Some(val) => Completion::Normal(val),
+                None => {
+                    let err = self.create_reference_error(&format!("{name} is not defined"));
+                    Completion::Throw(err)
                 }
-            }
+            },
             Expression::This => {
                 Completion::Normal(env.borrow().get("this").unwrap_or(JsValue::Undefined))
             }
@@ -2611,9 +3084,8 @@ impl Interpreter {
             let old_val = match env.borrow().get(name) {
                 Some(v) => to_number(&v),
                 None => {
-                    return Completion::Throw(JsValue::String(JsString::from_str(&format!(
-                        "{name} is not defined"
-                    ))));
+                    let err = self.create_reference_error(&format!("{name} is not defined"));
+                    return Completion::Throw(err);
                 }
             };
             let new_val = match op {
@@ -2732,14 +3204,23 @@ impl Interpreter {
                         let method = obj.borrow().get_property(&key);
                         (method, obj_val)
                     } else {
-                        return Completion::Throw(JsValue::String(JsString::from_str(
-                            "Cannot read property of undefined",
-                        )));
+                        let err = self.create_type_error("Cannot read property of undefined");
+                        return Completion::Throw(err);
                     }
+                } else if let JsValue::String(_) = &obj_val {
+                    if let Some(ref sp) = self.string_prototype {
+                        let method = sp.borrow().get_property(&key);
+                        (method, obj_val)
+                    } else {
+                        (JsValue::Undefined, obj_val)
+                    }
+                } else if matches!(&obj_val, JsValue::Undefined | JsValue::Null) {
+                    let err = self.create_type_error(&format!(
+                        "Cannot read properties of {obj_val} (reading '{key}')"
+                    ));
+                    return Completion::Throw(err);
                 } else {
-                    return Completion::Throw(JsValue::String(JsString::from_str(
-                        "Cannot read property of non-object",
-                    )));
+                    (JsValue::Undefined, obj_val)
                 }
             }
             _ => {
@@ -2813,7 +3294,8 @@ impl Interpreter {
                 };
             }
         }
-        Completion::Throw(JsValue::String(JsString::from_str("is not a function")))
+        let err = self.create_type_error("is not a function");
+        Completion::Throw(err)
     }
 
     fn eval_new(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
@@ -2889,9 +3371,25 @@ impl Interpreter {
             JsValue::String(s) => {
                 if key == "length" {
                     Completion::Normal(JsValue::Number(s.len() as f64))
+                } else if let Ok(idx) = key.parse::<usize>() {
+                    let ch = s.to_rust_string().chars().nth(idx);
+                    match ch {
+                        Some(c) => {
+                            Completion::Normal(JsValue::String(JsString::from_str(&c.to_string())))
+                        }
+                        None => Completion::Normal(JsValue::Undefined),
+                    }
+                } else if let Some(ref sp) = self.string_prototype {
+                    Completion::Normal(sp.borrow().get_property(&key))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
+            }
+            JsValue::Undefined | JsValue::Null => {
+                let err = self.create_type_error(&format!(
+                    "Cannot read properties of {obj_val} (reading '{key}')"
+                ));
+                Completion::Throw(err)
             }
             _ => Completion::Normal(JsValue::Undefined),
         }
