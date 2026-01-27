@@ -1088,6 +1088,27 @@ impl<'a> Parser<'a> {
         Ok(Expression::Yield(Some(Box::new(expr)), delegate))
     }
 
+    fn is_simple_assignment_target(expr: &Expression) -> bool {
+        matches!(expr, Expression::Identifier(_) | Expression::Member(_, _))
+    }
+
+    fn validate_assignment_target(&self, expr: &Expression, simple_only: bool) -> Result<(), ParseError> {
+        if !simple_only && matches!(expr, Expression::Array(_) | Expression::Object(_)) {
+            return Ok(());
+        }
+        if Self::is_simple_assignment_target(expr) {
+            if self.strict {
+                if let Expression::Identifier(name) = expr {
+                    if name == "eval" || name == "arguments" {
+                        return Err(self.error("Assignment to 'eval' or 'arguments' in strict mode"));
+                    }
+                }
+            }
+            return Ok(());
+        }
+        Err(self.error("Invalid left-hand side in assignment"))
+    }
+
     fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
         // YieldExpression in generator context
         if self.in_generator && self.current == Token::Keyword(Keyword::Yield) {
@@ -1117,6 +1138,8 @@ impl<'a> Parser<'a> {
         };
 
         if let Some(op) = op {
+            let simple_only = op != AssignOp::Assign;
+            self.validate_assignment_target(&left, simple_only)?;
             self.advance()?;
             let right = self.parse_assignment_expression()?;
             Ok(Expression::Assign(op, Box::new(left), Box::new(right)))
@@ -1344,23 +1367,16 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_unary()?;
                 Ok(Expression::Unary(UnaryOp::Not, Box::new(expr)))
             }
-            Token::Increment => {
+            Token::Increment | Token::Decrement => {
+                let op = if self.current == Token::Increment {
+                    UpdateOp::Increment
+                } else {
+                    UpdateOp::Decrement
+                };
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                Ok(Expression::Update(
-                    UpdateOp::Increment,
-                    true,
-                    Box::new(expr),
-                ))
-            }
-            Token::Decrement => {
-                self.advance()?;
-                let expr = self.parse_unary()?;
-                Ok(Expression::Update(
-                    UpdateOp::Decrement,
-                    true,
-                    Box::new(expr),
-                ))
+                self.validate_assignment_target(&expr, true)?;
+                Ok(Expression::Update(op, true, Box::new(expr)))
             }
             Token::Keyword(Keyword::Await) if self.in_async => {
                 self.advance()?;
@@ -1374,21 +1390,15 @@ impl<'a> Parser<'a> {
     fn parse_postfix(&mut self) -> Result<Expression, ParseError> {
         let expr = self.parse_left_hand_side_expression()?;
         if !self.prev_line_terminator {
-            if self.current == Token::Increment {
+            let op = match self.current {
+                Token::Increment => Some(UpdateOp::Increment),
+                Token::Decrement => Some(UpdateOp::Decrement),
+                _ => None,
+            };
+            if let Some(op) = op {
+                self.validate_assignment_target(&expr, true)?;
                 self.advance()?;
-                return Ok(Expression::Update(
-                    UpdateOp::Increment,
-                    false,
-                    Box::new(expr),
-                ));
-            }
-            if self.current == Token::Decrement {
-                self.advance()?;
-                return Ok(Expression::Update(
-                    UpdateOp::Decrement,
-                    false,
-                    Box::new(expr),
-                ));
+                return Ok(Expression::Update(op, false, Box::new(expr)));
             }
         }
         Ok(expr)

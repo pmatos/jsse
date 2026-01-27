@@ -66,7 +66,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [x] Simple assignment `=`
 - [x] Compound assignment (`+=`, `-=`, `*=`, `/=`, `%=`, `**=`, `<<=`, `>>=`, `>>>=`, `&=`, `^=`, `|=`, `&&=`, `||=`, `??=`)
 - [x] Destructuring assignment (array / object patterns)
-- [ ] AssignmentTargetType validation
+- [x] AssignmentTargetType validation
 
 ### 4.9 Comma & Sequence Expressions (§13.16)
 - [x] Comma operator
@@ -137,7 +137,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 ### 4.15 Early Errors
 - [x] Duplicate formal parameters (strict mode)
 - [x] Use of reserved words
-- [ ] Invalid assignment targets
+- [x] Invalid assignment targets
 - [x] `with` in strict mode
 - [x] `delete` of unqualified identifier in strict mode
 - [ ] Duplicate `__proto__` in object literals
