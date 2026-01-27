@@ -4729,6 +4729,59 @@ impl Interpreter {
         None
     }
 
+    fn require_object_coercible(&mut self, val: &JsValue) -> Completion {
+        match val {
+            JsValue::Undefined | JsValue::Null => {
+                let err = self.create_type_error("Cannot convert undefined or null to object");
+                Completion::Throw(err)
+            }
+            _ => Completion::Normal(val.clone()),
+        }
+    }
+
+    fn to_length(val: &JsValue) -> f64 {
+        let len = to_number(val);
+        if len.is_nan() || len <= 0.0 {
+            return 0.0;
+        }
+        len.min(9007199254740991.0).floor() // 2^53 - 1
+    }
+
+    fn to_object(&mut self, val: &JsValue) -> Completion {
+        match val {
+            JsValue::Undefined | JsValue::Null => {
+                let err = self.create_type_error("Cannot convert undefined or null to object");
+                Completion::Throw(err)
+            }
+            JsValue::Boolean(_) | JsValue::Number(_) | JsValue::String(_) | JsValue::Symbol(_) | JsValue::BigInt(_) => {
+                let mut obj_data = JsObjectData::new();
+                obj_data.primitive_value = Some(val.clone());
+                match val {
+                    JsValue::String(_) => {
+                        obj_data.class_name = "String".to_string();
+                        if let Some(ref sp) = self.string_prototype {
+                            obj_data.prototype = Some(sp.clone());
+                        }
+                    }
+                    JsValue::Number(_) => obj_data.class_name = "Number".to_string(),
+                    JsValue::Boolean(_) => obj_data.class_name = "Boolean".to_string(),
+                    JsValue::Symbol(_) => obj_data.class_name = "Symbol".to_string(),
+                    JsValue::BigInt(_) => obj_data.class_name = "BigInt".to_string(),
+                    _ => unreachable!(),
+                }
+                if obj_data.prototype.is_none() {
+                    obj_data.prototype = self.object_prototype.clone();
+                }
+                let obj = Rc::new(RefCell::new(obj_data));
+                self.objects.push(obj);
+                Completion::Normal(JsValue::Object(crate::types::JsObject {
+                    id: self.objects.len() as u64 - 1,
+                }))
+            }
+            JsValue::Object(_) => Completion::Normal(val.clone()),
+        }
+    }
+
     fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> JsValue {
         match val {
             JsValue::Object(o) => {

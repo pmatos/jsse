@@ -67,12 +67,12 @@ Implement all ECMAScript language types, specification types, and type conversio
   - [x] IsPropertyReference
   - [x] IsUnresolvableReference
   - [x] IsSuperReference
-  - [ ] IsPrivateReference
+  - [ ] IsPrivateReference (deferred: needs private class fields)
   - [x] GetValue
   - [x] PutValue
   - [x] GetThisValue
   - [x] InitializeReferencedBinding
-  - [ ] MakePrivateReference
+  - [ ] MakePrivateReference (deferred: needs private class fields)
 - [x] Property Descriptor
   - [x] IsAccessorDescriptor
   - [x] IsDataDescriptor
@@ -82,14 +82,14 @@ Implement all ECMAScript language types, specification types, and type conversio
   - [x] CompletePropertyDescriptor
 - [x] Environment Record types (placeholder — detailed in Phase 5)
 - [x] Abstract Closure
-- [ ] Data Blocks
+- [ ] Data Blocks (deferred: needs TypedArrays)
   - [ ] CreateByteDataBlock
   - [ ] CreateSharedByteDataBlock
   - [ ] CopyDataBlockBytes
-- [ ] PrivateElement specification type
-- [ ] ClassFieldDefinition Record
-- [ ] Private Names
-- [ ] ClassStaticBlockDefinition Record
+- [ ] PrivateElement specification type (deferred: needs private class fields)
+- [ ] ClassFieldDefinition Record (deferred: needs class fields)
+- [ ] Private Names (deferred: needs private class fields)
+- [ ] ClassStaticBlockDefinition Record (deferred: needs static blocks)
 
 ### 2.3 Type Conversion Abstract Operations (§7.1)
 - [x] ToPrimitive / OrdinaryToPrimitive
@@ -106,14 +106,14 @@ Implement all ECMAScript language types, specification types, and type conversio
 - [ ] StringToBigInt
 - [ ] ToBigInt64 / ToBigUint64
 - [x] ToString
-- [ ] ToObject
+- [x] ToObject
 - [x] ToPropertyKey
-- [ ] ToLength
+- [x] ToLength
 - [ ] CanonicalNumericIndexString
 - [ ] ToIndex
 
 ### 2.4 Testing Abstract Operations (§7.2)
-- [ ] RequireObjectCoercible
+- [x] RequireObjectCoercible
 - [x] IsArray
 - [x] IsCallable
 - [ ] IsConstructor
