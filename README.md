@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 5,586   | 36,490  | 13.28%    |
+| 48,257      | 42,076  | 6,181   | 5,482   | 36,594  | 13.03%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -33,6 +33,8 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Operators (arithmetic, comparison, bitwise, logical, assignment, update, typeof, void)
   - Objects and arrays (literals, member access, computed properties)
   - Template literals
+  - `new` operator with prototype chain setup
+  - `this` binding (method calls, constructors, arrow lexical scoping)
   - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
 ## Building & Running

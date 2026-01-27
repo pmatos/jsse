@@ -116,6 +116,7 @@ pub enum JsFunction {
         params: Vec<Pattern>,
         body: Vec<Statement>,
         closure: EnvRef,
+        is_arrow: bool,
     },
     Native(
         String,
@@ -131,11 +132,13 @@ impl Clone for JsFunction {
                 params,
                 body,
                 closure,
+                is_arrow,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
                 body: body.clone(),
                 closure: closure.clone(),
+                is_arrow: *is_arrow,
             },
             JsFunction::Native(name, f) => JsFunction::Native(name.clone(), f.clone()),
         }
@@ -224,6 +227,7 @@ impl Interpreter {
     }
 
     fn setup_globals(&mut self) {
+        let console_id = self.objects.len() as u64;
         let console = self.create_object();
         {
             let log_fn = self.create_function(JsFunction::Native(
@@ -239,9 +243,7 @@ impl Interpreter {
                 .properties
                 .insert("log".to_string(), log_fn);
         }
-        let console_val = JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        });
+        let console_val = JsValue::Object(crate::types::JsObject { id: console_id });
         self.global_env
             .borrow_mut()
             .declare("console", BindingKind::Const);
@@ -488,6 +490,7 @@ impl Interpreter {
         );
 
         // Math object
+        let math_id = self.objects.len() as u64;
         let math_obj = self.create_object();
         {
             let mut m = math_obj.borrow_mut();
@@ -619,9 +622,7 @@ impl Interpreter {
             .properties
             .insert("random".to_string(), random_fn);
 
-        let math_val = JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        });
+        let math_val = JsValue::Object(crate::types::JsObject { id: math_id });
         self.global_env
             .borrow_mut()
             .declare("Math", BindingKind::Const);
@@ -660,14 +661,37 @@ impl Interpreter {
     }
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
+        let is_arrow = matches!(&func, JsFunction::User { is_arrow: true, .. });
         let mut obj_data = JsObjectData::new();
         obj_data.callable = Some(func);
         obj_data.class_name = "Function".to_string();
+        // Non-arrow functions get a prototype property
+        if !is_arrow {
+            let proto = self.create_object();
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: self.objects.len() as u64 - 1,
+            });
+            obj_data
+                .properties
+                .insert("prototype".to_string(), proto_val.clone());
+            // prototype.constructor will be set after we know the function's id
+        }
         let obj = Rc::new(RefCell::new(obj_data));
-        self.objects.push(obj);
-        JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        })
+        self.objects.push(obj.clone());
+        let func_id = self.objects.len() as u64 - 1;
+        let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
+        // Set prototype.constructor = func
+        if !is_arrow {
+            if let Some(JsValue::Object(proto_ref)) = obj.borrow().properties.get("prototype") {
+                if let Some(proto_obj) = self.get_object(proto_ref.id) {
+                    proto_obj
+                        .borrow_mut()
+                        .properties
+                        .insert("constructor".to_string(), func_val.clone());
+                }
+            }
+        }
+        func_val
     }
 
     fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
@@ -710,6 +734,7 @@ impl Interpreter {
                         params: f.params.clone(),
                         body: f.body.clone(),
                         closure: env.clone(),
+                        is_arrow: false,
                     };
                     let val = self.create_function(func);
                     let _ = env.borrow_mut().set(&f.name, val);
@@ -1112,7 +1137,9 @@ impl Interpreter {
                     }
                 }
             }
-            Expression::This => Completion::Normal(JsValue::Undefined), // TODO
+            Expression::This => {
+                Completion::Normal(env.borrow().get("this").unwrap_or(JsValue::Undefined))
+            }
             Expression::Unary(op, operand) => {
                 let val = match self.eval_expr(operand, env) {
                     Completion::Normal(v) => v,
@@ -1156,6 +1183,7 @@ impl Interpreter {
                     params: f.params.clone(),
                     body: f.body.clone(),
                     closure: env.clone(),
+                    is_arrow: false,
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -1171,6 +1199,7 @@ impl Interpreter {
                     params: af.params.clone(),
                     body: body_stmts,
                     closure: env.clone(),
+                    is_arrow: true,
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -1522,6 +1551,7 @@ impl Interpreter {
                             params,
                             body,
                             closure,
+                            is_arrow,
                             ..
                         } => {
                             let func_env = Environment::new(Some(closure));
@@ -1529,6 +1559,17 @@ impl Interpreter {
                             for (i, param) in params.iter().enumerate() {
                                 let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
                                 let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
+                            }
+                            // Bind this (arrow functions inherit from closure)
+                            if !is_arrow {
+                                func_env.borrow_mut().bindings.insert(
+                                    "this".to_string(),
+                                    Binding {
+                                        value: _this_val.clone(),
+                                        kind: BindingKind::Const,
+                                        initialized: true,
+                                    },
+                                );
                             }
                             // Create arguments object
                             let arguments_obj = self.create_arguments_object(args);
@@ -1550,7 +1591,7 @@ impl Interpreter {
     }
 
     fn eval_new(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
-        let _callee_val = match self.eval_expr(callee, env) {
+        let callee_val = match self.eval_expr(callee, env) {
             Completion::Normal(v) => v,
             other => return other,
         };
@@ -1562,9 +1603,39 @@ impl Interpreter {
             };
             evaluated_args.push(val);
         }
-        // TODO: proper new semantics (create object, call constructor, return)
-        // For now, just call the function
-        self.call_function(&_callee_val, &JsValue::Undefined, &evaluated_args)
+        // Create new object for 'this'
+        let new_obj = self.create_object();
+        // Set prototype from constructor.prototype if available
+        if let JsValue::Object(o) = &callee_val {
+            if let Some(func_obj) = self.get_object(o.id) {
+                let proto = func_obj.borrow().properties.get("prototype").cloned();
+                if let Some(JsValue::Object(proto_obj)) = proto {
+                    if let Some(proto_rc) = self.get_object(proto_obj.id) {
+                        new_obj.borrow_mut().prototype = Some(proto_rc);
+                    }
+                }
+                // Store constructor reference
+                new_obj
+                    .borrow_mut()
+                    .properties
+                    .insert("constructor".to_string(), callee_val.clone());
+            }
+        }
+        let this_val = JsValue::Object(crate::types::JsObject {
+            id: self.objects.len() as u64 - 1,
+        });
+        let result = self.call_function(&callee_val, &this_val, &evaluated_args);
+        match result {
+            Completion::Normal(v) => {
+                // If constructor returns an object, use it; otherwise return this
+                if matches!(v, JsValue::Object(_)) {
+                    Completion::Normal(v)
+                } else {
+                    Completion::Normal(this_val)
+                }
+            }
+            other => other,
+        }
     }
 
     fn eval_member(&mut self, obj: &Expression, prop: &MemberProperty, env: &EnvRef) -> Completion {
