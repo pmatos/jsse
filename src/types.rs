@@ -148,6 +148,10 @@ impl JsValue {
     pub fn is_nullish(&self) -> bool {
         matches!(self, JsValue::Undefined | JsValue::Null)
     }
+
+    pub fn is_nan(&self) -> bool {
+        matches!(self, JsValue::Number(n) if n.is_nan())
+    }
 }
 
 // §6.1.6.1 Number type operations

@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 5,821   | 36,255  | 13.83%    |
+| 48,257      | 42,076  | 6,181   | 6,228   | 35,848  | 14.80%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -40,6 +40,9 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - `Object.defineProperty`, `Object.getOwnPropertyDescriptor`, `Object.keys`, `Object.freeze`, `Object.getPrototypeOf`, `Object.create`
   - `Function.prototype.call`, `Function.prototype.apply`
   - `Object.prototype.hasOwnProperty`
+  - `instanceof` and `in` operators
+  - Array prototype methods (`push`, `pop`, `shift`, `unshift`, `indexOf`, `lastIndexOf`, `includes`, `join`, `toString`, `concat`, `slice`, `splice`, `reverse`, `fill`, `forEach`, `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`)
+  - `Array.isArray`
   - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
 ## Building & Running
