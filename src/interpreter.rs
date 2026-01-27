@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::parser;
 use crate::types::{JsString, JsValue, number_ops};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -197,6 +198,7 @@ pub struct JsObjectData {
     pub array_elements: Option<Vec<JsValue>>,
     pub class_name: String,
     pub extensible: bool,
+    pub primitive_value: Option<JsValue>,
 }
 
 impl JsObjectData {
@@ -208,6 +210,7 @@ impl JsObjectData {
             array_elements: None,
             class_name: "Object".to_string(),
             extensible: true,
+            primitive_value: None,
         }
     }
 
@@ -329,6 +332,8 @@ pub struct Interpreter {
     object_prototype: Option<Rc<RefCell<JsObjectData>>>,
     array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     string_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    regexp_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    next_symbol_id: u64,
 }
 
 impl Interpreter {
@@ -359,6 +364,8 @@ impl Interpreter {
             object_prototype: None,
             array_prototype: None,
             string_prototype: None,
+            regexp_prototype: None,
+            next_symbol_id: 1,
         };
         interp.setup_globals();
         interp
@@ -573,12 +580,19 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::Native(
                 "String".to_string(),
-                Rc::new(|_interp, _this, args| {
+                Rc::new(|interp, this, args| {
                     let val = args
                         .first()
                         .cloned()
                         .unwrap_or(JsValue::String(JsString::from_str("")));
-                    Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(&val))))
+                    let s = to_js_string(&val);
+                    if let JsValue::Object(o) = this {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            obj.borrow_mut().primitive_value = Some(JsValue::String(JsString::from_str(&s)));
+                            obj.borrow_mut().class_name = "String".to_string();
+                        }
+                    }
+                    Completion::Normal(JsValue::String(JsString::from_str(&s)))
                 }),
             ),
         );
@@ -589,9 +603,16 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::Native(
                 "Number".to_string(),
-                Rc::new(|_interp, _this, args| {
+                Rc::new(|interp, this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Number(0.0));
-                    Completion::Normal(JsValue::Number(to_number(&val)))
+                    let n = to_number(&val);
+                    if let JsValue::Object(o) = this {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            obj.borrow_mut().primitive_value = Some(JsValue::Number(n));
+                            obj.borrow_mut().class_name = "Number".to_string();
+                        }
+                    }
+                    Completion::Normal(JsValue::Number(n))
                 }),
             ),
         );
@@ -686,9 +707,16 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::Native(
                 "Boolean".to_string(),
-                Rc::new(|_interp, _this, args| {
+                Rc::new(|interp, this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    Completion::Normal(JsValue::Boolean(to_boolean(&val)))
+                    let b = to_boolean(&val);
+                    if let JsValue::Object(o) = this {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            obj.borrow_mut().primitive_value = Some(JsValue::Boolean(b));
+                            obj.borrow_mut().class_name = "Boolean".to_string();
+                        }
+                    }
+                    Completion::Normal(JsValue::Boolean(b))
                 }),
             ),
         );
@@ -1048,17 +1076,89 @@ impl Interpreter {
             .declare("Math", BindingKind::Const);
         let _ = self.global_env.borrow_mut().set("Math", math_val);
 
-        // eval (stub that throws)
+        // eval
         self.register_global_fn(
             "eval",
             BindingKind::Var,
             JsFunction::Native(
                 "eval".to_string(),
-                Rc::new(|_interp, _this, _args| {
-                    Completion::Throw(JsValue::String(JsString::from_str("eval is not supported")))
+                Rc::new(|interp, _this, args| {
+                    let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !matches!(&arg, JsValue::String(_)) {
+                        return Completion::Normal(arg);
+                    }
+                    let code = to_js_string(&arg);
+                    let mut p = match parser::Parser::new(&code) {
+                        Ok(p) => p,
+                        Err(_) => return Completion::Throw(interp.create_error("SyntaxError", "Invalid eval source")),
+                    };
+                    let program = match p.parse_program() {
+                        Ok(prog) => prog,
+                        Err(_) => return Completion::Throw(interp.create_error("SyntaxError", "Invalid eval source")),
+                    };
+                    let env = interp.global_env.clone();
+                    let mut last = JsValue::Undefined;
+                    for stmt in &program.body {
+                        match interp.exec_statement(stmt, &env) {
+                            Completion::Normal(v) => {
+                                if !matches!(v, JsValue::Undefined) {
+                                    last = v;
+                                }
+                            }
+                            other => return other,
+                        }
+                    }
+                    Completion::Normal(last)
                 }),
             ),
         );
+
+        // Symbol
+        {
+            let symbol_fn = self.create_function(JsFunction::Native(
+                "Symbol".to_string(),
+                Rc::new(|interp, _this, args| {
+                    let desc = args.first().and_then(|v| {
+                        if matches!(v, JsValue::Undefined) {
+                            None
+                        } else {
+                            Some(JsString::from_str(&to_js_string(v)))
+                        }
+                    });
+                    let id = interp.next_symbol_id;
+                    interp.next_symbol_id += 1;
+                    Completion::Normal(JsValue::Symbol(crate::types::JsSymbol { id, description: desc }))
+                }),
+            ));
+            if let JsValue::Object(ref o) = symbol_fn {
+                if let Some(obj) = self.get_object(o.id) {
+                    let well_known = [
+                        ("iterator", "Symbol.iterator"),
+                        ("hasInstance", "Symbol.hasInstance"),
+                        ("toPrimitive", "Symbol.toPrimitive"),
+                        ("toStringTag", "Symbol.toStringTag"),
+                        ("isConcatSpreadable", "Symbol.isConcatSpreadable"),
+                        ("species", "Symbol.species"),
+                        ("match", "Symbol.match"),
+                        ("replace", "Symbol.replace"),
+                        ("search", "Symbol.search"),
+                        ("split", "Symbol.split"),
+                        ("unscopables", "Symbol.unscopables"),
+                    ];
+                    for (name, desc) in well_known {
+                        let id = self.next_symbol_id;
+                        self.next_symbol_id += 1;
+                        let sym = JsValue::Symbol(crate::types::JsSymbol {
+                            id,
+                            description: Some(JsString::from_str(desc)),
+                        });
+                        obj.borrow_mut().insert_value(name.to_string(), sym);
+                    }
+                }
+            }
+            self.global_env.borrow_mut().declare("Symbol", BindingKind::Var);
+            let _ = self.global_env.borrow_mut().set("Symbol", symbol_fn);
+        }
 
         self.register_global_fn(
             "$DONOTEVALUATE",
@@ -1121,6 +1221,9 @@ impl Interpreter {
             }
         }
 
+        // RegExp constructor and prototype
+        self.setup_regexp();
+
         // globalThis - create a global object
         let global_obj = self.create_object();
         let global_val = JsValue::Object(crate::types::JsObject {
@@ -1128,6 +1231,132 @@ impl Interpreter {
         });
         self.global_env.borrow_mut().declare("globalThis", BindingKind::Var);
         let _ = self.global_env.borrow_mut().set("globalThis", global_val);
+    }
+
+    fn setup_regexp(&mut self) {
+        let regexp_proto = self.create_object();
+        regexp_proto.borrow_mut().class_name = "RegExp".to_string();
+
+        // RegExp.prototype.test
+        let test_fn = self.create_function(JsFunction::Native(
+            "test".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let input = args.first().map(to_js_string).unwrap_or_default();
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let source = if let JsValue::String(s) = obj.borrow().get_property("source") {
+                            s.to_rust_string()
+                        } else { String::new() };
+                        let flags = if let JsValue::String(s) = obj.borrow().get_property("flags") {
+                            s.to_rust_string()
+                        } else { String::new() };
+                        let pattern = if flags.contains('i') {
+                            format!("(?i){}", source)
+                        } else {
+                            source
+                        };
+                        if let Ok(re) = regex::Regex::new(&pattern) {
+                            return Completion::Normal(JsValue::Boolean(re.is_match(&input)));
+                        }
+                    }
+                }
+                Completion::Normal(JsValue::Boolean(false))
+            }),
+        ));
+        regexp_proto.borrow_mut().insert_value("test".to_string(), test_fn);
+
+        // RegExp.prototype.exec
+        let exec_fn = self.create_function(JsFunction::Native(
+            "exec".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let input = args.first().map(to_js_string).unwrap_or_default();
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let source = if let JsValue::String(s) = obj.borrow().get_property("source") {
+                            s.to_rust_string()
+                        } else { String::new() };
+                        let flags = if let JsValue::String(s) = obj.borrow().get_property("flags") {
+                            s.to_rust_string()
+                        } else { String::new() };
+                        let pattern = if flags.contains('i') {
+                            format!("(?i){}", source)
+                        } else {
+                            source
+                        };
+                        if let Ok(re) = regex::Regex::new(&pattern) {
+                            if let Some(m) = re.find(&input) {
+                                let matched = JsValue::String(JsString::from_str(m.as_str()));
+                                let result = interp.create_array(vec![matched]);
+                                if let JsValue::Object(ref ro) = result {
+                                    if let Some(robj) = interp.get_object(ro.id) {
+                                        robj.borrow_mut().insert_value("index".to_string(), JsValue::Number(m.start() as f64));
+                                        robj.borrow_mut().insert_value("input".to_string(), JsValue::String(JsString::from_str(&input)));
+                                    }
+                                }
+                                return Completion::Normal(result);
+                            }
+                        }
+                    }
+                }
+                Completion::Normal(JsValue::Null)
+            }),
+        ));
+        regexp_proto.borrow_mut().insert_value("exec".to_string(), exec_fn);
+
+        // RegExp.prototype.toString
+        let tostring_fn = self.create_function(JsFunction::Native(
+            "toString".to_string(),
+            Rc::new(|interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let source = if let JsValue::String(s) = obj.borrow().get_property("source") {
+                            s.to_rust_string()
+                        } else { String::new() };
+                        let flags = if let JsValue::String(s) = obj.borrow().get_property("flags") {
+                            s.to_rust_string()
+                        } else { String::new() };
+                        return Completion::Normal(JsValue::String(JsString::from_str(&format!("/{}/{}", source, flags))));
+                    }
+                }
+                Completion::Normal(JsValue::String(JsString::from_str("/(?:)/")))
+            }),
+        ));
+        regexp_proto.borrow_mut().insert_value("toString".to_string(), tostring_fn);
+
+        let regexp_proto_rc = regexp_proto.clone();
+
+        // RegExp constructor
+        let regexp_ctor = self.create_function(JsFunction::Native(
+            "RegExp".to_string(),
+            Rc::new(move |interp, _this, args| {
+                let pattern_str = args.first().map(to_js_string).unwrap_or_default();
+                let flags_str = args.get(1).map(to_js_string).unwrap_or_default();
+                let mut obj = JsObjectData::new();
+                obj.prototype = Some(regexp_proto_rc.clone());
+                obj.class_name = "RegExp".to_string();
+                obj.insert_value("source".to_string(), JsValue::String(JsString::from_str(&pattern_str)));
+                obj.insert_value("flags".to_string(), JsValue::String(JsString::from_str(&flags_str)));
+                obj.insert_value("global".to_string(), JsValue::Boolean(flags_str.contains('g')));
+                obj.insert_value("ignoreCase".to_string(), JsValue::Boolean(flags_str.contains('i')));
+                obj.insert_value("multiline".to_string(), JsValue::Boolean(flags_str.contains('m')));
+                obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
+                let rc = Rc::new(RefCell::new(obj));
+                interp.objects.push(rc);
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id: interp.objects.len() as u64 - 1 }))
+            }),
+        ));
+        // Set prototype on constructor
+        if let JsValue::Object(ref o) = regexp_ctor {
+            if let Some(obj) = self.get_object(o.id) {
+                obj.borrow_mut().insert_value("prototype".to_string(), JsValue::Object(crate::types::JsObject {
+                    id: self.objects.iter().position(|o| Rc::ptr_eq(o, &regexp_proto)).unwrap() as u64,
+                }));
+            }
+        }
+        self.global_env.borrow_mut().declare("RegExp", BindingKind::Var);
+        let _ = self.global_env.borrow_mut().set("RegExp", regexp_ctor);
+
+        self.regexp_prototype = Some(regexp_proto);
     }
 
     fn setup_object_statics(&mut self) {
@@ -1193,7 +1422,14 @@ impl Interpreter {
                         // Object.prototype.valueOf
                         let obj_valueof_fn = self.create_function(JsFunction::Native(
                             "valueOf".to_string(),
-                            Rc::new(|_interp, this_val, _args| {
+                            Rc::new(|interp, this_val, _args| {
+                                if let JsValue::Object(o) = this_val {
+                                    if let Some(obj) = interp.get_object(o.id) {
+                                        if let Some(pv) = obj.borrow().primitive_value.clone() {
+                                            return Completion::Normal(pv);
+                                        }
+                                    }
+                                }
                                 Completion::Normal(this_val.clone())
                             }),
                         ));
@@ -2642,6 +2878,225 @@ impl Interpreter {
             }),
         ));
 
+        // Array.prototype.reduceRight
+        let reduce_right_fn = self.create_function(JsFunction::Native(
+            "reduceRight".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let elems = obj.borrow().array_elements.clone().unwrap_or_default();
+                        let len = elems.len();
+                        let (mut acc, start) = if args.len() > 1 {
+                            (args[1].clone(), len)
+                        } else if len > 0 {
+                            (elems[len - 1].clone(), len - 1)
+                        } else {
+                            return Completion::Throw(interp.create_type_error("Reduce of empty array with no initial value"));
+                        };
+                        for i in (0..start).rev() {
+                            let result = interp.call_function(
+                                &callback, &JsValue::Undefined,
+                                &[acc, elems[i].clone(), JsValue::Number(i as f64), this_val.clone()],
+                            );
+                            match result {
+                                Completion::Normal(v) => acc = v,
+                                other => return other,
+                            }
+                        }
+                        return Completion::Normal(acc);
+                    }
+                }
+                Completion::Normal(JsValue::Undefined)
+            }),
+        ));
+        proto.borrow_mut().insert_value("reduceRight".to_string(), reduce_right_fn);
+
+        // Array.prototype.at
+        let at_fn = self.create_function(JsFunction::Native(
+            "at".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let idx = args.first().map(|v| to_number(v) as i64).unwrap_or(0);
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        if let Some(elems) = &obj.borrow().array_elements {
+                            let len = elems.len() as i64;
+                            let actual = if idx < 0 { len + idx } else { idx };
+                            if actual >= 0 && actual < len {
+                                return Completion::Normal(elems[actual as usize].clone());
+                            }
+                        }
+                    }
+                }
+                Completion::Normal(JsValue::Undefined)
+            }),
+        ));
+        proto.borrow_mut().insert_value("at".to_string(), at_fn);
+
+        // Array.prototype.sort
+        let sort_fn = self.create_function(JsFunction::Native(
+            "sort".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let compare_fn = args.first().cloned();
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        if let Some(ref mut elems) = obj.borrow_mut().array_elements {
+                            let mut pairs: Vec<(usize, JsValue)> = elems.drain(..).enumerate().collect();
+                            pairs.sort_by(|a, b| {
+                                let x = &a.1;
+                                let y = &b.1;
+                                if matches!(x, JsValue::Undefined) && matches!(y, JsValue::Undefined) {
+                                    return std::cmp::Ordering::Equal;
+                                }
+                                if matches!(x, JsValue::Undefined) { return std::cmp::Ordering::Greater; }
+                                if matches!(y, JsValue::Undefined) { return std::cmp::Ordering::Less; }
+                                if let Some(JsValue::Object(fo)) = &compare_fn {
+                                    if let Some(fobj) = interp.get_object(fo.id) {
+                                        if fobj.borrow().callable.is_some() {
+                                            let result = interp.call_function(compare_fn.as_ref().unwrap(), &JsValue::Undefined, &[x.clone(), y.clone()]);
+                                            if let Completion::Normal(v) = result {
+                                                let n = to_number(&v);
+                                                if n < 0.0 { return std::cmp::Ordering::Less; }
+                                                if n > 0.0 { return std::cmp::Ordering::Greater; }
+                                                return std::cmp::Ordering::Equal;
+                                            }
+                                        }
+                                    }
+                                }
+                                let xs = to_js_string(x);
+                                let ys = to_js_string(y);
+                                xs.cmp(&ys)
+                            });
+                            *elems = pairs.into_iter().map(|(_, v)| v).collect();
+                        }
+                    }
+                }
+                Completion::Normal(this_val.clone())
+            }),
+        ));
+        proto.borrow_mut().insert_value("sort".to_string(), sort_fn);
+
+        // Array.prototype.flat
+        let flat_fn = self.create_function(JsFunction::Native(
+            "flat".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let depth = args.first().map(|v| to_number(v) as i64).unwrap_or(1);
+                fn flatten(interp: &Interpreter, val: &JsValue, depth: i64, result: &mut Vec<JsValue>) {
+                    if let JsValue::Object(o) = val {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            if let Some(elems) = &obj.borrow().array_elements {
+                                for elem in elems {
+                                    if depth > 0 {
+                                        if let JsValue::Object(eo) = elem {
+                                            if let Some(eobj) = interp.get_object(eo.id) {
+                                                if eobj.borrow().array_elements.is_some() {
+                                                    flatten(interp, elem, depth - 1, result);
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    result.push(elem.clone());
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    result.push(val.clone());
+                }
+                let mut result = Vec::new();
+                flatten(interp, this_val, depth, &mut result);
+                Completion::Normal(interp.create_array(result))
+            }),
+        ));
+        proto.borrow_mut().insert_value("flat".to_string(), flat_fn);
+
+        // Array.prototype.flatMap
+        let flatmap_fn = self.create_function(JsFunction::Native(
+            "flatMap".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let mut result = Vec::new();
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let elems = obj.borrow().array_elements.clone().unwrap_or_default();
+                        for (i, elem) in elems.iter().enumerate() {
+                            let mapped = interp.call_function(
+                                &callback,
+                                &this_arg,
+                                &[elem.clone(), JsValue::Number(i as f64), this_val.clone()],
+                            );
+                            if let Completion::Normal(v) = mapped {
+                                if let JsValue::Object(mo) = &v {
+                                    if let Some(mobj) = interp.get_object(mo.id) {
+                                        if let Some(melems) = &mobj.borrow().array_elements {
+                                            result.extend(melems.iter().cloned());
+                                            continue;
+                                        }
+                                    }
+                                }
+                                result.push(v);
+                            } else {
+                                return mapped;
+                            }
+                        }
+                    }
+                }
+                Completion::Normal(interp.create_array(result))
+            }),
+        ));
+        proto.borrow_mut().insert_value("flatMap".to_string(), flatmap_fn);
+
+        // Array.prototype.findLast / findLastIndex
+        let findlast_fn = self.create_function(JsFunction::Native(
+            "findLast".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let elems = obj.borrow().array_elements.clone().unwrap_or_default();
+                        for i in (0..elems.len()).rev() {
+                            let result = interp.call_function(
+                                &callback, &this_arg,
+                                &[elems[i].clone(), JsValue::Number(i as f64), this_val.clone()],
+                            );
+                            if let Completion::Normal(v) = result {
+                                if to_boolean(&v) { return Completion::Normal(elems[i].clone()); }
+                            } else { return result; }
+                        }
+                    }
+                }
+                Completion::Normal(JsValue::Undefined)
+            }),
+        ));
+        proto.borrow_mut().insert_value("findLast".to_string(), findlast_fn);
+
+        let findlastidx_fn = self.create_function(JsFunction::Native(
+            "findLastIndex".to_string(),
+            Rc::new(|interp, this_val, args| {
+                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let elems = obj.borrow().array_elements.clone().unwrap_or_default();
+                        for i in (0..elems.len()).rev() {
+                            let result = interp.call_function(
+                                &callback, &this_arg,
+                                &[elems[i].clone(), JsValue::Number(i as f64), this_val.clone()],
+                            );
+                            if let Completion::Normal(v) = result {
+                                if to_boolean(&v) { return Completion::Normal(JsValue::Number(i as f64)); }
+                            } else { return result; }
+                        }
+                    }
+                }
+                Completion::Normal(JsValue::Number(-1.0))
+            }),
+        ));
+        proto.borrow_mut().insert_value("findLastIndex".to_string(), findlastidx_fn);
+
         // Set Array statics on the Array constructor
         if let Some(array_val) = self.global_env.borrow().get("Array") {
             if let JsValue::Object(o) = &array_val {
@@ -2996,6 +3451,98 @@ impl Interpreter {
                         .map(|c| c.to_string())
                         .unwrap_or_default();
                     Completion::Normal(JsValue::String(JsString::from_str(&ch)))
+                }),
+            ),
+            (
+                "search",
+                Rc::new(|interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let (source, flags) = match args.first() {
+                        Some(JsValue::Object(o)) => {
+                            let obj = interp.get_object(o.id);
+                            let src = obj.as_ref().map(|ob| {
+                                if let JsValue::String(sv) = ob.borrow().get_property("source") {
+                                    sv.to_rust_string()
+                                } else { String::new() }
+                            }).unwrap_or_default();
+                            let fl = obj.as_ref().map(|ob| {
+                                if let JsValue::String(sv) = ob.borrow().get_property("flags") {
+                                    sv.to_rust_string()
+                                } else { String::new() }
+                            }).unwrap_or_default();
+                            (src, fl)
+                        }
+                        Some(v) => (to_js_string(v), String::new()),
+                        None => (String::new(), String::new()),
+                    };
+                    let pat = if flags.contains('i') {
+                        format!("(?i){}", source)
+                    } else {
+                        source
+                    };
+                    if let Ok(re) = regex::Regex::new(&pat) {
+                        if let Some(m) = re.find(&s) {
+                            return Completion::Normal(JsValue::Number(m.start() as f64));
+                        }
+                    }
+                    Completion::Normal(JsValue::Number(-1.0))
+                }),
+            ),
+            (
+                "match",
+                Rc::new(|interp, this_val, args| {
+                    let s = to_js_string(this_val);
+                    let (source, flags) = match args.first() {
+                        Some(JsValue::Object(o)) => {
+                            let obj = interp.get_object(o.id);
+                            let src = obj.as_ref().map(|ob| {
+                                if let JsValue::String(sv) = ob.borrow().get_property("source") {
+                                    sv.to_rust_string()
+                                } else { String::new() }
+                            }).unwrap_or_default();
+                            let fl = obj.as_ref().map(|ob| {
+                                if let JsValue::String(sv) = ob.borrow().get_property("flags") {
+                                    sv.to_rust_string()
+                                } else { String::new() }
+                            }).unwrap_or_default();
+                            (src, fl)
+                        }
+                        Some(v) => (to_js_string(v), String::new()),
+                        None => (String::new(), String::new()),
+                    };
+                    let pat = if flags.contains('i') {
+                        format!("(?i){}", source)
+                    } else {
+                        source
+                    };
+                    let re = match regex::Regex::new(&pat) {
+                        Ok(r) => r,
+                        Err(_) => return Completion::Normal(JsValue::Null),
+                    };
+                    if flags.contains('g') {
+                        let matches: Vec<JsValue> = re.find_iter(&s)
+                            .map(|m| JsValue::String(JsString::from_str(m.as_str())))
+                            .collect();
+                        if matches.is_empty() {
+                            Completion::Normal(JsValue::Null)
+                        } else {
+                            Completion::Normal(interp.create_array(matches))
+                        }
+                    } else {
+                        if let Some(m) = re.find(&s) {
+                            let matched = JsValue::String(JsString::from_str(m.as_str()));
+                            let result = interp.create_array(vec![matched]);
+                            if let JsValue::Object(ro) = &result {
+                                if let Some(robj) = interp.get_object(ro.id) {
+                                    robj.borrow_mut().insert_value("index".to_string(), JsValue::Number(m.start() as f64));
+                                    robj.borrow_mut().insert_value("input".to_string(), JsValue::String(JsString::from_str(&s)));
+                                }
+                            }
+                            Completion::Normal(result)
+                        } else {
+                            Completion::Normal(JsValue::Null)
+                        }
+                    }
                 }),
             ),
         ];
@@ -3394,9 +3941,80 @@ impl Interpreter {
                 };
                 self.bind_pattern(inner, v, kind, env)
             }
-            _ => {
-                // TODO: array/object destructuring
+            Pattern::Array(elements) => {
+                for (i, elem) in elements.iter().enumerate() {
+                    if let Some(elem) = elem {
+                        match elem {
+                            ArrayPatternElement::Pattern(p) => {
+                                let item = if let JsValue::Object(o) = &val {
+                                    if let Some(obj) = self.get_object(o.id) {
+                                        obj.borrow().array_elements.as_ref()
+                                            .and_then(|e| e.get(i).cloned())
+                                            .unwrap_or(JsValue::Undefined)
+                                    } else { JsValue::Undefined }
+                                } else { JsValue::Undefined };
+                                self.bind_pattern(p, item, kind, env)?;
+                            }
+                            ArrayPatternElement::Rest(p) => {
+                                let rest = if let JsValue::Object(o) = &val {
+                                    if let Some(obj) = self.get_object(o.id) {
+                                        obj.borrow().array_elements.as_ref()
+                                            .map(|e| e.get(i..).unwrap_or(&[]).to_vec())
+                                            .unwrap_or_default()
+                                    } else { vec![] }
+                                } else { vec![] };
+                                let arr = self.create_array(rest);
+                                self.bind_pattern(p, arr, kind, env)?;
+                                break;
+                            }
+                        }
+                    }
+                }
                 Ok(())
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::Shorthand(name) => {
+                            let v = if let JsValue::Object(o) = &val {
+                                if let Some(obj) = self.get_object(o.id) {
+                                    obj.borrow().get_property(name)
+                                } else { JsValue::Undefined }
+                            } else { JsValue::Undefined };
+                            if kind != BindingKind::Var || !env.borrow().bindings.contains_key(name) {
+                                env.borrow_mut().declare(name, kind);
+                            }
+                            env.borrow_mut().set(name, v)?;
+                        }
+                        ObjectPatternProperty::KeyValue(key, pat) => {
+                            let key_str = match key {
+                                PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
+                                PropertyKey::Number(n) => crate::interpreter::to_js_string(&JsValue::Number(*n)),
+                                PropertyKey::Computed(expr) => {
+                                    match self.eval_expr(expr, env) {
+                                        Completion::Normal(v) => to_js_string(&v),
+                                        Completion::Throw(e) => return Err(e),
+                                        _ => String::new(),
+                                    }
+                                }
+                            };
+                            let v = if let JsValue::Object(o) = &val {
+                                if let Some(obj) = self.get_object(o.id) {
+                                    obj.borrow().get_property(&key_str)
+                                } else { JsValue::Undefined }
+                            } else { JsValue::Undefined };
+                            self.bind_pattern(pat, v, kind, env)?;
+                        }
+                        ObjectPatternProperty::Rest(pat) => {
+                            // TODO: rest in object destructuring
+                            let _ = pat;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Pattern::Rest(inner) => {
+                self.bind_pattern(inner, val, kind, env)
             }
         }
     }
@@ -3778,7 +4396,38 @@ impl Interpreter {
                 }
                 Completion::Normal(JsValue::Undefined)
             }
-            Expression::Delete(_) => Completion::Normal(JsValue::Boolean(true)), // TODO
+            Expression::Delete(expr) => {
+                match expr.as_ref() {
+                    Expression::Member(obj_expr, prop) => {
+                        let obj_val = match self.eval_expr(obj_expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let key = match prop {
+                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Computed(expr) => {
+                                match self.eval_expr(expr, env) {
+                                    Completion::Normal(v) => to_js_string(&v),
+                                    other => return other,
+                                }
+                            }
+                        };
+                        if let JsValue::Object(o) = &obj_val {
+                            if let Some(obj) = self.get_object(o.id) {
+                                let mut obj_mut = obj.borrow_mut();
+                                if let Some(desc) = obj_mut.properties.get(&key) {
+                                    if desc.configurable == Some(false) {
+                                        return Completion::Normal(JsValue::Boolean(false));
+                                    }
+                                }
+                                obj_mut.properties.remove(&key);
+                            }
+                        }
+                        Completion::Normal(JsValue::Boolean(true))
+                    }
+                    _ => Completion::Normal(JsValue::Boolean(true)),
+                }
+            }
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 let mut result = JsValue::Undefined;
                 for e in exprs {
@@ -3808,14 +4457,30 @@ impl Interpreter {
         }
     }
 
-    fn eval_literal(&self, lit: &Literal) -> JsValue {
+    fn eval_literal(&mut self, lit: &Literal) -> JsValue {
         match lit {
             Literal::Null => JsValue::Null,
             Literal::Boolean(b) => JsValue::Boolean(*b),
             Literal::Number(n) => JsValue::Number(*n),
             Literal::String(s) => JsValue::String(JsString::from_str(s)),
             Literal::BigInt(_) => JsValue::Undefined, // TODO
-            Literal::RegExp(_, _) => JsValue::Undefined, // TODO
+            Literal::RegExp(pattern, flags) => {
+                let mut obj = JsObjectData::new();
+                obj.prototype = self.regexp_prototype.clone().or(self.object_prototype.clone());
+                obj.class_name = "RegExp".to_string();
+                obj.insert_value("source".to_string(), JsValue::String(JsString::from_str(pattern)));
+                obj.insert_value("flags".to_string(), JsValue::String(JsString::from_str(flags)));
+                obj.insert_value("global".to_string(), JsValue::Boolean(flags.contains('g')));
+                obj.insert_value("ignoreCase".to_string(), JsValue::Boolean(flags.contains('i')));
+                obj.insert_value("multiline".to_string(), JsValue::Boolean(flags.contains('m')));
+                obj.insert_value("dotAll".to_string(), JsValue::Boolean(flags.contains('s')));
+                obj.insert_value("unicode".to_string(), JsValue::Boolean(flags.contains('u')));
+                obj.insert_value("sticky".to_string(), JsValue::Boolean(flags.contains('y')));
+                obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
+                let rc = Rc::new(RefCell::new(obj));
+                self.objects.push(rc);
+                JsValue::Object(crate::types::JsObject { id: self.objects.len() as u64 - 1 })
+            }
         }
     }
 
@@ -3828,58 +4493,147 @@ impl Interpreter {
         }
     }
 
-    fn eval_binary(&self, op: BinaryOp, left: &JsValue, right: &JsValue) -> JsValue {
+    fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> JsValue {
+        match val {
+            JsValue::Object(o) => {
+                let methods = if preferred_type == "string" {
+                    ["toString", "valueOf"]
+                } else {
+                    ["valueOf", "toString"]
+                };
+                for method_name in &methods {
+                    let method = if let Some(obj) = self.get_object(o.id) {
+                        let desc = obj.borrow().get_property_descriptor(method_name);
+                        desc.and_then(|d| d.value)
+                    } else {
+                        None
+                    };
+                    if let Some(func) = method {
+                        if let JsValue::Object(fo) = &func {
+                            if self.get_object(fo.id).map(|o| o.borrow().callable.is_some()).unwrap_or(false) {
+                                let result = self.call_function(&func, val, &[]);
+                                match result {
+                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => return v,
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                // Fallback: check for primitive_value (wrapper objects)
+                if let Some(obj) = self.get_object(o.id) {
+                    if let Some(pv) = obj.borrow().primitive_value.clone() {
+                        return pv;
+                    }
+                }
+                JsValue::String(JsString::from_str("[object Object]"))
+            }
+            _ => val.clone(),
+        }
+    }
+
+    fn to_number_coerce(&mut self, val: &JsValue) -> f64 {
+        let prim = self.to_primitive(val, "number");
+        to_number(&prim)
+    }
+
+    fn abstract_equality(&mut self, left: &JsValue, right: &JsValue) -> bool {
+        if std::mem::discriminant(left) == std::mem::discriminant(right) {
+            return strict_equality(left, right);
+        }
+        if (left.is_null() && right.is_undefined()) || (left.is_undefined() && right.is_null()) {
+            return true;
+        }
+        if left.is_number() && right.is_string() {
+            return self.abstract_equality(left, &JsValue::Number(to_number(right)));
+        }
+        if left.is_string() && right.is_number() {
+            return self.abstract_equality(&JsValue::Number(to_number(left)), right);
+        }
+        if left.is_boolean() {
+            return self.abstract_equality(&JsValue::Number(to_number(left)), right);
+        }
+        if right.is_boolean() {
+            return self.abstract_equality(left, &JsValue::Number(to_number(right)));
+        }
+        // Object vs primitive
+        if matches!(left, JsValue::Object(_)) && (right.is_string() || right.is_number() || right.is_symbol()) {
+            let lprim = self.to_primitive(left, "default");
+            return self.abstract_equality(&lprim, right);
+        }
+        if matches!(right, JsValue::Object(_)) && (left.is_string() || left.is_number() || left.is_symbol()) {
+            let rprim = self.to_primitive(right, "default");
+            return self.abstract_equality(left, &rprim);
+        }
+        false
+    }
+
+    fn abstract_relational(&mut self, left: &JsValue, right: &JsValue) -> Option<bool> {
+        let lprim = self.to_primitive(left, "number");
+        let rprim = self.to_primitive(right, "number");
+        if is_string(&lprim) && is_string(&rprim) {
+            let ls = to_js_string(&lprim);
+            let rs = to_js_string(&rprim);
+            return Some(ls < rs);
+        }
+        let ln = to_number(&lprim);
+        let rn = to_number(&rprim);
+        number_ops::less_than(ln, rn)
+    }
+
+    fn eval_binary(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> JsValue {
         match op {
             BinaryOp::Add => {
-                // String concatenation or numeric addition
-                if is_string(left) || is_string(right) {
-                    let ls = to_js_string(left);
-                    let rs = to_js_string(right);
+                let lprim = self.to_primitive(left, "default");
+                let rprim = self.to_primitive(right, "default");
+                if is_string(&lprim) || is_string(&rprim) {
+                    let ls = to_js_string(&lprim);
+                    let rs = to_js_string(&rprim);
                     JsValue::String(JsString::from_str(&format!("{ls}{rs}")))
                 } else {
-                    JsValue::Number(number_ops::add(to_number(left), to_number(right)))
+                    JsValue::Number(number_ops::add(to_number(&lprim), to_number(&rprim)))
                 }
             }
             BinaryOp::Sub => {
-                JsValue::Number(number_ops::subtract(to_number(left), to_number(right)))
+                JsValue::Number(number_ops::subtract(self.to_number_coerce(left), self.to_number_coerce(right)))
             }
             BinaryOp::Mul => {
-                JsValue::Number(number_ops::multiply(to_number(left), to_number(right)))
+                JsValue::Number(number_ops::multiply(self.to_number_coerce(left), self.to_number_coerce(right)))
             }
-            BinaryOp::Div => JsValue::Number(number_ops::divide(to_number(left), to_number(right))),
+            BinaryOp::Div => JsValue::Number(number_ops::divide(self.to_number_coerce(left), self.to_number_coerce(right))),
             BinaryOp::Mod => {
-                JsValue::Number(number_ops::remainder(to_number(left), to_number(right)))
+                JsValue::Number(number_ops::remainder(self.to_number_coerce(left), self.to_number_coerce(right)))
             }
             BinaryOp::Exp => {
-                JsValue::Number(number_ops::exponentiate(to_number(left), to_number(right)))
+                JsValue::Number(number_ops::exponentiate(self.to_number_coerce(left), self.to_number_coerce(right)))
             }
-            BinaryOp::Eq => JsValue::Boolean(abstract_equality(left, right)),
-            BinaryOp::NotEq => JsValue::Boolean(!abstract_equality(left, right)),
+            BinaryOp::Eq => JsValue::Boolean(self.abstract_equality(left, right)),
+            BinaryOp::NotEq => JsValue::Boolean(!self.abstract_equality(left, right)),
             BinaryOp::StrictEq => JsValue::Boolean(strict_equality(left, right)),
             BinaryOp::StrictNotEq => JsValue::Boolean(!strict_equality(left, right)),
-            BinaryOp::Lt => JsValue::Boolean(abstract_relational(left, right) == Some(true)),
-            BinaryOp::Gt => JsValue::Boolean(abstract_relational(right, left) == Some(true)),
-            BinaryOp::LtEq => JsValue::Boolean(abstract_relational(right, left) == Some(false)),
-            BinaryOp::GtEq => JsValue::Boolean(abstract_relational(left, right) == Some(false)),
+            BinaryOp::Lt => JsValue::Boolean(self.abstract_relational(left, right) == Some(true)),
+            BinaryOp::Gt => JsValue::Boolean(self.abstract_relational(right, left) == Some(true)),
+            BinaryOp::LtEq => JsValue::Boolean(self.abstract_relational(right, left) == Some(false)),
+            BinaryOp::GtEq => JsValue::Boolean(self.abstract_relational(left, right) == Some(false)),
             BinaryOp::LShift => {
-                JsValue::Number(number_ops::left_shift(to_number(left), to_number(right)))
+                JsValue::Number(number_ops::left_shift(self.to_number_coerce(left), self.to_number_coerce(right)))
             }
             BinaryOp::RShift => JsValue::Number(number_ops::signed_right_shift(
-                to_number(left),
-                to_number(right),
+                self.to_number_coerce(left),
+                self.to_number_coerce(right),
             )),
             BinaryOp::URShift => JsValue::Number(number_ops::unsigned_right_shift(
-                to_number(left),
-                to_number(right),
+                self.to_number_coerce(left),
+                self.to_number_coerce(right),
             )),
             BinaryOp::BitAnd => {
-                JsValue::Number(number_ops::bitwise_and(to_number(left), to_number(right)))
+                JsValue::Number(number_ops::bitwise_and(self.to_number_coerce(left), self.to_number_coerce(right)))
             }
             BinaryOp::BitOr => {
-                JsValue::Number(number_ops::bitwise_or(to_number(left), to_number(right)))
+                JsValue::Number(number_ops::bitwise_or(self.to_number_coerce(left), self.to_number_coerce(right)))
             }
             BinaryOp::BitXor => {
-                JsValue::Number(number_ops::bitwise_xor(to_number(left), to_number(right)))
+                JsValue::Number(number_ops::bitwise_xor(self.to_number_coerce(left), self.to_number_coerce(right)))
             }
             BinaryOp::In => {
                 if let JsValue::Object(o) = &right {
@@ -4072,7 +4826,7 @@ impl Interpreter {
         }
     }
 
-    fn apply_compound_assign(&self, op: AssignOp, lval: &JsValue, rval: &JsValue) -> JsValue {
+    fn apply_compound_assign(&mut self, op: AssignOp, lval: &JsValue, rval: &JsValue) -> JsValue {
         match op {
             AssignOp::AddAssign => self.eval_binary(BinaryOp::Add, lval, rval),
             AssignOp::SubAssign => self.eval_binary(BinaryOp::Sub, lval, rval),
@@ -4240,11 +4994,27 @@ impl Interpreter {
 
         let mut evaluated_args = Vec::new();
         for arg in args {
-            let val = match self.eval_expr(arg, env) {
-                Completion::Normal(v) => v,
-                other => return other,
-            };
-            evaluated_args.push(val);
+            if let Expression::Spread(inner) = arg {
+                let val = match self.eval_expr(inner, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if let JsValue::Object(o) = &val {
+                    if let Some(obj) = self.get_object(o.id) {
+                        if let Some(elems) = obj.borrow().array_elements.clone() {
+                            evaluated_args.extend(elems);
+                            continue;
+                        }
+                    }
+                }
+                evaluated_args.push(val);
+            } else {
+                let val = match self.eval_expr(arg, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                evaluated_args.push(val);
+            }
         }
 
         self.call_function(&func_val, &this_val, &evaluated_args)
@@ -4273,6 +5043,12 @@ impl Interpreter {
                         let func_env = Environment::new(Some(closure));
                         // Bind parameters
                         for (i, param) in params.iter().enumerate() {
+                            if let Pattern::Rest(inner) = param {
+                                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
+                                let rest_arr = self.create_array(rest);
+                                let _ = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env);
+                                break;
+                            }
                             let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
                             let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
                         }
@@ -4311,11 +5087,27 @@ impl Interpreter {
         };
         let mut evaluated_args = Vec::new();
         for arg in args {
-            let val = match self.eval_expr(arg, env) {
-                Completion::Normal(v) => v,
-                other => return other,
-            };
-            evaluated_args.push(val);
+            if let Expression::Spread(inner) = arg {
+                let val = match self.eval_expr(inner, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if let JsValue::Object(o) = &val {
+                    if let Some(obj) = self.get_object(o.id) {
+                        if let Some(elems) = obj.borrow().array_elements.clone() {
+                            evaluated_args.extend(elems);
+                            continue;
+                        }
+                    }
+                }
+                evaluated_args.push(val);
+            } else {
+                let val = match self.eval_expr(arg, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                evaluated_args.push(val);
+            }
         }
         // Create new object for 'this'
         let new_obj = self.create_object();
@@ -4419,6 +5211,27 @@ impl Interpreter {
         let mut values = Vec::new();
         for elem in elements {
             match elem {
+                Some(Expression::Spread(inner)) => {
+                    let val = match self.eval_expr(inner, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if let JsValue::Object(o) = &val {
+                        if let Some(obj) = self.get_object(o.id) {
+                            if let Some(elems) = obj.borrow().array_elements.clone() {
+                                values.extend(elems);
+                                continue;
+                            }
+                        }
+                    }
+                    if let JsValue::String(s) = &val {
+                        for ch in s.to_rust_string().chars() {
+                            values.push(JsValue::String(JsString::from_str(&ch.to_string())));
+                        }
+                        continue;
+                    }
+                    values.push(val);
+                }
                 Some(expr) => {
                     let val = match self.eval_expr(expr, env) {
                         Completion::Normal(v) => v,
@@ -4748,6 +5561,15 @@ pub fn to_number(val: &JsValue) -> f64 {
             let trimmed = rust_str.trim();
             if trimmed.is_empty() {
                 return 0.0;
+            }
+            if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+                return i64::from_str_radix(&trimmed[2..], 16).map(|n| n as f64).unwrap_or(f64::NAN);
+            }
+            if trimmed.starts_with("0o") || trimmed.starts_with("0O") {
+                return i64::from_str_radix(&trimmed[2..], 8).map(|n| n as f64).unwrap_or(f64::NAN);
+            }
+            if trimmed.starts_with("0b") || trimmed.starts_with("0B") {
+                return i64::from_str_radix(&trimmed[2..], 2).map(|n| n as f64).unwrap_or(f64::NAN);
             }
             trimmed.parse::<f64>().unwrap_or(f64::NAN)
         }

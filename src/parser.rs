@@ -1391,6 +1391,21 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Literal(Literal::RegExp(p, f)))
             }
+            Token::Slash | Token::SlashAssign => {
+                // Re-lex as regex literal
+                let prefix = if matches!(self.current, Token::SlashAssign) { "=" } else { "" };
+                let regex_tok = self.lexer.lex_regex()?;
+                if let Token::RegExpLiteral { pattern, flags } = regex_tok {
+                    let full_pattern = format!("{}{}", prefix, pattern);
+                    self.current = self.lexer.next_token()?;
+                    while self.current == Token::LineTerminator {
+                        self.current = self.lexer.next_token()?;
+                    }
+                    Ok(Expression::Literal(Literal::RegExp(full_pattern, flags)))
+                } else {
+                    Err(ParseError { message: "Expected regex literal".to_string() })
+                }
+            }
             Token::LeftParen => {
                 self.advance()?;
                 // Could be: parenthesized expression, arrow params, or empty arrow ()=>

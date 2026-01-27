@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 7,756   | 34,320  | 18.43%    |
+| 48,257      | 42,076  | 6,181   | 9,402   | 32,674  | 22.35%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -44,9 +44,18 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - `Object.prototype.hasOwnProperty`, `Object.prototype.toString`, `Object.prototype.valueOf`, `Object.prototype.propertyIsEnumerable`, `Object.prototype.isPrototypeOf`
   - Number/Boolean primitive method calls (`toString`, `valueOf`, `toFixed`)
   - `instanceof` and `in` operators
-  - Array prototype methods (`push`, `pop`, `shift`, `unshift`, `indexOf`, `lastIndexOf`, `includes`, `join`, `toString`, `concat`, `slice`, `splice`, `reverse`, `fill`, `forEach`, `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`)
+  - ToPrimitive with valueOf/toString coercion for objects
+  - Wrapper objects (`new Boolean`, `new Number`, `new String`) with primitive value
+  - `eval()` support
+  - `Symbol` with well-known symbols (iterator, hasInstance, toPrimitive, etc.)
+  - `delete` operator for object properties
+  - Spread elements in arrays and function calls
+  - Rest parameters in function declarations
+  - Destructuring (array and object patterns in declarations and parameters)
+  - RegExp literals and `RegExp` constructor with `test`, `exec`, `toString`
+  - Array prototype methods (`push`, `pop`, `shift`, `unshift`, `indexOf`, `lastIndexOf`, `includes`, `join`, `toString`, `concat`, `slice`, `splice`, `reverse`, `fill`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `some`, `every`, `find`, `findIndex`, `findLast`, `findLastIndex`, `sort`, `flat`, `flatMap`, `at`)
   - `Array.isArray`, `Array.from`, `Array.of`
-  - String prototype methods (`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `repeat`, `padStart`, `padEnd`, `concat`, `split`, `replace`, `replaceAll`, `at`)
+  - String prototype methods (`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `padStart`, `padEnd`, `concat`, `split`, `replace`, `replaceAll`, `at`, `search`, `match`)
   - Proper Error objects (`TypeError`, `ReferenceError`, `SyntaxError`, `RangeError`) with prototype chains and `instanceof` support
   - `JSON.stringify`, `JSON.parse`
   - `String.fromCharCode`

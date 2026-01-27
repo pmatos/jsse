@@ -621,6 +621,40 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    pub fn lex_regex(&mut self) -> Result<Token, LexError> {
+        let mut pattern = String::new();
+        let mut in_class = false;
+        loop {
+            match self.peek() {
+                None | Some('\n') | Some('\r') => {
+                    return Err(LexError { message: "Unterminated regular expression".to_string(), location: self.location() });
+                }
+                Some('/') if !in_class => {
+                    self.advance();
+                    break;
+                }
+                Some('[') => { in_class = true; pattern.push(self.advance().unwrap()); }
+                Some(']') => { in_class = false; pattern.push(self.advance().unwrap()); }
+                Some('\\') => {
+                    pattern.push(self.advance().unwrap());
+                    if let Some(c) = self.peek() {
+                        pattern.push(self.advance().unwrap());
+                    }
+                }
+                Some(_) => { pattern.push(self.advance().unwrap()); }
+            }
+        }
+        let mut flags = String::new();
+        while let Some(c) = self.peek() {
+            if c.is_ascii_alphabetic() {
+                flags.push(self.advance().unwrap());
+            } else {
+                break;
+            }
+        }
+        Ok(Token::RegExpLiteral { pattern, flags })
+    }
+
     pub fn next_token(&mut self) -> Result<Token, LexError> {
         loop {
             self.skip_whitespace();
