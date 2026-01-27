@@ -28,6 +28,9 @@ pub struct Parser<'a> {
     in_function: u32,
     in_generator: bool,
     in_async: bool,
+    in_iteration: u32,
+    in_switch: u32,
+    labels: Vec<(String, bool)>, // (name, is_iteration)
 }
 
 impl<'a> Parser<'a> {
@@ -51,6 +54,9 @@ impl<'a> Parser<'a> {
             in_function: 0,
             in_generator: false,
             in_async: false,
+            in_iteration: 0,
+            in_switch: 0,
+            labels: Vec::new(),
         })
     }
 
@@ -298,7 +304,15 @@ impl<'a> Parser<'a> {
             self.advance()?;
             if self.current == Token::Colon {
                 self.advance()?;
+                let is_iteration = matches!(
+                    self.current,
+                    Token::Keyword(Keyword::For)
+                        | Token::Keyword(Keyword::While)
+                        | Token::Keyword(Keyword::Do)
+                );
+                self.labels.push((name.clone(), is_iteration));
                 let stmt = self.parse_statement()?;
+                self.labels.pop();
                 return Ok(Statement::Labeled(name, Box::new(stmt)));
             }
             // Not a label — push back current and restore identifier
@@ -467,18 +481,25 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn parse_iteration_body(&mut self) -> Result<Box<Statement>, ParseError> {
+        self.in_iteration += 1;
+        let body = self.parse_statement();
+        self.in_iteration -= 1;
+        Ok(Box::new(body?))
+    }
+
     fn parse_while_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // while
         self.eat(&Token::LeftParen)?;
         let test = self.parse_expression()?;
         self.eat(&Token::RightParen)?;
-        let body = Box::new(self.parse_statement()?);
+        let body = self.parse_iteration_body()?;
         Ok(Statement::While(WhileStatement { test, body }))
     }
 
     fn parse_do_while_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // do
-        let body = Box::new(self.parse_statement()?);
+        let body = self.parse_iteration_body()?;
         self.eat(&Token::Keyword(Keyword::While))?;
         self.eat(&Token::LeftParen)?;
         let test = self.parse_expression()?;
@@ -503,7 +524,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
-                    let body = Box::new(self.parse_statement()?);
+                    let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForIn(ForInStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind: VarKind::Var,
@@ -517,7 +538,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
-                    let body = Box::new(self.parse_statement()?);
+                    let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForOf(ForOfStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind: VarKind::Var,
@@ -545,7 +566,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
-                    let body = Box::new(self.parse_statement()?);
+                    let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForIn(ForInStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind,
@@ -559,7 +580,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
-                    let body = Box::new(self.parse_statement()?);
+                    let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForOf(ForOfStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind,
@@ -581,7 +602,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
-                    let body = Box::new(self.parse_statement()?);
+                    let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForIn(ForInStatement {
                         left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
                         right,
@@ -592,7 +613,7 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
-                    let body = Box::new(self.parse_statement()?);
+                    let body = self.parse_iteration_body()?;
                     return Ok(Statement::ForOf(ForOfStatement {
                         left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
                         right,
@@ -617,7 +638,7 @@ impl<'a> Parser<'a> {
             None
         };
         self.eat(&Token::RightParen)?;
-        let body = Box::new(self.parse_statement()?);
+        let body = self.parse_iteration_body()?;
         Ok(Statement::For(ForStatement {
             init,
             test,
@@ -647,6 +668,13 @@ impl<'a> Parser<'a> {
     fn parse_break_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?;
         let label = self.parse_optional_label()?;
+        if let Some(ref l) = label {
+            if !self.labels.iter().any(|(name, _)| name == l) {
+                return Err(self.error(&format!("Undefined label '{l}'")));
+            }
+        } else if self.in_iteration == 0 && self.in_switch == 0 {
+            return Err(self.error("Illegal break statement"));
+        }
         self.eat_semicolon()?;
         Ok(Statement::Break(label))
     }
@@ -654,6 +682,19 @@ impl<'a> Parser<'a> {
     fn parse_continue_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?;
         let label = self.parse_optional_label()?;
+        if let Some(ref l) = label {
+            match self.labels.iter().find(|(name, _)| name == l) {
+                None => return Err(self.error(&format!("Undefined label '{l}'"))),
+                Some((_, false)) => {
+                    return Err(self.error(&format!(
+                        "Label '{l}' is not an iteration statement"
+                    )));
+                }
+                _ => {}
+            }
+        } else if self.in_iteration == 0 {
+            return Err(self.error("Illegal continue statement"));
+        }
         self.eat_semicolon()?;
         Ok(Statement::Continue(label))
     }
@@ -724,6 +765,7 @@ impl<'a> Parser<'a> {
         let discriminant = self.parse_expression()?;
         self.eat(&Token::RightParen)?;
         self.eat(&Token::LeftBrace)?;
+        self.in_switch += 1;
         let mut cases = Vec::new();
         while self.current != Token::RightBrace {
             let test = if self.current == Token::Keyword(Keyword::Case) {
@@ -745,6 +787,7 @@ impl<'a> Parser<'a> {
             }
             cases.push(SwitchCase { test, consequent });
         }
+        self.in_switch -= 1;
         self.eat(&Token::RightBrace)?;
         Ok(Statement::Switch(SwitchStatement {
             discriminant,
@@ -1007,8 +1050,13 @@ impl<'a> Parser<'a> {
         let prev_strict = self.strict;
         let prev_generator = self.in_generator;
         let prev_async = self.in_async;
+        let prev_iteration = self.in_iteration;
+        let prev_switch = self.in_switch;
+        let prev_labels = std::mem::take(&mut self.labels);
         self.in_generator = is_generator;
         self.in_async = is_async;
+        self.in_iteration = 0;
+        self.in_switch = 0;
         self.in_function += 1;
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
@@ -1033,6 +1081,9 @@ impl<'a> Parser<'a> {
         self.in_function -= 1;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
+        self.in_iteration = prev_iteration;
+        self.in_switch = prev_switch;
+        self.labels = prev_labels;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))

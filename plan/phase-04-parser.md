@@ -147,7 +147,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [ ] `new.target` outside functions
 - [ ] `super` outside methods
 - [x] `return` outside functions
-- [ ] `break`/`continue` label validation
+- [x] `break`/`continue` label validation
 - [x] Lexical declarations in single-statement positions
 - [ ] Labelled function declarations (strict mode restrictions)
 
