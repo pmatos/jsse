@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 6,909   | 35,167  | 16.42%    |
+| 48,257      | 42,076  | 6,181   | 7,170   | 34,906  | 17.04%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -37,9 +37,10 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - `this` binding (method calls, constructors, arrow lexical scoping)
   - Property descriptors (data properties with writable/enumerable/configurable)
   - Prototype chain inheritance (Object.prototype on all objects)
-  - `Object.defineProperty`, `Object.getOwnPropertyDescriptor`, `Object.keys`, `Object.freeze`, `Object.getPrototypeOf`, `Object.create`
+  - `Object.defineProperty`, `Object.getOwnPropertyDescriptor`, `Object.keys`, `Object.freeze`, `Object.getPrototypeOf`, `Object.create`, `Object.entries`, `Object.values`, `Object.assign`, `Object.is`, `Object.getOwnPropertyNames`, `Object.preventExtensions`, `Object.isExtensible`, `Object.isFrozen`, `Object.isSealed`, `Object.seal`
   - `Function.prototype.call`, `Function.prototype.apply`
-  - `Object.prototype.hasOwnProperty`
+  - `Object.prototype.hasOwnProperty`, `Object.prototype.toString`, `Object.prototype.valueOf`, `Object.prototype.propertyIsEnumerable`, `Object.prototype.isPrototypeOf`
+  - Number/Boolean primitive method calls (`toString`, `valueOf`, `toFixed`)
   - `instanceof` and `in` operators
   - Array prototype methods (`push`, `pop`, `shift`, `unshift`, `indexOf`, `lastIndexOf`, `includes`, `join`, `toString`, `concat`, `slice`, `splice`, `reverse`, `fill`, `forEach`, `map`, `filter`, `reduce`, `some`, `every`, `find`, `findIndex`)
   - `Array.isArray`
