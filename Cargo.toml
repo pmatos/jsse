@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 num-bigint = "0.4"
+unicode-ident = "1.0"

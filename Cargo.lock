@@ -122,6 +122,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "num-bigint",
+ "unicode-ident",
 ]
 
 [[package]]

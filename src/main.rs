@@ -1,4 +1,6 @@
 #[allow(dead_code)]
+mod lexer;
+#[allow(dead_code)]
 mod types;
 
 use clap::Parser;
