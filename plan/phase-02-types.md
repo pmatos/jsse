@@ -55,13 +55,13 @@ Implement all ECMAScript language types, specification types, and type conversio
   - [ ] Well-known intrinsic objects table (§6.1.7.4)
 
 ### 2.2 Specification Types (§6.2)
-- [ ] Enum specification type
-- [ ] List and Record
+- [x] Enum specification type
+- [x] List and Record
 - [ ] Set and Relation
-- [ ] Completion Record (normal, throw, return, break, continue)
-  - [ ] NormalCompletion
-  - [ ] ThrowCompletion
-  - [ ] ReturnCompletion
+- [x] Completion Record (normal, throw, return, break, continue)
+  - [x] NormalCompletion
+  - [x] ThrowCompletion
+  - [x] ReturnCompletion
   - [ ] UpdateEmpty
 - [ ] Reference Record
   - [ ] IsPropertyReference
@@ -73,15 +73,15 @@ Implement all ECMAScript language types, specification types, and type conversio
   - [ ] GetThisValue
   - [ ] InitializeReferencedBinding
   - [ ] MakePrivateReference
-- [ ] Property Descriptor
-  - [ ] IsAccessorDescriptor
-  - [ ] IsDataDescriptor
+- [x] Property Descriptor
+  - [x] IsAccessorDescriptor
+  - [x] IsDataDescriptor
   - [ ] IsGenericDescriptor
-  - [ ] FromPropertyDescriptor
-  - [ ] ToPropertyDescriptor
+  - [x] FromPropertyDescriptor
+  - [x] ToPropertyDescriptor
   - [ ] CompletePropertyDescriptor
-- [ ] Environment Record types (placeholder — detailed in Phase 5)
-- [ ] Abstract Closure
+- [x] Environment Record types (placeholder — detailed in Phase 5)
+- [x] Abstract Closure
 - [ ] Data Blocks
   - [ ] CreateByteDataBlock
   - [ ] CreateSharedByteDataBlock
