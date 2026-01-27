@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+mod types;
+
 use clap::Parser;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
