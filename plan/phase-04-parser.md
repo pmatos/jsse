@@ -136,10 +136,10 @@ Build a complete recursive descent parser producing an AST from the token stream
 
 ### 4.15 Early Errors
 - [x] Duplicate formal parameters (strict mode)
-- [ ] Use of reserved words
+- [x] Use of reserved words
 - [ ] Invalid assignment targets
 - [x] `with` in strict mode
-- [ ] `delete` of unqualified identifier in strict mode
+- [x] `delete` of unqualified identifier in strict mode
 - [ ] Duplicate `__proto__` in object literals
 - [ ] `yield` in generator parameters
 - [ ] `await` in async function parameters

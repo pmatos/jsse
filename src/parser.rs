@@ -324,6 +324,11 @@ impl<'a> Parser<'a> {
             Token::Identifier(name) => {
                 let name = name.clone();
                 self.check_strict_identifier(&name)?;
+                if self.strict && (name == "eval" || name == "arguments") {
+                    return Err(self.error(format!(
+                        "'{name}' can't be defined or assigned to in strict mode code"
+                    )));
+                }
                 self.advance()?;
                 Ok(Pattern::Identifier(name))
             }
@@ -1247,6 +1252,9 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Delete) => {
                 self.advance()?;
                 let expr = self.parse_unary()?;
+                if self.strict && matches!(&expr, Expression::Identifier(_)) {
+                    return Err(self.error("Delete of an unqualified identifier in strict mode"));
+                }
                 Ok(Expression::Delete(Box::new(expr)))
             }
             Token::Keyword(Keyword::Void) => {
