@@ -6,11 +6,11 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 ## Test262 Progress
 
-| Total Tests | Passing | Failing | Pass Rate |
-|-------------|---------|---------|-----------|
-| 48,257      | 4,566   | 43,691  | 9.46%     |
+| Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
+|-------------|---------|---------|---------|---------|-----------|
+| 48,257      | 42,076  | 6,181   | 32      | 42,044  | 0.08%     |
 
-*Passing tests are negative tests (expected failures) since the engine is not yet implemented.*
+*Skipped: module and async tests. Engine not yet implemented.*
 
 ## Structure
 

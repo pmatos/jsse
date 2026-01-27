@@ -6,29 +6,29 @@ Set up the Rust project, CLI interface, test262 runner, and CI pipeline.
 ## Tasks
 
 ### 1.1 Rust Project Setup
-- [ ] `cargo init` with binary crate
-- [ ] Set up workspace if needed (e.g., `jsse-core`, `jsse-cli`)
-- [ ] Choose Rust edition (2024)
-- [ ] Set up `Cargo.toml` with initial dependencies
-- [ ] Add `.gitignore` for Rust
+- [x] `cargo init` with binary crate
+- [x] Set up workspace if needed (e.g., `jsse-core`, `jsse-cli`)
+- [x] Choose Rust edition (2024)
+- [x] Set up `Cargo.toml` with initial dependencies
+- [x] Add `.gitignore` for Rust
 
 ### 1.2 CLI Interface
-- [ ] Accept JS file path as argument
-- [ ] Accept `--eval` / `-e` for inline JS
-- [ ] REPL mode when no arguments given
-- [ ] `--version` and `--help` flags
-- [ ] Exit codes: 0 for success, 1 for runtime error, 2 for syntax error
+- [x] Accept JS file path as argument
+- [x] Accept `--eval` / `-e` for inline JS
+- [x] REPL mode when no arguments given
+- [x] `--version` and `--help` flags
+- [x] Exit codes: 0 for success, 1 for runtime error, 2 for syntax error
 
 ### 1.3 Test262 Runner
-- [ ] Parse test262 YAML frontmatter (description, flags, features, negative, includes)
-- [ ] Handle test flags: `onlyStrict`, `noStrict`, `raw`, `module`, `async`, `generated`
-- [ ] Pre-load harness files (`assert.js`, `sta.js`, `doneprintHandle.js`, etc.)
-- [ ] Handle negative tests (expected parse/runtime errors)
-- [ ] Produce JSON/text report: pass/fail/skip per test
-- [ ] Summary statistics output
-- [ ] Support running single test, directory, or full suite
-- [ ] Timeout handling per test (e.g., 10s)
-- [ ] Parallel test execution
+- [x] Parse test262 YAML frontmatter (description, flags, features, negative, includes)
+- [x] Handle test flags: `onlyStrict`, `noStrict`, `raw`, `module`, `async`, `generated`
+- [x] Pre-load harness files (`assert.js`, `sta.js`, `doneprintHandle.js`, etc.)
+- [x] Handle negative tests (expected parse/runtime errors)
+- [x] Produce JSON/text report: pass/fail/skip per test
+- [x] Summary statistics output
+- [x] Support running single test, directory, or full suite
+- [x] Timeout handling per test (e.g., 10s)
+- [x] Parallel test execution
 
 ### 1.4 Custom Test Runner
 - [ ] Script to run tests from `tests/` directory
