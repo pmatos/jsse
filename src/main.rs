@@ -1,10 +1,7 @@
-#[allow(dead_code)]
 mod ast;
-#[allow(dead_code)]
+mod interpreter;
 mod lexer;
-#[allow(dead_code)]
 mod parser;
-#[allow(dead_code)]
 mod types;
 
 use clap::Parser;
@@ -23,18 +20,36 @@ struct Cli {
     eval: Option<String>,
 }
 
-fn run_source(_source: &str) -> Result<(), EngineError> {
-    Err(EngineError::NotImplemented)
+enum EngineError {
+    Parse(String),
+    Runtime(String),
 }
 
-enum EngineError {
-    NotImplemented,
+fn run_source(source: &str) -> Result<(), EngineError> {
+    let mut p = parser::Parser::new(source).map_err(|e| EngineError::Parse(format!("{e:?}")))?;
+    let program = p
+        .parse_program()
+        .map_err(|e| EngineError::Parse(format!("{e:?}")))?;
+    let mut interp = interpreter::Interpreter::new();
+    match interp.run(&program) {
+        interpreter::Completion::Throw(val) => {
+            Err(EngineError::Runtime(interpreter::to_js_string(&val)))
+        }
+        _ => Ok(()),
+    }
 }
 
 fn execute_code(code: &str) -> ExitCode {
     match run_source(code) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(EngineError::NotImplemented) => ExitCode::from(1),
+        Err(EngineError::Parse(msg)) => {
+            eprintln!("SyntaxError: {msg}");
+            ExitCode::from(2)
+        }
+        Err(EngineError::Runtime(msg)) => {
+            eprintln!("{msg}");
+            ExitCode::from(1)
+        }
     }
 }
 
@@ -69,10 +84,12 @@ fn run_repl() -> ExitCode {
             Ok(0) => break,
             Ok(_) => {
                 let trimmed = line.trim();
-                if !trimmed.is_empty()
-                    && let Err(EngineError::NotImplemented) = run_source(trimmed)
-                {
-                    eprintln!("Engine not yet implemented");
+                if !trimmed.is_empty() {
+                    match run_source(trimmed) {
+                        Ok(()) => {}
+                        Err(EngineError::Parse(msg)) => eprintln!("SyntaxError: {msg}"),
+                        Err(EngineError::Runtime(msg)) => eprintln!("{msg}"),
+                    }
                 }
             }
             Err(e) => {

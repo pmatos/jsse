@@ -8,37 +8,37 @@ Implement all ECMAScript language types, specification types, and type conversio
 ## Tasks
 
 ### 2.1 Language Types (§6.1)
-- [ ] `Undefined` type
-- [ ] `Null` type
-- [ ] `Boolean` type
-- [ ] `String` type (UTF-16 code unit sequences)
-  - [ ] `StringIndexOf` abstract operation
-  - [ ] `StringLastIndexOf` abstract operation
-- [ ] `Symbol` type
-  - [ ] Symbol description
-  - [ ] Well-known symbols table (§6.1.5.1): `@@iterator`, `@@toPrimitive`, `@@toStringTag`, `@@hasInstance`, `@@species`, `@@match`, `@@replace`, `@@search`, `@@split`, `@@unscopables`, `@@isConcatSpreadable`, `@@asyncIterator`, `@@dispose`, `@@asyncDispose`, `@@matchAll`
-- [ ] `Number` type (§6.1.6.1)
-  - [ ] IEEE 754-2019 double precision
-  - [ ] Special values: NaN, +Infinity, -Infinity, +0, -0
-  - [ ] Number::unaryMinus
-  - [ ] Number::bitwiseNOT
-  - [ ] Number::exponentiate
-  - [ ] Number::multiply
-  - [ ] Number::divide
-  - [ ] Number::remainder
-  - [ ] Number::add
-  - [ ] Number::subtract
-  - [ ] Number::leftShift
-  - [ ] Number::signedRightShift
-  - [ ] Number::unsignedRightShift
-  - [ ] Number::lessThan
-  - [ ] Number::equal
-  - [ ] Number::sameValue
-  - [ ] Number::sameValueZero
-  - [ ] Number::bitwiseAND / bitwiseXOR / bitwiseOR
-  - [ ] Number::toString
+- [x] `Undefined` type
+- [x] `Null` type
+- [x] `Boolean` type
+- [x] `String` type (UTF-16 code unit sequences)
+  - [x] `StringIndexOf` abstract operation
+  - [x] `StringLastIndexOf` abstract operation
+- [x] `Symbol` type
+  - [x] Symbol description
+  - [x] Well-known symbols table (§6.1.5.1): `@@iterator`, `@@toPrimitive`, `@@toStringTag`, `@@hasInstance`, `@@species`, `@@match`, `@@replace`, `@@search`, `@@split`, `@@unscopables`, `@@isConcatSpreadable`, `@@asyncIterator`, `@@dispose`, `@@asyncDispose`, `@@matchAll`
+- [x] `Number` type (§6.1.6.1)
+  - [x] IEEE 754-2019 double precision
+  - [x] Special values: NaN, +Infinity, -Infinity, +0, -0
+  - [x] Number::unaryMinus
+  - [x] Number::bitwiseNOT
+  - [x] Number::exponentiate
+  - [x] Number::multiply
+  - [x] Number::divide
+  - [x] Number::remainder
+  - [x] Number::add
+  - [x] Number::subtract
+  - [x] Number::leftShift
+  - [x] Number::signedRightShift
+  - [x] Number::unsignedRightShift
+  - [x] Number::lessThan
+  - [x] Number::equal
+  - [x] Number::sameValue
+  - [x] Number::sameValueZero
+  - [x] Number::bitwiseAND / bitwiseXOR / bitwiseOR
+  - [x] Number::toString
 - [ ] `BigInt` type (§6.1.6.2)
-  - [ ] Arbitrary precision integers
+  - [x] Arbitrary precision integers
   - [ ] BigInt::unaryMinus
   - [ ] BigInt::bitwiseNOT
   - [ ] BigInt::exponentiate

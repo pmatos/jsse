@@ -24,6 +24,16 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 - CLI with file execution, `--eval`/`-e` inline evaluation, and REPL mode
 - `--version` and `--help` flags
 - Exit codes: 0 (success), 1 (runtime error), 2 (syntax error)
+- Lexer: all ES2024 tokens, keywords, numeric/string/template literals, Unicode identifiers
+- Parser: recursive descent, all statements, expressions, destructuring, arrow functions, classes
+- Interpreter: tree-walking execution with environment chain scoping
+  - Variable declarations (`var`, `let`, `const` with TDZ)
+  - Control flow (`if`, `while`, `do-while`, `for`, `for-in`, `switch`, `try/catch/finally`)
+  - Functions (declarations, expressions, arrows, closures)
+  - Operators (arithmetic, comparison, bitwise, logical, assignment, update, typeof, void)
+  - Objects and arrays (literals, member access, computed properties)
+  - Template literals
+  - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
 ## Building & Running
 
