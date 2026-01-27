@@ -144,9 +144,28 @@ impl<'a> Parser<'a> {
         Ok(None)
     }
 
+    fn is_reserved_identifier(name: &str, strict: bool) -> bool {
+        matches!(
+            name,
+            "break" | "case" | "catch" | "class" | "const" | "continue"
+            | "debugger" | "default" | "delete" | "do" | "else" | "enum"
+            | "export" | "extends" | "false" | "finally" | "for" | "function"
+            | "if" | "import" | "in" | "instanceof" | "new" | "null"
+            | "return" | "super" | "switch" | "this" | "throw" | "true"
+            | "try" | "typeof" | "var" | "void" | "while" | "with"
+        ) || (strict && matches!(name, "implements" | "interface" | "package"
+            | "private" | "protected" | "public"))
+    }
+
     fn current_identifier_name(&self) -> Option<String> {
         match &self.current {
-            Token::Identifier(name) => Some(name.clone()),
+            Token::Identifier(name) => {
+                if Self::is_reserved_identifier(name, self.strict) {
+                    None
+                } else {
+                    Some(name.clone())
+                }
+            }
             Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => {
                 Some("yield".to_string())
             }
@@ -1674,6 +1693,9 @@ impl<'a> Parser<'a> {
             }
             Token::Identifier(name) => {
                 let name = name.clone();
+                if Self::is_reserved_identifier(&name, self.strict) {
+                    return Err(self.error(&format!("Unexpected reserved word '{name}'")));
+                }
                 self.check_strict_identifier(&name)?;
                 self.advance()?;
                 // Arrow function: (ident) => or ident =>
