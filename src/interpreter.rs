@@ -193,6 +193,7 @@ impl PropertyDescriptor {
 #[derive(Debug, Clone)]
 pub struct JsObjectData {
     pub properties: HashMap<String, PropertyDescriptor>,
+    pub property_order: Vec<String>,
     pub prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub callable: Option<JsFunction>,
     pub array_elements: Option<Vec<JsValue>>,
@@ -205,6 +206,7 @@ impl JsObjectData {
     fn new() -> Self {
         Self {
             properties: HashMap::new(),
+            property_order: Vec::new(),
             prototype: None,
             callable: None,
             array_elements: None,
@@ -249,11 +251,13 @@ impl JsObjectData {
     pub fn enumerable_keys_with_proto(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut keys = Vec::new();
-        // Own enumerable properties
-        for (k, desc) in &self.properties {
-            if desc.enumerable != Some(false) {
-                if seen.insert(k.clone()) {
-                    keys.push(k.clone());
+        // Own enumerable properties (in insertion order)
+        for k in &self.property_order {
+            if let Some(desc) = self.properties.get(k) {
+                if desc.enumerable != Some(false) {
+                    if seen.insert(k.clone()) {
+                        keys.push(k.clone());
+                    }
                 }
             }
         }
@@ -301,6 +305,9 @@ impl JsObjectData {
         } else if !self.extensible {
             return false;
         }
+        if !self.properties.contains_key(&key) {
+            self.property_order.push(key.clone());
+        }
         self.properties.insert(key, desc);
         true
     }
@@ -317,8 +324,18 @@ impl JsObjectData {
     }
 
     pub fn insert_value(&mut self, key: String, value: JsValue) {
+        if !self.properties.contains_key(&key) {
+            self.property_order.push(key.clone());
+        }
         self.properties
             .insert(key, PropertyDescriptor::data_default(value));
+    }
+
+    pub fn insert_property(&mut self, key: String, desc: PropertyDescriptor) {
+        if !self.properties.contains_key(&key) {
+            self.property_order.push(key.clone());
+        }
+        self.properties.insert(key, desc);
     }
 
     pub fn get_property_value(&self, key: &str) -> Option<JsValue> {
@@ -1640,12 +1657,10 @@ impl Interpreter {
                         let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                         if let JsValue::Object(ref o) = target {
                             if let Some(obj) = interp.get_object(o.id) {
-                                let keys: Vec<JsValue> = obj
-                                    .borrow()
-                                    .properties
-                                    .iter()
-                                    .filter(|(_, desc)| desc.enumerable != Some(false))
-                                    .map(|(k, _)| JsValue::String(JsString::from_str(k)))
+                                let borrowed = obj.borrow();
+                                let keys: Vec<JsValue> = borrowed.property_order.iter()
+                                    .filter(|k| borrowed.properties.get(*k).map_or(false, |d| d.enumerable != Some(false)))
+                                    .map(|k| JsValue::String(JsString::from_str(k)))
                                     .collect();
                                 let arr = interp.create_array(keys);
                                 return Completion::Normal(arr);
@@ -1741,16 +1756,19 @@ impl Interpreter {
                         let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                         if let JsValue::Object(o) = &target {
                             if let Some(obj) = interp.get_object(o.id) {
-                                let entries: Vec<JsValue> = obj
-                                    .borrow()
-                                    .properties
-                                    .iter()
-                                    .filter(|(_, desc)| desc.enumerable != Some(false))
-                                    .map(|(k, desc)| {
+                                let borrowed = obj.borrow();
+                                let pairs: Vec<_> = borrowed.property_order.iter()
+                                    .filter_map(|k| {
+                                        let desc = borrowed.properties.get(k)?;
+                                        if desc.enumerable == Some(false) { return None; }
                                         let key = JsValue::String(JsString::from_str(k));
                                         let val = desc.value.clone().unwrap_or(JsValue::Undefined);
-                                        interp.create_array(vec![key, val])
+                                        Some((key, val))
                                     })
+                                    .collect();
+                                drop(borrowed);
+                                let entries: Vec<JsValue> = pairs.into_iter()
+                                    .map(|(key, val)| interp.create_array(vec![key, val]))
                                     .collect();
                                 let arr = interp.create_array(entries);
                                 return Completion::Normal(arr);
@@ -1770,13 +1788,12 @@ impl Interpreter {
                         let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                         if let JsValue::Object(o) = &target {
                             if let Some(obj) = interp.get_object(o.id) {
-                                let values: Vec<JsValue> = obj
-                                    .borrow()
-                                    .properties
-                                    .iter()
-                                    .filter(|(_, desc)| desc.enumerable != Some(false))
-                                    .map(|(_, desc)| {
-                                        desc.value.clone().unwrap_or(JsValue::Undefined)
+                                let borrowed = obj.borrow();
+                                let values: Vec<JsValue> = borrowed.property_order.iter()
+                                    .filter_map(|k| {
+                                        let desc = borrowed.properties.get(k)?;
+                                        if desc.enumerable == Some(false) { return None; }
+                                        Some(desc.value.clone().unwrap_or(JsValue::Undefined))
                                     })
                                     .collect();
                                 let arr = interp.create_array(values);
@@ -1799,20 +1816,15 @@ impl Interpreter {
                             for source in args.iter().skip(1) {
                                 if let JsValue::Object(s) = source {
                                     if let Some(src_obj) = interp.get_object(s.id) {
-                                        let props: Vec<(String, JsValue)> = src_obj
-                                            .borrow()
-                                            .properties
-                                            .iter()
-                                            .filter(|(_, desc)| desc.enumerable != Some(false))
-                                            .map(|(k, desc)| {
-                                                (
-                                                    k.clone(),
-                                                    desc.value
-                                                        .clone()
-                                                        .unwrap_or(JsValue::Undefined),
-                                                )
+                                        let borrowed = src_obj.borrow();
+                                        let props: Vec<(String, JsValue)> = borrowed.property_order.iter()
+                                            .filter_map(|k| {
+                                                let desc = borrowed.properties.get(k)?;
+                                                if desc.enumerable == Some(false) { return None; }
+                                                Some((k.clone(), desc.value.clone().unwrap_or(JsValue::Undefined)))
                                             })
                                             .collect();
+                                        drop(borrowed);
                                         if let Some(tgt_obj) = interp.get_object(t.id) {
                                             let mut tgt = tgt_obj.borrow_mut();
                                             for (k, v) in props {
@@ -1856,8 +1868,8 @@ impl Interpreter {
                             if let Some(obj) = interp.get_object(o.id) {
                                 let names: Vec<JsValue> = obj
                                     .borrow()
-                                    .properties
-                                    .keys()
+                                    .property_order
+                                    .iter()
                                     .map(|k| JsValue::String(JsString::from_str(k)))
                                     .collect();
                                 let arr = interp.create_array(names);
@@ -2052,7 +2064,7 @@ impl Interpreter {
                                                 if !matches!(s, JsValue::Undefined) || b.has_own_property("set") { desc.set = Some(s); }
                                                 drop(b);
                                                 if let Some(target_obj) = interp.get_object(t.id) {
-                                                    target_obj.borrow_mut().properties.insert(key, desc);
+                                                    target_obj.borrow_mut().insert_property(key, desc);
                                                 }
                                             }
                                         }
@@ -4191,29 +4203,30 @@ impl Interpreter {
             Completion::Normal(v) => v,
             other => return other,
         };
-        // Get iterable values
-        let values: Vec<JsValue> = if let JsValue::Object(ref o) = iterable {
-            if let Some(obj) = self.get_object(o.id) {
-                let obj_ref = obj.borrow();
-                if let Some(ref elems) = obj_ref.array_elements {
-                    elems.clone()
-                } else {
-                    // Iterate object values
-                    obj_ref
-                        .properties
-                        .values()
-                        .filter_map(|d| d.value.clone())
-                        .collect()
-                }
-            } else {
-                return Completion::Normal(JsValue::Undefined);
-            }
-        } else if let JsValue::String(ref s) = iterable {
-            // String iteration: each character
+        // Get iterable values - check for Symbol.iterator first, then fallback to arrays/strings
+        let values: Vec<JsValue> = if let JsValue::String(ref s) = iterable {
             s.to_rust_string()
                 .chars()
                 .map(|c| JsValue::String(JsString::from_str(&c.to_string())))
                 .collect()
+        } else if let JsValue::Object(ref o) = iterable {
+            if let Some(obj) = self.get_object(o.id) {
+                let has_array = obj.borrow().array_elements.is_some();
+                if has_array {
+                    obj.borrow().array_elements.clone().unwrap_or_default()
+                } else {
+                    // Try Symbol.iterator protocol
+                    match self.call_iterator(&iterable) {
+                        Some(vals) => vals,
+                        None => {
+                            let err = self.create_type_error("is not iterable");
+                            return Completion::Throw(err);
+                        }
+                    }
+                }
+            } else {
+                return Completion::Normal(JsValue::Undefined);
+            }
         } else {
             let err = self.create_type_error("is not iterable");
             return Completion::Throw(err);
@@ -4462,6 +4475,7 @@ impl Interpreter {
                                     }
                                 }
                                 obj_mut.properties.remove(&key);
+                                obj_mut.property_order.retain(|k| k != &key);
                             }
                         }
                         Completion::Normal(JsValue::Boolean(true))
@@ -4532,6 +4546,63 @@ impl Interpreter {
             UnaryOp::Not => JsValue::Boolean(!to_boolean(val)),
             UnaryOp::BitNot => JsValue::Number(number_ops::bitwise_not(to_number(val))),
         }
+    }
+
+    fn call_iterator(&mut self, iterable: &JsValue) -> Option<Vec<JsValue>> {
+        if let JsValue::Object(o) = iterable {
+            // Look for Symbol.iterator property - symbols are stored as string keys like "Symbol(Symbol.iterator)"
+            let iter_fn = if let Some(obj) = self.get_object(o.id) {
+                let sym_key = self.global_env.borrow().get("Symbol")
+                    .and_then(|sv| {
+                        if let JsValue::Object(so) = sv {
+                            self.get_object(so.id).map(|sobj| {
+                                let val = sobj.borrow().get_property("iterator");
+                                to_js_string(&val)
+                            })
+                        } else { None }
+                    });
+                if let Some(key) = sym_key {
+                    let val = obj.borrow().get_property(&key);
+                    if matches!(val, JsValue::Object(_)) { Some(val) } else { None }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(iter_fn) = iter_fn {
+                let iterator = match self.call_function(&iter_fn, iterable, &[]) {
+                    Completion::Normal(v) => v,
+                    _ => return None,
+                };
+                let mut values = Vec::new();
+                for _ in 0..100_000 {
+                    if let JsValue::Object(io) = &iterator {
+                        let next_fn = self.get_object(io.id)
+                            .and_then(|obj| {
+                                obj.borrow().get_property_descriptor("next").and_then(|d| d.value)
+                            });
+                        if let Some(next_fn) = next_fn {
+                            match self.call_function(&next_fn, &iterator, &[]) {
+                                Completion::Normal(result) => {
+                                    if let JsValue::Object(ro) = &result {
+                                        if let Some(robj) = self.get_object(ro.id) {
+                                            let done = robj.borrow().get_property("done");
+                                            if to_boolean(&done) { break; }
+                                            let value = robj.borrow().get_property("value");
+                                            values.push(value);
+                                        } else { break; }
+                                    } else { break; }
+                                }
+                                _ => break,
+                            }
+                        } else { break; }
+                    } else { break; }
+                }
+                return Some(values);
+            }
+        }
+        None
     }
 
     fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> JsValue {
@@ -5568,7 +5639,7 @@ impl Interpreter {
                                 desc.get = Some(method_val);
                                 desc.value = None;
                                 desc.writable = None;
-                                t.borrow_mut().properties.insert(key, desc);
+                                t.borrow_mut().insert_property(key, desc);
                             }
                             ClassMethodKind::Set => {
                                 let mut desc = t.borrow().properties.get(&key)
@@ -5581,7 +5652,7 @@ impl Interpreter {
                                 desc.set = Some(method_val);
                                 desc.value = None;
                                 desc.writable = None;
-                                t.borrow_mut().properties.insert(key, desc);
+                                t.borrow_mut().insert_property(key, desc);
                             }
                             _ => {
                                 t.borrow_mut().insert_value(key, method_val);
@@ -5654,8 +5725,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = spread_val
                     && let Some(src) = self.get_object(o.id)
                 {
-                    for (k, v) in &src.borrow().properties {
-                        obj_data.properties.insert(k.clone(), v.clone());
+                    let src_ref = src.borrow();
+                    for k in &src_ref.property_order {
+                        if let Some(v) = src_ref.properties.get(k) {
+                            obj_data.insert_property(k.clone(), v.clone());
+                        }
                     }
                 }
                 continue;
@@ -5670,7 +5744,7 @@ impl Interpreter {
                     desc.get = Some(value);
                     desc.value = None;
                     desc.writable = None;
-                    obj_data.properties.insert(key, desc);
+                    obj_data.insert_property(key, desc);
                 }
                 PropertyKind::Set => {
                     let mut desc = obj_data.properties.get(&key).cloned().unwrap_or(PropertyDescriptor {
@@ -5681,7 +5755,7 @@ impl Interpreter {
                     desc.set = Some(value);
                     desc.value = None;
                     desc.writable = None;
-                    obj_data.properties.insert(key, desc);
+                    obj_data.insert_property(key, desc);
                 }
                 _ => {
                     obj_data.insert_value(key, value);
