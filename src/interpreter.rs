@@ -1224,7 +1224,7 @@ impl Interpreter {
             Statement::DoWhile(dw) => self.exec_do_while(dw, env),
             Statement::For(f) => self.exec_for(f, env),
             Statement::ForIn(fi) => self.exec_for_in(fi, env),
-            Statement::ForOf(_) => Completion::Normal(JsValue::Undefined), // TODO
+            Statement::ForOf(fo) => self.exec_for_of(fo, env),
             Statement::Return(expr) => {
                 let val = if let Some(e) = expr {
                     match self.eval_expr(e, env) {
@@ -1443,6 +1443,70 @@ impl Interpreter {
                     Completion::Break(None) => break,
                     other => return other,
                 }
+            }
+        }
+        Completion::Normal(JsValue::Undefined)
+    }
+
+    fn exec_for_of(&mut self, fo: &ForOfStatement, env: &EnvRef) -> Completion {
+        let iterable = match self.eval_expr(&fo.right, env) {
+            Completion::Normal(v) => v,
+            other => return other,
+        };
+        // Get iterable values
+        let values: Vec<JsValue> = if let JsValue::Object(ref o) = iterable {
+            if let Some(obj) = self.get_object(o.id) {
+                let obj_ref = obj.borrow();
+                if let Some(ref elems) = obj_ref.array_elements {
+                    elems.clone()
+                } else {
+                    // Iterate object values
+                    obj_ref
+                        .properties
+                        .values()
+                        .filter_map(|d| d.value.clone())
+                        .collect()
+                }
+            } else {
+                return Completion::Normal(JsValue::Undefined);
+            }
+        } else if let JsValue::String(ref s) = iterable {
+            // String iteration: each character
+            s.to_rust_string()
+                .chars()
+                .map(|c| JsValue::String(JsString::from_str(&c.to_string())))
+                .collect()
+        } else {
+            return Completion::Throw(JsValue::String(JsString::from_str("is not iterable")));
+        };
+
+        for val in values {
+            let for_env = Environment::new(Some(env.clone()));
+            match &fo.left {
+                ForInOfLeft::Variable(decl) => {
+                    let kind = match decl.kind {
+                        VarKind::Var => BindingKind::Var,
+                        VarKind::Let => BindingKind::Let,
+                        VarKind::Const => BindingKind::Const,
+                    };
+                    if let Some(d) = decl.declarations.first()
+                        && let Err(e) = self.bind_pattern(&d.pattern, val, kind, &for_env)
+                    {
+                        return Completion::Throw(e);
+                    }
+                }
+                ForInOfLeft::Pattern(pat) => {
+                    if let Pattern::Identifier(name) = pat {
+                        let _ = env.borrow_mut().set(name, val);
+                    } else if let Err(e) = self.bind_pattern(pat, val, BindingKind::Let, &for_env) {
+                        return Completion::Throw(e);
+                    }
+                }
+            }
+            match self.exec_statement(&fo.body, &for_env) {
+                Completion::Normal(_) | Completion::Continue(None) => {}
+                Completion::Break(None) => break,
+                other => return other,
             }
         }
         Completion::Normal(JsValue::Undefined)
