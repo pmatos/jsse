@@ -638,16 +638,18 @@ impl<'a> Lexer<'a> {
         Ok(Token::NumericLiteral(val as f64))
     }
 
-    fn read_identifier(&mut self, first: char) -> Token {
+    fn read_identifier_chars(&mut self, first: char) -> (String, bool) {
         let mut name = String::new();
+        let mut has_escape = false;
         name.push(first);
         while let Some(ch) = self.peek() {
             if Self::is_identifier_continue(ch) {
                 name.push(ch);
                 self.advance();
-            } else if ch == '\\' {
-                // Unicode escape in identifier — simplified handling
-                self.advance();
+            } else if ch == '\\' && self.peek_next() == Some('u') {
+                has_escape = true;
+                self.advance(); // consume '\'
+                self.advance(); // consume 'u'
                 if let Ok(esc) = self.read_unicode_escape() {
                     name.push_str(&esc);
                 } else {
@@ -656,6 +658,20 @@ impl<'a> Lexer<'a> {
             } else {
                 break;
             }
+        }
+        (name, has_escape)
+    }
+
+    fn read_identifier_with_escape(&mut self, first: char) -> Token {
+        let (name, _) = self.read_identifier_chars(first);
+        Token::Identifier(name)
+    }
+
+    fn read_identifier(&mut self, first: char) -> Token {
+        let (name, has_escape) = self.read_identifier_chars(first);
+
+        if has_escape {
+            return Token::Identifier(name);
         }
 
         match name.as_str() {
@@ -778,7 +794,17 @@ impl<'a> Lexer<'a> {
                 return self.read_numeric_literal(ch);
             }
 
-            // Identifiers
+            // Identifiers (including those starting with unicode escape)
+            if ch == '\\' && self.peek() == Some('u') {
+                self.advance(); // consume 'u'
+                if let Ok(esc) = self.read_unicode_escape() {
+                    let first = esc.chars().next().unwrap();
+                    if Self::is_identifier_start(first) {
+                        return Ok(self.read_identifier_with_escape(first));
+                    }
+                }
+                return Err(self.error("Invalid Unicode escape sequence"));
+            }
             if Self::is_identifier_start(ch) {
                 return Ok(self.read_identifier(ch));
             }
