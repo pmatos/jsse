@@ -36,4 +36,4 @@ jobs:
         run: cargo test
 
       - name: Run test262
-        run: ./scripts/run-test262.sh ./target/release/jsse ./test262
+        run: python3 ./scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262
