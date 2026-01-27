@@ -8,9 +8,9 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Passing | Failing | Pass Rate |
 |-------------|---------|---------|-----------|
-| 0           | 0       | 0       | 0%        |
+| 48,257      | 4,566   | 43,691  | 9.46%     |
 
-*No tests have been run yet. The engine is not yet implemented.*
+*Passing tests are negative tests (expected failures) since the engine is not yet implemented.*
 
 ## Structure
 
@@ -19,11 +19,19 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 - `tests/` — Additional custom tests
 - `scripts/` — Test runner and tooling
 
+## Supported Features
+
+- CLI with file execution, `--eval`/`-e` inline evaluation, and REPL mode
+- `--version` and `--help` flags
+- Exit codes: 0 (success), 1 (runtime error), 2 (syntax error)
+
 ## Building & Running
 
 ```bash
 cargo build --release
 ./target/release/jsse <file.js>
+./target/release/jsse -e "1 + 1"
+./target/release/jsse              # starts REPL
 ```
 
 ## Running test262
