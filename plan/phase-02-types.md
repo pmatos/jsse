@@ -120,7 +120,7 @@ Implement all ECMAScript language types, specification types, and type conversio
 - [x] IsExtensible
 - [x] IsIntegralNumber (inline: Number.isInteger)
 - [x] IsPropertyKey
-- [ ] IsRegExp
+- [x] IsRegExp
 - [x] SameValue
 - [x] SameValueZero
 - [x] SameValueNonNumber (inline in strict equality)
@@ -150,9 +150,9 @@ Implement all ECMAScript language types, specification types, and type conversio
 - [x] EnumerableOwnProperties (Object.keys/values/entries)
 - [ ] GetFunctionRealm
 - [x] CopyDataProperties (Object.assign)
-- [ ] PrivateElementFind / PrivateFieldAdd / PrivateMethodOrAccessorAdd / PrivateGet / PrivateSet
-- [ ] DefineField
-- [ ] InitializeInstanceElements
+- [ ] PrivateElementFind / PrivateFieldAdd / PrivateMethodOrAccessorAdd / PrivateGet / PrivateSet (deferred: needs private class fields)
+- [ ] DefineField (deferred: needs class fields)
+- [ ] InitializeInstanceElements (deferred: needs class fields)
 - [ ] AddValueToKeyedGroup
 - [ ] GroupBy
 - [ ] SetterThatIgnoresPrototypeProperties

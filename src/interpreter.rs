@@ -4739,6 +4739,15 @@ impl Interpreter {
         }
     }
 
+    fn is_regexp(&self, val: &JsValue) -> bool {
+        if let JsValue::Object(o) = val {
+            if let Some(obj) = self.get_object(o.id) {
+                return obj.borrow().class_name == "RegExp";
+            }
+        }
+        false
+    }
+
     fn canonical_numeric_index_string(s: &str) -> Option<f64> {
         if s == "-0" {
             return Some(-0.0_f64);
