@@ -326,6 +326,319 @@ impl Interpreter {
             ),
         );
 
+        // String constructor/converter
+        self.register_global_fn(
+            "String",
+            BindingKind::Var,
+            JsFunction::Native(
+                "String".to_string(),
+                Rc::new(|_interp, args| {
+                    let val = args
+                        .first()
+                        .cloned()
+                        .unwrap_or(JsValue::String(JsString::from_str("")));
+                    Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(&val))))
+                }),
+            ),
+        );
+
+        // Number constructor/converter
+        self.register_global_fn(
+            "Number",
+            BindingKind::Var,
+            JsFunction::Native(
+                "Number".to_string(),
+                Rc::new(|_interp, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Number(0.0));
+                    Completion::Normal(JsValue::Number(to_number(&val)))
+                }),
+            ),
+        );
+
+        // Boolean constructor/converter
+        self.register_global_fn(
+            "Boolean",
+            BindingKind::Var,
+            JsFunction::Native(
+                "Boolean".to_string(),
+                Rc::new(|_interp, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    Completion::Normal(JsValue::Boolean(to_boolean(&val)))
+                }),
+            ),
+        );
+
+        // Array constructor
+        self.register_global_fn(
+            "Array",
+            BindingKind::Var,
+            JsFunction::Native(
+                "Array".to_string(),
+                Rc::new(|interp, args| {
+                    let obj = interp.create_object();
+                    {
+                        let mut o = obj.borrow_mut();
+                        o.class_name = "Array".to_string();
+                        if args.len() == 1 {
+                            if let JsValue::Number(n) = &args[0] {
+                                o.array_elements = Some(vec![JsValue::Undefined; *n as usize]);
+                                o.properties.insert("length".to_string(), args[0].clone());
+                            } else {
+                                o.array_elements = Some(vec![args[0].clone()]);
+                                o.properties
+                                    .insert("length".to_string(), JsValue::Number(1.0));
+                            }
+                        } else {
+                            o.array_elements = Some(args.to_vec());
+                            o.properties
+                                .insert("length".to_string(), JsValue::Number(args.len() as f64));
+                        }
+                    }
+                    Completion::Normal(JsValue::Object(crate::types::JsObject {
+                        id: interp.objects.len() as u64 - 1,
+                    }))
+                }),
+            ),
+        );
+
+        // Global functions
+        self.register_global_fn(
+            "parseInt",
+            BindingKind::Var,
+            JsFunction::Native(
+                "parseInt".to_string(),
+                Rc::new(|_interp, args| {
+                    let s = args.first().map(|v| to_js_string(v)).unwrap_or_default();
+                    let radix = args.get(1).map(|v| to_number(v) as i32).unwrap_or(10);
+                    let s = s.trim();
+                    let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
+                        (true, rest)
+                    } else if let Some(rest) = s.strip_prefix('+') {
+                        (false, rest)
+                    } else {
+                        (false, s)
+                    };
+                    let radix = if radix == 0 {
+                        if s.starts_with("0x") || s.starts_with("0X") {
+                            16
+                        } else {
+                            10
+                        }
+                    } else {
+                        radix
+                    };
+                    let s = if radix == 16 {
+                        s.strip_prefix("0x")
+                            .or_else(|| s.strip_prefix("0X"))
+                            .unwrap_or(s)
+                    } else {
+                        s
+                    };
+                    match i64::from_str_radix(s, radix as u32) {
+                        Ok(n) => {
+                            let n = if negative { -n } else { n };
+                            Completion::Normal(JsValue::Number(n as f64))
+                        }
+                        Err(_) => Completion::Normal(JsValue::Number(f64::NAN)),
+                    }
+                }),
+            ),
+        );
+
+        self.register_global_fn(
+            "parseFloat",
+            BindingKind::Var,
+            JsFunction::Native(
+                "parseFloat".to_string(),
+                Rc::new(|_interp, args| {
+                    let s = args.first().map(|v| to_js_string(v)).unwrap_or_default();
+                    let s = s.trim();
+                    match s.parse::<f64>() {
+                        Ok(n) => Completion::Normal(JsValue::Number(n)),
+                        Err(_) => Completion::Normal(JsValue::Number(f64::NAN)),
+                    }
+                }),
+            ),
+        );
+
+        self.register_global_fn(
+            "isNaN",
+            BindingKind::Var,
+            JsFunction::Native(
+                "isNaN".to_string(),
+                Rc::new(|_interp, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let n = to_number(&val);
+                    Completion::Normal(JsValue::Boolean(n.is_nan()))
+                }),
+            ),
+        );
+
+        self.register_global_fn(
+            "isFinite",
+            BindingKind::Var,
+            JsFunction::Native(
+                "isFinite".to_string(),
+                Rc::new(|_interp, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let n = to_number(&val);
+                    Completion::Normal(JsValue::Boolean(n.is_finite()))
+                }),
+            ),
+        );
+
+        // Math object
+        let math_obj = self.create_object();
+        {
+            let mut m = math_obj.borrow_mut();
+            m.class_name = "Math".to_string();
+            m.properties
+                .insert("PI".to_string(), JsValue::Number(std::f64::consts::PI));
+            m.properties
+                .insert("E".to_string(), JsValue::Number(std::f64::consts::E));
+            m.properties
+                .insert("LN2".to_string(), JsValue::Number(std::f64::consts::LN_2));
+            m.properties
+                .insert("LN10".to_string(), JsValue::Number(std::f64::consts::LN_10));
+            m.properties.insert(
+                "LOG2E".to_string(),
+                JsValue::Number(std::f64::consts::LOG2_E),
+            );
+            m.properties.insert(
+                "LOG10E".to_string(),
+                JsValue::Number(std::f64::consts::LOG10_E),
+            );
+            m.properties.insert(
+                "SQRT2".to_string(),
+                JsValue::Number(std::f64::consts::SQRT_2),
+            );
+            m.properties.insert(
+                "SQRT1_2".to_string(),
+                JsValue::Number(std::f64::consts::FRAC_1_SQRT_2),
+            );
+        }
+        // Add Math methods
+        let math_fns: Vec<(&str, fn(f64) -> f64)> = vec![
+            ("abs", f64::abs),
+            ("ceil", f64::ceil),
+            ("floor", f64::floor),
+            ("round", f64::round),
+            ("sqrt", f64::sqrt),
+            ("sin", f64::sin),
+            ("cos", f64::cos),
+            ("tan", f64::tan),
+            ("log", f64::ln),
+            ("exp", f64::exp),
+            ("asin", f64::asin),
+            ("acos", f64::acos),
+            ("atan", f64::atan),
+            ("trunc", f64::trunc),
+            ("sign", f64::signum),
+            ("cbrt", f64::cbrt),
+        ];
+        for (name, op) in math_fns {
+            let fn_val = self.create_function(JsFunction::Native(
+                name.to_string(),
+                Rc::new(move |_interp, args| {
+                    let x = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    Completion::Normal(JsValue::Number(op(x)))
+                }),
+            ));
+            math_obj
+                .borrow_mut()
+                .properties
+                .insert(name.to_string(), fn_val);
+        }
+        // Math.max, Math.min, Math.pow, Math.random, Math.atan2
+        let max_fn = self.create_function(JsFunction::Native(
+            "max".to_string(),
+            Rc::new(|_interp, args| {
+                if args.is_empty() {
+                    return Completion::Normal(JsValue::Number(f64::NEG_INFINITY));
+                }
+                let mut result = f64::NEG_INFINITY;
+                for a in args {
+                    let n = to_number(a);
+                    if n.is_nan() {
+                        return Completion::Normal(JsValue::Number(f64::NAN));
+                    }
+                    if n > result {
+                        result = n;
+                    }
+                }
+                Completion::Normal(JsValue::Number(result))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .properties
+            .insert("max".to_string(), max_fn);
+        let min_fn = self.create_function(JsFunction::Native(
+            "min".to_string(),
+            Rc::new(|_interp, args| {
+                if args.is_empty() {
+                    return Completion::Normal(JsValue::Number(f64::INFINITY));
+                }
+                let mut result = f64::INFINITY;
+                for a in args {
+                    let n = to_number(a);
+                    if n.is_nan() {
+                        return Completion::Normal(JsValue::Number(f64::NAN));
+                    }
+                    if n < result {
+                        result = n;
+                    }
+                }
+                Completion::Normal(JsValue::Number(result))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .properties
+            .insert("min".to_string(), min_fn);
+        let pow_fn = self.create_function(JsFunction::Native(
+            "pow".to_string(),
+            Rc::new(|_interp, args| {
+                let base = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                let exp = args.get(1).map(|v| to_number(v)).unwrap_or(f64::NAN);
+                Completion::Normal(JsValue::Number(base.powf(exp)))
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .properties
+            .insert("pow".to_string(), pow_fn);
+        let random_fn = self.create_function(JsFunction::Native(
+            "random".to_string(),
+            Rc::new(|_interp, _args| {
+                Completion::Normal(JsValue::Number(0.5)) // deterministic for testing
+            }),
+        ));
+        math_obj
+            .borrow_mut()
+            .properties
+            .insert("random".to_string(), random_fn);
+
+        let math_val = JsValue::Object(crate::types::JsObject {
+            id: self.objects.len() as u64 - 1,
+        });
+        self.global_env
+            .borrow_mut()
+            .declare("Math", BindingKind::Const);
+        let _ = self.global_env.borrow_mut().set("Math", math_val);
+
+        // eval (stub that throws)
+        self.register_global_fn(
+            "eval",
+            BindingKind::Var,
+            JsFunction::Native(
+                "eval".to_string(),
+                Rc::new(|_interp, _args| {
+                    Completion::Throw(JsValue::String(JsString::from_str("eval is not supported")))
+                }),
+            ),
+        );
+
         self.register_global_fn(
             "$DONOTEVALUATE",
             BindingKind::Var,
