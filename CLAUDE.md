@@ -3,6 +3,8 @@
 ## Project Overview
 A from-scratch JavaScript engine implemented in Rust. No JS parser/engine libraries allowed as dependencies — every detail must be implemented by us. Utility crates (parsing combinators, math, etc.) are fine.
 
+**Ultimate goal: 100% test262 pass rate.**
+
 ## Repository Layout
 - `spec/` — ECMAScript spec submodule (tc39/ecma262). **NEVER modify.**
 - `test262/` — Test suite submodule (tc39/test262). **NEVER modify.**

@@ -2,6 +2,8 @@
 
 An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not one. This repo is a write-only data store. I didn't even create this repo by hand -- my agent did that.
 
+**Goal: 100% test262 pass rate.**
+
 ## Test262 Progress
 
 | Total Tests | Passing | Failing | Pass Rate |
