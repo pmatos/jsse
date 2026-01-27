@@ -25,6 +25,7 @@ pub struct Parser<'a> {
     prev_line_terminator: bool,
     pushback: Option<(Token, bool)>, // (token, had_line_terminator_before)
     strict: bool,
+    in_function: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -45,6 +46,7 @@ impl<'a> Parser<'a> {
             prev_line_terminator: had_lt,
             pushback: None,
             strict: false,
+            in_function: 0,
         })
     }
 
@@ -583,6 +585,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_return_statement(&mut self) -> Result<Statement, ParseError> {
+        if self.in_function == 0 {
+            return Err(self.error("Illegal return statement"));
+        }
         self.advance()?; // return
         let value = if self.current == Token::Semicolon
             || self.current == Token::RightBrace
@@ -991,6 +996,7 @@ impl<'a> Parser<'a> {
     fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
+        self.in_function += 1;
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
 
@@ -1011,6 +1017,7 @@ impl<'a> Parser<'a> {
         }
 
         let was_strict = self.strict;
+        self.in_function -= 1;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))
