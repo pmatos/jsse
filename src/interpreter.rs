@@ -2988,7 +2988,17 @@ impl Interpreter {
             Statement::With(_, _) => Completion::Normal(JsValue::Undefined), // TODO
             Statement::Debugger => Completion::Normal(JsValue::Undefined),
             Statement::FunctionDeclaration(_) => Completion::Normal(JsValue::Undefined), // hoisted
-            Statement::ClassDeclaration(_) => Completion::Normal(JsValue::Undefined),    // TODO
+            Statement::ClassDeclaration(cd) => {
+                let class_val = self.eval_class(&cd.name, &cd.super_class, &cd.body, env);
+                match class_val {
+                    Completion::Normal(val) => {
+                        env.borrow_mut().declare(&cd.name, BindingKind::Let);
+                        let _ = env.borrow_mut().set(&cd.name, val);
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                    other => other,
+                }
+            }
         }
     }
 
@@ -3329,6 +3339,9 @@ impl Interpreter {
             Expression::This => {
                 Completion::Normal(env.borrow().get("this").unwrap_or(JsValue::Undefined))
             }
+            Expression::Super => {
+                Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::Undefined))
+            }
             Expression::Unary(op, operand) => {
                 let val = match self.eval_expr(operand, env) {
                     Completion::Normal(v) => v,
@@ -3391,6 +3404,10 @@ impl Interpreter {
                     is_arrow: true,
                 };
                 Completion::Normal(self.create_function(func))
+            }
+            Expression::Class(ce) => {
+                let name = ce.name.clone().unwrap_or_default();
+                self.eval_class(&name, &ce.super_class, &ce.body, env)
             }
             Expression::Typeof(operand) => {
                 // typeof on unresolvable reference returns "undefined"
@@ -3718,9 +3735,24 @@ impl Interpreter {
     }
 
     fn eval_call(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
+        // Handle super() calls - call parent constructor with current this
+        if matches!(callee, Expression::Super) {
+            let super_ctor = env.borrow().get("__super__").unwrap_or(JsValue::Undefined);
+            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+            let mut arg_vals = Vec::new();
+            for arg in args {
+                match self.eval_expr(arg, env) {
+                    Completion::Normal(v) => arg_vals.push(v),
+                    other => return other,
+                }
+            }
+            return self.call_function(&super_ctor, &this_val, &arg_vals);
+        }
+
         // Handle member calls: obj.method()
         let (func_val, this_val) = match callee {
             Expression::Member(obj_expr, prop) => {
+                let is_super_call = matches!(obj_expr.as_ref(), Expression::Super);
                 let obj_val = match self.eval_expr(obj_expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -3735,7 +3767,29 @@ impl Interpreter {
                         to_js_string(&v)
                     }
                 };
-                if let JsValue::Object(ref o) = obj_val {
+                // super.method() - look up on super constructor's prototype, bind this
+                if is_super_call {
+                    if let JsValue::Object(ref o) = obj_val {
+                        if let Some(obj) = self.get_object(o.id) {
+                            let proto_val = obj.borrow().get_property("prototype");
+                            if let JsValue::Object(ref p) = proto_val {
+                                if let Some(proto) = self.get_object(p.id) {
+                                    let method = proto.borrow().get_property(&key);
+                                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                                    (method, this_val)
+                                } else {
+                                    (JsValue::Undefined, JsValue::Undefined)
+                                }
+                            } else {
+                                (JsValue::Undefined, JsValue::Undefined)
+                            }
+                        } else {
+                            (JsValue::Undefined, JsValue::Undefined)
+                        }
+                    } else {
+                        (JsValue::Undefined, JsValue::Undefined)
+                    }
+                } else if let JsValue::Object(ref o) = obj_val {
                     if let Some(obj) = self.get_object(o.id) {
                         let method = obj.borrow().get_property(&key);
                         (method, obj_val)
@@ -4007,6 +4061,204 @@ impl Interpreter {
             }
         }
         Completion::Normal(self.create_array(values))
+    }
+
+    fn eval_class(
+        &mut self,
+        name: &str,
+        super_class: &Option<Box<Expression>>,
+        body: &[ClassElement],
+        env: &EnvRef,
+    ) -> Completion {
+        // Find constructor method
+        let ctor_method = body.iter().find_map(|elem| {
+            if let ClassElement::Method(m) = elem {
+                if m.kind == ClassMethodKind::Constructor {
+                    return Some(m);
+                }
+            }
+            None
+        });
+
+        // Evaluate super class if present
+        let super_val = if let Some(sc) = super_class {
+            match self.eval_expr(sc, env) {
+                Completion::Normal(v) => Some(v),
+                other => return other,
+            }
+        } else {
+            None
+        };
+
+        // Create class environment with __super__ binding
+        let class_env = Environment::new(Some(env.clone()));
+        if let Some(ref sv) = super_val {
+            class_env.borrow_mut().declare("__super__", BindingKind::Const);
+            let _ = class_env.borrow_mut().set("__super__", sv.clone());
+        }
+
+        // Create constructor function
+        let ctor_func = if let Some(cm) = ctor_method {
+            JsFunction::User {
+                name: Some(name.to_string()),
+                params: cm.value.params.clone(),
+                body: cm.value.body.clone(),
+                closure: class_env.clone(),
+                is_arrow: false,
+            }
+        } else if super_val.is_some() {
+            JsFunction::User {
+                name: Some(name.to_string()),
+                params: vec![],
+                body: vec![],
+                closure: class_env.clone(),
+                is_arrow: false,
+            }
+        } else {
+            JsFunction::User {
+                name: Some(name.to_string()),
+                params: vec![],
+                body: vec![],
+                closure: class_env.clone(),
+                is_arrow: false,
+            }
+        };
+
+        let ctor_val = self.create_function(ctor_func);
+
+        // Get the prototype object that was auto-created by create_function
+        let proto_obj = if let JsValue::Object(ref o) = ctor_val {
+            if let Some(func_obj) = self.get_object(o.id) {
+                let proto_val = func_obj.borrow().get_property("prototype");
+                if let JsValue::Object(ref p) = proto_val {
+                    self.get_object(p.id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Set up inheritance
+        if let Some(ref sv) = super_val {
+            if let JsValue::Object(super_o) = sv {
+                if let Some(super_obj) = self.get_object(super_o.id) {
+                    let super_proto_val = super_obj.borrow().get_property("prototype");
+                    if let JsValue::Object(ref sp) = super_proto_val {
+                        if let Some(super_proto) = self.get_object(sp.id) {
+                            if let Some(ref proto) = proto_obj {
+                                proto.borrow_mut().prototype = Some(super_proto);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add methods and properties to prototype/constructor
+        for elem in body {
+            match elem {
+                ClassElement::Method(m) => {
+                    if m.kind == ClassMethodKind::Constructor {
+                        continue;
+                    }
+                    let key = match &m.key {
+                        PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
+                        PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                        PropertyKey::Computed(expr) => {
+                            match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => to_js_string(&v),
+                                other => return other,
+                            }
+                        }
+                    };
+                    let method_func = JsFunction::User {
+                        name: Some(key.clone()),
+                        params: m.value.params.clone(),
+                        body: m.value.body.clone(),
+                        closure: class_env.clone(),
+                        is_arrow: false,
+                    };
+                    let method_val = self.create_function(method_func);
+
+                    let target = if m.is_static {
+                        if let JsValue::Object(ref o) = ctor_val {
+                            self.get_object(o.id)
+                        } else { None }
+                    } else {
+                        proto_obj.clone()
+                    };
+                    if let Some(ref t) = target {
+                        match m.kind {
+                            ClassMethodKind::Get => {
+                                let mut desc = t.borrow().properties.get(&key)
+                                    .cloned()
+                                    .unwrap_or(PropertyDescriptor {
+                                        value: None, writable: None,
+                                        get: None, set: None,
+                                        enumerable: Some(false), configurable: Some(true),
+                                    });
+                                desc.get = Some(method_val);
+                                desc.value = None;
+                                desc.writable = None;
+                                t.borrow_mut().properties.insert(key, desc);
+                            }
+                            ClassMethodKind::Set => {
+                                let mut desc = t.borrow().properties.get(&key)
+                                    .cloned()
+                                    .unwrap_or(PropertyDescriptor {
+                                        value: None, writable: None,
+                                        get: None, set: None,
+                                        enumerable: Some(false), configurable: Some(true),
+                                    });
+                                desc.set = Some(method_val);
+                                desc.value = None;
+                                desc.writable = None;
+                                t.borrow_mut().properties.insert(key, desc);
+                            }
+                            _ => {
+                                t.borrow_mut().insert_value(key, method_val);
+                            }
+                        }
+                    }
+                }
+                ClassElement::Property(p) => {
+                    // Instance properties are handled in the constructor
+                    // Static properties are set on the constructor
+                    if p.is_static {
+                        let key = match &p.key {
+                            PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
+                            PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                            PropertyKey::Computed(expr) => {
+                                match self.eval_expr(expr, env) {
+                                    Completion::Normal(v) => to_js_string(&v),
+                                    other => return other,
+                                }
+                            }
+                        };
+                        let val = if let Some(ref expr) = p.value {
+                            match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        if let JsValue::Object(ref o) = ctor_val {
+                            if let Some(func_obj) = self.get_object(o.id) {
+                                func_obj.borrow_mut().insert_value(key, val);
+                            }
+                        }
+                    }
+                }
+                ClassElement::StaticBlock(_) => {} // TODO
+            }
+        }
+
+        Completion::Normal(ctor_val)
     }
 
     fn eval_object_literal(&mut self, props: &[Property], env: &EnvRef) -> Completion {

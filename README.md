@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 7,325   | 34,751  | 17.41%    |
+| 48,257      | 42,076  | 6,181   | 7,419   | 34,657  | 17.63%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -30,6 +30,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Variable declarations (`var`, `let`, `const` with TDZ)
   - Control flow (`if`, `while`, `do-while`, `for`, `for-in`, `for-of`, `switch`, `try/catch/finally`)
   - Functions (declarations, expressions, arrows, closures)
+  - Classes (declarations, expressions, inheritance, `super`, static methods/properties)
   - Operators (arithmetic, comparison, bitwise, logical, assignment, update, typeof, void)
   - Objects and arrays (literals, member access, computed properties)
   - Template literals

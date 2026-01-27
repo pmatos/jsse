@@ -77,6 +77,7 @@ pub enum Expression {
     Literal(Literal),
     Identifier(String),
     This,
+    Super,
     Array(Vec<Option<Expression>>),
     Object(Vec<Property>),
     Function(FunctionExpr),

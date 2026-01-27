@@ -1337,6 +1337,10 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::This)
             }
+            Token::Keyword(Keyword::Super) => {
+                self.advance()?;
+                Ok(Expression::Super)
+            }
             Token::Identifier(name) => {
                 let name = name.clone();
                 self.advance()?;
