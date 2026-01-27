@@ -3845,10 +3845,20 @@ impl Interpreter {
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
         let is_arrow = matches!(&func, JsFunction::User { is_arrow: true, .. });
+        let (fn_name, fn_length) = match &func {
+            JsFunction::User { name, params, .. } => {
+                let n = name.clone().unwrap_or_default();
+                let len = params.iter().filter(|p| !matches!(p, Pattern::Rest(_))).count();
+                (n, len)
+            }
+            JsFunction::Native(name, _) => (name.clone(), 0),
+        };
         let mut obj_data = JsObjectData::new();
         obj_data.prototype = self.object_prototype.clone();
         obj_data.callable = Some(func);
         obj_data.class_name = "Function".to_string();
+        obj_data.insert_property("length".to_string(), PropertyDescriptor::data(JsValue::Number(fn_length as f64), false, false, true));
+        obj_data.insert_property("name".to_string(), PropertyDescriptor::data(JsValue::String(JsString::from_str(&fn_name)), false, false, true));
         // Non-arrow functions get a prototype property
         if !is_arrow {
             let _proto = self.create_object();
@@ -5068,7 +5078,7 @@ impl Interpreter {
                             };
                         }
                     }
-                    obj.borrow_mut().insert_value(key, final_val.clone());
+                    obj.borrow_mut().set_property_value(&key, final_val.clone());
                     return Completion::Normal(final_val);
                 }
                 Completion::Normal(rval)

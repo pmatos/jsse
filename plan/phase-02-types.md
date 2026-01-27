@@ -50,36 +50,36 @@ Implement all ECMAScript language types, specification types, and type conversio
   - [x] BigInt::toString
 - [x] `Object` type (§6.1.7) — initial representation
   - [x] Property attributes (§6.1.7.1): data vs accessor descriptors
-  - [ ] Internal methods table (§6.1.7.2)
-  - [ ] Internal slots representation
-  - [ ] Well-known intrinsic objects table (§6.1.7.4)
+  - [x] Internal methods table (§6.1.7.2)
+  - [x] Internal slots representation
+  - [x] Well-known intrinsic objects table (§6.1.7.4)
 
 ### 2.2 Specification Types (§6.2)
 - [x] Enum specification type
 - [x] List and Record
-- [ ] Set and Relation
+- [x] Set and Relation
 - [x] Completion Record (normal, throw, return, break, continue)
   - [x] NormalCompletion
   - [x] ThrowCompletion
   - [x] ReturnCompletion
-  - [ ] UpdateEmpty
-- [ ] Reference Record
-  - [ ] IsPropertyReference
-  - [ ] IsUnresolvableReference
-  - [ ] IsSuperReference
+  - [x] UpdateEmpty
+- [x] Reference Record
+  - [x] IsPropertyReference
+  - [x] IsUnresolvableReference
+  - [x] IsSuperReference
   - [ ] IsPrivateReference
-  - [ ] GetValue
-  - [ ] PutValue
-  - [ ] GetThisValue
-  - [ ] InitializeReferencedBinding
+  - [x] GetValue
+  - [x] PutValue
+  - [x] GetThisValue
+  - [x] InitializeReferencedBinding
   - [ ] MakePrivateReference
 - [x] Property Descriptor
   - [x] IsAccessorDescriptor
   - [x] IsDataDescriptor
-  - [ ] IsGenericDescriptor
+  - [x] IsGenericDescriptor
   - [x] FromPropertyDescriptor
   - [x] ToPropertyDescriptor
-  - [ ] CompletePropertyDescriptor
+  - [x] CompletePropertyDescriptor
 - [x] Environment Record types (placeholder — detailed in Phase 5)
 - [x] Abstract Closure
 - [ ] Data Blocks
@@ -92,41 +92,41 @@ Implement all ECMAScript language types, specification types, and type conversio
 - [ ] ClassStaticBlockDefinition Record
 
 ### 2.3 Type Conversion Abstract Operations (§7.1)
-- [ ] ToPrimitive / OrdinaryToPrimitive
-- [ ] ToBoolean
-- [ ] ToNumeric
-- [ ] ToNumber (including StringToNumber)
-  - [ ] StringNumericValue runtime semantics
+- [x] ToPrimitive / OrdinaryToPrimitive
+- [x] ToBoolean
+- [x] ToNumeric
+- [x] ToNumber (including StringToNumber)
+  - [x] StringNumericValue runtime semantics
   - [ ] RoundMVResult
-- [ ] ToIntegerOrInfinity
-- [ ] ToInt32 / ToUint32
+- [x] ToIntegerOrInfinity
+- [x] ToInt32 / ToUint32
 - [ ] ToInt16 / ToUint16
 - [ ] ToInt8 / ToUint8 / ToUint8Clamp
 - [ ] ToBigInt
 - [ ] StringToBigInt
 - [ ] ToBigInt64 / ToBigUint64
-- [ ] ToString
+- [x] ToString
 - [ ] ToObject
-- [ ] ToPropertyKey
+- [x] ToPropertyKey
 - [ ] ToLength
 - [ ] CanonicalNumericIndexString
 - [ ] ToIndex
 
 ### 2.4 Testing Abstract Operations (§7.2)
 - [ ] RequireObjectCoercible
-- [ ] IsArray
-- [ ] IsCallable
+- [x] IsArray
+- [x] IsCallable
 - [ ] IsConstructor
-- [ ] IsExtensible
+- [x] IsExtensible
 - [ ] IsIntegralNumber
-- [ ] IsPropertyKey
+- [x] IsPropertyKey
 - [ ] IsRegExp
-- [ ] SameValue
-- [ ] SameValueZero
+- [x] SameValue
+- [x] SameValueZero
 - [ ] SameValueNonNumber
-- [ ] IsLessThan
-- [ ] IsLooselyEqual
-- [ ] IsStrictlyEqual
+- [x] IsLessThan
+- [x] IsLooselyEqual
+- [x] IsStrictlyEqual
 
 ### 2.5 Operations on Objects (§7.3)
 - [ ] MakeBasicObject
