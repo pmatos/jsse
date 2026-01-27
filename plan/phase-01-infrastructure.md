@@ -37,7 +37,7 @@ Set up the Rust project, CLI interface, test262 runner, and CI pipeline.
 ### 1.5 CI / Development Tooling
 - [x] GitHub Actions: build + test on PR
 - [x] Clippy + rustfmt in CI
-- [ ] Script to update README.md with latest test262 results
+- [x] Script to update README.md with latest test262 results
 
 ### 1.6 Documentation
 - [x] Update README.md with build/run instructions
