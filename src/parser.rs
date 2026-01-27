@@ -1686,26 +1686,18 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 loop {
                     expressions.push(self.parse_expression()?);
-                    // Read template continuation
+                    // self.current should be RightBrace (closing the ${...})
+                    // read_template_continuation reads from lexer char stream
                     let tok = self.lexer.read_template_continuation()?;
                     match tok {
                         Token::TemplateTail(s) => {
                             quasis.push(s);
-                            // Advance past the consumed template
-                            self.prev_line_terminator = false;
-                            loop {
-                                let t = self.lexer.next_token()?;
-                                if t == Token::LineTerminator {
-                                    self.prev_line_terminator = true;
-                                    continue;
-                                }
-                                self.current = t;
-                                break;
-                            }
+                            self.advance()?;
                             break;
                         }
                         Token::TemplateMiddle(s) => {
                             quasis.push(s);
+                            self.advance()?;
                         }
                         _ => return Err(self.error("Expected template continuation")),
                     }
