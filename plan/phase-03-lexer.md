@@ -54,7 +54,7 @@ Implement a complete lexer that tokenizes ECMAScript source text according to th
   - [x] NoSubstitutionTemplate
   - [x] TemplateHead / TemplateMiddle / TemplateTail
   - [x] Template escape sequences (tagged template raw)
-  - [ ] Illegal escape sequences in tagged templates (undefined raw value)
+  - [x] Illegal escape sequences in tagged templates (undefined raw value)
 - [x] RegularExpressionLiteral (§12.9.5)
   - [x] RegExp body and flags
   - [x] Disambiguation from division operator (lexer context)

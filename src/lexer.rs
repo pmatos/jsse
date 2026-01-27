@@ -16,11 +16,11 @@ pub enum Token {
     NullLiteral,
     RegExpLiteral { pattern: String, flags: String },
 
-    // Template literals
-    NoSubstitutionTemplate(String),
-    TemplateHead(String),
-    TemplateMiddle(String),
-    TemplateTail(String),
+    // Template literals: (cooked, raw) — cooked is None for invalid escapes in tagged templates
+    NoSubstitutionTemplate(Option<String>, String),
+    TemplateHead(Option<String>, String),
+    TemplateMiddle(Option<String>, String),
+    TemplateTail(Option<String>, String),
 
     // Punctuators
     LeftBrace,                // {
@@ -788,49 +788,72 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn read_template_literal(&mut self) -> Result<Token, LexError> {
-        let mut s = String::new();
+    // Returns (cooked, raw, is_tail). is_tail=true means ended with backtick, false means ${
+    fn read_template_chars(&mut self) -> Result<(Option<String>, String, bool), LexError> {
+        let mut cooked = Some(String::new());
+        let mut raw = String::new();
         loop {
             match self.advance() {
                 None => return Err(self.error("Unterminated template literal")),
-                Some('`') => return Ok(Token::NoSubstitutionTemplate(s)),
+                Some('`') => return Ok((cooked, raw, true)),
                 Some('$') if self.peek() == Some('{') => {
                     self.advance();
-                    return Ok(Token::TemplateHead(s));
+                    return Ok((cooked, raw, false));
                 }
                 Some('\\') => {
-                    let esc = self.read_escape_sequence()?;
-                    s.push_str(&esc);
+                    raw.push('\\');
+                    let before_offset = self.offset;
+                    match self.read_escape_sequence() {
+                        Ok(esc) => {
+                            raw.push_str(&self.source[before_offset..self.offset]);
+                            if let Some(ref mut c) = cooked {
+                                c.push_str(&esc);
+                            }
+                        }
+                        Err(_) => {
+                            // Invalid escape: cooked becomes undefined, raw gets source chars
+                            raw.push_str(&self.source[before_offset..self.offset]);
+                            cooked = None;
+                        }
+                    }
                 }
                 Some(ch) if Self::is_line_terminator(ch) => {
+                    if ch == '\r' && self.peek() == Some('\n') {
+                        raw.push('\r');
+                        raw.push('\n');
+                    } else {
+                        raw.push(ch);
+                    }
                     self.handle_newline(ch);
-                    s.push('\n');
+                    if let Some(ref mut c) = cooked {
+                        c.push('\n');
+                    }
                 }
-                Some(ch) => s.push(ch),
+                Some(ch) => {
+                    raw.push(ch);
+                    if let Some(ref mut c) = cooked {
+                        c.push(ch);
+                    }
+                }
             }
         }
     }
 
+    fn read_template_literal(&mut self) -> Result<Token, LexError> {
+        let (cooked, raw, is_tail) = self.read_template_chars()?;
+        if is_tail {
+            Ok(Token::NoSubstitutionTemplate(cooked, raw))
+        } else {
+            Ok(Token::TemplateHead(cooked, raw))
+        }
+    }
+
     pub fn read_template_continuation(&mut self) -> Result<Token, LexError> {
-        let mut s = String::new();
-        loop {
-            match self.advance() {
-                None => return Err(self.error("Unterminated template literal")),
-                Some('`') => return Ok(Token::TemplateTail(s)),
-                Some('$') if self.peek() == Some('{') => {
-                    self.advance();
-                    return Ok(Token::TemplateMiddle(s));
-                }
-                Some('\\') => {
-                    let esc = self.read_escape_sequence()?;
-                    s.push_str(&esc);
-                }
-                Some(ch) if Self::is_line_terminator(ch) => {
-                    self.handle_newline(ch);
-                    s.push('\n');
-                }
-                Some(ch) => s.push(ch),
-            }
+        let (cooked, raw, is_tail) = self.read_template_chars()?;
+        if is_tail {
+            Ok(Token::TemplateTail(cooked, raw))
+        } else {
+            Ok(Token::TemplateMiddle(cooked, raw))
         }
     }
 
@@ -1200,7 +1223,7 @@ mod tests {
     fn template_literal() {
         assert_eq!(
             lex_no_lt("`hello`"),
-            vec![Token::NoSubstitutionTemplate("hello".into()), Token::Eof]
+            vec![Token::NoSubstitutionTemplate(Some("hello".into()), "hello".into()), Token::Eof]
         );
     }
 
