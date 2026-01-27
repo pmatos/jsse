@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 10,003  | 32,073  | 23.77%    |
+| 48,257      | 42,076  | 6,181   | 10,473  | 31,603  | 24.89%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 

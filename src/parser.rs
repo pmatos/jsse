@@ -1551,33 +1551,43 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_object_property(&mut self) -> Result<Property, ParseError> {
-        // Check for get/set
+        // Check for get/set accessor
         if let Token::Identifier(n) = &self.current
             && (n == "get" || n == "set")
-            && self.peek_is_property_name()
         {
-            let kind = if n == "get" {
-                PropertyKind::Get
-            } else {
-                PropertyKind::Set
-            };
-            self.advance()?;
-            let (key, computed) = self.parse_property_name()?;
-            let params = self.parse_formal_parameters()?;
-            let body = self.parse_function_body()?;
-            return Ok(Property {
-                key,
-                value: Expression::Function(FunctionExpr {
-                    name: None,
-                    params,
-                    body,
-                    is_async: false,
-                    is_generator: false,
-                }),
-                kind,
-                computed,
-                shorthand: false,
-            });
+            let saved_kind = if n == "get" { PropertyKind::Get } else { PropertyKind::Set };
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?; // consume get/set, current is now next token
+            let is_accessor = matches!(
+                &self.current,
+                Token::Identifier(_)
+                    | Token::StringLiteral(_)
+                    | Token::NumericLiteral(_)
+                    | Token::LeftBracket
+                    | Token::Keyword(_)
+            );
+            if is_accessor {
+                let (key, computed) = self.parse_property_name()?;
+                let params = self.parse_formal_parameters()?;
+                let body = self.parse_function_body()?;
+                return Ok(Property {
+                    key,
+                    value: Expression::Function(FunctionExpr {
+                        name: None,
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                    }),
+                    kind: saved_kind,
+                    computed,
+                    shorthand: false,
+                });
+            }
+            // Not an accessor — push back current and restore get/set as current
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
         }
 
         let (key, computed) = self.parse_property_name()?;
@@ -1629,16 +1639,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn peek_is_property_name(&self) -> bool {
-        matches!(
-            &self.current,
-            Token::Identifier(_)
-                | Token::StringLiteral(_)
-                | Token::NumericLiteral(_)
-                | Token::LeftBracket
-                | Token::Keyword(_)
-        )
-    }
 
     fn parse_function_expression(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // function

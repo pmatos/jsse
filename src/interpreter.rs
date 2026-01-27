@@ -331,6 +331,16 @@ impl JsObjectData {
             .insert(key, PropertyDescriptor::data_default(value));
     }
 
+    pub fn insert_builtin(&mut self, key: String, value: JsValue) {
+        if !self.properties.contains_key(&key) {
+            self.property_order.push(key.clone());
+        }
+        self.properties.insert(
+            key,
+            PropertyDescriptor::data(value, true, false, true),
+        );
+    }
+
     pub fn insert_property(&mut self, key: String, desc: PropertyDescriptor) {
         if !self.properties.contains_key(&key) {
             self.property_order.push(key.clone());
@@ -494,7 +504,7 @@ impl Interpreter {
                 }),
             ));
             ep.borrow_mut()
-                .insert_value("toString".to_string(), tostring_fn);
+                .insert_builtin("toString".to_string(), tostring_fn);
         }
 
         // Test262Error
@@ -921,7 +931,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("max".to_string(), max_fn);
+            .insert_builtin("max".to_string(), max_fn);
         let min_fn = self.create_function(JsFunction::Native(
             "min".to_string(),
             Rc::new(|_interp, _this, args| {
@@ -943,7 +953,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("min".to_string(), min_fn);
+            .insert_builtin("min".to_string(), min_fn);
         let pow_fn = self.create_function(JsFunction::Native(
             "pow".to_string(),
             Rc::new(|_interp, _this, args| {
@@ -954,7 +964,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("pow".to_string(), pow_fn);
+            .insert_builtin("pow".to_string(), pow_fn);
         let random_fn = self.create_function(JsFunction::Native(
             "random".to_string(),
             Rc::new(|_interp, _this, _args| {
@@ -963,7 +973,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("random".to_string(), random_fn);
+            .insert_builtin("random".to_string(), random_fn);
 
         // Math.atan2
         let atan2_fn = self.create_function(JsFunction::Native(
@@ -976,7 +986,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("atan2".to_string(), atan2_fn);
+            .insert_builtin("atan2".to_string(), atan2_fn);
 
         // Math.hypot
         let hypot_fn = self.create_function(JsFunction::Native(
@@ -1001,7 +1011,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("hypot".to_string(), hypot_fn);
+            .insert_builtin("hypot".to_string(), hypot_fn);
 
         // Math.log2, Math.log10
         let log2_fn = self.create_function(JsFunction::Native(
@@ -1013,7 +1023,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("log2".to_string(), log2_fn);
+            .insert_builtin("log2".to_string(), log2_fn);
         let log10_fn = self.create_function(JsFunction::Native(
             "log10".to_string(),
             Rc::new(|_interp, _this, args| {
@@ -1023,7 +1033,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("log10".to_string(), log10_fn);
+            .insert_builtin("log10".to_string(), log10_fn);
 
         // Math.fround
         let fround_fn = self.create_function(JsFunction::Native(
@@ -1035,7 +1045,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("fround".to_string(), fround_fn);
+            .insert_builtin("fround".to_string(), fround_fn);
 
         // Math.clz32
         let clz32_fn = self.create_function(JsFunction::Native(
@@ -1048,7 +1058,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("clz32".to_string(), clz32_fn);
+            .insert_builtin("clz32".to_string(), clz32_fn);
 
         // Math.imul
         let imul_fn = self.create_function(JsFunction::Native(
@@ -1063,7 +1073,7 @@ impl Interpreter {
         ));
         math_obj
             .borrow_mut()
-            .insert_value("imul".to_string(), imul_fn);
+            .insert_builtin("imul".to_string(), imul_fn);
 
         // Math.expm1, Math.log1p, Math.cosh, Math.sinh, Math.tanh, Math.acosh, Math.asinh, Math.atanh
         let extra_math_fns: Vec<(&str, fn(f64) -> f64)> = vec![
@@ -1210,8 +1220,8 @@ impl Interpreter {
                 json_parse_value(interp, &s)
             }),
         ));
-        json_obj.borrow_mut().insert_value("stringify".to_string(), json_stringify);
-        json_obj.borrow_mut().insert_value("parse".to_string(), json_parse);
+        json_obj.borrow_mut().insert_builtin("stringify".to_string(), json_stringify);
+        json_obj.borrow_mut().insert_builtin("parse".to_string(), json_parse);
         let json_val = JsValue::Object(crate::types::JsObject {
             id: self.objects.iter().position(|o| Rc::ptr_eq(o, &json_obj)).unwrap() as u64,
         });
@@ -1294,7 +1304,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             }),
         ));
-        regexp_proto.borrow_mut().insert_value("test".to_string(), test_fn);
+        regexp_proto.borrow_mut().insert_builtin("test".to_string(), test_fn);
 
         // RegExp.prototype.exec
         let exec_fn = self.create_function(JsFunction::Native(
@@ -1332,7 +1342,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Null)
             }),
         ));
-        regexp_proto.borrow_mut().insert_value("exec".to_string(), exec_fn);
+        regexp_proto.borrow_mut().insert_builtin("exec".to_string(), exec_fn);
 
         // RegExp.prototype.toString
         let tostring_fn = self.create_function(JsFunction::Native(
@@ -1352,7 +1362,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str("/(?:)/")))
             }),
         ));
-        regexp_proto.borrow_mut().insert_value("toString".to_string(), tostring_fn);
+        regexp_proto.borrow_mut().insert_builtin("toString".to_string(), tostring_fn);
 
         let regexp_proto_rc = regexp_proto.clone();
 
@@ -1422,7 +1432,7 @@ impl Interpreter {
                         ));
                         proto_obj
                             .borrow_mut()
-                            .insert_value("hasOwnProperty".to_string(), has_own_fn);
+                            .insert_builtin("hasOwnProperty".to_string(), has_own_fn);
 
                         // Object.prototype.toString
                         let obj_tostring_fn = self.create_function(JsFunction::Native(
@@ -1454,7 +1464,7 @@ impl Interpreter {
                         ));
                         proto_obj
                             .borrow_mut()
-                            .insert_value("toString".to_string(), obj_tostring_fn);
+                            .insert_builtin("toString".to_string(), obj_tostring_fn);
 
                         // Object.prototype.valueOf
                         let obj_valueof_fn = self.create_function(JsFunction::Native(
@@ -1472,7 +1482,7 @@ impl Interpreter {
                         ));
                         proto_obj
                             .borrow_mut()
-                            .insert_value("valueOf".to_string(), obj_valueof_fn);
+                            .insert_builtin("valueOf".to_string(), obj_valueof_fn);
 
                         // Object.prototype.propertyIsEnumerable
                         let pie_fn = self.create_function(JsFunction::Native(
@@ -1493,7 +1503,7 @@ impl Interpreter {
                         ));
                         proto_obj
                             .borrow_mut()
-                            .insert_value("propertyIsEnumerable".to_string(), pie_fn);
+                            .insert_builtin("propertyIsEnumerable".to_string(), pie_fn);
 
                         // Object.prototype.isPrototypeOf
                         let ipof_fn = self.create_function(JsFunction::Native(
@@ -1521,7 +1531,7 @@ impl Interpreter {
                         ));
                         proto_obj
                             .borrow_mut()
-                            .insert_value("isPrototypeOf".to_string(), ipof_fn);
+                            .insert_builtin("isPrototypeOf".to_string(), ipof_fn);
 
                         self.setup_function_prototype(&proto_obj);
                     }
@@ -2180,7 +2190,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }),
         ));
-        proto.borrow_mut().insert_value("push".to_string(), push_fn);
+        proto.borrow_mut().insert_builtin("push".to_string(), push_fn);
 
         // Array.prototype.pop
         let pop_fn = self.create_function(JsFunction::Native(
@@ -2200,7 +2210,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }),
         ));
-        proto.borrow_mut().insert_value("pop".to_string(), pop_fn);
+        proto.borrow_mut().insert_builtin("pop".to_string(), pop_fn);
 
         // Array.prototype.shift
         let shift_fn = self.create_function(JsFunction::Native(
@@ -2225,7 +2235,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("shift".to_string(), shift_fn);
+            .insert_builtin("shift".to_string(), shift_fn);
 
         // Array.prototype.unshift
         let unshift_fn = self.create_function(JsFunction::Native(
@@ -2250,7 +2260,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("unshift".to_string(), unshift_fn);
+            .insert_builtin("unshift".to_string(), unshift_fn);
 
         // Array.prototype.indexOf
         let indexof_fn = self.create_function(JsFunction::Native(
@@ -2280,7 +2290,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("indexOf".to_string(), indexof_fn);
+            .insert_builtin("indexOf".to_string(), indexof_fn);
 
         // Array.prototype.lastIndexOf
         let lastindexof_fn = self.create_function(JsFunction::Native(
@@ -2311,7 +2321,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("lastIndexOf".to_string(), lastindexof_fn);
+            .insert_builtin("lastIndexOf".to_string(), lastindexof_fn);
 
         // Array.prototype.includes
         let includes_fn = self.create_function(JsFunction::Native(
@@ -2337,7 +2347,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("includes".to_string(), includes_fn);
+            .insert_builtin("includes".to_string(), includes_fn);
 
         // Array.prototype.join
         let join_fn = self.create_function(JsFunction::Native(
@@ -2375,7 +2385,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str("")))
             }),
         ));
-        proto.borrow_mut().insert_value("join".to_string(), join_fn);
+        proto.borrow_mut().insert_builtin("join".to_string(), join_fn);
 
         // Array.prototype.toString
         let tostring_fn = self.create_function(JsFunction::Native(
@@ -2406,7 +2416,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("toString".to_string(), tostring_fn);
+            .insert_builtin("toString".to_string(), tostring_fn);
 
         // Array.prototype.concat
         let concat_fn = self.create_function(JsFunction::Native(
@@ -2437,7 +2447,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("concat".to_string(), concat_fn);
+            .insert_builtin("concat".to_string(), concat_fn);
 
         // Array.prototype.slice
         let slice_fn = self.create_function(JsFunction::Native(
@@ -2491,7 +2501,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("slice".to_string(), slice_fn);
+            .insert_builtin("slice".to_string(), slice_fn);
 
         // Array.prototype.reverse
         let reverse_fn = self.create_function(JsFunction::Native(
@@ -2510,7 +2520,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("reverse".to_string(), reverse_fn);
+            .insert_builtin("reverse".to_string(), reverse_fn);
 
         // Array.prototype.forEach
         let foreach_fn = self.create_function(JsFunction::Native(
@@ -2536,7 +2546,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("forEach".to_string(), foreach_fn);
+            .insert_builtin("forEach".to_string(), foreach_fn);
 
         // Array.prototype.map
         let map_fn = self.create_function(JsFunction::Native(
@@ -2561,7 +2571,7 @@ impl Interpreter {
                 Completion::Normal(arr)
             }),
         ));
-        proto.borrow_mut().insert_value("map".to_string(), map_fn);
+        proto.borrow_mut().insert_builtin("map".to_string(), map_fn);
 
         // Array.prototype.filter
         let filter_fn = self.create_function(JsFunction::Native(
@@ -2592,7 +2602,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("filter".to_string(), filter_fn);
+            .insert_builtin("filter".to_string(), filter_fn);
 
         // Array.prototype.reduce
         let reduce_fn = self.create_function(JsFunction::Native(
@@ -2631,7 +2641,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("reduce".to_string(), reduce_fn);
+            .insert_builtin("reduce".to_string(), reduce_fn);
 
         // Array.prototype.some
         let some_fn = self.create_function(JsFunction::Native(
@@ -2658,7 +2668,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             }),
         ));
-        proto.borrow_mut().insert_value("some".to_string(), some_fn);
+        proto.borrow_mut().insert_builtin("some".to_string(), some_fn);
 
         // Array.prototype.every
         let every_fn = self.create_function(JsFunction::Native(
@@ -2687,7 +2697,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("every".to_string(), every_fn);
+            .insert_builtin("every".to_string(), every_fn);
 
         // Array.prototype.find
         let find_fn = self.create_function(JsFunction::Native(
@@ -2714,7 +2724,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }),
         ));
-        proto.borrow_mut().insert_value("find".to_string(), find_fn);
+        proto.borrow_mut().insert_builtin("find".to_string(), find_fn);
 
         // Array.prototype.findIndex
         let findindex_fn = self.create_function(JsFunction::Native(
@@ -2743,7 +2753,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("findIndex".to_string(), findindex_fn);
+            .insert_builtin("findIndex".to_string(), findindex_fn);
 
         // Array.prototype.splice
         let splice_fn = self.create_function(JsFunction::Native(
@@ -2791,7 +2801,7 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_value("splice".to_string(), splice_fn);
+            .insert_builtin("splice".to_string(), splice_fn);
 
         // Array.prototype.fill
         let fill_fn = self.create_function(JsFunction::Native(
@@ -2838,7 +2848,7 @@ impl Interpreter {
                 Completion::Normal(this_val.clone())
             }),
         ));
-        proto.borrow_mut().insert_value("fill".to_string(), fill_fn);
+        proto.borrow_mut().insert_builtin("fill".to_string(), fill_fn);
 
         // Array.isArray
         let is_array_fn = self.create_function(JsFunction::Native(
@@ -2942,7 +2952,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }),
         ));
-        proto.borrow_mut().insert_value("reduceRight".to_string(), reduce_right_fn);
+        proto.borrow_mut().insert_builtin("reduceRight".to_string(), reduce_right_fn);
 
         // Array.prototype.at
         let at_fn = self.create_function(JsFunction::Native(
@@ -2963,7 +2973,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }),
         ));
-        proto.borrow_mut().insert_value("at".to_string(), at_fn);
+        proto.borrow_mut().insert_builtin("at".to_string(), at_fn);
 
         // Array.prototype.sort
         let sort_fn = self.create_function(JsFunction::Native(
@@ -3006,7 +3016,7 @@ impl Interpreter {
                 Completion::Normal(this_val.clone())
             }),
         ));
-        proto.borrow_mut().insert_value("sort".to_string(), sort_fn);
+        proto.borrow_mut().insert_builtin("sort".to_string(), sort_fn);
 
         // Array.prototype.flat
         let flat_fn = self.create_function(JsFunction::Native(
@@ -3041,7 +3051,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(result))
             }),
         ));
-        proto.borrow_mut().insert_value("flat".to_string(), flat_fn);
+        proto.borrow_mut().insert_builtin("flat".to_string(), flat_fn);
 
         // Array.prototype.flatMap
         let flatmap_fn = self.create_function(JsFunction::Native(
@@ -3078,7 +3088,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(result))
             }),
         ));
-        proto.borrow_mut().insert_value("flatMap".to_string(), flatmap_fn);
+        proto.borrow_mut().insert_builtin("flatMap".to_string(), flatmap_fn);
 
         // Array.prototype.findLast / findLastIndex
         let findlast_fn = self.create_function(JsFunction::Native(
@@ -3103,7 +3113,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }),
         ));
-        proto.borrow_mut().insert_value("findLast".to_string(), findlast_fn);
+        proto.borrow_mut().insert_builtin("findLast".to_string(), findlast_fn);
 
         let findlastidx_fn = self.create_function(JsFunction::Native(
             "findLastIndex".to_string(),
@@ -3127,7 +3137,95 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             }),
         ));
-        proto.borrow_mut().insert_value("findLastIndex".to_string(), findlastidx_fn);
+        proto.borrow_mut().insert_builtin("findLastIndex".to_string(), findlastidx_fn);
+
+        // Array.prototype.copyWithin
+        let copywithin_fn = self.create_function(JsFunction::Native(
+            "copyWithin".to_string(),
+            Rc::new(|interp, this_val, args| {
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let mut obj_mut = obj.borrow_mut();
+                        if let Some(ref mut elems) = obj_mut.array_elements {
+                            let len = elems.len() as i64;
+                            let target = {
+                                let t = args.first().map(|v| to_number(v) as i64).unwrap_or(0);
+                                if t < 0 { (len + t).max(0) as usize } else { t.min(len) as usize }
+                            };
+                            let start = {
+                                let s = args.get(1).map(|v| to_number(v) as i64).unwrap_or(0);
+                                if s < 0 { (len + s).max(0) as usize } else { s.min(len) as usize }
+                            };
+                            let end = {
+                                let e = args.get(2).map(|v| {
+                                    if matches!(v, JsValue::Undefined) { len } else { to_number(v) as i64 }
+                                }).unwrap_or(len);
+                                if e < 0 { (len + e).max(0) as usize } else { e.min(len) as usize }
+                            };
+                            let count = (end - start).min(len as usize - target);
+                            let src: Vec<JsValue> = elems[start..start + count].to_vec();
+                            for (i, v) in src.into_iter().enumerate() {
+                                elems[target + i] = v;
+                            }
+                        }
+                    }
+                }
+                Completion::Normal(this_val.clone())
+            }),
+        ));
+        proto.borrow_mut().insert_builtin("copyWithin".to_string(), copywithin_fn);
+
+        // Array.prototype.entries
+        let entries_fn = self.create_function(JsFunction::Native(
+            "entries".to_string(),
+            Rc::new(|interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let elems = obj.borrow().array_elements.clone().unwrap_or_default();
+                        let pairs: Vec<JsValue> = elems.into_iter().enumerate()
+                            .map(|(i, v)| interp.create_array(vec![JsValue::Number(i as f64), v]))
+                            .collect();
+                        let iter_arr = interp.create_array(pairs);
+                        return Completion::Normal(iter_arr);
+                    }
+                }
+                Completion::Normal(interp.create_array(Vec::new()))
+            }),
+        ));
+        proto.borrow_mut().insert_builtin("entries".to_string(), entries_fn);
+
+        // Array.prototype.keys
+        let keys_fn = self.create_function(JsFunction::Native(
+            "keys".to_string(),
+            Rc::new(|interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let len = obj.borrow().array_elements.as_ref().map(|e| e.len()).unwrap_or(0);
+                        let keys: Vec<JsValue> = (0..len).map(|i| JsValue::Number(i as f64)).collect();
+                        let arr = interp.create_array(keys);
+                        return Completion::Normal(arr);
+                    }
+                }
+                Completion::Normal(interp.create_array(Vec::new()))
+            }),
+        ));
+        proto.borrow_mut().insert_builtin("keys".to_string(), keys_fn);
+
+        // Array.prototype.values
+        let values_fn = self.create_function(JsFunction::Native(
+            "values".to_string(),
+            Rc::new(|interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let elems = obj.borrow().array_elements.clone().unwrap_or_default();
+                        let arr = interp.create_array(elems);
+                        return Completion::Normal(arr);
+                    }
+                }
+                Completion::Normal(interp.create_array(Vec::new()))
+            }),
+        ));
+        proto.borrow_mut().insert_builtin("values".to_string(), values_fn);
 
         // Set Array statics on the Array constructor
         if let Some(array_val) = self.global_env.borrow().get("Array") {
@@ -3201,12 +3299,20 @@ impl Interpreter {
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let idx = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
-                    let cp = s
-                        .chars()
-                        .nth(idx)
-                        .map(|c| c as u32 as f64)
-                        .unwrap_or(f64::NAN);
-                    Completion::Normal(JsValue::Number(cp))
+                    // Use UTF-16 code units for indexing
+                    let utf16: Vec<u16> = s.encode_utf16().collect();
+                    if idx >= utf16.len() {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                    let code = utf16[idx];
+                    if (0xD800..=0xDBFF).contains(&code) && idx + 1 < utf16.len() {
+                        let trail = utf16[idx + 1];
+                        if (0xDC00..=0xDFFF).contains(&trail) {
+                            let cp = ((code as u32 - 0xD800) << 10) + (trail as u32 - 0xDC00) + 0x10000;
+                            return Completion::Normal(JsValue::Number(cp as f64));
+                        }
+                    }
+                    Completion::Normal(JsValue::Number(code as f64))
                 }),
             ),
             (
@@ -3581,7 +3687,7 @@ impl Interpreter {
 
         for (name, func) in methods {
             let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
-            proto.borrow_mut().insert_value(name.to_string(), fn_val);
+            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
         self.string_prototype = Some(proto);
@@ -3645,7 +3751,7 @@ impl Interpreter {
         ));
         obj_proto
             .borrow_mut()
-            .insert_value("call".to_string(), call_fn);
+            .insert_builtin("call".to_string(), call_fn);
 
         // Add apply
         let apply_fn = self.create_function(JsFunction::Native(
@@ -3672,7 +3778,7 @@ impl Interpreter {
         ));
         obj_proto
             .borrow_mut()
-            .insert_value("apply".to_string(), apply_fn);
+            .insert_builtin("apply".to_string(), apply_fn);
 
         // Function.prototype.bind
         let bind_fn = self.create_function(JsFunction::Native(
@@ -3694,7 +3800,7 @@ impl Interpreter {
         ));
         obj_proto
             .borrow_mut()
-            .insert_value("bind".to_string(), bind_fn);
+            .insert_builtin("bind".to_string(), bind_fn);
 
         // Merge Function.prototype.toString into Object.prototype.toString
         // The existing Object.prototype.toString already handles [object Type] for non-functions.
@@ -3726,7 +3832,7 @@ impl Interpreter {
         ));
         obj_proto
             .borrow_mut()
-            .insert_value("toString".to_string(), combined_tostring);
+            .insert_builtin("toString".to_string(), combined_tostring);
     }
 
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
@@ -3763,7 +3869,7 @@ impl Interpreter {
         {
             proto_obj
                 .borrow_mut()
-                .insert_value("constructor".to_string(), func_val.clone());
+                .insert_builtin("constructor".to_string(), func_val.clone());
         }
         func_val
     }
@@ -3953,6 +4059,14 @@ impl Interpreter {
             VarKind::Const => BindingKind::Const,
         };
         for d in &decl.declarations {
+            if d.init.is_none() && decl.kind == VarKind::Var {
+                if let Pattern::Identifier(ref name) = d.pattern {
+                    if !env.borrow().bindings.contains_key(name) {
+                        env.borrow_mut().declare(name, kind);
+                    }
+                    continue;
+                }
+            }
             let val = if let Some(init) = &d.init {
                 match self.eval_expr(init, env) {
                     Completion::Normal(v) => v,
@@ -5172,6 +5286,8 @@ impl Interpreter {
                         || key == "valueOf"
                         || key == "toFixed"
                         || key == "toLocaleString"
+                        || key == "toExponential"
+                        || key == "toPrecision"
                     {
                         // We'll handle these built-in methods directly in call_function
                         // by creating inline native functions
@@ -5213,6 +5329,40 @@ impl Interpreter {
                                         Completion::Normal(JsValue::String(JsString::from_str(
                                             &format!("{n:.digits$}"),
                                         )))
+                                    } else {
+                                        Completion::Normal(captured_val.clone())
+                                    }
+                                }
+                                "toExponential" => {
+                                    if let JsValue::Number(n) = &captured_val {
+                                        let has_arg = args.first().map(|v| !matches!(v, JsValue::Undefined)).unwrap_or(false);
+                                        if has_arg {
+                                            let digits = to_number(args.first().unwrap()) as usize;
+                                            Completion::Normal(JsValue::String(JsString::from_str(
+                                                &format!("{n:.digits$e}"),
+                                            )))
+                                        } else {
+                                            Completion::Normal(JsValue::String(JsString::from_str(
+                                                &format!("{n:e}"),
+                                            )))
+                                        }
+                                    } else {
+                                        Completion::Normal(captured_val.clone())
+                                    }
+                                }
+                                "toPrecision" => {
+                                    if let JsValue::Number(n) = &captured_val {
+                                        let has_arg = args.first().map(|v| !matches!(v, JsValue::Undefined)).unwrap_or(false);
+                                        if has_arg {
+                                            let precision = to_number(args.first().unwrap()) as usize;
+                                            Completion::Normal(JsValue::String(JsString::from_str(
+                                                &format!("{n:.prec$}", prec = precision.saturating_sub(1)),
+                                            )))
+                                        } else {
+                                            Completion::Normal(JsValue::String(JsString::from_str(
+                                                &to_js_string(&captured_val),
+                                            )))
+                                        }
                                     } else {
                                         Completion::Normal(captured_val.clone())
                                     }
@@ -5377,7 +5527,7 @@ impl Interpreter {
             // Store constructor reference
             new_obj
                 .borrow_mut()
-                .insert_value("constructor".to_string(), callee_val.clone());
+                .insert_builtin("constructor".to_string(), callee_val.clone());
         }
         let this_val = JsValue::Object(crate::types::JsObject {
             id: self.objects.len() as u64 - 1,
