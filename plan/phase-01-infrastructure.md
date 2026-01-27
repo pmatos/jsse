@@ -31,8 +31,8 @@ Set up the Rust project, CLI interface, test262 runner, and CI pipeline.
 - [x] Parallel test execution
 
 ### 1.4 Custom Test Runner
-- [ ] Script to run tests from `tests/` directory
-- [ ] Simple pass/fail assertion mechanism
+- [x] Script to run tests from `tests/` directory
+- [x] Simple pass/fail assertion mechanism
 
 ### 1.5 CI / Development Tooling
 - [x] GitHub Actions: build + test on PR
