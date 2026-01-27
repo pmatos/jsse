@@ -205,6 +205,9 @@ impl<'a> Parser<'a> {
         match &self.current {
             Token::Keyword(Keyword::Function) => self.parse_function_declaration(),
             Token::Keyword(Keyword::Class) => self.parse_class_declaration(),
+            Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const) => {
+                self.parse_lexical_declaration()
+            }
             Token::Keyword(Keyword::Async) if self.is_async_function() => {
                 self.parse_function_declaration()
             }
@@ -219,6 +222,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
+        if matches!(
+            &self.current,
+            Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const)
+        ) {
+            return Err(self.error(
+                "Lexical declaration cannot appear in a single-statement context",
+            ));
+        }
         match &self.current {
             Token::LeftBrace => self.parse_block_statement(),
             Token::Semicolon => {
@@ -226,8 +237,6 @@ impl<'a> Parser<'a> {
                 Ok(Statement::Empty)
             }
             Token::Keyword(Keyword::Var) => self.parse_variable_statement(),
-            Token::Keyword(Keyword::Let) => self.parse_lexical_declaration(),
-            Token::Keyword(Keyword::Const) => self.parse_lexical_declaration(),
             Token::Keyword(Keyword::If) => self.parse_if_statement(),
             Token::Keyword(Keyword::While) => self.parse_while_statement(),
             Token::Keyword(Keyword::Do) => self.parse_do_while_statement(),
