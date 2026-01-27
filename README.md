@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 5,482   | 36,594  | 13.03%    |
+| 48,257      | 42,076  | 6,181   | 5,923   | 36,153  | 14.08%    |
 
 *Skipped: module and async tests. Engine not yet implemented.*
 
@@ -35,6 +35,11 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Template literals
   - `new` operator with prototype chain setup
   - `this` binding (method calls, constructors, arrow lexical scoping)
+  - Property descriptors (data properties with writable/enumerable/configurable)
+  - Prototype chain inheritance (Object.prototype on all objects)
+  - `Object.defineProperty`, `Object.getOwnPropertyDescriptor`, `Object.keys`, `Object.freeze`, `Object.getPrototypeOf`, `Object.create`
+  - `Function.prototype.call`, `Function.prototype.apply`
+  - `Object.prototype.hasOwnProperty`
   - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
 ## Building & Running

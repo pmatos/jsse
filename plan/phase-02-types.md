@@ -48,8 +48,8 @@ Implement all ECMAScript language types, specification types, and type conversio
   - [x] BigInt::lessThan / equal
   - [x] BigInt::bitwiseAND / bitwiseXOR / bitwiseOR
   - [x] BigInt::toString
-- [ ] `Object` type (§6.1.7) — initial representation
-  - [ ] Property attributes (§6.1.7.1): data vs accessor descriptors
+- [x] `Object` type (§6.1.7) — initial representation
+  - [x] Property attributes (§6.1.7.1): data vs accessor descriptors
   - [ ] Internal methods table (§6.1.7.2)
   - [ ] Internal slots representation
   - [ ] Well-known intrinsic objects table (§6.1.7.4)
