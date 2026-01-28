@@ -221,8 +221,14 @@ impl JsObjectData {
             if let Some(ref val) = desc.value {
                 return val.clone();
             }
-            // Accessor without value — return undefined (getter must be called by interpreter)
             return JsValue::Undefined;
+        }
+        if let Some(ref elems) = self.array_elements {
+            if let Ok(idx) = key.parse::<usize>() {
+                if idx < elems.len() {
+                    return elems[idx].clone();
+                }
+            }
         }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property(key);
@@ -233,6 +239,20 @@ impl JsObjectData {
     pub fn get_property_descriptor(&self, key: &str) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             return Some(desc.clone());
+        }
+        if let Some(ref elems) = self.array_elements {
+            if let Ok(idx) = key.parse::<usize>() {
+                if idx < elems.len() {
+                    return Some(PropertyDescriptor {
+                        value: Some(elems[idx].clone()),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        get: None,
+                        set: None,
+                    });
+                }
+            }
         }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property_descriptor(key);
