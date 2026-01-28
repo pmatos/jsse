@@ -5317,6 +5317,74 @@ impl Interpreter {
                 }
                 Completion::Normal(JsValue::String(JsString::from_str(&s)))
             }
+            Expression::OptionalChain(base, prop) => {
+                let base_val = match self.eval_expr(base, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if matches!(base_val, JsValue::Null | JsValue::Undefined) {
+                    return Completion::Normal(JsValue::Undefined);
+                }
+                match prop.as_ref() {
+                    Expression::Identifier(name) => {
+                        match &base_val {
+                            JsValue::Object(o) => self.get_object_property(o.id, name, &base_val),
+                            JsValue::String(s) => {
+                                if name == "length" {
+                                    Completion::Normal(JsValue::Number(s.len() as f64))
+                                } else if let Some(ref sp) = self.string_prototype {
+                                    Completion::Normal(sp.borrow().get_property(name))
+                                } else {
+                                    Completion::Normal(JsValue::Undefined)
+                                }
+                            }
+                            _ => Completion::Normal(JsValue::Undefined),
+                        }
+                    }
+                    Expression::Call(callee, args) => {
+                        if let Expression::Identifier(method_name) = callee.as_ref() {
+                            if method_name.is_empty() {
+                                let mut evaluated_args = Vec::new();
+                                for arg in args {
+                                    let val = match self.eval_expr(arg, env) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
+                                    evaluated_args.push(val);
+                                }
+                                return self.call_function(&base_val, &JsValue::Undefined, &evaluated_args);
+                            }
+                        }
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                    Expression::Member(_, mp) => {
+                        if let MemberProperty::Private(name) = mp {
+                            if let JsValue::Object(o) = &base_val {
+                                if let Some(obj) = self.get_object(o.id) {
+                                    return match obj.borrow().private_fields.get(name).cloned() {
+                                        Some(v) => Completion::Normal(v),
+                                        None => Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot read private member #{name} from an object whose class did not declare it"
+                                        ))),
+                                    };
+                                }
+                            }
+                        }
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                    other => {
+                        let key_val = match self.eval_expr(other, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let key = to_js_string(&key_val);
+                        match &base_val {
+                            JsValue::Object(o) => self.get_object_property(o.id, &key, &base_val),
+                            _ => Completion::Normal(JsValue::Undefined),
+                        }
+                    }
+                }
+            }
             _ => Completion::Normal(JsValue::Undefined),
         }
     }

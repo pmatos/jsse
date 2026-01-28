@@ -1,6 +1,14 @@
 use crate::ast::*;
 use crate::lexer::{Keyword, LexError, Lexer, Token};
+use std::collections::HashSet;
 use std::fmt;
+
+#[derive(Clone, Copy, PartialEq)]
+enum PrivateNameKind {
+    Getter,
+    Setter,
+    Other,
+}
 
 #[derive(Debug)]
 pub struct ParseError {
@@ -1083,16 +1091,76 @@ impl<'a> Parser<'a> {
         let prev_strict = self.strict;
         self.set_strict(true); // class bodies are always strict
         let mut elements = Vec::new();
+        // Track private names: value is (has_getter, has_setter, has_other)
+        let mut private_names: std::collections::HashMap<String, (bool, bool, bool)> =
+            std::collections::HashMap::new();
         while self.current != Token::RightBrace {
             if self.current == Token::Semicolon {
                 self.advance()?;
                 continue;
             }
-            elements.push(self.parse_class_element()?);
+            let element = self.parse_class_element()?;
+            // Check for duplicate private names
+            if let Some((name, kind)) = Self::get_private_name_info(&element) {
+                let entry = private_names.entry(name.clone()).or_insert((false, false, false));
+                let (has_getter, has_setter, has_other) = *entry;
+                match kind {
+                    PrivateNameKind::Getter => {
+                        if has_getter || has_other {
+                            return Err(self.error(format!(
+                                "Identifier '#{name}' has already been declared"
+                            )));
+                        }
+                        entry.0 = true;
+                    }
+                    PrivateNameKind::Setter => {
+                        if has_setter || has_other {
+                            return Err(self.error(format!(
+                                "Identifier '#{name}' has already been declared"
+                            )));
+                        }
+                        entry.1 = true;
+                    }
+                    PrivateNameKind::Other => {
+                        if has_getter || has_setter || has_other {
+                            return Err(self.error(format!(
+                                "Identifier '#{name}' has already been declared"
+                            )));
+                        }
+                        entry.2 = true;
+                    }
+                }
+            }
+            elements.push(element);
         }
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok(elements)
+    }
+
+    fn get_private_name_info(element: &ClassElement) -> Option<(String, PrivateNameKind)> {
+        match element {
+            ClassElement::Method(m) => {
+                if let PropertyKey::Private(name) = &m.key {
+                    let kind = match m.kind {
+                        ClassMethodKind::Get => PrivateNameKind::Getter,
+                        ClassMethodKind::Set => PrivateNameKind::Setter,
+                        _ => PrivateNameKind::Other,
+                    };
+                    Some((name.clone(), kind))
+                } else {
+                    None
+                }
+            }
+            ClassElement::Property(p) => {
+                if let PropertyKey::Private(name) = &p.key {
+                    Some((name.clone(), PrivateNameKind::Other))
+                } else {
+                    None
+                }
+            }
+            ClassElement::StaticBlock(_) => None,
+        }
     }
 
     fn parse_class_element(&mut self) -> Result<ClassElement, ParseError> {
