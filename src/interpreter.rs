@@ -436,17 +436,25 @@ impl Interpreter {
                 BindingKind::Var,
                 JsFunction::Native(
                     error_name.clone(),
-                    Rc::new(move |interp, _this, args| {
+                    Rc::new(move |interp, this, args| {
                         let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        if let JsValue::Object(o) = this {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let mut o = obj.borrow_mut();
+                                o.class_name = "Error".to_string();
+                                if !matches!(msg, JsValue::Undefined) {
+                                    o.insert_value("message".to_string(), msg);
+                                }
+                            }
+                            return Completion::Normal(this.clone());
+                        }
                         let obj = interp.create_object();
                         {
                             let mut o = obj.borrow_mut();
                             o.class_name = "Error".to_string();
-                            o.insert_value("message".to_string(), msg);
-                            o.insert_value(
-                                "name".to_string(),
-                                JsValue::String(JsString::from_str("Error")),
-                            );
+                            if !matches!(msg, JsValue::Undefined) {
+                                o.insert_value("message".to_string(), msg);
+                            }
                         }
                         Completion::Normal(JsValue::Object(crate::types::JsObject {
                             id: interp.objects.len() as u64 - 1,
@@ -509,6 +517,14 @@ impl Interpreter {
             ));
             ep.borrow_mut()
                 .insert_builtin("toString".to_string(), tostring_fn);
+            ep.borrow_mut().insert_value(
+                "name".to_string(),
+                JsValue::String(JsString::from_str("Error")),
+            );
+            ep.borrow_mut().insert_value(
+                "message".to_string(),
+                JsValue::String(JsString::from_str("")),
+            );
         }
 
         // Test262Error
@@ -519,8 +535,25 @@ impl Interpreter {
                 BindingKind::Var,
                 JsFunction::Native(
                     "Test262Error".to_string(),
-                    Rc::new(move |interp, _this, args| {
+                    Rc::new(move |interp, this, args| {
                         let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        if let JsValue::Object(o) = this {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let mut o = obj.borrow_mut();
+                                o.class_name = "Test262Error".to_string();
+                                if let Some(ref ep) = error_proto_clone {
+                                    o.prototype = Some(ep.clone());
+                                }
+                                if !matches!(msg, JsValue::Undefined) {
+                                    o.insert_value("message".to_string(), msg);
+                                }
+                                o.insert_value(
+                                    "name".to_string(),
+                                    JsValue::String(JsString::from_str("Test262Error")),
+                                );
+                            }
+                            return Completion::Normal(this.clone());
+                        }
                         let obj = interp.create_object();
                         {
                             let mut o = obj.borrow_mut();
@@ -528,7 +561,9 @@ impl Interpreter {
                             if let Some(ref ep) = error_proto_clone {
                                 o.prototype = Some(ep.clone());
                             }
-                            o.insert_value("message".to_string(), msg);
+                            if !matches!(msg, JsValue::Undefined) {
+                                o.insert_value("message".to_string(), msg);
+                            }
                             o.insert_value(
                                 "name".to_string(),
                                 JsValue::String(JsString::from_str("Test262Error")),
@@ -558,8 +593,25 @@ impl Interpreter {
                 BindingKind::Var,
                 JsFunction::Native(
                     error_name.clone(),
-                    Rc::new(move |interp, _this, args| {
+                    Rc::new(move |interp, this, args| {
                         let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        if let JsValue::Object(o) = this {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let mut o = obj.borrow_mut();
+                                o.class_name = error_name.clone();
+                                if let Some(ref ep) = error_proto_clone {
+                                    o.prototype = Some(ep.clone());
+                                }
+                                if !matches!(msg, JsValue::Undefined) {
+                                    o.insert_value("message".to_string(), msg.clone());
+                                }
+                                o.insert_value(
+                                    "name".to_string(),
+                                    JsValue::String(JsString::from_str(&error_name)),
+                                );
+                            }
+                            return Completion::Normal(this.clone());
+                        }
                         let obj = interp.create_object();
                         {
                             let mut o = obj.borrow_mut();
@@ -567,7 +619,9 @@ impl Interpreter {
                             if let Some(ref ep) = error_proto_clone {
                                 o.prototype = Some(ep.clone());
                             }
-                            o.insert_value("message".to_string(), msg);
+                            if !matches!(msg, JsValue::Undefined) {
+                                o.insert_value("message".to_string(), msg);
+                            }
                             o.insert_value(
                                 "name".to_string(),
                                 JsValue::String(JsString::from_str(&error_name)),
