@@ -30,7 +30,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Variable declarations (`var`, `let`, `const` with TDZ)
   - Control flow (`if`, `while`, `do-while`, `for`, `for-in`, `for-of`, `switch`, `try/catch/finally`)
   - Functions (declarations, expressions, arrows, closures)
-  - Classes (declarations, expressions, inheritance, `super`, static methods/properties)
+  - Classes (declarations, expressions, inheritance, `super`, static methods/properties, private fields)
   - Operators (arithmetic, comparison, bitwise, logical, assignment, update, typeof, void)
   - Objects and arrays (literals, member access, computed properties)
   - Template literals

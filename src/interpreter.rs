@@ -191,6 +191,12 @@ impl PropertyDescriptor {
 }
 
 #[derive(Debug, Clone)]
+pub struct PrivateFieldDef {
+    pub name: String,
+    pub initializer: Option<Expression>,
+}
+
+#[derive(Debug, Clone)]
 pub struct JsObjectData {
     pub properties: HashMap<String, PropertyDescriptor>,
     pub property_order: Vec<String>,
@@ -200,6 +206,8 @@ pub struct JsObjectData {
     pub class_name: String,
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
+    pub private_fields: HashMap<String, JsValue>,
+    pub class_private_field_defs: Vec<PrivateFieldDef>,
 }
 
 impl JsObjectData {
@@ -213,6 +221,8 @@ impl JsObjectData {
             class_name: "Object".to_string(),
             extensible: true,
             primitive_value: None,
+            private_fields: HashMap::new(),
+            class_private_field_defs: Vec::new(),
         }
     }
 
@@ -5880,6 +5890,32 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
+                if let MemberProperty::Private(name) = prop {
+                    return match &obj_val {
+                        JsValue::Object(o) => {
+                            if let Some(obj) = self.get_object(o.id) {
+                                let final_val = if op == AssignOp::Assign {
+                                    rval
+                                } else {
+                                    let lval = obj.borrow().private_fields.get(name).cloned().unwrap_or(JsValue::Undefined);
+                                    self.apply_compound_assign(op, &lval, &rval)
+                                };
+                                if !obj.borrow().private_fields.contains_key(name) {
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot write private member #{name} to an object whose class did not declare it"
+                                    )));
+                                }
+                                obj.borrow_mut().private_fields.insert(name.clone(), final_val.clone());
+                                Completion::Normal(final_val)
+                            } else {
+                                Completion::Normal(JsValue::Undefined)
+                            }
+                        }
+                        _ => Completion::Throw(self.create_type_error(&format!(
+                            "Cannot write private member #{name} to a non-object"
+                        ))),
+                    };
+                }
                 let key = match prop {
                     MemberProperty::Dot(name) => name.clone(),
                     MemberProperty::Computed(expr) => {
@@ -5889,11 +5925,7 @@ impl Interpreter {
                         };
                         to_js_string(&v)
                     }
-                    MemberProperty::Private(_) => {
-                        return Completion::Throw(
-                            self.create_type_error("Private fields are not yet supported"),
-                        );
-                    }
+                    MemberProperty::Private(_) => unreachable!(),
                 };
                 if let JsValue::Object(ref o) = obj_val
                     && let Some(obj) = self.get_object(o.id)
@@ -6320,7 +6352,7 @@ impl Interpreter {
         // Create new object for 'this'
         let new_obj = self.create_object();
         // Set prototype from constructor.prototype if available
-        if let JsValue::Object(o) = &callee_val
+        let private_field_defs = if let JsValue::Object(o) = &callee_val
             && let Some(func_obj) = self.get_object(o.id)
         {
             let proto = func_obj.borrow().get_property_value("prototype");
@@ -6333,10 +6365,33 @@ impl Interpreter {
             new_obj
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), callee_val.clone());
-        }
+            // Get private field definitions
+            func_obj.borrow().class_private_field_defs.clone()
+        } else {
+            Vec::new()
+        };
+        // Initialize private fields on the new instance
+        let new_obj_id = self.objects.len() as u64 - 1;
         let this_val = JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
+            id: new_obj_id,
         });
+        // Create a temporary env for evaluating initializers with `this` bound
+        let init_env = Environment::new(Some(env.clone()));
+        init_env.borrow_mut().declare("this", BindingKind::Const);
+        let _ = init_env.borrow_mut().set("this", this_val.clone());
+        for def in &private_field_defs {
+            let val = if let Some(ref init) = def.initializer {
+                match self.eval_expr(init, &init_env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                }
+            } else {
+                JsValue::Undefined
+            };
+            if let Some(obj) = self.get_object(new_obj_id) {
+                obj.borrow_mut().private_fields.insert(def.name.clone(), val);
+            }
+        }
         let prev_new_target = self.new_target.take();
         self.new_target = Some(callee_val.clone());
         let result = self.call_function(&callee_val, &this_val, &evaluated_args);
@@ -6374,6 +6429,26 @@ impl Interpreter {
             Completion::Normal(v) => v,
             other => return other,
         };
+        if let MemberProperty::Private(name) = prop {
+            return match &obj_val {
+                JsValue::Object(o) => {
+                    if let Some(obj) = self.get_object(o.id) {
+                        let val = obj.borrow().private_fields.get(name).cloned();
+                        match val {
+                            Some(v) => Completion::Normal(v),
+                            None => Completion::Throw(self.create_type_error(&format!(
+                                "Cannot read private member #{name} from an object whose class did not declare it"
+                            ))),
+                        }
+                    } else {
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                }
+                _ => Completion::Throw(self.create_type_error(&format!(
+                    "Cannot read private member #{name} from a non-object"
+                ))),
+            };
+        }
         let key = match prop {
             MemberProperty::Dot(name) => name.clone(),
             MemberProperty::Computed(expr) => {
@@ -6383,11 +6458,7 @@ impl Interpreter {
                 };
                 to_js_string(&v)
             }
-            MemberProperty::Private(_name) => {
-                return Completion::Throw(
-                    self.create_type_error("Private fields are not yet supported"),
-                );
-            }
+            MemberProperty::Private(_) => unreachable!(),
         };
         match &obj_val {
             JsValue::Object(o) => self.get_object_property(o.id, &key, &obj_val.clone()),
@@ -6624,7 +6695,36 @@ impl Interpreter {
                     }
                 }
                 ClassElement::Property(p) => {
-                    // Instance properties are handled in the constructor
+                    // Check if this is a private field
+                    if let PropertyKey::Private(name) = &p.key {
+                        if !p.is_static {
+                            // Store instance private field definition
+                            if let JsValue::Object(ref o) = ctor_val
+                                && let Some(func_obj) = self.get_object(o.id)
+                            {
+                                func_obj.borrow_mut().class_private_field_defs.push(PrivateFieldDef {
+                                    name: name.clone(),
+                                    initializer: p.value.clone(),
+                                });
+                            }
+                        } else {
+                            // Static private field - evaluate now and store on constructor
+                            let val = if let Some(ref expr) = p.value {
+                                match self.eval_expr(expr, env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::Undefined
+                            };
+                            if let JsValue::Object(ref o) = ctor_val
+                                && let Some(func_obj) = self.get_object(o.id)
+                            {
+                                func_obj.borrow_mut().private_fields.insert(name.clone(), val);
+                            }
+                        }
+                        continue;
+                    }
                     // Static properties are set on the constructor
                     if p.is_static {
                         let key = match &p.key {
@@ -6634,10 +6734,7 @@ impl Interpreter {
                                 Completion::Normal(v) => to_js_string(&v),
                                 other => return other,
                             },
-                            PropertyKey::Private(_) => {
-                                // Private properties are not yet supported, skip them
-                                continue;
-                            }
+                            PropertyKey::Private(_) => unreachable!(),
                         };
                         let val = if let Some(ref expr) = p.value {
                             match self.eval_expr(expr, env) {
