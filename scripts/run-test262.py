@@ -244,6 +244,8 @@ def main():
     failed = 0
     skipped = 0
     done = 0
+    pass_list: list[str] = []
+    fail_list: list[str] = []
 
     work = [
         (str(t), str(jsse.resolve()), args.timeout, str(test262.resolve()))
@@ -253,14 +255,16 @@ def main():
     with ProcessPoolExecutor(max_workers=args.jobs) as pool:
         futures = {pool.submit(run_single_test, w): w for w in work}
         for future in as_completed(futures):
-            _, test_passed, skip_reason = future.result()
+            test_path, test_passed, skip_reason = future.result()
             done += 1
             if skip_reason.startswith("skip_"):
                 skipped += 1
             elif test_passed:
                 passed += 1
+                pass_list.append(test_path)
             else:
                 failed += 1
+                fail_list.append(test_path)
             if done % 1000 == 0:
                 run = passed + failed
                 pct = (passed / run * 100) if run else 0
@@ -272,6 +276,16 @@ def main():
     run_total = passed + failed
     percentage = (passed / run_total * 100) if run_total else 0
 
+    # Regression detection
+    baseline_file = Path("test262-pass.txt")
+    regressions: list[str] = []
+    new_passes: list[str] = []
+    if baseline_file.exists():
+        baseline = set(baseline_file.read_text().strip().split("\n"))
+        current = set(pass_list)
+        regressions = sorted(baseline - current)
+        new_passes = sorted(current - baseline)
+
     print()
     print("=== test262 Results ===")
     print(f"Total:   {total}")
@@ -280,6 +294,21 @@ def main():
     print(f"Pass:    {passed}")
     print(f"Fail:    {failed}")
     print(f"Rate:    {percentage:.2f}%")
+
+    if regressions:
+        print(f"\n!!! REGRESSIONS: {len(regressions)} tests that previously passed now fail:")
+        for r in regressions[:20]:
+            print(f"  REGRESSED: {r}")
+        if len(regressions) > 20:
+            print(f"  ... and {len(regressions) - 20} more")
+
+    if new_passes:
+        print(f"\nNew passes: {len(new_passes)}")
+
+    # Save current pass list as new baseline
+    pass_list.sort()
+    baseline_file.write_text("\n".join(pass_list) + "\n")
+
     print()
     print(
         f"JSON: {json.dumps({
@@ -289,6 +318,8 @@ def main():
             'pass': passed,
             'fail': failed,
             'percentage': round(percentage, 2),
+            'regressions': len(regressions),
+            'new_passes': len(new_passes),
         })}"
     )
 
