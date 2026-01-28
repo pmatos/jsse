@@ -149,7 +149,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [x] `return` outside functions
 - [x] `break`/`continue` label validation
 - [x] Lexical declarations in single-statement positions
-- [ ] Labelled function declarations (strict mode restrictions)
+- [x] Labelled function declarations (strict mode restrictions)
 
 ### 4.16 Operator Precedence
 - [x] Correct precedence for all operators

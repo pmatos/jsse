@@ -366,6 +366,9 @@ impl<'a> Parser<'a> {
                         | Token::Keyword(Keyword::While)
                         | Token::Keyword(Keyword::Do)
                 );
+                if self.strict && self.current == Token::Keyword(Keyword::Function) {
+                    return Err(self.error("In strict mode code, functions can only be declared at top level or inside a block"));
+                }
                 self.labels.push((name.clone(), is_iteration));
                 let stmt = self.parse_statement()?;
                 self.labels.pop();
