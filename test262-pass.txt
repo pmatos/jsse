@@ -9185,6 +9185,8 @@ test262/test/language/statements/async-function/await-as-identifier-reference.js
 test262/test/language/statements/async-function/await-as-label-identifier.js
 test262/test/language/statements/async-function/cptn-decl.js
 test262/test/language/statements/async-function/dflt-params-rest.js
+test262/test/language/statements/async-function/early-errors-declaration-await-in-formals-default.js
+test262/test/language/statements/async-function/early-errors-declaration-await-in-formals.js
 test262/test/language/statements/async-function/early-errors-declaration-body-contains-super-call.js
 test262/test/language/statements/async-function/early-errors-declaration-body-contains-super-property.js
 test262/test/language/statements/async-function/early-errors-declaration-formals-contains-super-call.js

@@ -996,11 +996,16 @@ impl<'a> Parser<'a> {
             None => return Err(self.error("Expected function name")),
         };
         let prev_generator = self.in_generator;
+        let prev_async = self.in_async;
         if is_generator {
             self.in_generator = true;
         }
+        if is_async {
+            self.in_async = true;
+        }
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
+        self.in_async = prev_async;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
         if body_strict {
             self.check_duplicate_params_strict(&params)?;
@@ -1182,11 +1187,16 @@ impl<'a> Parser<'a> {
         is_constructor: bool,
     ) -> Result<FunctionExpr, ParseError> {
         let prev_generator = self.in_generator;
+        let prev_async = self.in_async;
         if is_generator {
             self.in_generator = true;
         }
+        if is_async {
+            self.in_async = true;
+        }
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
+        self.in_async = prev_async;
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
         if body_strict {
@@ -1656,6 +1666,11 @@ impl<'a> Parser<'a> {
                 Ok(Expression::Update(op, true, Box::new(expr)))
             }
             Token::Keyword(Keyword::Await) if self.in_async => {
+                if self.in_formal_parameters {
+                    return Err(self.error(
+                        "Await expression is not allowed in formal parameters of an async function",
+                    ));
+                }
                 self.advance()?;
                 let expr = self.parse_unary()?;
                 Ok(Expression::Await(Box::new(expr)))
