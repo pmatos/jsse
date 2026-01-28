@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 12,045 / 42,076 run (28.63%)
+**Current pass rate:** 12,354 / 42,076 run (29.36%)
 *Skipped: 6,181 module and async tests*
 
 ---
@@ -47,9 +47,10 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 These features block significant numbers of tests:
 
-1. **`arguments` object** — 31% pass rate (63/203). Many function tests depend on this.
-2. **Generator `yield` evaluation** — Parsing works, runtime doesn't. Blocks iterator protocol.
-3. **Iterator protocol** — Breaks `for...of`, spread on non-arrays, many built-in methods.
+1. ~~**`arguments` object**~~ — ✅ Done (82/203, 40.39%). Mapped arguments + Symbol.iterator implemented.
+2. **Garbage collection** — No GC; all objects live forever. Causes OOM on heavy tests.
+3. **Generator `yield` evaluation** — Parsing works, runtime doesn't. Blocks iterator protocol.
+4. **Iterator protocol** — Breaks `for...of`, spread on non-arrays, many built-in methods.
 4. **Promise** — Blocks all async/await runtime.
 5. **Map/Set** — Not implemented. 587 tests, relatively isolated.
 6. **Date** — Not implemented. 594 tests, fundamental.
@@ -58,8 +59,9 @@ These features block significant numbers of tests:
 
 ## Recommended Next Tasks (Priority Order)
 
-1. **Fix `arguments` object** — Quick win, unlocks many function tests
-2. **Complete Iterator built-in** — Many tests rely on iterator protocol
+1. ~~**Complete `arguments` object (mapped arguments)**~~ — ✅ Done
+2. **Garbage collection** — Prevents OOM; enables long-running tests
+3. **Complete Iterator built-in** — Many tests rely on iterator protocol
 3. **Implement Map and Set** — 587 tests, relatively isolated
 4. **Implement Date** — 594 tests, fundamental built-in
 5. **Generator `yield` evaluation** — Enables iterator protocol, async later
@@ -76,6 +78,7 @@ These are tracked across all phases:
 - [ ] **Unicode RegExp** — Unicode property escapes, `v` flag
 - [ ] **Error reporting** — quality error messages with source locations
 - [ ] **Spec compliance annotations** — link code to spec section IDs
+- [ ] **Garbage collection** — replace append-only object store with GC-managed heap
 - [ ] **Performance** — profile and optimize hot paths after correctness
 - [ ] **Annex B** — web legacy compat (1,086 tests in `test262/test/annexB/`)
 
