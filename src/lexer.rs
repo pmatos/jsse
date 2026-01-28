@@ -5,6 +5,7 @@ use std::str::Chars;
 pub enum Token {
     // Identifiers and keywords
     Identifier(String),
+    IdentifierWithEscape(String), // identifier containing Unicode escapes
     Keyword(Keyword),
 
     // Literals
@@ -675,14 +676,14 @@ impl<'a> Lexer<'a> {
 
     fn read_identifier_with_escape(&mut self, first: char) -> Token {
         let (name, _) = self.read_identifier_chars(first);
-        Token::Identifier(name)
+        Token::IdentifierWithEscape(name)
     }
 
     fn read_identifier(&mut self, first: char) -> Token {
         let (name, has_escape) = self.read_identifier_chars(first);
 
         if has_escape {
-            return Token::Identifier(name);
+            return Token::IdentifierWithEscape(name);
         }
 
         match name.as_str() {

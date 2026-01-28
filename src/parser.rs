@@ -212,6 +212,17 @@ impl<'a> Parser<'a> {
                     Some(name.clone())
                 }
             }
+            Token::IdentifierWithEscape(name) => {
+                // Escaped identifiers can still be reserved words - reject them
+                if Self::is_reserved_identifier(name, self.strict) {
+                    None
+                } else if name == "await" || name == "yield" {
+                    // "await" and "yield" written with escapes are always errors as identifiers
+                    None
+                } else {
+                    Some(name.clone())
+                }
+            }
             Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => {
                 Some("yield".to_string())
             }
@@ -638,7 +649,7 @@ impl<'a> Parser<'a> {
 
     fn parse_property_key_for_pattern(&mut self) -> Result<PropertyKey, ParseError> {
         match &self.current {
-            Token::Identifier(name) => {
+            Token::Identifier(name) | Token::IdentifierWithEscape(name) => {
                 let name = name.clone();
                 self.advance()?;
                 Ok(PropertyKey::Identifier(name))
@@ -1182,7 +1193,7 @@ impl<'a> Parser<'a> {
         }
 
         // Check for async method
-        let is_async_method = matches!(&self.current, Token::Identifier(n) if n == "async")
+        let is_async_method = matches!(&self.current, Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
         if is_async_method {
             self.advance()?;
@@ -1258,7 +1269,7 @@ impl<'a> Parser<'a> {
         }
 
         let kind = match &self.current {
-            Token::Identifier(n) if n == "get" => {
+            Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "get" => {
                 self.advance()?;
                 if self.current == Token::LeftParen {
                     let key = PropertyKey::Identifier("get".to_string());
@@ -1273,7 +1284,7 @@ impl<'a> Parser<'a> {
                 }
                 ClassMethodKind::Get
             }
-            Token::Identifier(n) if n == "set" => {
+            Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "set" => {
                 self.advance()?;
                 if self.current == Token::LeftParen {
                     let key = PropertyKey::Identifier("set".to_string());
@@ -1348,7 +1359,7 @@ impl<'a> Parser<'a> {
             let name = name.clone();
             self.advance()?;
             Ok((PropertyKey::Private(name), false))
-        } else if let Token::Identifier(name) = &self.current {
+        } else if let Token::Identifier(name) | Token::IdentifierWithEscape(name) = &self.current {
             let name = name.clone();
             self.advance()?;
             Ok((PropertyKey::Identifier(name), false))
@@ -1909,7 +1920,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(MemberProperty::Private(name))
             }
-            Token::Identifier(n) => {
+            Token::Identifier(n) | Token::IdentifierWithEscape(n) => {
                 let name = n.clone();
                 self.advance()?;
                 Ok(MemberProperty::Dot(name))
@@ -1974,7 +1985,7 @@ impl<'a> Parser<'a> {
                         )
                     } else {
                         let name = match &self.current {
-                            Token::Identifier(n) => n.clone(),
+                            Token::Identifier(n) | Token::IdentifierWithEscape(n) => n.clone(),
                             _ => return Err(self.error("Expected property after '?.'")),
                         };
                         self.advance()?;
@@ -1992,14 +2003,17 @@ impl<'a> Parser<'a> {
         self.advance()?; // new
         if self.current == Token::Dot {
             self.advance()?; // .
-            if let Token::Identifier(ref name) = self.current
-                && name == "target" {
-                    if self.in_function == 0 {
-                        return Err(self.error("new.target expression is not allowed here"));
-                    }
-                    self.advance()?; // target
-                    return Ok(Expression::NewTarget);
+            let is_target = match &self.current {
+                Token::Identifier(n) | Token::IdentifierWithEscape(n) => n == "target",
+                _ => false,
+            };
+            if is_target {
+                if self.in_function == 0 {
+                    return Err(self.error("new.target expression is not allowed here"));
                 }
+                self.advance()?; // target
+                return Ok(Expression::NewTarget);
+            }
             return Err(self.error("Expected 'target' after 'new.'"));
         }
         if self.current == Token::Keyword(Keyword::New) {
@@ -2124,6 +2138,35 @@ impl<'a> Parser<'a> {
                 self.check_strict_identifier(&name)?;
                 self.advance()?;
                 // Arrow function: (ident) => or ident =>
+                if self.current == Token::Arrow && !self.prev_line_terminator {
+                    self.advance()?;
+                    let body = if self.current == Token::LeftBrace {
+                        let (stmts, _) = self.parse_arrow_function_body(false)?;
+                        ArrowBody::Block(stmts)
+                    } else {
+                        ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
+                    };
+                    return Ok(Expression::ArrowFunction(ArrowFunction {
+                        params: vec![Pattern::Identifier(name)],
+                        body,
+                        is_async: false,
+                    }));
+                }
+                Ok(Expression::Identifier(name))
+            }
+            Token::IdentifierWithEscape(name) => {
+                let name = name.clone();
+                // Escaped reserved words are still reserved
+                if Self::is_reserved_identifier(&name, self.strict) {
+                    return Err(self.error(format!("Keyword must not contain escaped characters")));
+                }
+                // Escaped "await" and "yield" cannot be used as identifiers
+                if name == "await" || name == "yield" {
+                    return Err(self.error(format!("Keyword must not contain escaped characters")));
+                }
+                self.check_strict_identifier(&name)?;
+                self.advance()?;
+                // Arrow function with single escaped identifier
                 if self.current == Token::Arrow && !self.prev_line_terminator {
                     self.advance()?;
                     let body = if self.current == Token::LeftBrace {
@@ -2367,7 +2410,7 @@ impl<'a> Parser<'a> {
 
     fn parse_object_property(&mut self) -> Result<Property, ParseError> {
         // Check for async method: { async method() {} } or { async *method() {} }
-        let is_async_prop = matches!(&self.current, Token::Identifier(n) if n == "async")
+        let is_async_prop = matches!(&self.current, Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
         if is_async_prop {
             let saved_lt = self.prev_line_terminator;
@@ -2377,6 +2420,7 @@ impl<'a> Parser<'a> {
                 let is_method = matches!(
                     &self.current,
                     Token::Identifier(_)
+                        | Token::IdentifierWithEscape(_)
                         | Token::StringLiteral(_)
                         | Token::NumericLiteral(_)
                         | Token::LegacyOctalLiteral(_)
@@ -2419,9 +2463,13 @@ impl<'a> Parser<'a> {
         }
 
         // Check for get/set accessor
-        if let Token::Identifier(n) = &self.current
-            && (n == "get" || n == "set")
-        {
+        let get_or_set_name = match &self.current {
+            Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "get" || n == "set" => {
+                Some(n.clone())
+            }
+            _ => None,
+        };
+        if let Some(n) = get_or_set_name {
             let saved_kind = if n == "get" {
                 PropertyKind::Get
             } else {
@@ -2432,6 +2480,7 @@ impl<'a> Parser<'a> {
             let is_accessor = matches!(
                 &self.current,
                 Token::Identifier(_)
+                    | Token::IdentifierWithEscape(_)
                     | Token::StringLiteral(_)
                     | Token::NumericLiteral(_)
                     | Token::LegacyOctalLiteral(_)
