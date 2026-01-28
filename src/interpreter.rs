@@ -979,9 +979,18 @@ impl Interpreter {
             ("acos", f64::acos),
             ("atan", f64::atan),
             ("trunc", f64::trunc),
-            ("sign", (|x: f64| {
-                if x.is_nan() || x == 0.0 { x } else if x > 0.0 { 1.0 } else { -1.0 }
-            }) as fn(f64) -> f64),
+            (
+                "sign",
+                (|x: f64| {
+                    if x.is_nan() || x == 0.0 {
+                        x
+                    } else if x > 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }) as fn(f64) -> f64,
+            ),
             ("cbrt", f64::cbrt),
         ];
         for (name, op) in math_fns {

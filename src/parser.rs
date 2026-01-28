@@ -31,6 +31,8 @@ pub struct Parser<'a> {
     in_iteration: u32,
     in_switch: u32,
     labels: Vec<(String, bool)>, // (name, is_iteration)
+    allow_super_property: bool,
+    allow_super_call: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -57,6 +59,8 @@ impl<'a> Parser<'a> {
             in_iteration: 0,
             in_switch: 0,
             labels: Vec::new(),
+            allow_super_property: false,
+            allow_super_call: false,
         })
     }
 
@@ -147,14 +151,47 @@ impl<'a> Parser<'a> {
     fn is_reserved_identifier(name: &str, strict: bool) -> bool {
         matches!(
             name,
-            "break" | "case" | "catch" | "class" | "const" | "continue"
-            | "debugger" | "default" | "delete" | "do" | "else" | "enum"
-            | "export" | "extends" | "false" | "finally" | "for" | "function"
-            | "if" | "import" | "in" | "instanceof" | "new" | "null"
-            | "return" | "super" | "switch" | "this" | "throw" | "true"
-            | "try" | "typeof" | "var" | "void" | "while" | "with"
-        ) || (strict && matches!(name, "implements" | "interface" | "package"
-            | "private" | "protected" | "public"))
+            "break"
+                | "case"
+                | "catch"
+                | "class"
+                | "const"
+                | "continue"
+                | "debugger"
+                | "default"
+                | "delete"
+                | "do"
+                | "else"
+                | "enum"
+                | "export"
+                | "extends"
+                | "false"
+                | "finally"
+                | "for"
+                | "function"
+                | "if"
+                | "import"
+                | "in"
+                | "instanceof"
+                | "new"
+                | "null"
+                | "return"
+                | "super"
+                | "switch"
+                | "this"
+                | "throw"
+                | "true"
+                | "try"
+                | "typeof"
+                | "var"
+                | "void"
+                | "while"
+                | "with"
+        ) || (strict
+            && matches!(
+                name,
+                "implements" | "interface" | "package" | "private" | "protected" | "public"
+            ))
     }
 
     fn current_identifier_name(&self) -> Option<String> {
@@ -208,9 +245,7 @@ impl<'a> Parser<'a> {
         }
         for name in &names {
             if !seen.insert(name.as_str()) {
-                return Err(self.error(
-                    "Duplicate parameter name not allowed in this context",
-                ));
+                return Err(self.error("Duplicate parameter name not allowed in this context"));
             }
         }
         Ok(())
@@ -285,9 +320,9 @@ impl<'a> Parser<'a> {
             &self.current,
             Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const)
         ) {
-            return Err(self.error(
-                "Lexical declaration cannot appear in a single-statement context",
-            ));
+            return Err(
+                self.error("Lexical declaration cannot appear in a single-statement context")
+            );
         }
         match &self.current {
             Token::LeftBrace => self.parse_block_statement(),
@@ -550,10 +585,8 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Assign {
                     self.advance()?;
                     let default = self.parse_assignment_expression()?;
-                    let pat = Pattern::Assign(
-                        Box::new(Pattern::Identifier(name)),
-                        Box::new(default),
-                    );
+                    let pat =
+                        Pattern::Assign(Box::new(Pattern::Identifier(name)), Box::new(default));
                     props.push(ObjectPatternProperty::KeyValue(key, pat));
                 } else {
                     props.push(ObjectPatternProperty::Shorthand(name));
@@ -823,9 +856,7 @@ impl<'a> Parser<'a> {
             match self.labels.iter().find(|(name, _)| name == l) {
                 None => return Err(self.error(&format!("Undefined label '{l}'"))),
                 Some((_, false)) => {
-                    return Err(self.error(&format!(
-                        "Label '{l}' is not an iteration statement"
-                    )));
+                    return Err(self.error(&format!("Label '{l}' is not an iteration statement")));
                 }
                 _ => {}
             }
@@ -1022,10 +1053,13 @@ impl<'a> Parser<'a> {
             self.advance()?;
             if self.current == Token::LeftBrace {
                 self.eat(&Token::LeftBrace)?;
+                let prev_super_property = self.allow_super_property;
+                self.allow_super_property = true;
                 let mut stmts = Vec::new();
                 while self.current != Token::RightBrace {
                     stmts.push(self.parse_statement_or_declaration()?);
                 }
+                self.allow_super_property = prev_super_property;
                 self.eat(&Token::RightBrace)?;
                 return Ok(ClassElement::StaticBlock(stmts));
             }
@@ -1035,9 +1069,8 @@ impl<'a> Parser<'a> {
             Token::Identifier(n) if n == "get" => {
                 self.advance()?;
                 if self.current == Token::LeftParen {
-                    // it's a method called "get"
                     let key = PropertyKey::Identifier("get".to_string());
-                    let func = self.parse_method_function(false, false)?;
+                    let func = self.parse_class_method_function(false, false, false)?;
                     return Ok(ClassElement::Method(ClassMethod {
                         key,
                         kind: ClassMethodKind::Method,
@@ -1052,7 +1085,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 if self.current == Token::LeftParen {
                     let key = PropertyKey::Identifier("set".to_string());
-                    let func = self.parse_method_function(false, false)?;
+                    let func = self.parse_class_method_function(false, false, false)?;
                     return Ok(ClassElement::Method(ClassMethod {
                         key,
                         kind: ClassMethodKind::Method,
@@ -1074,7 +1107,7 @@ impl<'a> Parser<'a> {
             && matches!(&key, PropertyKey::Identifier(n) if n == "constructor");
 
         if self.current == Token::LeftParen {
-            let func = self.parse_method_function(false, is_generator)?;
+            let func = self.parse_class_method_function(false, is_generator, is_constructor)?;
             let method_kind = if is_constructor {
                 ClassMethodKind::Constructor
             } else {
@@ -1135,13 +1168,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_method_function(
+    fn parse_class_method_function(
         &mut self,
         is_async: bool,
         is_generator: bool,
+        is_constructor: bool,
     ) -> Result<FunctionExpr, ParseError> {
         let params = self.parse_formal_parameters()?;
-        let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
+        let (body, body_strict) =
+            self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
         if body_strict {
             self.check_duplicate_params_strict(&params)?;
         }
@@ -1186,6 +1221,16 @@ impl<'a> Parser<'a> {
         is_generator: bool,
         is_async: bool,
     ) -> Result<(Vec<Statement>, bool), ParseError> {
+        self.parse_function_body_inner(is_generator, is_async, false, false)
+    }
+
+    fn parse_function_body_inner(
+        &mut self,
+        is_generator: bool,
+        is_async: bool,
+        super_property: bool,
+        super_call: bool,
+    ) -> Result<(Vec<Statement>, bool), ParseError> {
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
         let prev_generator = self.in_generator;
@@ -1193,11 +1238,15 @@ impl<'a> Parser<'a> {
         let prev_iteration = self.in_iteration;
         let prev_switch = self.in_switch;
         let prev_labels = std::mem::take(&mut self.labels);
+        let prev_super_property = self.allow_super_property;
+        let prev_super_call = self.allow_super_call;
         self.in_generator = is_generator;
         self.in_async = is_async;
         self.in_iteration = 0;
         self.in_switch = 0;
         self.in_function += 1;
+        self.allow_super_property = super_property;
+        self.allow_super_call = super_call;
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
 
@@ -1224,6 +1273,8 @@ impl<'a> Parser<'a> {
         self.in_iteration = prev_iteration;
         self.in_switch = prev_switch;
         self.labels = prev_labels;
+        self.allow_super_property = prev_super_property;
+        self.allow_super_call = prev_super_call;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))
@@ -1231,6 +1282,15 @@ impl<'a> Parser<'a> {
 
     fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
         self.parse_function_body_with_context(false, false)
+    }
+
+    fn parse_arrow_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
+        self.parse_function_body_inner(
+            false,
+            false,
+            self.allow_super_property,
+            self.allow_super_call,
+        )
     }
 
     fn parse_expression_statement(&mut self) -> Result<Statement, ParseError> {
@@ -1283,7 +1343,11 @@ impl<'a> Parser<'a> {
         matches!(expr, Expression::Identifier(_) | Expression::Member(_, _))
     }
 
-    fn validate_assignment_target(&self, expr: &Expression, simple_only: bool) -> Result<(), ParseError> {
+    fn validate_assignment_target(
+        &self,
+        expr: &Expression,
+        simple_only: bool,
+    ) -> Result<(), ParseError> {
         if !simple_only && matches!(expr, Expression::Array(_) | Expression::Object(_)) {
             return Ok(());
         }
@@ -1291,7 +1355,9 @@ impl<'a> Parser<'a> {
             if self.strict {
                 if let Expression::Identifier(name) = expr {
                     if name == "eval" || name == "arguments" {
-                        return Err(self.error("Assignment to 'eval' or 'arguments' in strict mode"));
+                        return Err(
+                            self.error("Assignment to 'eval' or 'arguments' in strict mode")
+                        );
                     }
                 }
             }
@@ -1738,6 +1804,13 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Super) => {
                 self.advance()?;
+                let is_call = self.current == Token::LeftParen;
+                let is_property = self.current == Token::Dot || self.current == Token::LeftBracket;
+                let allowed = (is_call && self.allow_super_call)
+                    || (is_property && self.allow_super_property);
+                if !allowed {
+                    return Err(self.error("'super' keyword unexpected here"));
+                }
                 Ok(Expression::Super)
             }
             Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => {
@@ -1759,7 +1832,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Arrow && !self.prev_line_terminator {
                     self.advance()?;
                     let body = if self.current == Token::LeftBrace {
-                        let (stmts, _) = self.parse_function_body()?;
+                        let (stmts, _) = self.parse_arrow_function_body()?;
                         ArrowBody::Block(stmts)
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
@@ -1840,7 +1913,7 @@ impl<'a> Parser<'a> {
                     if self.current == Token::Arrow {
                         self.advance()?;
                         let body = if self.current == Token::LeftBrace {
-                            ArrowBody::Block(self.parse_function_body()?.0)
+                            ArrowBody::Block(self.parse_arrow_function_body()?.0)
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
@@ -1861,7 +1934,7 @@ impl<'a> Parser<'a> {
                     self.eat(&Token::RightParen)?;
                     self.eat(&Token::Arrow)?;
                     let body = if self.current == Token::LeftBrace {
-                        ArrowBody::Block(self.parse_function_body()?.0)
+                        ArrowBody::Block(self.parse_arrow_function_body()?.0)
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                     };
@@ -1895,7 +1968,7 @@ impl<'a> Parser<'a> {
                             .map(expr_to_pattern)
                             .collect::<Result<_, _>>()?;
                         let body = if self.current == Token::LeftBrace {
-                            ArrowBody::Block(self.parse_function_body()?.0)
+                            ArrowBody::Block(self.parse_arrow_function_body()?.0)
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
@@ -1999,7 +2072,7 @@ impl<'a> Parser<'a> {
             if is_accessor {
                 let (key, computed) = self.parse_property_name()?;
                 let params = self.parse_formal_parameters()?;
-                let (body, _) = self.parse_function_body()?;
+                let (body, _) = self.parse_function_body_inner(false, false, true, false)?;
                 return Ok(Property {
                     key,
                     value: Expression::Function(FunctionExpr {
@@ -2041,7 +2114,7 @@ impl<'a> Parser<'a> {
         // Method: { foo() {} }
         if self.current == Token::LeftParen {
             let params = self.parse_formal_parameters()?;
-            let (body, _) = self.parse_function_body()?;
+            let (body, _) = self.parse_function_body_inner(false, false, true, false)?;
             return Ok(Property {
                 key,
                 value: Expression::Function(FunctionExpr {
@@ -2094,7 +2167,9 @@ impl<'a> Parser<'a> {
 
     fn parse_class_expression(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // class
-        let name = if self.current != Token::Keyword(Keyword::Extends) && self.current != Token::LeftBrace {
+        let name = if self.current != Token::Keyword(Keyword::Extends)
+            && self.current != Token::LeftBrace
+        {
             if let Some(n) = self.current_identifier_name() {
                 self.advance()?;
                 Some(n)
@@ -2123,9 +2198,8 @@ impl<'a> Parser<'a> {
             Token::NoSubstitutionTemplate(cooked, _raw) => {
                 let cooked = cooked.clone();
                 // Non-tagged templates require valid cooked values
-                let s = cooked.ok_or_else(|| {
-                    self.error("Invalid escape sequence in template literal")
-                })?;
+                let s = cooked
+                    .ok_or_else(|| self.error("Invalid escape sequence in template literal"))?;
                 self.advance()?;
                 Ok(TemplateLiteral {
                     quasis: vec![s],
@@ -2134,9 +2208,8 @@ impl<'a> Parser<'a> {
             }
             Token::TemplateHead(cooked, _raw) => {
                 let cooked = cooked.clone();
-                let s = cooked.ok_or_else(|| {
-                    self.error("Invalid escape sequence in template literal")
-                })?;
+                let s = cooked
+                    .ok_or_else(|| self.error("Invalid escape sequence in template literal"))?;
                 let mut quasis = vec![s];
                 let mut expressions = Vec::new();
                 self.advance()?;

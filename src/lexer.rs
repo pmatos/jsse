@@ -417,7 +417,9 @@ impl<'a> Lexer<'a> {
                         val = val * 8 + (self.advance().unwrap() as u32 - '0' as u32);
                     }
                 }
-                Ok(char::from_u32(val).map(|c| c.to_string()).unwrap_or_default())
+                Ok(char::from_u32(val)
+                    .map(|c| c.to_string())
+                    .unwrap_or_default())
             }
             Some('x') => {
                 let h1 = self
@@ -593,7 +595,11 @@ impl<'a> Lexer<'a> {
                 break;
             }
         }
-        if is_octal && self.peek() != Some('.') && self.peek() != Some('e') && self.peek() != Some('E') {
+        if is_octal
+            && self.peek() != Some('.')
+            && self.peek() != Some('e')
+            && self.peek() != Some('E')
+        {
             let oct_part = &s[1..]; // skip leading 0
             let val = u64::from_str_radix(oct_part, 8)
                 .map_err(|_| self.error("Invalid octal literal"))?;
@@ -612,7 +618,9 @@ impl<'a> Lexer<'a> {
                 }
                 self.read_decimal_digits(&mut s);
             }
-            let val: f64 = s.parse().map_err(|_| self.error("Invalid numeric literal"))?;
+            let val: f64 = s
+                .parse()
+                .map_err(|_| self.error("Invalid numeric literal"))?;
             Ok(Token::NumericLiteral(val))
         }
     }
@@ -1249,7 +1257,10 @@ mod tests {
     fn template_literal() {
         assert_eq!(
             lex_no_lt("`hello`"),
-            vec![Token::NoSubstitutionTemplate(Some("hello".into()), "hello".into()), Token::Eof]
+            vec![
+                Token::NoSubstitutionTemplate(Some("hello".into()), "hello".into()),
+                Token::Eof
+            ]
         );
     }
 

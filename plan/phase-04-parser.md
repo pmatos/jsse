@@ -145,7 +145,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [ ] `await` in async function parameters
 - [ ] Duplicate export names
 - [x] `new.target` outside functions
-- [ ] `super` outside methods
+- [x] `super` outside methods
 - [x] `return` outside functions
 - [x] `break`/`continue` label validation
 - [x] Lexical declarations in single-statement positions

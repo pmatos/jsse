@@ -32,9 +32,7 @@ fn run_source(source: &str) -> Result<(), EngineError> {
         .map_err(|e| EngineError::Parse(format!("{e:?}")))?;
     let mut interp = interpreter::Interpreter::new();
     match interp.run(&program) {
-        interpreter::Completion::Throw(val) => {
-            Err(EngineError::Runtime(interp.format_value(&val)))
-        }
+        interpreter::Completion::Throw(val) => Err(EngineError::Runtime(interp.format_value(&val))),
         _ => Ok(()),
     }
 }
