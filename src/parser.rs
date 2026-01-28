@@ -531,21 +531,33 @@ impl<'a> Parser<'a> {
                 props.push(ObjectPatternProperty::Rest(rest));
                 break;
             }
-            if let Token::Identifier(name) = &self.current {
-                let name = name.clone();
+            let key = self.parse_property_key_for_pattern()?;
+            if self.current == Token::Colon {
                 self.advance()?;
-                if self.current == Token::Colon {
+                let mut pat = self.parse_binding_pattern()?;
+                if self.current == Token::Assign {
                     self.advance()?;
-                    let pat = self.parse_binding_pattern()?;
-                    props.push(ObjectPatternProperty::KeyValue(
-                        PropertyKey::Identifier(name),
-                        pat,
-                    ));
+                    let default = self.parse_assignment_expression()?;
+                    pat = Pattern::Assign(Box::new(pat), Box::new(default));
+                }
+                props.push(ObjectPatternProperty::KeyValue(key, pat));
+            } else {
+                // Shorthand: { x } or { x = default }
+                let name = match &key {
+                    PropertyKey::Identifier(n) => n.clone(),
+                    _ => return Err(self.error("Expected identifier for shorthand pattern")),
+                };
+                if self.current == Token::Assign {
+                    self.advance()?;
+                    let default = self.parse_assignment_expression()?;
+                    let pat = Pattern::Assign(
+                        Box::new(Pattern::Identifier(name)),
+                        Box::new(default),
+                    );
+                    props.push(ObjectPatternProperty::KeyValue(key, pat));
                 } else {
                     props.push(ObjectPatternProperty::Shorthand(name));
                 }
-            } else {
-                return Err(self.error("Expected property name in object pattern"));
             }
             if self.current == Token::Comma {
                 self.advance()?;
@@ -553,6 +565,38 @@ impl<'a> Parser<'a> {
         }
         self.eat(&Token::RightBrace)?;
         Ok(Pattern::Object(props))
+    }
+
+    fn parse_property_key_for_pattern(&mut self) -> Result<PropertyKey, ParseError> {
+        match &self.current {
+            Token::Identifier(name) => {
+                let name = name.clone();
+                self.advance()?;
+                Ok(PropertyKey::Identifier(name))
+            }
+            Token::StringLiteral(s) => {
+                let s = s.clone();
+                self.advance()?;
+                Ok(PropertyKey::String(s))
+            }
+            Token::NumericLiteral(n) => {
+                let n = *n;
+                self.advance()?;
+                Ok(PropertyKey::Number(n))
+            }
+            Token::LeftBracket => {
+                self.advance()?;
+                let expr = self.parse_assignment_expression()?;
+                self.eat(&Token::RightBracket)?;
+                Ok(PropertyKey::Computed(Box::new(expr)))
+            }
+            Token::Keyword(kw) => {
+                let name = kw.to_string();
+                self.advance()?;
+                Ok(PropertyKey::Identifier(name))
+            }
+            _ => Err(self.error("Expected property name in object pattern")),
+        }
     }
 
     fn parse_if_statement(&mut self) -> Result<Statement, ParseError> {
