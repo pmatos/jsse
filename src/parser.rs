@@ -239,6 +239,10 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn is_simple_parameter_list(params: &[Pattern]) -> bool {
+        params.iter().all(|p| matches!(p, Pattern::Identifier(_)))
+    }
+
     fn check_duplicate_params_strict(&self, params: &[Pattern]) -> Result<(), ParseError> {
         let mut seen = std::collections::HashSet::new();
         let mut names = Vec::new();
@@ -263,6 +267,14 @@ impl<'a> Parser<'a> {
     fn check_strict_identifier(&self, name: &str) -> Result<(), ParseError> {
         if self.strict && Self::is_strict_reserved_word(name) {
             return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
+        }
+        Ok(())
+    }
+
+    fn check_strict_binding_identifier(&self, name: &str) -> Result<(), ParseError> {
+        self.check_strict_identifier(name)?;
+        if self.strict && (name == "eval" || name == "arguments") {
+            return Err(self.error(format!("'{}' can't be used as a binding identifier in strict mode", name)));
         }
         Ok(())
     }
@@ -325,6 +337,19 @@ impl<'a> Parser<'a> {
             return Err(
                 self.error("Lexical declaration cannot appear in a single-statement context")
             );
+        }
+        if matches!(&self.current, Token::Keyword(Keyword::Async)) {
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?;
+            let is_async_fn = self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
+            if is_async_fn {
+                return Err(
+                    self.error("Async function declaration cannot appear in a single-statement context")
+                );
+            }
         }
         match &self.current {
             Token::LeftBrace => self.parse_block_statement(),
@@ -513,12 +538,7 @@ impl<'a> Parser<'a> {
 
     fn parse_binding_pattern(&mut self) -> Result<Pattern, ParseError> {
         if let Some(name) = self.current_identifier_name() {
-            self.check_strict_identifier(&name)?;
-            if self.strict && (name == "eval" || name == "arguments") {
-                return Err(self.error(format!(
-                    "'{name}' can't be defined or assigned to in strict mode code"
-                )));
-            }
+            self.check_strict_binding_identifier(&name)?;
             self.advance()?;
             return Ok(Pattern::Identifier(name));
         }
@@ -992,7 +1012,7 @@ impl<'a> Parser<'a> {
         let is_generator = self.eat_star()?;
         let name = match self.current_identifier_name() {
             Some(n) => {
-                self.check_strict_identifier(&n)?;
+                self.check_strict_binding_identifier(&n)?;
                 self.advance()?;
                 n
             }
@@ -1010,7 +1030,10 @@ impl<'a> Parser<'a> {
         self.in_generator = prev_generator;
         self.in_async = prev_async;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
-        if body_strict {
+        if body_strict && !Self::is_simple_parameter_list(&params) {
+            return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+        }
+        if body_strict || self.strict || is_async || is_generator || !Self::is_simple_parameter_list(&params) {
             self.check_duplicate_params_strict(&params)?;
         }
         Ok(Statement::FunctionDeclaration(FunctionDecl {
@@ -1080,6 +1103,73 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Check for async method
+        let is_async_method = matches!(&self.current, Token::Identifier(n) if n == "async")
+            || matches!(&self.current, Token::Keyword(Keyword::Async));
+        if is_async_method {
+            self.advance()?;
+            if self.current == Token::LeftParen {
+                // method named 'async': class { async() {} }
+                let key = PropertyKey::Identifier("async".to_string());
+                let func = self.parse_class_method_function(false, false, false)?;
+                return Ok(ClassElement::Method(ClassMethod {
+                    key,
+                    kind: ClassMethodKind::Method,
+                    value: func,
+                    is_static,
+                    computed: false,
+                }));
+            }
+            if self.current == Token::Assign || self.current == Token::Semicolon || self.current == Token::RightBrace {
+                // field named 'async': class { async = value; }
+                let value = if self.current == Token::Assign {
+                    self.advance()?;
+                    Some(self.parse_assignment_expression()?)
+                } else {
+                    None
+                };
+                self.eat_semicolon()?;
+                return Ok(ClassElement::Property(ClassProperty {
+                    key: PropertyKey::Identifier("async".to_string()),
+                    value,
+                    is_static,
+                    computed: false,
+                }));
+            }
+            // It's an async method: async [*] name() {}
+            let is_generator = self.eat_star()?;
+            let (key, computed) = self.parse_property_name()?;
+            if !is_static && !computed && matches!(&key, PropertyKey::Identifier(n) if n == "constructor") {
+                return Err(self.error("Class constructor may not be an async method"));
+            }
+            if is_static && !computed && matches!(&key, PropertyKey::Identifier(n) if n == "prototype") {
+                return Err(self.error("Classes may not have a static property named 'prototype'"));
+            }
+            if self.current == Token::LeftParen {
+                let func = self.parse_class_method_function(true, is_generator, false)?;
+                return Ok(ClassElement::Method(ClassMethod {
+                    key,
+                    kind: ClassMethodKind::Method,
+                    value: func,
+                    is_static,
+                    computed,
+                }));
+            }
+            let value = if self.current == Token::Assign {
+                self.advance()?;
+                Some(self.parse_assignment_expression()?)
+            } else {
+                None
+            };
+            self.eat_semicolon()?;
+            return Ok(ClassElement::Property(ClassProperty {
+                key,
+                value,
+                is_static,
+                computed,
+            }));
+        }
+
         let kind = match &self.current {
             Token::Identifier(n) if n == "get" => {
                 self.advance()?;
@@ -1120,6 +1210,14 @@ impl<'a> Parser<'a> {
         let is_constructor = !is_static
             && kind == ClassMethodKind::Method
             && matches!(&key, PropertyKey::Identifier(n) if n == "constructor");
+
+        if is_static && !computed && matches!(&key, PropertyKey::Identifier(n) if n == "prototype") {
+            return Err(self.error("Classes may not have a static property named 'prototype'"));
+        }
+
+        if is_constructor && is_generator {
+            return Err(self.error("Class constructor may not be a generator"));
+        }
 
         if self.current == Token::LeftParen {
             let func = self.parse_class_method_function(false, is_generator, is_constructor)?;
@@ -1202,7 +1300,10 @@ impl<'a> Parser<'a> {
         self.in_async = prev_async;
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
-        if body_strict {
+        if body_strict && !Self::is_simple_parameter_list(&params) {
+            return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+        }
+        if body_strict || self.strict || is_async || is_generator || !Self::is_simple_parameter_list(&params) {
             self.check_duplicate_params_strict(&params)?;
         }
         Ok(FunctionExpr {
@@ -1277,6 +1378,7 @@ impl<'a> Parser<'a> {
         self.allow_super_call = super_call;
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
+        let mut has_use_strict_directive = false;
 
         while self.current != Token::RightBrace {
             let stmt = self.parse_statement_or_declaration()?;
@@ -1285,6 +1387,7 @@ impl<'a> Parser<'a> {
                 if let Some(directive) = Self::is_directive_prologue(&stmt) {
                     if directive == "use strict" {
                         self.set_strict(true);
+                        has_use_strict_directive = true;
                     }
                 } else {
                     in_directive_prologue = false;
@@ -1294,7 +1397,7 @@ impl<'a> Parser<'a> {
             stmts.push(stmt);
         }
 
-        let was_strict = self.strict;
+        let was_strict = has_use_strict_directive;
         self.in_function -= 1;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
@@ -1312,10 +1415,10 @@ impl<'a> Parser<'a> {
         self.parse_function_body_with_context(false, false)
     }
 
-    fn parse_arrow_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
+    fn parse_arrow_function_body(&mut self, is_async: bool) -> Result<(Vec<Statement>, bool), ParseError> {
         self.parse_function_body_inner(
             false,
-            false,
+            is_async,
             self.allow_super_property,
             self.allow_super_call,
         )
@@ -1859,6 +1962,44 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Identifier("await".to_string()))
             }
+            Token::Keyword(Keyword::Async) => {
+                self.advance()?;
+                if self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator {
+                    return self.parse_async_function_expression();
+                }
+                if !self.prev_line_terminator {
+                    if let Some(name) = self.current_identifier_name() {
+                        let name = name.clone();
+                        self.advance()?;
+                        if self.current == Token::Arrow && !self.prev_line_terminator {
+                            self.advance()?;
+                            let prev_async = self.in_async;
+                            self.in_async = true;
+                            let body = if self.current == Token::LeftBrace {
+                                let (stmts, _) = self.parse_arrow_function_body(true)?;
+                                ArrowBody::Block(stmts)
+                            } else {
+                                ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
+                            };
+                            self.in_async = prev_async;
+                            return Ok(Expression::ArrowFunction(ArrowFunction {
+                                params: vec![Pattern::Identifier(name)],
+                                body,
+                                is_async: true,
+                            }));
+                        }
+                        // Not an arrow — push back and return "async" as identifier
+                        self.push_back(self.current.clone(), self.prev_line_terminator);
+                        self.current = Token::Identifier(name);
+                        self.prev_line_terminator = false;
+                        return Ok(Expression::Identifier("async".to_string()));
+                    }
+                    if self.current == Token::LeftParen {
+                        return self.parse_async_arrow_params();
+                    }
+                }
+                Ok(Expression::Identifier("async".to_string()))
+            }
             Token::Identifier(name) => {
                 let name = name.clone();
                 if Self::is_reserved_identifier(&name, self.strict) {
@@ -1870,7 +2011,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Arrow && !self.prev_line_terminator {
                     self.advance()?;
                     let body = if self.current == Token::LeftBrace {
-                        let (stmts, _) = self.parse_arrow_function_body()?;
+                        let (stmts, _) = self.parse_arrow_function_body(false)?;
                         ArrowBody::Block(stmts)
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
@@ -1951,7 +2092,7 @@ impl<'a> Parser<'a> {
                     if self.current == Token::Arrow {
                         self.advance()?;
                         let body = if self.current == Token::LeftBrace {
-                            ArrowBody::Block(self.parse_arrow_function_body()?.0)
+                            ArrowBody::Block(self.parse_arrow_function_body(false)?.0)
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
@@ -1972,7 +2113,7 @@ impl<'a> Parser<'a> {
                     self.eat(&Token::RightParen)?;
                     self.eat(&Token::Arrow)?;
                     let body = if self.current == Token::LeftBrace {
-                        ArrowBody::Block(self.parse_arrow_function_body()?.0)
+                        ArrowBody::Block(self.parse_arrow_function_body(false)?.0)
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                     };
@@ -2006,7 +2147,7 @@ impl<'a> Parser<'a> {
                             .map(expr_to_pattern)
                             .collect::<Result<_, _>>()?;
                         let body = if self.current == Token::LeftBrace {
-                            ArrowBody::Block(self.parse_arrow_function_body()?.0)
+                            ArrowBody::Block(self.parse_arrow_function_body(false)?.0)
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
@@ -2109,6 +2250,57 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_object_property(&mut self) -> Result<Property, ParseError> {
+        // Check for async method: { async method() {} } or { async *method() {} }
+        let is_async_prop = matches!(&self.current, Token::Identifier(n) if n == "async")
+            || matches!(&self.current, Token::Keyword(Keyword::Async));
+        if is_async_prop {
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?;
+            if !saved_lt && !self.prev_line_terminator {
+                let is_generator = self.eat_star()?;
+                let is_method = matches!(
+                    &self.current,
+                    Token::Identifier(_)
+                        | Token::StringLiteral(_)
+                        | Token::NumericLiteral(_)
+                        | Token::LegacyOctalLiteral(_)
+                        | Token::LeftBracket
+                        | Token::Keyword(_)
+                );
+                if is_method || is_generator {
+                    let (key, computed) = self.parse_property_name()?;
+                    let prev_async = self.in_async;
+                    let prev_generator = self.in_generator;
+                    self.in_async = true;
+                    if is_generator {
+                        self.in_generator = true;
+                    }
+                    let params = self.parse_formal_parameters()?;
+                    self.in_async = prev_async;
+                    self.in_generator = prev_generator;
+                    let (body, _) = self.parse_function_body_inner(is_generator, true, true, false)?;
+                    self.check_duplicate_params_strict(&params)?;
+                    return Ok(Property {
+                        key,
+                        value: Expression::Function(FunctionExpr {
+                            name: None,
+                            params,
+                            body,
+                            is_async: true,
+                            is_generator,
+                        }),
+                        kind: PropertyKind::Init,
+                        computed,
+                        shorthand: false,
+                    });
+                }
+            }
+            // Not an async method — push back and restore
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
+        }
+
         // Check for get/set accessor
         if let Token::Identifier(n) = &self.current
             && (n == "get" || n == "set")
@@ -2132,7 +2324,13 @@ impl<'a> Parser<'a> {
             if is_accessor {
                 let (key, computed) = self.parse_property_name()?;
                 let params = self.parse_formal_parameters()?;
-                let (body, _) = self.parse_function_body_inner(false, false, true, false)?;
+                let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
+                if body_strict && !Self::is_simple_parameter_list(&params) {
+                    return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+                }
+                if body_strict || self.strict {
+                    self.check_duplicate_params_strict(&params)?;
+                }
                 return Ok(Property {
                     key,
                     value: Expression::Function(FunctionExpr {
@@ -2174,7 +2372,13 @@ impl<'a> Parser<'a> {
         // Method: { foo() {} }
         if self.current == Token::LeftParen {
             let params = self.parse_formal_parameters()?;
-            let (body, _) = self.parse_function_body_inner(false, false, true, false)?;
+            let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
+            if body_strict && !Self::is_simple_parameter_list(&params) {
+                return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+            }
+            if body_strict || self.strict {
+                self.check_duplicate_params_strict(&params)?;
+            }
             return Ok(Property {
                 key,
                 value: Expression::Function(FunctionExpr {
@@ -2206,6 +2410,7 @@ impl<'a> Parser<'a> {
         self.advance()?;
         let is_generator = self.eat_star()?;
         let name = if let Some(n) = self.current_identifier_name() {
+            self.check_strict_binding_identifier(&n)?;
             self.advance()?;
             Some(n)
         } else {
@@ -2218,7 +2423,10 @@ impl<'a> Parser<'a> {
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, false)?;
-        if body_strict {
+        if body_strict && !Self::is_simple_parameter_list(&params) {
+            return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+        }
+        if body_strict || self.strict || is_generator || !Self::is_simple_parameter_list(&params) {
             self.check_duplicate_params_strict(&params)?;
         }
         Ok(Expression::Function(FunctionExpr {
@@ -2228,6 +2436,140 @@ impl<'a> Parser<'a> {
             is_async: false,
             is_generator,
         }))
+    }
+
+    fn parse_async_function_expression(&mut self) -> Result<Expression, ParseError> {
+        self.advance()?; // consume 'function'
+        let is_generator = self.eat_star()?;
+        let name = if matches!(&self.current, Token::Keyword(Keyword::Await)) {
+            return Err(self.error("'await' is not allowed as a function name in async functions"));
+        } else if let Some(n) = self.current_identifier_name() {
+            self.check_strict_binding_identifier(&n)?;
+            self.advance()?;
+            Some(n)
+        } else {
+            None
+        };
+        let prev_generator = self.in_generator;
+        let prev_async = self.in_async;
+        if is_generator {
+            self.in_generator = true;
+        }
+        self.in_async = true;
+        let params = self.parse_formal_parameters()?;
+        self.in_generator = prev_generator;
+        self.in_async = prev_async;
+        let (body, body_strict) = self.parse_function_body_with_context(is_generator, true)?;
+        if body_strict && !Self::is_simple_parameter_list(&params) {
+            return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+        }
+        self.check_duplicate_params_strict(&params)?;
+        Ok(Expression::Function(FunctionExpr {
+            name,
+            params,
+            body,
+            is_async: true,
+            is_generator,
+        }))
+    }
+
+    fn parse_async_arrow_params(&mut self) -> Result<Expression, ParseError> {
+        // Current token is '(' — parse params, check for '=>'
+        self.advance()?; // consume '('
+        if self.current == Token::RightParen {
+            self.advance()?;
+            if self.current == Token::Arrow && !self.prev_line_terminator {
+                self.advance()?;
+                let prev_async = self.in_async;
+                self.in_async = true;
+                let body = if self.current == Token::LeftBrace {
+                    ArrowBody::Block(self.parse_arrow_function_body(true)?.0)
+                } else {
+                    ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
+                };
+                self.in_async = prev_async;
+                return Ok(Expression::ArrowFunction(ArrowFunction {
+                    params: Vec::new(),
+                    body,
+                    is_async: true,
+                }));
+            }
+            // async() — function call on 'async' identifier
+            return Ok(Expression::Call(
+                Box::new(Expression::Identifier("async".to_string())),
+                Vec::new(),
+            ));
+        }
+        if self.current == Token::Ellipsis {
+            // async(...rest) =>
+            self.advance()?;
+            let pat = self.parse_binding_pattern()?;
+            let params = vec![Pattern::Rest(Box::new(pat))];
+            self.eat(&Token::RightParen)?;
+            self.eat(&Token::Arrow)?;
+            let prev_async = self.in_async;
+            self.in_async = true;
+            let body = if self.current == Token::LeftBrace {
+                ArrowBody::Block(self.parse_arrow_function_body(true)?.0)
+            } else {
+                ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
+            };
+            self.in_async = prev_async;
+            return Ok(Expression::ArrowFunction(ArrowFunction {
+                params,
+                body,
+                is_async: true,
+            }));
+        }
+        let expr = self.parse_assignment_expression()?;
+        if self.current == Token::Comma || self.current == Token::RightParen {
+            let mut exprs = vec![expr];
+            while self.current == Token::Comma {
+                self.advance()?;
+                if self.current == Token::Ellipsis {
+                    self.advance()?;
+                    let pat = self.parse_binding_pattern()?;
+                    exprs.push(Expression::Spread(Box::new(pattern_to_expr(pat))));
+                    break;
+                }
+                if self.current == Token::RightParen {
+                    break;
+                }
+                exprs.push(self.parse_assignment_expression()?);
+            }
+            self.eat(&Token::RightParen)?;
+            if self.current == Token::Arrow && !self.prev_line_terminator {
+                self.advance()?;
+                let params: Vec<Pattern> = exprs
+                    .into_iter()
+                    .map(expr_to_pattern)
+                    .collect::<Result<_, _>>()?;
+                let prev_async = self.in_async;
+                self.in_async = true;
+                let body = if self.current == Token::LeftBrace {
+                    ArrowBody::Block(self.parse_arrow_function_body(true)?.0)
+                } else {
+                    ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
+                };
+                self.in_async = prev_async;
+                return Ok(Expression::ArrowFunction(ArrowFunction {
+                    params,
+                    body,
+                    is_async: true,
+                }));
+            }
+            // Not an arrow — it's async(args) function call
+            return Ok(Expression::Call(
+                Box::new(Expression::Identifier("async".to_string())),
+                exprs,
+            ));
+        }
+        self.eat(&Token::RightParen)?;
+        // async(expr) — function call
+        Ok(Expression::Call(
+            Box::new(Expression::Identifier("async".to_string())),
+            vec![expr],
+        ))
     }
 
     fn parse_class_expression(&mut self) -> Result<Expression, ParseError> {

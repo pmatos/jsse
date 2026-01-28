@@ -21,8 +21,8 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [x] FunctionExpression
 - [x] ClassExpression
 - [x] GeneratorExpression
-- [ ] AsyncFunctionExpression
-- [ ] AsyncGeneratorExpression
+- [x] AsyncFunctionExpression
+- [x] AsyncGeneratorExpression
 - [x] RegularExpressionLiteral
 - [x] TemplateLiteral
 - [x] CoverParenthesizedExpressionAndArrowParameterList (parenthesized / arrow params)
@@ -46,7 +46,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [x] Unary `+` / `-`
 - [x] Bitwise NOT `~`
 - [x] Logical NOT `!`
-- [ ] `await`
+- [x] `await`
 
 ### 4.6 Binary Expressions (§13.6–13.12)
 - [x] Exponentiation `**` (§13.6)
@@ -104,8 +104,8 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [x] FunctionDeclaration / FunctionExpression
 - [x] Arrow function `=>`
 - [x] GeneratorDeclaration / GeneratorExpression
-- [ ] AsyncFunctionDeclaration / AsyncFunctionExpression
-- [ ] AsyncGeneratorDeclaration / AsyncGeneratorExpression
+- [x] AsyncFunctionDeclaration / AsyncFunctionExpression
+- [x] AsyncGeneratorDeclaration / AsyncGeneratorExpression
 - [x] Method definitions (get/set/generator/async)
 - [x] Default parameters
 - [x] Rest parameters `...`
