@@ -2,8 +2,9 @@
 
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
-**Total test262 tests:** ~53,114
-**Current pass rate:** 0 / 53,114 (0%)
+**Total test262 tests:** ~48,257 (excluding Temporal/intl402)
+**Current pass rate:** 12,045 / 42,076 run (28.63%)
+*Skipped: 6,181 module and async tests*
 
 ---
 
@@ -11,18 +12,58 @@ A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 The engine is broken into 10 phases, ordered by dependency. Each phase has a detailed sub-plan in `plan/`.
 
-| Phase | Name | Spec Sections | Detail | Est. Tests |
-|-------|------|---------------|--------|------------|
-| 1 | [Project Scaffolding & Infrastructure](plan/phase-01-infrastructure.md) | — | Rust project, CLI, test harness, CI | — |
-| 2 | [Types & Values](plan/phase-02-types.md) | §6 | Language types, spec types, type conversions | ~113 |
-| 3 | [Lexer](plan/phase-03-lexer.md) | §12 | Lexical grammar, tokens, Unicode | ~800+ |
-| 4 | [Parser (AST)](plan/phase-04-parser.md) | §13–16 | Expressions, statements, functions, modules | ~2,000+ |
-| 5 | [Runtime Core](plan/phase-05-runtime.md) | §6–10 | Environments, execution contexts, objects, abstract ops | ~3,500+ |
-| 6 | [Evaluation — Expressions & Statements](plan/phase-06-evaluation.md) | §13–14 | Runtime semantics for all language constructs | ~20,000+ |
-| 7 | [Functions & Classes](plan/phase-07-functions-classes.md) | §15 | Functions, arrow, async, generators, classes | ~10,000+ |
-| 8 | [Modules & Scripts](plan/phase-08-modules.md) | §16 | Script/module evaluation, import/export | ~900+ |
-| 9 | [Built-in Objects](plan/phase-09-builtins.md) | §19–28 | All standard built-ins | ~20,000+ |
-| 10 | [Advanced Features](plan/phase-10-advanced.md) | §17,25–27,B | Error handling, memory model, Proxy, Reflect, Annex B | ~3,000+ |
+| Phase | Name | Spec Sections | Status | Detail |
+|-------|------|---------------|--------|--------|
+| 1 | [Project Scaffolding & Infrastructure](plan/phase-01-infrastructure.md) | — | ✅ Complete | Rust project, CLI, test harness, CI |
+| 2 | [Types & Values](plan/phase-02-types.md) | §6 | ✅ ~95% | Language types, spec types, type conversions |
+| 3 | [Lexer](plan/phase-03-lexer.md) | §12 | ✅ Complete | Lexical grammar, tokens, Unicode |
+| 4 | [Parser (AST)](plan/phase-04-parser.md) | §13–16 | 🟡 ~95% | Expressions, statements, functions (modules missing) |
+| 5 | [Runtime Core](plan/phase-05-runtime.md) | §6–10 | 🟡 ~30% | Environments, execution contexts, objects |
+| 6 | [Evaluation — Expressions & Statements](plan/phase-06-evaluation.md) | §13–14 | 🟡 ~60% | Most operators/statements work |
+| 7 | [Functions & Classes](plan/phase-07-functions-classes.md) | §15 | 🟡 ~50% | Functions, classes work; generators/async don't |
+| 8 | [Modules & Scripts](plan/phase-08-modules.md) | §16 | ⬜ 0% | Script/module evaluation, import/export |
+| 9 | [Built-in Objects](plan/phase-09-builtins.md) | §19–28 | 🟡 ~40% | Object, Array, String, Math, JSON work |
+| 10 | [Advanced Features](plan/phase-10-advanced.md) | §17,25–27,B | ⬜ 0% | Error handling, memory model, Proxy, Reflect, Annex B |
+
+---
+
+## Current Built-in Status
+
+| Built-in | Pass Rate | Tests |
+|----------|-----------|-------|
+| Object | 35% | 1,199/3,411 |
+| Array | 25% | 736/2,989 |
+| String | 24% | 294/1,215 |
+| Function | 19% | 95/509 |
+| Iterator | 2% | 8/510 |
+| Promise | 0% | 0/281 |
+| Map | 0% | 0/204 |
+| Set | 0% | 0/383 |
+| Date | 0% | 0/594 |
+
+---
+
+## Current Blockers (Highest Impact)
+
+These features block significant numbers of tests:
+
+1. **`arguments` object** — 31% pass rate (63/203). Many function tests depend on this.
+2. **Generator `yield` evaluation** — Parsing works, runtime doesn't. Blocks iterator protocol.
+3. **Iterator protocol** — Breaks `for...of`, spread on non-arrays, many built-in methods.
+4. **Promise** — Blocks all async/await runtime.
+5. **Map/Set** — Not implemented. 587 tests, relatively isolated.
+6. **Date** — Not implemented. 594 tests, fundamental.
+
+---
+
+## Recommended Next Tasks (Priority Order)
+
+1. **Fix `arguments` object** — Quick win, unlocks many function tests
+2. **Complete Iterator built-in** — Many tests rely on iterator protocol
+3. **Implement Map and Set** — 587 tests, relatively isolated
+4. **Implement Date** — 594 tests, fundamental built-in
+5. **Generator `yield` evaluation** — Enables iterator protocol, async later
+6. **Private fields runtime** — Parsing done, evaluation needed
 
 ---
 
@@ -30,8 +71,9 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 These are tracked across all phases:
 
-- [ ] **Strict mode** — enforce throughout parser and runtime
-- [ ] **Unicode** — full Unicode support in lexer, identifiers, strings, RegExp
+- [x] **Strict mode** — enforce throughout parser and runtime
+- [x] **Unicode** — full Unicode support in lexer, identifiers, strings
+- [ ] **Unicode RegExp** — Unicode property escapes, `v` flag
 - [ ] **Error reporting** — quality error messages with source locations
 - [ ] **Spec compliance annotations** — link code to spec section IDs
 - [ ] **Performance** — profile and optimize hot paths after correctness
@@ -77,16 +119,16 @@ These are tracked across all phases:
 
 ## Milestone Targets
 
-| Milestone | Description | Target Tests |
-|-----------|-------------|-------------|
-| M0 | CLI runs, exits with code | 0 |
-| M1 | Numeric/string/bool literals evaluate | ~50 |
-| M2 | Variable declarations + basic expressions | ~500 |
-| M3 | Control flow (if/while/for) | ~1,500 |
-| M4 | Functions (basic call/return) | ~3,000 |
-| M5 | Objects + prototypes | ~6,000 |
-| M6 | All expressions + statements | ~15,000 |
-| M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 |
-| M8 | Classes, iterators, generators, async/await | ~35,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~45,000 |
-| M10 | Full spec compliance | ~50,000+ |
+| Milestone | Description | Target Tests | Status |
+|-----------|-------------|--------------|--------|
+| M0 | CLI runs, exits with code | 0 | ✅ |
+| M1 | Numeric/string/bool literals evaluate | ~50 | ✅ |
+| M2 | Variable declarations + basic expressions | ~500 | ✅ |
+| M3 | Control flow (if/while/for) | ~1,500 | ✅ |
+| M4 | Functions (basic call/return) | ~3,000 | ✅ |
+| M5 | Objects + prototypes | ~6,000 | ✅ |
+| M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
+| M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 In progress |
+| M8 | Classes, iterators, generators, async/await | ~35,000 | ⬜ Partial |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~45,000 | ⬜ |
+| M10 | Full spec compliance | ~48,000+ | ⬜ |

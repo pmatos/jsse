@@ -8,31 +8,31 @@ Implement all function types (normal, arrow, generator, async, async generator) 
 ## Tasks
 
 ### 7.1 Ordinary Functions (§15.2)
-- [ ] FunctionDeclarationInstantiation
-- [ ] Function hoisting
-- [ ] Strict mode propagation
-- [ ] `arguments` object (mapped and unmapped)
-- [ ] Default parameter values
-- [ ] Rest parameters `...args`
-- [ ] Duplicate parameter names (sloppy mode)
-- [ ] `"use strict"` directive in function body
+- [x] FunctionDeclarationInstantiation
+- [x] Function hoisting
+- [x] Strict mode propagation
+- [ ] `arguments` object (mapped and unmapped) — **BLOCKER: ~140 tests**
+- [x] Default parameter values
+- [x] Rest parameters `...args`
+- [x] Duplicate parameter names (sloppy mode)
+- [x] `"use strict"` directive in function body
 
 ### 7.2 Arrow Functions (§15.3)
-- [ ] Lexical `this` binding
-- [ ] No `arguments` object
-- [ ] No `new.target`
-- [ ] Cannot be used as constructors
-- [ ] Concise body (expression) vs block body
+- [x] Lexical `this` binding
+- [x] No `arguments` object
+- [x] No `new.target`
+- [x] Cannot be used as constructors
+- [x] Concise body (expression) vs block body
 
 ### 7.3 Method Definitions (§15.4)
-- [ ] Method shorthand `{ foo() {} }`
-- [ ] Getter `get` / Setter `set`
-- [ ] `super` method calls
-- [ ] Computed method names `{ [expr]() {} }`
+- [x] Method shorthand `{ foo() {} }`
+- [x] Getter `get` / Setter `set`
+- [x] `super` method calls
+- [x] Computed method names `{ [expr]() {} }`
 
-### 7.4 Generator Functions (§15.5, §27.5)
-- [ ] `function*` declaration and expression
-- [ ] `yield` expression
+### 7.4 Generator Functions (§15.5, §27.5) — **BLOCKER: parsing works, runtime doesn't**
+- [x] `function*` declaration and expression (parsing)
+- [ ] `yield` expression (runtime)
 - [ ] `yield*` delegation
 - [ ] Generator prototype chain
 - [ ] GeneratorStart, GeneratorResume, GeneratorResumeAbrupt
@@ -40,40 +40,40 @@ Implement all function types (normal, arrow, generator, async, async generator) 
 - [ ] Generator `next()` / `return()` / `throw()`
 - [ ] Suspended execution context
 
-### 7.5 Async Functions (§15.8, §27.7)
-- [ ] `async function` declaration and expression
-- [ ] `await` expression
+### 7.5 Async Functions (§15.8, §27.7) — **requires Promise**
+- [x] `async function` declaration and expression (parsing)
+- [ ] `await` expression (runtime)
 - [ ] Implicit promise wrapping
 - [ ] Async function start
 - [ ] Await fulfilled/rejected reactions
 - [ ] Async-from-sync iterator
 
-### 7.6 Async Generator Functions (§15.6, §27.6)
-- [ ] `async function*` declaration and expression
+### 7.6 Async Generator Functions (§15.6, §27.6) — **requires generators + async**
+- [x] `async function*` declaration and expression (parsing)
 - [ ] `yield` and `await` in async generators
 - [ ] AsyncGeneratorStart / Resume / Yield / Return
 - [ ] AsyncGeneratorEnqueue / Drain
 - [ ] `next()` / `return()` / `throw()` returning Promises
 
 ### 7.7 Class Definitions (§15.7)
-- [ ] ClassDefinitionEvaluation
-- [ ] Constructor function creation
-- [ ] `extends` and prototype chain setup
-- [ ] `super()` in derived class constructors
-- [ ] Derived class `this` binding (TDZ until `super()` called)
-- [ ] Instance methods and static methods
-- [ ] Instance fields
-- [ ] Static fields
-- [ ] Private fields (`#field`)
-  - [ ] Private instance fields
-  - [ ] Private static fields
+- [x] ClassDefinitionEvaluation
+- [x] Constructor function creation
+- [x] `extends` and prototype chain setup
+- [x] `super()` in derived class constructors
+- [x] Derived class `this` binding (TDZ until `super()` called)
+- [x] Instance methods and static methods
+- [x] Instance fields
+- [x] Static fields
+- [x] Private fields (`#field`) — parsing done, runtime partial
+  - [x] Private instance fields
+  - [x] Private static fields
   - [ ] Private methods (instance and static)
   - [ ] Private getters/setters
-  - [ ] `#field in obj` (private brand check)
-- [ ] Static initialization blocks `static { ... }`
-- [ ] Computed property names in class body
-- [ ] `new.target` in constructors
-- [ ] Class name binding (const in class body, not const outside)
+  - [x] `#field in obj` (private brand check)
+- [x] Static initialization blocks `static { ... }`
+- [x] Computed property names in class body
+- [x] `new.target` in constructors
+- [x] Class name binding (const in class body, not const outside)
 - [ ] `toString()` of class
 
 ### 7.8 Tail Position Calls (§15.10)

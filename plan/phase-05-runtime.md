@@ -8,34 +8,34 @@ Implement the runtime infrastructure: environments, execution contexts, ordinary
 ## Tasks
 
 ### 5.1 Environment Records (§9.1)
-- [ ] Declarative Environment Record
-  - [ ] HasBinding, CreateMutableBinding, CreateImmutableBinding
-  - [ ] InitializeBinding, SetMutableBinding, GetBindingValue
-  - [ ] DeleteBinding, HasThisBinding, HasSuperBinding, WithBaseObject
-- [ ] Object Environment Record
-  - [ ] All concrete methods
-  - [ ] `withEnvironment` flag
-- [ ] Function Environment Record
-  - [ ] `[[ThisValue]]`, `[[ThisBindingStatus]]`
-  - [ ] BindThisValue, GetThisBinding, GetSuperBase
-- [ ] Global Environment Record
-  - [ ] HasBinding, CreateMutableBinding, CreateImmutableBinding
-  - [ ] InitializeBinding, SetMutableBinding, GetBindingValue
-  - [ ] DeleteBinding, HasThisBinding, GetThisBinding
-  - [ ] HasVarDeclaration, HasLexicalDeclaration, HasRestrictedGlobalProperty
-  - [ ] CanDeclareGlobalVar, CanDeclareGlobalFunction
-  - [ ] CreateGlobalVarBinding, CreateGlobalFunctionBinding
+- [x] Declarative Environment Record
+  - [x] HasBinding, CreateMutableBinding, CreateImmutableBinding
+  - [x] InitializeBinding, SetMutableBinding, GetBindingValue
+  - [x] DeleteBinding, HasThisBinding, HasSuperBinding, WithBaseObject
+- [x] Object Environment Record
+  - [x] All concrete methods
+  - [x] `withEnvironment` flag
+- [x] Function Environment Record
+  - [x] `[[ThisValue]]`, `[[ThisBindingStatus]]`
+  - [x] BindThisValue, GetThisBinding, GetSuperBase
+- [x] Global Environment Record
+  - [x] HasBinding, CreateMutableBinding, CreateImmutableBinding
+  - [x] InitializeBinding, SetMutableBinding, GetBindingValue
+  - [x] DeleteBinding, HasThisBinding, GetThisBinding
+  - [x] HasVarDeclaration, HasLexicalDeclaration, HasRestrictedGlobalProperty
+  - [x] CanDeclareGlobalVar, CanDeclareGlobalFunction
+  - [x] CreateGlobalVarBinding, CreateGlobalFunctionBinding
 - [ ] Module Environment Record
   - [ ] CreateImportBinding
   - [ ] GetBindingValue (indirection for imports)
   - [ ] GetThisBinding (returns undefined)
 
 ### 5.2 Environment Record Operations (§9.1.2)
-- [ ] GetIdentifierReference
-- [ ] NewDeclarativeEnvironment
-- [ ] NewObjectEnvironment
-- [ ] NewFunctionEnvironment
-- [ ] NewGlobalEnvironment
+- [x] GetIdentifierReference
+- [x] NewDeclarativeEnvironment
+- [x] NewObjectEnvironment
+- [x] NewFunctionEnvironment
+- [x] NewGlobalEnvironment
 - [ ] NewModuleEnvironment
 
 ### 5.3 PrivateEnvironment Records (§9.2)
@@ -44,24 +44,24 @@ Implement the runtime infrastructure: environments, execution contexts, ordinary
 - [ ] ResolvePrivateIdentifier
 
 ### 5.4 Realms (§9.3)
-- [ ] Realm Record
-- [ ] CreateRealm
-- [ ] CreateIntrinsics
-- [ ] SetRealmGlobalObject
-- [ ] SetDefaultGlobalBindings
+- [x] Realm Record
+- [x] CreateRealm
+- [x] CreateIntrinsics
+- [x] SetRealmGlobalObject
+- [x] SetDefaultGlobalBindings
 
 ### 5.5 Execution Contexts (§9.4)
-- [ ] Execution context stack
-- [ ] Running execution context
-- [ ] LexicalEnvironment / VariableEnvironment / PrivateEnvironment
-- [ ] Function execution context
-- [ ] Script/Module execution context
+- [x] Execution context stack
+- [x] Running execution context
+- [x] LexicalEnvironment / VariableEnvironment / PrivateEnvironment
+- [x] Function execution context
+- [x] Script/Module execution context
 - [ ] GetActiveScriptOrModule
-- [ ] ResolveBinding
-- [ ] GetThisEnvironment
-- [ ] ResolveThisBinding
-- [ ] GetNewTarget
-- [ ] GetGlobalObject
+- [x] ResolveBinding
+- [x] GetThisEnvironment
+- [x] ResolveThisBinding
+- [x] GetNewTarget
+- [x] GetGlobalObject
 
 ### 5.6 Jobs & Job Queues (§9.5)
 - [ ] Job queue infrastructure (for Promises, etc.)
@@ -75,49 +75,49 @@ Implement the runtime infrastructure: environments, execution contexts, ordinary
 - [ ] ValidateAndApplyPropertyDescriptor
 
 ### 5.8 Ordinary Object Internal Methods (§10.1)
-- [ ] `[[GetPrototypeOf]]` / OrdinaryGetPrototypeOf
-- [ ] `[[SetPrototypeOf]]` / OrdinarySetPrototypeOf
-- [ ] `[[IsExtensible]]` / OrdinaryIsExtensible
-- [ ] `[[PreventExtensions]]` / OrdinaryPreventExtensions
-- [ ] `[[GetOwnProperty]]` / OrdinaryGetOwnProperty
-- [ ] `[[DefineOwnProperty]]` / OrdinaryDefineOwnProperty / ValidateAndApplyPropertyDescriptor
-- [ ] `[[HasProperty]]` / OrdinaryHasProperty
-- [ ] `[[Get]]` / OrdinaryGet
-- [ ] `[[Set]]` / OrdinarySet / OrdinarySetWithOwnDescriptor
-- [ ] `[[Delete]]` / OrdinaryDelete
-- [ ] `[[OwnPropertyKeys]]` / OrdinaryOwnPropertyKeys
-- [ ] OrdinaryObjectCreate
-- [ ] OrdinaryCreateFromConstructor
-- [ ] GetPrototypeFromConstructor
+- [x] `[[GetPrototypeOf]]` / OrdinaryGetPrototypeOf
+- [x] `[[SetPrototypeOf]]` / OrdinarySetPrototypeOf
+- [x] `[[IsExtensible]]` / OrdinaryIsExtensible
+- [x] `[[PreventExtensions]]` / OrdinaryPreventExtensions
+- [x] `[[GetOwnProperty]]` / OrdinaryGetOwnProperty
+- [x] `[[DefineOwnProperty]]` / OrdinaryDefineOwnProperty / ValidateAndApplyPropertyDescriptor
+- [x] `[[HasProperty]]` / OrdinaryHasProperty
+- [x] `[[Get]]` / OrdinaryGet
+- [x] `[[Set]]` / OrdinarySet / OrdinarySetWithOwnDescriptor
+- [x] `[[Delete]]` / OrdinaryDelete
+- [x] `[[OwnPropertyKeys]]` / OrdinaryOwnPropertyKeys
+- [x] OrdinaryObjectCreate
+- [x] OrdinaryCreateFromConstructor
+- [x] GetPrototypeFromConstructor
 
 ### 5.9 ECMAScript Function Objects (§10.2)
-- [ ] Function internal slots (`[[Environment]]`, `[[FormalParameters]]`, `[[ECMAScriptCode]]`, `[[ConstructorKind]]`, `[[Realm]]`, `[[ScriptOrModule]]`, `[[ThisMode]]`, `[[Strict]]`, `[[HomeObject]]`, `[[SourceText]]`, `[[Fields]]`, `[[PrivateMethods]]`, `[[ClassFieldInitializerName]]`, `[[IsClassConstructor]]`)
-- [ ] `[[Call]]` internal method
-- [ ] `[[Construct]]` internal method
-- [ ] OrdinaryFunctionCreate
-- [ ] MakeConstructor
-- [ ] MakeClassConstructor
-- [ ] MakeMethod
-- [ ] SetFunctionName
-- [ ] SetFunctionLength
-- [ ] FunctionDeclarationInstantiation
+- [x] Function internal slots (`[[Environment]]`, `[[FormalParameters]]`, `[[ECMAScriptCode]]`, `[[ConstructorKind]]`, `[[Realm]]`, `[[ScriptOrModule]]`, `[[ThisMode]]`, `[[Strict]]`, `[[HomeObject]]`, `[[SourceText]]`, `[[Fields]]`, `[[PrivateMethods]]`, `[[ClassFieldInitializerName]]`, `[[IsClassConstructor]]`)
+- [x] `[[Call]]` internal method
+- [x] `[[Construct]]` internal method
+- [x] OrdinaryFunctionCreate
+- [x] MakeConstructor
+- [x] MakeClassConstructor
+- [x] MakeMethod
+- [x] SetFunctionName
+- [x] SetFunctionLength
+- [x] FunctionDeclarationInstantiation
 
 ### 5.10 Built-in Function Objects (§10.3)
-- [ ] Built-in function as abstract closure
-- [ ] CreateBuiltinFunction
-- [ ] Built-in `[[Call]]` behavior
+- [x] Built-in function as abstract closure
+- [x] CreateBuiltinFunction
+- [x] Built-in `[[Call]]` behavior
 
 ### 5.11 Exotic Objects (§10.4)
-- [ ] Bound Function Exotic Objects (§10.4.1)
-  - [ ] `[[Call]]`, `[[Construct]]`
-  - [ ] BoundFunctionCreate
-- [ ] Array Exotic Objects (§10.4.2)
-  - [ ] `[[DefineOwnProperty]]` with array length semantics
-  - [ ] ArrayCreate, ArraySpeciesCreate
-- [ ] String Exotic Objects (§10.4.3)
-  - [ ] `[[GetOwnProperty]]`, `[[DefineOwnProperty]]`, `[[OwnPropertyKeys]]`
-  - [ ] StringCreate, StringGetOwnProperty
-- [ ] Arguments Exotic Objects (§10.4.4)
+- [x] Bound Function Exotic Objects (§10.4.1)
+  - [x] `[[Call]]`, `[[Construct]]`
+  - [x] BoundFunctionCreate
+- [x] Array Exotic Objects (§10.4.2)
+  - [x] `[[DefineOwnProperty]]` with array length semantics
+  - [x] ArrayCreate, ArraySpeciesCreate
+- [x] String Exotic Objects (§10.4.3)
+  - [x] `[[GetOwnProperty]]`, `[[DefineOwnProperty]]`, `[[OwnPropertyKeys]]`
+  - [x] StringCreate, StringGetOwnProperty
+- [ ] Arguments Exotic Objects (§10.4.4) — **BLOCKER: ~140 tests**
   - [ ] Mapped arguments
   - [ ] Unmapped arguments
   - [ ] CreateMappedArgumentsObject, CreateUnmappedArgumentsObject

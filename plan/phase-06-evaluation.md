@@ -8,119 +8,119 @@ Implement runtime evaluation for all expression and statement types.
 ## Tasks
 
 ### 6.1 Literal Evaluation
-- [ ] `null` → Null value
-- [ ] `true` / `false` → Boolean value
-- [ ] NumericLiteral → Number / BigInt value
-- [ ] StringLiteral → String value
-- [ ] RegularExpressionLiteral → RegExp object creation
-- [ ] TemplateLiteral evaluation (string coercion, tagged templates)
-- [ ] ArrayLiteral → Array creation (elision, spread)
-- [ ] ObjectLiteral → Object creation (property definitions, computed, spread, get/set, `__proto__`)
+- [x] `null` → Null value
+- [x] `true` / `false` → Boolean value
+- [x] NumericLiteral → Number / BigInt value
+- [x] StringLiteral → String value
+- [x] RegularExpressionLiteral → RegExp object creation
+- [x] TemplateLiteral evaluation (string coercion, tagged templates)
+- [x] ArrayLiteral → Array creation (elision, spread)
+- [x] ObjectLiteral → Object creation (property definitions, computed, spread, get/set, `__proto__`)
 
 ### 6.2 Identifier & Reference Evaluation
-- [ ] IdentifierReference → Reference Record via ResolveBinding
-- [ ] `this` → ResolveThisBinding
-- [ ] Property access (dot, bracket) → Reference Record
-- [ ] `super` property access
-- [ ] Optional chaining `?.`
+- [x] IdentifierReference → Reference Record via ResolveBinding
+- [x] `this` → ResolveThisBinding
+- [x] Property access (dot, bracket) → Reference Record
+- [x] `super` property access
+- [x] Optional chaining `?.`
 
 ### 6.3 Unary & Update Operators
-- [ ] Prefix/postfix `++`/`--` (ToNumeric, increment, PutValue)
-- [ ] `delete` (Reference deletion semantics)
-- [ ] `void` (evaluate and return undefined)
-- [ ] `typeof` (unresolvable reference → "undefined")
-- [ ] Unary `+` (ToNumber), `-` (negate)
-- [ ] `~` (ToInt32 then complement)
-- [ ] `!` (ToBoolean then negate)
+- [x] Prefix/postfix `++`/`--` (ToNumeric, increment, PutValue)
+- [x] `delete` (Reference deletion semantics)
+- [x] `void` (evaluate and return undefined)
+- [x] `typeof` (unresolvable reference → "undefined")
+- [x] Unary `+` (ToNumber), `-` (negate)
+- [x] `~` (ToInt32 then complement)
+- [x] `!` (ToBoolean then negate)
 
 ### 6.4 Binary Operators — Arithmetic
-- [ ] `+` (addition / string concatenation via ToPrimitive)
-- [ ] `-` (subtraction)
-- [ ] `*` (multiplication)
-- [ ] `/` (division)
-- [ ] `%` (remainder)
-- [ ] `**` (exponentiation)
+- [x] `+` (addition / string concatenation via ToPrimitive)
+- [x] `-` (subtraction)
+- [x] `*` (multiplication)
+- [x] `/` (division)
+- [x] `%` (remainder)
+- [x] `**` (exponentiation)
 
 ### 6.5 Binary Operators — Bitwise & Shift
-- [ ] `<<`, `>>`, `>>>` (shift operators — ToInt32/ToUint32)
-- [ ] `&`, `^`, `|` (bitwise ops — ToInt32)
+- [x] `<<`, `>>`, `>>>` (shift operators — ToInt32/ToUint32)
+- [x] `&`, `^`, `|` (bitwise ops — ToInt32)
 
 ### 6.6 Binary Operators — Relational & Equality
-- [ ] `<`, `>`, `<=`, `>=` (IsLessThan abstract relational comparison)
-- [ ] `==`, `!=` (IsLooselyEqual — coercion rules)
-- [ ] `===`, `!==` (IsStrictlyEqual)
-- [ ] `instanceof` (OrdinaryHasInstance, @@hasInstance)
-- [ ] `in` (HasProperty, private `#field in obj`)
+- [x] `<`, `>`, `<=`, `>=` (IsLessThan abstract relational comparison)
+- [x] `==`, `!=` (IsLooselyEqual — coercion rules)
+- [x] `===`, `!==` (IsStrictlyEqual)
+- [x] `instanceof` (OrdinaryHasInstance, @@hasInstance)
+- [x] `in` (HasProperty, private `#field in obj`)
 
 ### 6.7 Logical & Short-Circuit Operators
-- [ ] `&&` (short-circuit AND)
-- [ ] `||` (short-circuit OR)
-- [ ] `??` (nullish coalescing — only null/undefined)
+- [x] `&&` (short-circuit AND)
+- [x] `||` (short-circuit OR)
+- [x] `??` (nullish coalescing — only null/undefined)
 
 ### 6.8 Conditional Operator
-- [ ] `? :` (ternary — ToBoolean condition)
+- [x] `? :` (ternary — ToBoolean condition)
 
 ### 6.9 Assignment
-- [ ] Simple assignment `=` (PutValue)
-- [ ] Compound assignment (`+=`, `-=`, etc.)
-- [ ] Logical assignment (`&&=`, `||=`, `??=`)
-- [ ] Destructuring assignment (array/object patterns)
-  - [ ] Array destructuring: iterator protocol, rest element, defaults
-  - [ ] Object destructuring: property access, rest properties, defaults
+- [x] Simple assignment `=` (PutValue)
+- [x] Compound assignment (`+=`, `-=`, etc.)
+- [x] Logical assignment (`&&=`, `||=`, `??=`)
+- [x] Destructuring assignment (array/object patterns)
+  - [x] Array destructuring: iterator protocol, rest element, defaults
+  - [x] Object destructuring: property access, rest properties, defaults
 
 ### 6.10 Comma Operator
-- [ ] Evaluate left, discard result, evaluate right
+- [x] Evaluate left, discard result, evaluate right
 
 ### 6.11 Block Statement & Scoping
-- [ ] Block: new declarative environment
-- [ ] Block scoped declarations (`let`, `const`) — TDZ semantics
-- [ ] Var hoisting within blocks
+- [x] Block: new declarative environment
+- [x] Block scoped declarations (`let`, `const`) — TDZ semantics
+- [x] Var hoisting within blocks
 
 ### 6.12 Variable Declarations
-- [ ] `var` — hoist to function/global scope
-- [ ] `let` — block scope, TDZ
-- [ ] `const` — block scope, TDZ, immutable binding
+- [x] `var` — hoist to function/global scope
+- [x] `let` — block scope, TDZ
+- [x] `const` — block scope, TDZ, immutable binding
 - [ ] `using` — disposable resource management
 - [ ] `await using` — async disposable
-- [ ] Destructuring in declarations
+- [x] Destructuring in declarations
 
 ### 6.13 Control Flow — Conditional
-- [ ] `if` / `else`
-- [ ] `switch` / `case` / `default` (strict equality matching)
+- [x] `if` / `else`
+- [x] `switch` / `case` / `default` (strict equality matching)
 
 ### 6.14 Control Flow — Loops
-- [ ] `while`
-- [ ] `do`-`while`
-- [ ] `for` (init/test/update with scoping)
-- [ ] `for`-`in` (EnumerateObjectProperties)
-- [ ] `for`-`of` (GetIterator, IteratorStep)
+- [x] `while`
+- [x] `do`-`while`
+- [x] `for` (init/test/update with scoping)
+- [x] `for`-`in` (EnumerateObjectProperties)
+- [x] `for`-`of` (GetIterator, IteratorStep) — partial, needs Iterator built-in
 - [ ] `for await`-`of` (async iteration)
-- [ ] Loop body scoping: per-iteration environment for `let`/`const`
-- [ ] `break` / `continue` (with and without labels)
-- [ ] Labelled statements
+- [x] Loop body scoping: per-iteration environment for `let`/`const`
+- [x] `break` / `continue` (with and without labels)
+- [x] Labelled statements
 
 ### 6.15 Control Flow — Exception Handling
-- [ ] `throw` expression evaluation
-- [ ] `try` / `catch` — catch binding, new environment
-- [ ] `try` / `finally`
-- [ ] `try` / `catch` / `finally`
-- [ ] Catch parameter destructuring
-- [ ] Optional catch binding
+- [x] `throw` expression evaluation
+- [x] `try` / `catch` — catch binding, new environment
+- [x] `try` / `finally`
+- [x] `try` / `catch` / `finally`
+- [x] Catch parameter destructuring
+- [x] Optional catch binding
 
 ### 6.16 Other Statements
-- [ ] `return` statement
-- [ ] `with` statement (new object environment — sloppy mode only)
-- [ ] `debugger` statement (no-op or host hook)
-- [ ] Expression statement (evaluate, discard result)
-- [ ] Empty statement
+- [x] `return` statement
+- [x] `with` statement (new object environment — sloppy mode only)
+- [x] `debugger` statement (no-op or host hook)
+- [x] Expression statement (evaluate, discard result)
+- [x] Empty statement
 
 ### 6.17 Function Calls
-- [ ] Function call evaluation
-- [ ] Argument list evaluation (spread in calls)
-- [ ] `new` expression evaluation
-- [ ] `super()` call in constructors
-- [ ] `super.property` access
-- [ ] Direct/indirect `eval()`
+- [x] Function call evaluation
+- [x] Argument list evaluation (spread in calls)
+- [x] `new` expression evaluation
+- [x] `super()` call in constructors
+- [x] `super.property` access
+- [x] Direct/indirect `eval()`
 - [ ] Tail call optimization (§15.10)
 
 ## test262 Tests
