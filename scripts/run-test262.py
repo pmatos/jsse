@@ -280,10 +280,13 @@ def main():
     baseline_file = Path("test262-pass.txt")
     regressions: list[str] = []
     new_passes: list[str] = []
+    ran_tests = set(pass_list + fail_list)
+    is_full_run = not args.paths
     if baseline_file.exists():
         baseline = set(baseline_file.read_text().strip().split("\n"))
         current = set(pass_list)
-        regressions = sorted(baseline - current)
+        # Only check regressions among tests that were actually run
+        regressions = sorted((baseline & ran_tests) - current)
         new_passes = sorted(current - baseline)
 
     print()
@@ -305,9 +308,10 @@ def main():
     if new_passes:
         print(f"\nNew passes: {len(new_passes)}")
 
-    # Save current pass list as new baseline
-    pass_list.sort()
-    baseline_file.write_text("\n".join(pass_list) + "\n")
+    # Save current pass list as new baseline (only on full runs)
+    if is_full_run:
+        pass_list.sort()
+        baseline_file.write_text("\n".join(pass_list) + "\n")
 
     print()
     print(
