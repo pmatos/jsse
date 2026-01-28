@@ -4802,9 +4802,11 @@ impl Interpreter {
                 Ok(())
             }
             Pattern::Object(props) => {
+                let mut excluded_keys = Vec::new();
                 for prop in props {
                     match prop {
                         ObjectPatternProperty::Shorthand(name) => {
+                            excluded_keys.push(name.clone());
                             let v = if let JsValue::Object(o) = &val {
                                 if let Some(obj) = self.get_object(o.id) {
                                     obj.borrow().get_property(name)
@@ -4832,6 +4834,7 @@ impl Interpreter {
                                     _ => String::new(),
                                 },
                             };
+                            excluded_keys.push(key_str.clone());
                             let v = if let JsValue::Object(o) = &val {
                                 if let Some(obj) = self.get_object(o.id) {
                                     obj.borrow().get_property(&key_str)
@@ -4844,8 +4847,30 @@ impl Interpreter {
                             self.bind_pattern(pat, v, kind, env)?;
                         }
                         ObjectPatternProperty::Rest(pat) => {
-                            // TODO: rest in object destructuring
-                            let _ = pat;
+                            let rest_obj = self.create_object();
+                            if let JsValue::Object(o) = &val {
+                                if let Some(src) = self.get_object(o.id) {
+                                    let src = src.borrow();
+                                    for key in &src.property_order {
+                                        if !excluded_keys.contains(key) {
+                                            if let Some(desc) = src.properties.get(key) {
+                                                if desc.enumerable.unwrap_or(true) {
+                                                    rest_obj.borrow_mut().insert_value(
+                                                        key.clone(),
+                                                        desc.value
+                                                            .clone()
+                                                            .unwrap_or(JsValue::Undefined),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let rest_val = JsValue::Object(crate::types::JsObject {
+                                id: self.objects.len() as u64 - 1,
+                            });
+                            self.bind_pattern(pat, rest_val, kind, env)?;
                         }
                     }
                 }

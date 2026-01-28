@@ -2195,6 +2195,41 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                 .collect::<Result<_, _>>()?;
             Ok(Pattern::Array(pats))
         }
+        Expression::Object(props) => {
+            let mut pat_props = Vec::new();
+            for prop in props {
+                if let PropertyKind::Init = prop.kind {
+                    if let Expression::Spread(inner) = prop.value {
+                        let pat = expr_to_pattern(*inner)?;
+                        pat_props.push(ObjectPatternProperty::Rest(pat));
+                    } else if prop.shorthand {
+                        if let PropertyKey::Identifier(ref name) = prop.key {
+                            if let Expression::Assign(AssignOp::Assign, left, right) = prop.value {
+                                let pat = expr_to_pattern(*left)?;
+                                pat_props.push(ObjectPatternProperty::KeyValue(
+                                    prop.key,
+                                    Pattern::Assign(Box::new(pat), right),
+                                ));
+                            } else {
+                                pat_props.push(ObjectPatternProperty::Shorthand(name.clone()));
+                            }
+                        } else {
+                            return Err(ParseError {
+                                message: "Invalid destructuring target".to_string(),
+                            });
+                        }
+                    } else {
+                        let val_pat = expr_to_pattern(prop.value)?;
+                        pat_props.push(ObjectPatternProperty::KeyValue(prop.key, val_pat));
+                    }
+                } else {
+                    return Err(ParseError {
+                        message: "Invalid destructuring target".to_string(),
+                    });
+                }
+            }
+            Ok(Pattern::Object(pat_props))
+        }
         Expression::Spread(inner) => {
             let pat = expr_to_pattern(*inner)?;
             Ok(Pattern::Rest(Box::new(pat)))
