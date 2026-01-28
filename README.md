@@ -25,7 +25,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 - `--version` and `--help` flags
 - Exit codes: 0 (success), 1 (runtime error), 2 (syntax error)
 - Lexer: all ES2024 tokens, keywords, numeric/string/template literals, Unicode identifiers
-- Parser: recursive descent, all statements, expressions, destructuring, arrow functions, classes, strict mode
+- Parser: recursive descent, all statements, expressions, destructuring, arrow functions, classes, private fields, strict mode
 - Interpreter: tree-walking execution with environment chain scoping
   - Variable declarations (`var`, `let`, `const` with TDZ)
   - Control flow (`if`, `while`, `do-while`, `for`, `for-in`, `for-of`, `switch`, `try/catch/finally`)

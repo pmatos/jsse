@@ -81,6 +81,9 @@ pub enum Token {
     Slash,                    // /
     SlashAssign,              // /=
 
+    // Private identifier
+    PrivateName(String), // #name
+
     // Special
     LineTerminator,
     Eof,
@@ -721,7 +724,7 @@ impl<'a> Lexer<'a> {
                 }
                 Some('\\') => {
                     pattern.push(self.advance().unwrap());
-                    if let Some(c) = self.peek() {
+                    if let Some(_c) = self.peek() {
                         pattern.push(self.advance().unwrap());
                     }
                 }
@@ -779,6 +782,23 @@ impl<'a> Lexer<'a> {
             if ch == '#' && self.offset == 0 && self.peek_next() == Some('!') {
                 self.skip_line_comment();
                 continue;
+            }
+
+            // Private name: #identifier
+            if ch == '#' {
+                if let Some(next) = self.peek_next()
+                    && Self::is_identifier_start(next) {
+                        self.advance(); // consume '#'
+                        self.advance(); // consume first char of identifier
+                        let tok = self.read_identifier(next);
+                        let name_str = match tok {
+                            Token::Identifier(s) => s,
+                            Token::Keyword(kw) => kw.to_string(),
+                            _ => return Err(self.error("Invalid private name")),
+                        };
+                        return Ok(Token::PrivateName(name_str));
+                    }
+                return Err(self.error("Invalid or unexpected '#'"));
             }
 
             self.advance();

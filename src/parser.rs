@@ -141,12 +141,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_optional_label(&mut self) -> Result<Option<String>, ParseError> {
-        if !self.prev_line_terminator {
-            if let Some(name) = self.current_identifier_name() {
+        if !self.prev_line_terminator
+            && let Some(name) = self.current_identifier_name() {
                 self.advance()?;
                 return Ok(Some(name));
             }
-        }
         Ok(None)
     }
 
@@ -274,7 +273,10 @@ impl<'a> Parser<'a> {
     fn check_strict_binding_identifier(&self, name: &str) -> Result<(), ParseError> {
         self.check_strict_identifier(name)?;
         if self.strict && (name == "eval" || name == "arguments") {
-            return Err(self.error(format!("'{}' can't be used as a binding identifier in strict mode", name)));
+            return Err(self.error(format!(
+                "'{}' can't be used as a binding identifier in strict mode",
+                name
+            )));
         }
         Ok(())
     }
@@ -341,14 +343,15 @@ impl<'a> Parser<'a> {
         if matches!(&self.current, Token::Keyword(Keyword::Async)) {
             let saved_lt = self.prev_line_terminator;
             let saved = self.advance()?;
-            let is_async_fn = self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
+            let is_async_fn =
+                self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
             self.push_back(self.current.clone(), self.prev_line_terminator);
             self.current = saved;
             self.prev_line_terminator = saved_lt;
             if is_async_fn {
-                return Err(
-                    self.error("Async function declaration cannot appear in a single-statement context")
-                );
+                return Err(self.error(
+                    "Async function declaration cannot appear in a single-statement context",
+                ));
             }
         }
         match &self.current {
@@ -865,7 +868,7 @@ impl<'a> Parser<'a> {
         let label = self.parse_optional_label()?;
         if let Some(ref l) = label {
             if !self.labels.iter().any(|(name, _)| name == l) {
-                return Err(self.error(&format!("Undefined label '{l}'")));
+                return Err(self.error(format!("Undefined label '{l}'")));
             }
         } else if self.in_iteration == 0 && self.in_switch == 0 {
             return Err(self.error("Illegal break statement"));
@@ -879,9 +882,9 @@ impl<'a> Parser<'a> {
         let label = self.parse_optional_label()?;
         if let Some(ref l) = label {
             match self.labels.iter().find(|(name, _)| name == l) {
-                None => return Err(self.error(&format!("Undefined label '{l}'"))),
+                None => return Err(self.error(format!("Undefined label '{l}'"))),
                 Some((_, false)) => {
-                    return Err(self.error(&format!("Label '{l}' is not an iteration statement")));
+                    return Err(self.error(format!("Label '{l}' is not an iteration statement")));
                 }
                 _ => {}
             }
@@ -1031,9 +1034,16 @@ impl<'a> Parser<'a> {
         self.in_async = prev_async;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
-            return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+            return Err(self.error(
+                "Illegal 'use strict' directive in function with non-simple parameter list",
+            ));
         }
-        if body_strict || self.strict || is_async || is_generator || !Self::is_simple_parameter_list(&params) {
+        if body_strict
+            || self.strict
+            || is_async
+            || is_generator
+            || !Self::is_simple_parameter_list(&params)
+        {
             self.check_duplicate_params_strict(&params)?;
         }
         Ok(Statement::FunctionDeclaration(FunctionDecl {
@@ -1120,7 +1130,10 @@ impl<'a> Parser<'a> {
                     computed: false,
                 }));
             }
-            if self.current == Token::Assign || self.current == Token::Semicolon || self.current == Token::RightBrace {
+            if self.current == Token::Assign
+                || self.current == Token::Semicolon
+                || self.current == Token::RightBrace
+            {
                 // field named 'async': class { async = value; }
                 let value = if self.current == Token::Assign {
                     self.advance()?;
@@ -1139,10 +1152,16 @@ impl<'a> Parser<'a> {
             // It's an async method: async [*] name() {}
             let is_generator = self.eat_star()?;
             let (key, computed) = self.parse_property_name()?;
-            if !is_static && !computed && matches!(&key, PropertyKey::Identifier(n) if n == "constructor") {
+            if !is_static
+                && !computed
+                && matches!(&key, PropertyKey::Identifier(n) if n == "constructor")
+            {
                 return Err(self.error("Class constructor may not be an async method"));
             }
-            if is_static && !computed && matches!(&key, PropertyKey::Identifier(n) if n == "prototype") {
+            if is_static
+                && !computed
+                && matches!(&key, PropertyKey::Identifier(n) if n == "prototype")
+            {
                 return Err(self.error("Classes may not have a static property named 'prototype'"));
             }
             if self.current == Token::LeftParen {
@@ -1211,7 +1230,8 @@ impl<'a> Parser<'a> {
             && kind == ClassMethodKind::Method
             && matches!(&key, PropertyKey::Identifier(n) if n == "constructor");
 
-        if is_static && !computed && matches!(&key, PropertyKey::Identifier(n) if n == "prototype") {
+        if is_static && !computed && matches!(&key, PropertyKey::Identifier(n) if n == "prototype")
+        {
             return Err(self.error("Classes may not have a static property named 'prototype'"));
         }
 
@@ -1256,6 +1276,10 @@ impl<'a> Parser<'a> {
             let expr = self.parse_assignment_expression()?;
             self.eat(&Token::RightBracket)?;
             Ok((PropertyKey::Computed(Box::new(expr)), true))
+        } else if let Token::PrivateName(name) = &self.current {
+            let name = name.clone();
+            self.advance()?;
+            Ok((PropertyKey::Private(name), false))
         } else if let Token::Identifier(name) = &self.current {
             let name = name.clone();
             self.advance()?;
@@ -1301,9 +1325,16 @@ impl<'a> Parser<'a> {
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
-            return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+            return Err(self.error(
+                "Illegal 'use strict' directive in function with non-simple parameter list",
+            ));
         }
-        if body_strict || self.strict || is_async || is_generator || !Self::is_simple_parameter_list(&params) {
+        if body_strict
+            || self.strict
+            || is_async
+            || is_generator
+            || !Self::is_simple_parameter_list(&params)
+        {
             self.check_duplicate_params_strict(&params)?;
         }
         Ok(FunctionExpr {
@@ -1415,7 +1446,10 @@ impl<'a> Parser<'a> {
         self.parse_function_body_with_context(false, false)
     }
 
-    fn parse_arrow_function_body(&mut self, is_async: bool) -> Result<(Vec<Statement>, bool), ParseError> {
+    fn parse_arrow_function_body(
+        &mut self,
+        is_async: bool,
+    ) -> Result<(Vec<Statement>, bool), ParseError> {
         self.parse_function_body_inner(
             false,
             is_async,
@@ -1483,15 +1517,13 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         if Self::is_simple_assignment_target(expr) {
-            if self.strict {
-                if let Expression::Identifier(name) = expr {
-                    if name == "eval" || name == "arguments" {
+            if self.strict
+                && let Expression::Identifier(name) = expr
+                    && (name == "eval" || name == "arguments") {
                         return Err(
                             self.error("Assignment to 'eval' or 'arguments' in strict mode")
                         );
                     }
-                }
-            }
             return Ok(());
         }
         Err(self.error("Invalid left-hand side in assignment"))
@@ -1802,6 +1834,27 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    fn parse_dot_member_property(&mut self) -> Result<MemberProperty, ParseError> {
+        match &self.current {
+            Token::PrivateName(name) => {
+                let name = name.clone();
+                self.advance()?;
+                Ok(MemberProperty::Private(name))
+            }
+            Token::Identifier(n) => {
+                let name = n.clone();
+                self.advance()?;
+                Ok(MemberProperty::Dot(name))
+            }
+            Token::Keyword(kw) => {
+                let name = kw.to_string();
+                self.advance()?;
+                Ok(MemberProperty::Dot(name))
+            }
+            _ => Err(self.error("Expected identifier after '.'")),
+        }
+    }
+
     fn parse_left_hand_side_expression(&mut self) -> Result<Expression, ParseError> {
         let mut expr = if self.current == Token::Keyword(Keyword::New) {
             self.parse_new_expression()?
@@ -1813,13 +1866,8 @@ impl<'a> Parser<'a> {
             match &self.current {
                 Token::Dot => {
                     self.advance()?;
-                    let name = match &self.current {
-                        Token::Identifier(n) => n.clone(),
-                        Token::Keyword(kw) => kw.to_string(),
-                        _ => return Err(self.error("Expected identifier after '.'")),
-                    };
-                    self.advance()?;
-                    expr = Expression::Member(Box::new(expr), MemberProperty::Dot(name));
+                    let prop = self.parse_dot_member_property()?;
+                    expr = Expression::Member(Box::new(expr), prop);
                 }
                 Token::LeftBracket => {
                     self.advance()?;
@@ -1848,6 +1896,14 @@ impl<'a> Parser<'a> {
                         let p = self.parse_expression()?;
                         self.eat(&Token::RightBracket)?;
                         p
+                    } else if let Token::PrivateName(name) = &self.current {
+                        // Uses placeholder for base expr, similar to Call above
+                        let name = name.clone();
+                        self.advance()?;
+                        Expression::Member(
+                            Box::new(Expression::Identifier("".into())),
+                            MemberProperty::Private(name),
+                        )
                     } else {
                         let name = match &self.current {
                             Token::Identifier(n) => n.clone(),
@@ -1868,35 +1924,27 @@ impl<'a> Parser<'a> {
         self.advance()?; // new
         if self.current == Token::Dot {
             self.advance()?; // .
-            if let Token::Identifier(ref name) = self.current {
-                if name == "target" {
+            if let Token::Identifier(ref name) = self.current
+                && name == "target" {
                     if self.in_function == 0 {
                         return Err(self.error("new.target expression is not allowed here"));
                     }
                     self.advance()?; // target
                     return Ok(Expression::NewTarget);
                 }
-            }
             return Err(self.error("Expected 'target' after 'new.'"));
         }
         if self.current == Token::Keyword(Keyword::New) {
             let inner = self.parse_new_expression()?;
             return Ok(Expression::New(Box::new(inner), Vec::new()));
         }
-        let callee = self.parse_primary_expression()?;
-        // handle member access on new target
-        let mut callee = callee;
+        let mut callee = self.parse_primary_expression()?;
         loop {
             match &self.current {
                 Token::Dot => {
                     self.advance()?;
-                    let name = match &self.current {
-                        Token::Identifier(n) => n.clone(),
-                        Token::Keyword(kw) => kw.to_string(),
-                        _ => return Err(self.error("Expected identifier after '.'")),
-                    };
-                    self.advance()?;
-                    callee = Expression::Member(Box::new(callee), MemberProperty::Dot(name));
+                    let prop = self.parse_dot_member_property()?;
+                    callee = Expression::Member(Box::new(callee), prop);
                 }
                 Token::LeftBracket => {
                     self.advance()?;
@@ -2003,7 +2051,7 @@ impl<'a> Parser<'a> {
             Token::Identifier(name) => {
                 let name = name.clone();
                 if Self::is_reserved_identifier(&name, self.strict) {
-                    return Err(self.error(&format!("Unexpected reserved word '{name}'")));
+                    return Err(self.error(format!("Unexpected reserved word '{name}'")));
                 }
                 self.check_strict_identifier(&name)?;
                 self.advance()?;
@@ -2278,7 +2326,8 @@ impl<'a> Parser<'a> {
                     let params = self.parse_formal_parameters()?;
                     self.in_async = prev_async;
                     self.in_generator = prev_generator;
-                    let (body, _) = self.parse_function_body_inner(is_generator, true, true, false)?;
+                    let (body, _) =
+                        self.parse_function_body_inner(is_generator, true, true, false)?;
                     self.check_duplicate_params_strict(&params)?;
                     return Ok(Property {
                         key,
@@ -2324,9 +2373,12 @@ impl<'a> Parser<'a> {
             if is_accessor {
                 let (key, computed) = self.parse_property_name()?;
                 let params = self.parse_formal_parameters()?;
-                let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
+                let (body, body_strict) =
+                    self.parse_function_body_inner(false, false, true, false)?;
                 if body_strict && !Self::is_simple_parameter_list(&params) {
-                    return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+                    return Err(self.error(
+                        "Illegal 'use strict' directive in function with non-simple parameter list",
+                    ));
                 }
                 if body_strict || self.strict {
                     self.check_duplicate_params_strict(&params)?;
@@ -2374,7 +2426,9 @@ impl<'a> Parser<'a> {
             let params = self.parse_formal_parameters()?;
             let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
             if body_strict && !Self::is_simple_parameter_list(&params) {
-                return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+                return Err(self.error(
+                    "Illegal 'use strict' directive in function with non-simple parameter list",
+                ));
             }
             if body_strict || self.strict {
                 self.check_duplicate_params_strict(&params)?;
@@ -2424,7 +2478,9 @@ impl<'a> Parser<'a> {
         self.in_generator = prev_generator;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, false)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
-            return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+            return Err(self.error(
+                "Illegal 'use strict' directive in function with non-simple parameter list",
+            ));
         }
         if body_strict || self.strict || is_generator || !Self::is_simple_parameter_list(&params) {
             self.check_duplicate_params_strict(&params)?;
@@ -2461,7 +2517,9 @@ impl<'a> Parser<'a> {
         self.in_async = prev_async;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, true)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
-            return Err(self.error("Illegal 'use strict' directive in function with non-simple parameter list"));
+            return Err(self.error(
+                "Illegal 'use strict' directive in function with non-simple parameter list",
+            ));
         }
         self.check_duplicate_params_strict(&params)?;
         Ok(Expression::Function(FunctionExpr {

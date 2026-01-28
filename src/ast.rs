@@ -111,6 +111,7 @@ pub enum Expression {
 pub enum MemberProperty {
     Dot(String),
     Computed(Box<Expression>),
+    Private(String),
 }
 
 #[derive(Clone, Debug)]
@@ -205,6 +206,7 @@ pub enum PropertyKey {
     String(String),
     Number(f64),
     Computed(Box<Expression>),
+    Private(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
