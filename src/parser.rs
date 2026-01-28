@@ -2045,6 +2045,28 @@ impl<'a> Parser<'a> {
             }
         }
         self.eat(&Token::RightBrace)?;
+        let mut has_proto = false;
+        for prop in &props {
+            if prop.computed || prop.shorthand || prop.kind != PropertyKind::Init {
+                continue;
+            }
+            let is_proto = match &prop.key {
+                PropertyKey::Identifier(n) => n == "__proto__",
+                PropertyKey::String(s) => s == "__proto__",
+                _ => false,
+            };
+            if is_proto {
+                if matches!(&prop.value, Expression::Function(_)) {
+                    continue;
+                }
+                if has_proto {
+                    return Err(
+                        self.error("Duplicate __proto__ fields are not allowed in object literals")
+                    );
+                }
+                has_proto = true;
+            }
+        }
         Ok(Expression::Object(props))
     }
 
