@@ -301,6 +301,150 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    fn contains_arguments(expr: &Expression) -> bool {
+        use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
+        match expr {
+            Expression::Identifier(name) => name == "arguments",
+            Expression::Array(elems) => elems
+                .iter()
+                .any(|e| e.as_ref().is_some_and(|ex| Self::contains_arguments(ex))),
+            Expression::Object(props) => props.iter().any(|p: &Property| {
+                Self::contains_arguments(&p.value)
+                    || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::contains_arguments(e))
+            }),
+            Expression::Member(object, property) => {
+                Self::contains_arguments(object)
+                    || matches!(property, MemberProperty::Computed(e) if Self::contains_arguments(e))
+            }
+            Expression::Call(callee, args) | Expression::New(callee, args) => {
+                Self::contains_arguments(callee)
+                    || args.iter().any(|a| Self::contains_arguments(a))
+            }
+            Expression::Binary(_, left, right)
+            | Expression::Logical(_, left, right)
+            | Expression::Assign(_, left, right) => {
+                Self::contains_arguments(left) || Self::contains_arguments(right)
+            }
+            Expression::Unary(_, operand) | Expression::Update(_, _, operand) => {
+                Self::contains_arguments(operand)
+            }
+            Expression::Conditional(test, consequent, alternate) => {
+                Self::contains_arguments(test)
+                    || Self::contains_arguments(consequent)
+                    || Self::contains_arguments(alternate)
+            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                exprs.iter().any(|e| Self::contains_arguments(e))
+            }
+            Expression::Spread(inner)
+            | Expression::Await(inner)
+            | Expression::Import(inner) => Self::contains_arguments(inner),
+            Expression::Yield(opt_e, _) => {
+                opt_e.as_ref().is_some_and(|e| Self::contains_arguments(e))
+            }
+            // Arrow functions don't create their own arguments binding,
+            // so references inside them still refer to the enclosing scope's arguments
+            Expression::ArrowFunction(af) => match &af.body {
+                ArrowBody::Expression(e) => Self::contains_arguments(e),
+                ArrowBody::Block(stmts) => Self::stmts_contain_arguments(stmts),
+            },
+            Expression::Template(tl) => {
+                tl.expressions.iter().any(|e| Self::contains_arguments(e))
+            }
+            Expression::TaggedTemplate(tag, tl) => {
+                Self::contains_arguments(tag)
+                    || tl.expressions.iter().any(|e| Self::contains_arguments(e))
+            }
+            Expression::Typeof(e) | Expression::Void(e) | Expression::Delete(e) => {
+                Self::contains_arguments(e)
+            }
+            Expression::OptionalChain(object, chain) => {
+                Self::contains_arguments(object) || Self::contains_arguments(chain)
+            }
+            // Functions/classes create their own scope, don't recurse
+            Expression::Literal(_)
+            | Expression::This
+            | Expression::Super
+            | Expression::NewTarget
+            | Expression::Function(_)
+            | Expression::Class(_) => false,
+        }
+    }
+
+    fn stmts_contain_arguments(stmts: &[Statement]) -> bool {
+        stmts.iter().any(|s| Self::stmt_contains_arguments(s))
+    }
+
+    fn stmt_contains_arguments(stmt: &Statement) -> bool {
+        use crate::ast::Statement;
+        match stmt {
+            Statement::Expression(e) | Statement::Throw(e) => Self::contains_arguments(e),
+            Statement::Return(Some(e)) => Self::contains_arguments(e),
+            Statement::Return(None) | Statement::Empty | Statement::Debugger => false,
+            Statement::Block(stmts) => Self::stmts_contain_arguments(stmts),
+            Statement::Variable(decl) => decl
+                .declarations
+                .iter()
+                .any(|d| d.init.as_ref().is_some_and(|e| Self::contains_arguments(e))),
+            Statement::If(i) => {
+                Self::contains_arguments(&i.test)
+                    || Self::stmt_contains_arguments(&i.consequent)
+                    || i.alternate
+                        .as_ref()
+                        .is_some_and(|a| Self::stmt_contains_arguments(a))
+            }
+            Statement::While(w) => {
+                Self::contains_arguments(&w.test) || Self::stmt_contains_arguments(&w.body)
+            }
+            Statement::DoWhile(d) => {
+                Self::contains_arguments(&d.test) || Self::stmt_contains_arguments(&d.body)
+            }
+            Statement::For(f) => {
+                f.init.as_ref().is_some_and(|i| match i {
+                    crate::ast::ForInit::Expression(e) => Self::contains_arguments(e),
+                    crate::ast::ForInit::Variable(d) => d.declarations.iter().any(|dd| {
+                        dd.init
+                            .as_ref()
+                            .is_some_and(|e| Self::contains_arguments(e))
+                    }),
+                }) || f.test.as_ref().is_some_and(|e| Self::contains_arguments(e))
+                    || f.update
+                        .as_ref()
+                        .is_some_and(|e| Self::contains_arguments(e))
+                    || Self::stmt_contains_arguments(&f.body)
+            }
+            Statement::ForIn(f) => {
+                Self::contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
+            }
+            Statement::ForOf(f) => {
+                Self::contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
+            }
+            Statement::Try(t) => {
+                Self::stmts_contain_arguments(&t.block)
+                    || t.handler
+                        .as_ref()
+                        .is_some_and(|h| Self::stmts_contain_arguments(&h.body))
+                    || t.finalizer
+                        .as_ref()
+                        .is_some_and(|f| Self::stmts_contain_arguments(f))
+            }
+            Statement::Switch(s) => {
+                Self::contains_arguments(&s.discriminant)
+                    || s.cases.iter().any(|c| {
+                        c.test.as_ref().is_some_and(|e| Self::contains_arguments(e))
+                            || Self::stmts_contain_arguments(&c.consequent)
+                    })
+            }
+            Statement::Labeled(_, s) => Self::stmt_contains_arguments(s),
+            Statement::With(e, s) => {
+                Self::contains_arguments(e) || Self::stmt_contains_arguments(s)
+            }
+            Statement::Break(_) | Statement::Continue(_) => false,
+            // Function/class declarations create their own scope
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+        }
+    }
+
     fn is_directive_prologue(stmt: &Statement) -> Option<&str> {
         match stmt {
             Statement::Expression(Expression::Literal(Literal::String(s))) => Some(s.as_str()),
@@ -1335,7 +1479,12 @@ impl<'a> Parser<'a> {
         } else {
             let value = if self.current == Token::Assign {
                 self.advance()?;
-                Some(self.parse_assignment_expression()?)
+                let expr = self.parse_assignment_expression()?;
+                // Class field initializers cannot contain 'arguments'
+                if Self::contains_arguments(&expr) {
+                    return Err(self.error("Class field initializer cannot reference 'arguments'"));
+                }
+                Some(expr)
             } else {
                 None
             };

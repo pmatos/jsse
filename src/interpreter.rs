@@ -118,6 +118,7 @@ pub enum JsFunction {
         body: Vec<Statement>,
         closure: EnvRef,
         is_arrow: bool,
+        is_strict: bool,
     },
     Native(
         String,
@@ -134,12 +135,14 @@ impl Clone for JsFunction {
                 body,
                 closure,
                 is_arrow,
+                is_strict,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
                 body: body.clone(),
                 closure: closure.clone(),
                 is_arrow: *is_arrow,
+                is_strict: *is_strict,
             },
             JsFunction::Native(name, f) => JsFunction::Native(name.clone(), f.clone()),
         }
@@ -4462,6 +4465,34 @@ impl Interpreter {
         obj
     }
 
+    fn create_thrower_function(&mut self) -> JsValue {
+        let func = JsFunction::Native(
+            "%ThrowTypeError%".to_string(),
+            Rc::new(
+                |interp: &mut Interpreter, _this: &JsValue, _args: &[JsValue]| {
+                    let err = interp.create_type_error(
+                    "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them",
+                );
+                    Completion::Throw(err)
+                },
+            ),
+        );
+        self.create_function(func)
+    }
+
+    fn is_strict_mode_body(body: &[Statement]) -> bool {
+        for stmt in body {
+            if let Statement::Expression(Expression::Literal(Literal::String(s))) = stmt {
+                if s == "use strict" {
+                    return true;
+                }
+            } else {
+                break;
+            }
+        }
+        false
+    }
+
     fn create_function(&mut self, func: JsFunction) -> JsValue {
         let is_arrow = matches!(&func, JsFunction::User { is_arrow: true, .. });
         let (fn_name, fn_length) = match &func {
@@ -4521,19 +4552,86 @@ impl Interpreter {
         self.objects.get(id as usize).cloned()
     }
 
-    fn create_arguments_object(&mut self, args: &[JsValue]) -> JsValue {
+    fn create_arguments_object(
+        &mut self,
+        args: &[JsValue],
+        callee: JsValue,
+        is_strict: bool,
+    ) -> JsValue {
         let obj = self.create_object();
         {
             let mut o = obj.borrow_mut();
             o.class_name = "Arguments".to_string();
-            o.insert_value("length".to_string(), JsValue::Number(args.len() as f64));
+
+            // length property: writable, not enumerable, configurable
+            o.define_own_property(
+                "length".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::Number(args.len() as f64)),
+                    writable: Some(true),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
+
+            // Index properties: writable, enumerable, configurable
             for (i, val) in args.iter().enumerate() {
-                o.insert_value(i.to_string(), val.clone());
+                o.define_own_property(
+                    i.to_string(),
+                    PropertyDescriptor {
+                        value: Some(val.clone()),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        get: None,
+                        set: None,
+                    },
+                );
+            }
+
+            if !is_strict {
+                // Non-strict: callee is a writable, non-enumerable, configurable data property
+                o.define_own_property(
+                    "callee".to_string(),
+                    PropertyDescriptor {
+                        value: Some(callee),
+                        writable: Some(true),
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: None,
+                        set: None,
+                    },
+                );
             }
         }
-        JsValue::Object(crate::types::JsObject {
+
+        let result = JsValue::Object(crate::types::JsObject {
             id: self.objects.len() as u64 - 1,
-        })
+        });
+
+        if is_strict {
+            // Strict: callee is an accessor that throws TypeError on get/set
+            let thrower = self.create_thrower_function();
+            if let JsValue::Object(ref o) = result {
+                if let Some(obj_rc) = self.get_object(o.id) {
+                    obj_rc.borrow_mut().define_own_property(
+                        "callee".to_string(),
+                        PropertyDescriptor {
+                            value: None,
+                            writable: None,
+                            get: Some(thrower.clone()),
+                            set: Some(thrower),
+                            enumerable: Some(false),
+                            configurable: Some(false),
+                        },
+                    );
+                }
+            }
+        }
+
+        result
     }
 
     pub fn run(&mut self, program: &Program) -> Completion {
@@ -4582,6 +4680,7 @@ impl Interpreter {
                         body: f.body.clone(),
                         closure: env.clone(),
                         is_arrow: false,
+                        is_strict: Self::is_strict_mode_body(&f.body),
                     };
                     let val = self.create_function(func);
                     let _ = env.borrow_mut().set(&f.name, val);
@@ -5246,6 +5345,7 @@ impl Interpreter {
                     body: f.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
+                    is_strict: Self::is_strict_mode_body(&f.body),
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -5259,9 +5359,10 @@ impl Interpreter {
                 let func = JsFunction::User {
                     name: None,
                     params: af.params.clone(),
-                    body: body_stmts,
+                    body: body_stmts.clone(),
                     closure: env.clone(),
                     is_arrow: true,
+                    is_strict: Self::is_strict_mode_body(&body_stmts),
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -6404,6 +6505,7 @@ impl Interpreter {
                         body,
                         closure,
                         is_arrow,
+                        is_strict,
                         ..
                     } => {
                         let func_env = Environment::new(Some(closure));
@@ -6419,7 +6521,7 @@ impl Interpreter {
                             let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
                             let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
                         }
-                        // Bind this (arrow functions inherit from closure)
+                        // Arrow functions inherit `this` and `arguments` from closure
                         if !is_arrow {
                             func_env.borrow_mut().bindings.insert(
                                 "this".to_string(),
@@ -6429,11 +6531,11 @@ impl Interpreter {
                                     initialized: true,
                                 },
                             );
+                            let arguments_obj =
+                                self.create_arguments_object(args, func_val.clone(), is_strict);
+                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                         }
-                        // Create arguments object
-                        let arguments_obj = self.create_arguments_object(args);
-                        func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                        let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                         let result = self.exec_statements(&body, &func_env);
                         match result {
                             Completion::Return(v) | Completion::Normal(v) => Completion::Normal(v),
@@ -6688,7 +6790,7 @@ impl Interpreter {
             let _ = class_env.borrow_mut().set("__super__", sv.clone());
         }
 
-        // Create constructor function
+        // Create constructor function (classes are always strict mode)
         let ctor_func = if let Some(cm) = ctor_method {
             JsFunction::User {
                 name: Some(name.to_string()),
@@ -6696,6 +6798,7 @@ impl Interpreter {
                 body: cm.value.body.clone(),
                 closure: class_env.clone(),
                 is_arrow: false,
+                is_strict: true,
             }
         } else if super_val.is_some() {
             JsFunction::User {
@@ -6704,6 +6807,7 @@ impl Interpreter {
                 body: vec![],
                 closure: class_env.clone(),
                 is_arrow: false,
+                is_strict: true,
             }
         } else {
             JsFunction::User {
@@ -6712,6 +6816,7 @@ impl Interpreter {
                 body: vec![],
                 closure: class_env.clone(),
                 is_arrow: false,
+                is_strict: true,
             }
         };
 
@@ -6772,6 +6877,7 @@ impl Interpreter {
                         body: m.value.body.clone(),
                         closure: class_env.clone(),
                         is_arrow: false,
+                        is_strict: true, // class methods are always strict
                     };
                     let method_val = self.create_function(method_func);
 
