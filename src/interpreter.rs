@@ -676,6 +676,26 @@ impl Interpreter {
         );
 
         self.setup_object_statics();
+
+        // Array constructor (must be before setup_array_prototype so statics can be added)
+        self.register_global_fn(
+            "Array",
+            BindingKind::Var,
+            JsFunction::Native(
+                "Array".to_string(),
+                Rc::new(|interp, _this, args| {
+                    if args.len() == 1 {
+                        if let JsValue::Number(n) = &args[0] {
+                            let arr = interp.create_array(vec![JsValue::Undefined; *n as usize]);
+                            return Completion::Normal(arr);
+                        }
+                    }
+                    let arr = interp.create_array(args.to_vec());
+                    Completion::Normal(arr)
+                }),
+            ),
+        );
+
         self.setup_array_prototype();
         self.setup_string_prototype();
 
@@ -829,25 +849,6 @@ impl Interpreter {
 
         self.setup_number_prototype();
         self.setup_boolean_prototype();
-
-        // Array constructor
-        self.register_global_fn(
-            "Array",
-            BindingKind::Var,
-            JsFunction::Native(
-                "Array".to_string(),
-                Rc::new(|interp, _this, args| {
-                    if args.len() == 1 {
-                        if let JsValue::Number(n) = &args[0] {
-                            let arr = interp.create_array(vec![JsValue::Undefined; *n as usize]);
-                            return Completion::Normal(arr);
-                        }
-                    }
-                    let arr = interp.create_array(args.to_vec());
-                    Completion::Normal(arr)
-                }),
-            ),
-        );
 
         // Global functions
         self.register_global_fn(
