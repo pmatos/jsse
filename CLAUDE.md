@@ -27,3 +27,5 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Python scripts are run via `uv run python` (no virtualenv setup needed).
 - Ensure forward progress. 
   - We should implement new features to ensure new tests pass without regressing on previously passing tests.
+- Any validation that's spec-correct but not in test262 should have its own tests in test262-extra/
+  - it should include spec part that is tested and follow the exact same patterns of test262 tests.
