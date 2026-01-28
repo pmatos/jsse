@@ -97,7 +97,7 @@ Implement all ECMAScript language types, specification types, and type conversio
 - [x] ToNumeric
 - [x] ToNumber (including StringToNumber)
   - [x] StringNumericValue runtime semantics
-  - [ ] RoundMVResult
+  - [x] RoundMVResult (via Rust's IEEE 754-compliant f64::parse)
 - [x] ToIntegerOrInfinity
 - [x] ToInt32 / ToUint32
 - [ ] ToInt16 / ToUint16 (deferred: needs TypedArrays)

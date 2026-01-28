@@ -150,10 +150,11 @@ impl<'a> Parser<'a> {
 
     fn parse_optional_label(&mut self) -> Result<Option<String>, ParseError> {
         if !self.prev_line_terminator
-            && let Some(name) = self.current_identifier_name() {
-                self.advance()?;
-                return Ok(Some(name));
-            }
+            && let Some(name) = self.current_identifier_name()
+        {
+            self.advance()?;
+            return Ok(Some(name));
+        }
         Ok(None)
     }
 
@@ -1113,30 +1114,29 @@ impl<'a> Parser<'a> {
             let element = self.parse_class_element()?;
             // Check for duplicate private names
             if let Some((name, kind)) = Self::get_private_name_info(&element) {
-                let entry = private_names.entry(name.clone()).or_insert((false, false, false));
+                let entry = private_names
+                    .entry(name.clone())
+                    .or_insert((false, false, false));
                 let (has_getter, has_setter, has_other) = *entry;
                 match kind {
                     PrivateNameKind::Getter => {
                         if has_getter || has_other {
-                            return Err(self.error(format!(
-                                "Identifier '#{name}' has already been declared"
-                            )));
+                            return Err(self
+                                .error(format!("Identifier '#{name}' has already been declared")));
                         }
                         entry.0 = true;
                     }
                     PrivateNameKind::Setter => {
                         if has_setter || has_other {
-                            return Err(self.error(format!(
-                                "Identifier '#{name}' has already been declared"
-                            )));
+                            return Err(self
+                                .error(format!("Identifier '#{name}' has already been declared")));
                         }
                         entry.1 = true;
                     }
                     PrivateNameKind::Other => {
                         if has_getter || has_setter || has_other {
-                            return Err(self.error(format!(
-                                "Identifier '#{name}' has already been declared"
-                            )));
+                            return Err(self
+                                .error(format!("Identifier '#{name}' has already been declared")));
                         }
                         entry.2 = true;
                     }
@@ -1598,11 +1598,10 @@ impl<'a> Parser<'a> {
         if Self::is_simple_assignment_target(expr) {
             if self.strict
                 && let Expression::Identifier(name) = expr
-                    && (name == "eval" || name == "arguments") {
-                        return Err(
-                            self.error("Assignment to 'eval' or 'arguments' in strict mode")
-                        );
-                    }
+                && (name == "eval" || name == "arguments")
+            {
+                return Err(self.error("Assignment to 'eval' or 'arguments' in strict mode"));
+            }
             return Ok(());
         }
         Err(self.error("Invalid left-hand side in assignment"))
