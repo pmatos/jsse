@@ -199,7 +199,28 @@ pub struct PrivateFieldDef {
     pub initializer: Option<Expression>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IteratorKind {
+    Key,
+    Value,
+    KeyValue,
+}
+
 #[derive(Debug, Clone)]
+pub enum IteratorState {
+    ArrayIterator {
+        array_id: u64,
+        index: usize,
+        kind: IteratorKind,
+        done: bool,
+    },
+    StringIterator {
+        string: JsString,
+        position: usize,
+        done: bool,
+    },
+}
+
 pub struct JsObjectData {
     pub properties: HashMap<String, PropertyDescriptor>,
     pub property_order: Vec<String>,
@@ -211,6 +232,7 @@ pub struct JsObjectData {
     pub primitive_value: Option<JsValue>,
     pub private_fields: HashMap<String, JsValue>,
     pub class_private_field_defs: Vec<PrivateFieldDef>,
+    pub iterator_state: Option<IteratorState>,
 }
 
 impl JsObjectData {
@@ -226,6 +248,7 @@ impl JsObjectData {
             primitive_value: None,
             private_fields: HashMap::new(),
             class_private_field_defs: Vec::new(),
+            iterator_state: None,
         }
     }
 
@@ -391,6 +414,9 @@ pub struct Interpreter {
     number_prototype: Option<Rc<RefCell<JsObjectData>>>,
     boolean_prototype: Option<Rc<RefCell<JsObjectData>>>,
     regexp_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    array_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    string_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
 }
@@ -426,6 +452,9 @@ impl Interpreter {
             number_prototype: None,
             boolean_prototype: None,
             regexp_prototype: None,
+            iterator_prototype: None,
+            array_iterator_prototype: None,
+            string_iterator_prototype: None,
             next_symbol_id: 1,
             new_target: None,
         };
@@ -707,6 +736,59 @@ impl Interpreter {
             ),
         );
 
+        // Symbol — must be before iterator prototypes so @@iterator key is available
+        {
+            let symbol_fn = self.create_function(JsFunction::Native(
+                "Symbol".to_string(),
+                Rc::new(|interp, _this, args| {
+                    let desc = args.first().and_then(|v| {
+                        if matches!(v, JsValue::Undefined) {
+                            None
+                        } else {
+                            Some(JsString::from_str(&to_js_string(v)))
+                        }
+                    });
+                    let id = interp.next_symbol_id;
+                    interp.next_symbol_id += 1;
+                    Completion::Normal(JsValue::Symbol(crate::types::JsSymbol {
+                        id,
+                        description: desc,
+                    }))
+                }),
+            ));
+            if let JsValue::Object(ref o) = symbol_fn
+                && let Some(obj) = self.get_object(o.id)
+            {
+                let well_known = [
+                    ("iterator", "Symbol.iterator"),
+                    ("hasInstance", "Symbol.hasInstance"),
+                    ("toPrimitive", "Symbol.toPrimitive"),
+                    ("toStringTag", "Symbol.toStringTag"),
+                    ("isConcatSpreadable", "Symbol.isConcatSpreadable"),
+                    ("species", "Symbol.species"),
+                    ("match", "Symbol.match"),
+                    ("replace", "Symbol.replace"),
+                    ("search", "Symbol.search"),
+                    ("split", "Symbol.split"),
+                    ("unscopables", "Symbol.unscopables"),
+                ];
+                for (name, desc) in well_known {
+                    let id = self.next_symbol_id;
+                    self.next_symbol_id += 1;
+                    let sym = JsValue::Symbol(crate::types::JsSymbol {
+                        id,
+                        description: Some(JsString::from_str(desc)),
+                    });
+                    obj.borrow_mut().insert_value(name.to_string(), sym);
+                }
+            }
+            self.global_env
+                .borrow_mut()
+                .declare("Symbol", BindingKind::Var);
+            let _ = self.global_env.borrow_mut().set("Symbol", symbol_fn);
+        }
+
+        self.setup_iterator_prototypes();
         self.setup_array_prototype();
         self.setup_string_prototype();
 
@@ -1251,58 +1333,6 @@ impl Interpreter {
                 }),
             ),
         );
-
-        // Symbol
-        {
-            let symbol_fn = self.create_function(JsFunction::Native(
-                "Symbol".to_string(),
-                Rc::new(|interp, _this, args| {
-                    let desc = args.first().and_then(|v| {
-                        if matches!(v, JsValue::Undefined) {
-                            None
-                        } else {
-                            Some(JsString::from_str(&to_js_string(v)))
-                        }
-                    });
-                    let id = interp.next_symbol_id;
-                    interp.next_symbol_id += 1;
-                    Completion::Normal(JsValue::Symbol(crate::types::JsSymbol {
-                        id,
-                        description: desc,
-                    }))
-                }),
-            ));
-            if let JsValue::Object(ref o) = symbol_fn
-                && let Some(obj) = self.get_object(o.id)
-            {
-                let well_known = [
-                    ("iterator", "Symbol.iterator"),
-                    ("hasInstance", "Symbol.hasInstance"),
-                    ("toPrimitive", "Symbol.toPrimitive"),
-                    ("toStringTag", "Symbol.toStringTag"),
-                    ("isConcatSpreadable", "Symbol.isConcatSpreadable"),
-                    ("species", "Symbol.species"),
-                    ("match", "Symbol.match"),
-                    ("replace", "Symbol.replace"),
-                    ("search", "Symbol.search"),
-                    ("split", "Symbol.split"),
-                    ("unscopables", "Symbol.unscopables"),
-                ];
-                for (name, desc) in well_known {
-                    let id = self.next_symbol_id;
-                    self.next_symbol_id += 1;
-                    let sym = JsValue::Symbol(crate::types::JsSymbol {
-                        id,
-                        description: Some(JsString::from_str(desc)),
-                    });
-                    obj.borrow_mut().insert_value(name.to_string(), sym);
-                }
-            }
-            self.global_env
-                .borrow_mut()
-                .declare("Symbol", BindingKind::Var);
-            let _ = self.global_env.borrow_mut().set("Symbol", symbol_fn);
-        }
 
         self.register_global_fn(
             "$DONOTEVALUATE",
@@ -2414,6 +2444,444 @@ impl Interpreter {
         }
     }
 
+    fn get_symbol_iterator_key(&self) -> Option<String> {
+        self.global_env.borrow().get("Symbol").and_then(|sv| {
+            if let JsValue::Object(so) = sv {
+                self.get_object(so.id).map(|sobj| {
+                    let val = sobj.borrow().get_property("iterator");
+                    to_js_string(&val)
+                })
+            } else {
+                None
+            }
+        })
+    }
+
+    fn create_iter_result_object(&mut self, value: JsValue, done: bool) -> JsValue {
+        let obj = self.create_object();
+        obj.borrow_mut().insert_value("value".to_string(), value);
+        obj.borrow_mut()
+            .insert_value("done".to_string(), JsValue::Boolean(done));
+        JsValue::Object(crate::types::JsObject {
+            id: self.objects.len() as u64 - 1,
+        })
+    }
+
+    fn get_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
+        let sym_key = self.get_symbol_iterator_key();
+        let iter_fn = match obj {
+            JsValue::Object(o) => {
+                if let Some(key) = &sym_key {
+                    if let Some(obj_data) = self.get_object(o.id) {
+                        let val = obj_data.borrow().get_property(key);
+                        if matches!(val, JsValue::Undefined) {
+                            return Err(self.create_type_error("is not iterable"));
+                        }
+                        val
+                    } else {
+                        return Err(self.create_type_error("is not iterable"));
+                    }
+                } else {
+                    return Err(self.create_type_error("is not iterable"));
+                }
+            }
+            JsValue::String(_) => {
+                if let Some(key) = &sym_key {
+                    let str_proto = self.string_prototype.clone();
+                    if let Some(proto) = str_proto {
+                        let val = proto.borrow().get_property(key);
+                        if !matches!(val, JsValue::Undefined) {
+                            val
+                        } else {
+                            return Err(self.create_type_error("is not iterable"));
+                        }
+                    } else {
+                        return Err(self.create_type_error("is not iterable"));
+                    }
+                } else {
+                    return Err(self.create_type_error("is not iterable"));
+                }
+            }
+            _ => return Err(self.create_type_error("is not iterable")),
+        };
+        match self.call_function(&iter_fn, obj, &[]) {
+            Completion::Normal(v) => {
+                if matches!(v, JsValue::Object(_)) {
+                    Ok(v)
+                } else {
+                    Err(self
+                        .create_type_error("Result of the Symbol.iterator method is not an object"))
+                }
+            }
+            Completion::Throw(e) => Err(e),
+            _ => Err(self.create_type_error("is not iterable")),
+        }
+    }
+
+    fn iterator_next(&mut self, iterator: &JsValue) -> Result<JsValue, JsValue> {
+        if let JsValue::Object(io) = iterator {
+            let next_fn = self.get_object(io.id).and_then(|obj| {
+                obj.borrow()
+                    .get_property_descriptor("next")
+                    .and_then(|d| d.value)
+            });
+            if let Some(next_fn) = next_fn {
+                match self.call_function(&next_fn, iterator, &[]) {
+                    Completion::Normal(v) => {
+                        if matches!(v, JsValue::Object(_)) {
+                            Ok(v)
+                        } else {
+                            Err(self.create_type_error("Iterator result is not an object"))
+                        }
+                    }
+                    Completion::Throw(e) => Err(e),
+                    _ => Err(self.create_type_error("Iterator next failed")),
+                }
+            } else {
+                Err(self.create_type_error("Iterator does not have a next method"))
+            }
+        } else {
+            Err(self.create_type_error("Iterator is not an object"))
+        }
+    }
+
+    fn iterator_complete(&self, result: &JsValue) -> bool {
+        if let JsValue::Object(o) = result {
+            if let Some(obj) = self.get_object(o.id) {
+                let done = obj.borrow().get_property("done");
+                return to_boolean(&done);
+            }
+        }
+        true
+    }
+
+    fn iterator_value(&self, result: &JsValue) -> JsValue {
+        if let JsValue::Object(o) = result {
+            if let Some(obj) = self.get_object(o.id) {
+                return obj.borrow().get_property("value");
+            }
+        }
+        JsValue::Undefined
+    }
+
+    fn iterator_step(&mut self, iterator: &JsValue) -> Result<Option<JsValue>, JsValue> {
+        let result = self.iterator_next(iterator)?;
+        if self.iterator_complete(&result) {
+            Ok(None)
+        } else {
+            Ok(Some(result))
+        }
+    }
+
+    fn iterator_close(&mut self, iterator: &JsValue, _completion: JsValue) -> JsValue {
+        if let JsValue::Object(io) = iterator {
+            let return_fn = self.get_object(io.id).and_then(|obj| {
+                let val = obj.borrow().get_property("return");
+                if matches!(val, JsValue::Object(_)) {
+                    Some(val)
+                } else {
+                    None
+                }
+            });
+            if let Some(return_fn) = return_fn {
+                let _ = self.call_function(&return_fn, iterator, &[]);
+            }
+        }
+        _completion
+    }
+
+    fn iterate_to_vec(&mut self, iterable: &JsValue) -> Result<Vec<JsValue>, JsValue> {
+        let iterator = self.get_iterator(iterable)?;
+        let mut values = Vec::new();
+        loop {
+            match self.iterator_step(&iterator)? {
+                Some(result) => values.push(self.iterator_value(&result)),
+                None => break,
+            }
+        }
+        Ok(values)
+    }
+
+    fn setup_iterator_prototypes(&mut self) {
+        // %IteratorPrototype% (§27.1.2)
+        let iter_proto = self.create_object();
+        iter_proto.borrow_mut().class_name = "Iterator".to_string();
+
+        // %IteratorPrototype%[@@iterator]() returns this
+        let iter_self_fn = self.create_function(JsFunction::Native(
+            "[Symbol.iterator]".to_string(),
+            Rc::new(|_interp, this, _args| Completion::Normal(this.clone())),
+        ));
+        if let Some(key) = self.get_symbol_iterator_key() {
+            iter_proto.borrow_mut().insert_property(
+                key,
+                PropertyDescriptor::data(iter_self_fn, true, false, true),
+            );
+        }
+        self.iterator_prototype = Some(iter_proto.clone());
+
+        // %ArrayIteratorPrototype% (§23.1.5.1)
+        let arr_iter_proto = self.create_object();
+        arr_iter_proto.borrow_mut().prototype = Some(iter_proto.clone());
+        arr_iter_proto.borrow_mut().class_name = "Array Iterator".to_string();
+
+        let arr_iter_next = self.create_function(JsFunction::Native(
+            "next".to_string(),
+            Rc::new(|interp, this, _args| {
+                if let JsValue::Object(o) = this {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let state = obj.borrow().iterator_state.clone();
+                        if let Some(IteratorState::ArrayIterator {
+                            array_id,
+                            index,
+                            kind,
+                            done,
+                        }) = state
+                        {
+                            if done {
+                                return Completion::Normal(
+                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                );
+                            }
+                            let (len, val) = if let Some(arr_obj) = interp.get_object(array_id) {
+                                let borrowed = arr_obj.borrow();
+                                let len = borrowed
+                                    .array_elements
+                                    .as_ref()
+                                    .map(|e| e.len())
+                                    .unwrap_or_else(|| {
+                                        if let Some(JsValue::Number(n)) =
+                                            borrowed.get_property_value("length")
+                                        {
+                                            n as usize
+                                        } else {
+                                            0
+                                        }
+                                    });
+                                if index >= len {
+                                    (len, None)
+                                } else {
+                                    let v = match kind {
+                                        IteratorKind::Key => JsValue::Number(index as f64),
+                                        IteratorKind::Value => borrowed
+                                            .array_elements
+                                            .as_ref()
+                                            .and_then(|e| e.get(index).cloned())
+                                            .unwrap_or_else(|| {
+                                                borrowed.get_property(&index.to_string())
+                                            }),
+                                        IteratorKind::KeyValue => {
+                                            let elem = borrowed
+                                                .array_elements
+                                                .as_ref()
+                                                .and_then(|e| e.get(index).cloned())
+                                                .unwrap_or_else(|| {
+                                                    borrowed.get_property(&index.to_string())
+                                                });
+                                            drop(borrowed);
+                                            let pair = interp.create_array(vec![
+                                                JsValue::Number(index as f64),
+                                                elem,
+                                            ]);
+                                            return {
+                                                obj.borrow_mut().iterator_state =
+                                                    Some(IteratorState::ArrayIterator {
+                                                        array_id,
+                                                        index: index + 1,
+                                                        kind,
+                                                        done: false,
+                                                    });
+                                                Completion::Normal(
+                                                    interp.create_iter_result_object(pair, false),
+                                                )
+                                            };
+                                        }
+                                    };
+                                    (len, Some(v))
+                                }
+                            } else {
+                                (0, None)
+                            };
+                            match val {
+                                Some(v) => {
+                                    obj.borrow_mut().iterator_state =
+                                        Some(IteratorState::ArrayIterator {
+                                            array_id,
+                                            index: index + 1,
+                                            kind,
+                                            done: false,
+                                        });
+                                    Completion::Normal(interp.create_iter_result_object(v, false))
+                                }
+                                None => {
+                                    obj.borrow_mut().iterator_state =
+                                        Some(IteratorState::ArrayIterator {
+                                            array_id,
+                                            index: len,
+                                            kind,
+                                            done: true,
+                                        });
+                                    Completion::Normal(
+                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                    )
+                                }
+                            }
+                        } else {
+                            let err = interp.create_type_error("next called on non-array iterator");
+                            Completion::Throw(err)
+                        }
+                    } else {
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                } else {
+                    let err = interp.create_type_error("next called on non-object");
+                    Completion::Throw(err)
+                }
+            }),
+        ));
+        arr_iter_proto
+            .borrow_mut()
+            .insert_builtin("next".to_string(), arr_iter_next);
+
+        // Set @@toStringTag
+        arr_iter_proto.borrow_mut().insert_property(
+            "Symbol(Symbol.toStringTag)".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("Array Iterator")),
+                false,
+                false,
+                true,
+            ),
+        );
+
+        self.array_iterator_prototype = Some(arr_iter_proto);
+
+        // %StringIteratorPrototype% (§22.1.5.1)
+        let str_iter_proto = self.create_object();
+        str_iter_proto.borrow_mut().prototype = Some(iter_proto.clone());
+        str_iter_proto.borrow_mut().class_name = "String Iterator".to_string();
+
+        let str_iter_next = self.create_function(JsFunction::Native(
+            "next".to_string(),
+            Rc::new(|interp, this, _args| {
+                if let JsValue::Object(o) = this {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let state = obj.borrow().iterator_state.clone();
+                        if let Some(IteratorState::StringIterator {
+                            ref string,
+                            position,
+                            done,
+                        }) = state
+                        {
+                            if done || position >= string.code_units.len() {
+                                obj.borrow_mut().iterator_state =
+                                    Some(IteratorState::StringIterator {
+                                        string: string.clone(),
+                                        position,
+                                        done: true,
+                                    });
+                                return Completion::Normal(
+                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                );
+                            }
+                            let cu = string.code_units[position];
+                            // Handle surrogate pairs for full Unicode code points
+                            let (result_str, advance) = if (0xD800..=0xDBFF).contains(&cu)
+                                && position + 1 < string.code_units.len()
+                            {
+                                let next_cu = string.code_units[position + 1];
+                                if (0xDC00..=0xDFFF).contains(&next_cu) {
+                                    let s = String::from_utf16_lossy(
+                                        &string.code_units[position..position + 2],
+                                    );
+                                    (s, 2)
+                                } else {
+                                    (String::from_utf16_lossy(&[cu]), 1)
+                                }
+                            } else {
+                                (String::from_utf16_lossy(&[cu]), 1)
+                            };
+                            obj.borrow_mut().iterator_state = Some(IteratorState::StringIterator {
+                                string: string.clone(),
+                                position: position + advance,
+                                done: false,
+                            });
+                            Completion::Normal(interp.create_iter_result_object(
+                                JsValue::String(JsString::from_str(&result_str)),
+                                false,
+                            ))
+                        } else {
+                            let err =
+                                interp.create_type_error("next called on non-string iterator");
+                            Completion::Throw(err)
+                        }
+                    } else {
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                } else {
+                    let err = interp.create_type_error("next called on non-object");
+                    Completion::Throw(err)
+                }
+            }),
+        ));
+        str_iter_proto
+            .borrow_mut()
+            .insert_builtin("next".to_string(), str_iter_next);
+
+        str_iter_proto.borrow_mut().insert_property(
+            "Symbol(Symbol.toStringTag)".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("String Iterator")),
+                false,
+                false,
+                true,
+            ),
+        );
+
+        self.string_iterator_prototype = Some(str_iter_proto);
+    }
+
+    fn create_array_iterator(&mut self, array_id: u64, kind: IteratorKind) -> JsValue {
+        let mut obj_data = JsObjectData::new();
+        obj_data.prototype = self
+            .array_iterator_prototype
+            .clone()
+            .or(self.iterator_prototype.clone())
+            .or(self.object_prototype.clone());
+        obj_data.class_name = "Array Iterator".to_string();
+        obj_data.iterator_state = Some(IteratorState::ArrayIterator {
+            array_id,
+            index: 0,
+            kind,
+            done: false,
+        });
+        let obj = Rc::new(RefCell::new(obj_data));
+        self.objects.push(obj);
+        JsValue::Object(crate::types::JsObject {
+            id: self.objects.len() as u64 - 1,
+        })
+    }
+
+    fn create_string_iterator(&mut self, string: JsString) -> JsValue {
+        let mut obj_data = JsObjectData::new();
+        obj_data.prototype = self
+            .string_iterator_prototype
+            .clone()
+            .or(self.iterator_prototype.clone())
+            .or(self.object_prototype.clone());
+        obj_data.class_name = "String Iterator".to_string();
+        obj_data.iterator_state = Some(IteratorState::StringIterator {
+            string,
+            position: 0,
+            done: false,
+        });
+        let obj = Rc::new(RefCell::new(obj_data));
+        self.objects.push(obj);
+        JsValue::Object(crate::types::JsObject {
+            id: self.objects.len() as u64 - 1,
+        })
+    }
+
     fn setup_array_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Array".to_string();
@@ -3507,70 +3975,75 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("copyWithin".to_string(), copywithin_fn);
 
-        // Array.prototype.entries
+        // Array.prototype.entries — returns lazy ArrayIterator (KeyValue)
         let entries_fn = self.create_function(JsFunction::Native(
             "entries".to_string(),
             Rc::new(|interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let elems = obj.borrow().array_elements.clone().unwrap_or_default();
-                    let pairs: Vec<JsValue> = elems
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, v)| interp.create_array(vec![JsValue::Number(i as f64), v]))
-                        .collect();
-                    let iter_arr = interp.create_array(pairs);
-                    return Completion::Normal(iter_arr);
+                if let JsValue::Object(o) = this_val {
+                    return Completion::Normal(
+                        interp.create_array_iterator(o.id, IteratorKind::KeyValue),
+                    );
                 }
-                Completion::Normal(interp.create_array(Vec::new()))
+                let err = interp.create_type_error("entries called on non-object");
+                Completion::Throw(err)
             }),
         ));
         proto
             .borrow_mut()
             .insert_builtin("entries".to_string(), entries_fn);
 
-        // Array.prototype.keys
+        // Array.prototype.keys — returns lazy ArrayIterator (Key)
         let keys_fn = self.create_function(JsFunction::Native(
             "keys".to_string(),
             Rc::new(|interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let len = obj
-                        .borrow()
-                        .array_elements
-                        .as_ref()
-                        .map(|e| e.len())
-                        .unwrap_or(0);
-                    let keys: Vec<JsValue> = (0..len).map(|i| JsValue::Number(i as f64)).collect();
-                    let arr = interp.create_array(keys);
-                    return Completion::Normal(arr);
+                if let JsValue::Object(o) = this_val {
+                    return Completion::Normal(
+                        interp.create_array_iterator(o.id, IteratorKind::Key),
+                    );
                 }
-                Completion::Normal(interp.create_array(Vec::new()))
+                let err = interp.create_type_error("keys called on non-object");
+                Completion::Throw(err)
             }),
         ));
         proto
             .borrow_mut()
             .insert_builtin("keys".to_string(), keys_fn);
 
-        // Array.prototype.values
+        // Array.prototype.values — returns lazy ArrayIterator (Value)
         let values_fn = self.create_function(JsFunction::Native(
             "values".to_string(),
             Rc::new(|interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let elems = obj.borrow().array_elements.clone().unwrap_or_default();
-                    let arr = interp.create_array(elems);
-                    return Completion::Normal(arr);
+                if let JsValue::Object(o) = this_val {
+                    return Completion::Normal(
+                        interp.create_array_iterator(o.id, IteratorKind::Value),
+                    );
                 }
-                Completion::Normal(interp.create_array(Vec::new()))
+                let err = interp.create_type_error("values called on non-object");
+                Completion::Throw(err)
             }),
         ));
         proto
             .borrow_mut()
             .insert_builtin("values".to_string(), values_fn);
+
+        // Array.prototype[@@iterator] = Array.prototype.values
+        let iter_fn = self.create_function(JsFunction::Native(
+            "[Symbol.iterator]".to_string(),
+            Rc::new(|interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val {
+                    return Completion::Normal(
+                        interp.create_array_iterator(o.id, IteratorKind::Value),
+                    );
+                }
+                let err = interp.create_type_error("Symbol.iterator called on non-object");
+                Completion::Throw(err)
+            }),
+        ));
+        if let Some(key) = self.get_symbol_iterator_key() {
+            proto
+                .borrow_mut()
+                .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
+        }
 
         // Set Array statics on the Array constructor
         if let Some(array_val) = self.global_env.borrow().get("Array")
@@ -4062,6 +4535,27 @@ impl Interpreter {
         for (name, func) in methods {
             let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        // String.prototype[@@iterator]
+        let str_iter_fn = self.create_function(JsFunction::Native(
+            "[Symbol.iterator]".to_string(),
+            Rc::new(|interp, this_val, _args| {
+                let s = match this_val {
+                    JsValue::String(s) => s.clone(),
+                    _ => {
+                        let converted = to_js_string(this_val);
+                        JsString::from_str(&converted)
+                    }
+                };
+                Completion::Normal(interp.create_string_iterator(s))
+            }),
+        ));
+        if let Some(key) = self.get_symbol_iterator_key() {
+            proto.borrow_mut().insert_property(
+                key,
+                PropertyDescriptor::data(str_iter_fn, true, false, true),
+            );
         }
 
         self.string_prototype = Some(proto);
@@ -4877,44 +5371,37 @@ impl Interpreter {
                 self.bind_pattern(inner, v, kind, env)
             }
             Pattern::Array(elements) => {
-                for (i, elem) in elements.iter().enumerate() {
+                let iterator = self.get_iterator(&val)?;
+                for elem in elements {
                     if let Some(elem) = elem {
                         match elem {
                             ArrayPatternElement::Pattern(p) => {
-                                let item = if let JsValue::Object(o) = &val {
-                                    if let Some(obj) = self.get_object(o.id) {
-                                        obj.borrow()
-                                            .array_elements
-                                            .as_ref()
-                                            .and_then(|e| e.get(i).cloned())
-                                            .unwrap_or(JsValue::Undefined)
-                                    } else {
-                                        JsValue::Undefined
-                                    }
-                                } else {
-                                    JsValue::Undefined
+                                let item = match self.iterator_step(&iterator) {
+                                    Ok(Some(result)) => self.iterator_value(&result),
+                                    Ok(None) => JsValue::Undefined,
+                                    Err(e) => return Err(e),
                                 };
                                 self.bind_pattern(p, item, kind, env)?;
                             }
                             ArrayPatternElement::Rest(p) => {
-                                let rest = if let JsValue::Object(o) = &val {
-                                    if let Some(obj) = self.get_object(o.id) {
-                                        obj.borrow()
-                                            .array_elements
-                                            .as_ref()
-                                            .map(|e| e.get(i..).unwrap_or(&[]).to_vec())
-                                            .unwrap_or_default()
-                                    } else {
-                                        vec![]
+                                let mut rest = Vec::new();
+                                loop {
+                                    match self.iterator_step(&iterator) {
+                                        Ok(Some(result)) => {
+                                            rest.push(self.iterator_value(&result));
+                                        }
+                                        Ok(None) => break,
+                                        Err(e) => return Err(e),
                                     }
-                                } else {
-                                    vec![]
-                                };
+                                }
                                 let arr = self.create_array(rest);
                                 self.bind_pattern(p, arr, kind, env)?;
                                 break;
                             }
                         }
+                    } else {
+                        // Elision — skip one iterator step
+                        let _ = self.iterator_step(&iterator);
                     }
                 }
                 Ok(())
@@ -5139,36 +5626,20 @@ impl Interpreter {
             Completion::Normal(v) => v,
             other => return other,
         };
-        // Get iterable values - check for Symbol.iterator first, then fallback to arrays/strings
-        let values: Vec<JsValue> = if let JsValue::String(ref s) = iterable {
-            s.to_rust_string()
-                .chars()
-                .map(|c| JsValue::String(JsString::from_str(&c.to_string())))
-                .collect()
-        } else if let JsValue::Object(ref o) = iterable {
-            if let Some(obj) = self.get_object(o.id) {
-                let has_array = obj.borrow().array_elements.is_some();
-                if has_array {
-                    obj.borrow().array_elements.clone().unwrap_or_default()
-                } else {
-                    // Try Symbol.iterator protocol
-                    match self.call_iterator(&iterable) {
-                        Some(vals) => vals,
-                        None => {
-                            let err = self.create_type_error("is not iterable");
-                            return Completion::Throw(err);
-                        }
-                    }
-                }
-            } else {
-                return Completion::Normal(JsValue::Undefined);
-            }
-        } else {
-            let err = self.create_type_error("is not iterable");
-            return Completion::Throw(err);
+
+        let iterator = match self.get_iterator(&iterable) {
+            Ok(iter) => iter,
+            Err(e) => return Completion::Throw(e),
         };
 
-        for val in values {
+        loop {
+            let step = match self.iterator_step(&iterator) {
+                Ok(Some(result)) => result,
+                Ok(None) => break,
+                Err(e) => return Completion::Throw(e),
+            };
+            let val = self.iterator_value(&step);
+
             let for_env = Environment::new(Some(env.clone()));
             match &fo.left {
                 ForInOfLeft::Variable(decl) => {
@@ -5185,6 +5656,7 @@ impl Interpreter {
                     if let Some(d) = decl.declarations.first()
                         && let Err(e) = self.bind_pattern(&d.pattern, val, kind, bind_env)
                     {
+                        self.iterator_close(&iterator, e.clone());
                         return Completion::Throw(e);
                     }
                 }
@@ -5192,13 +5664,21 @@ impl Interpreter {
                     if let Pattern::Identifier(name) = pat {
                         let _ = env.borrow_mut().set(name, val);
                     } else if let Err(e) = self.bind_pattern(pat, val, BindingKind::Let, &for_env) {
+                        self.iterator_close(&iterator, e.clone());
                         return Completion::Throw(e);
                     }
                 }
             }
             match self.exec_statement(&fo.body, &for_env) {
                 Completion::Normal(_) | Completion::Continue(None) => {}
-                Completion::Break(None) => break,
+                Completion::Break(None) => {
+                    self.iterator_close(&iterator, JsValue::Undefined);
+                    break;
+                }
+                Completion::Return(v) => {
+                    self.iterator_close(&iterator, JsValue::Undefined);
+                    return Completion::Return(v);
+                }
                 other => return other,
             }
         }
@@ -5587,79 +6067,6 @@ impl Interpreter {
             UnaryOp::Not => JsValue::Boolean(!to_boolean(val)),
             UnaryOp::BitNot => JsValue::Number(number_ops::bitwise_not(to_number(val))),
         }
-    }
-
-    fn call_iterator(&mut self, iterable: &JsValue) -> Option<Vec<JsValue>> {
-        if let JsValue::Object(o) = iterable {
-            // Look for Symbol.iterator property - symbols are stored as string keys like "Symbol(Symbol.iterator)"
-            let iter_fn = if let Some(obj) = self.get_object(o.id) {
-                let sym_key = self.global_env.borrow().get("Symbol").and_then(|sv| {
-                    if let JsValue::Object(so) = sv {
-                        self.get_object(so.id).map(|sobj| {
-                            let val = sobj.borrow().get_property("iterator");
-                            to_js_string(&val)
-                        })
-                    } else {
-                        None
-                    }
-                });
-                if let Some(key) = sym_key {
-                    let val = obj.borrow().get_property(&key);
-                    if matches!(val, JsValue::Object(_)) {
-                        Some(val)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            if let Some(iter_fn) = iter_fn {
-                let iterator = match self.call_function(&iter_fn, iterable, &[]) {
-                    Completion::Normal(v) => v,
-                    _ => return None,
-                };
-                let mut values = Vec::new();
-                for _ in 0..100_000 {
-                    if let JsValue::Object(io) = &iterator {
-                        let next_fn = self.get_object(io.id).and_then(|obj| {
-                            obj.borrow()
-                                .get_property_descriptor("next")
-                                .and_then(|d| d.value)
-                        });
-                        if let Some(next_fn) = next_fn {
-                            match self.call_function(&next_fn, &iterator, &[]) {
-                                Completion::Normal(result) => {
-                                    if let JsValue::Object(ro) = &result {
-                                        if let Some(robj) = self.get_object(ro.id) {
-                                            let done = robj.borrow().get_property("done");
-                                            if to_boolean(&done) {
-                                                break;
-                                            }
-                                            let value = robj.borrow().get_property("value");
-                                            values.push(value);
-                                        } else {
-                                            break;
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
-                                _ => break,
-                            }
-                        } else {
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                return Some(values);
-            }
-        }
-        None
     }
 
     fn require_object_coercible(&mut self, val: &JsValue) -> Completion {
@@ -6460,29 +6867,10 @@ impl Interpreter {
             }
         };
 
-        let mut evaluated_args = Vec::new();
-        for arg in args {
-            if let Expression::Spread(inner) = arg {
-                let val = match self.eval_expr(inner, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if let JsValue::Object(o) = &val
-                    && let Some(obj) = self.get_object(o.id)
-                    && let Some(elems) = obj.borrow().array_elements.clone()
-                {
-                    evaluated_args.extend(elems);
-                    continue;
-                }
-                evaluated_args.push(val);
-            } else {
-                let val = match self.eval_expr(arg, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                evaluated_args.push(val);
-            }
-        }
+        let evaluated_args = match self.eval_spread_args(args, env) {
+            Ok(args) => args,
+            Err(e) => return Completion::Throw(e),
+        };
 
         self.call_function(&func_val, &this_val, &evaluated_args)
     }
@@ -6549,34 +6937,42 @@ impl Interpreter {
         Completion::Throw(err)
     }
 
+    fn eval_spread_args(
+        &mut self,
+        args: &[Expression],
+        env: &EnvRef,
+    ) -> Result<Vec<JsValue>, JsValue> {
+        let mut evaluated = Vec::new();
+        for arg in args {
+            if let Expression::Spread(inner) = arg {
+                let val = match self.eval_expr(inner, env) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
+                };
+                let items = self.iterate_to_vec(&val)?;
+                evaluated.extend(items);
+            } else {
+                let val = match self.eval_expr(arg, env) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
+                };
+                evaluated.push(val);
+            }
+        }
+        Ok(evaluated)
+    }
+
     fn eval_new(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
         let callee_val = match self.eval_expr(callee, env) {
             Completion::Normal(v) => v,
             other => return other,
         };
-        let mut evaluated_args = Vec::new();
-        for arg in args {
-            if let Expression::Spread(inner) = arg {
-                let val = match self.eval_expr(inner, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if let JsValue::Object(o) = &val
-                    && let Some(obj) = self.get_object(o.id)
-                    && let Some(elems) = obj.borrow().array_elements.clone()
-                {
-                    evaluated_args.extend(elems);
-                    continue;
-                }
-                evaluated_args.push(val);
-            } else {
-                let val = match self.eval_expr(arg, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                evaluated_args.push(val);
-            }
-        }
+        let evaluated_args = match self.eval_spread_args(args, env) {
+            Ok(args) => args,
+            Err(e) => return Completion::Throw(e),
+        };
         // Create new object for 'this'
         let new_obj = self.create_object();
         // Set prototype from constructor.prototype if available
@@ -6726,20 +7122,10 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if let JsValue::Object(o) = &val
-                        && let Some(obj) = self.get_object(o.id)
-                        && let Some(elems) = obj.borrow().array_elements.clone()
-                    {
-                        values.extend(elems);
-                        continue;
+                    match self.iterate_to_vec(&val) {
+                        Ok(items) => values.extend(items),
+                        Err(e) => return Completion::Throw(e),
                     }
-                    if let JsValue::String(s) = &val {
-                        for ch in s.to_rust_string().chars() {
-                            values.push(JsValue::String(JsString::from_str(&ch.to_string())));
-                        }
-                        continue;
-                    }
-                    values.push(val);
                 }
                 Some(expr) => {
                     let val = match self.eval_expr(expr, env) {

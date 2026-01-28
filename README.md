@@ -50,9 +50,12 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - `eval()` support
   - `Symbol` with well-known symbols (iterator, hasInstance, toPrimitive, etc.)
   - `delete` operator for object properties
-  - Spread elements in arrays and function calls
+  - Iterator protocol (`Symbol.iterator`, lazy `ArrayIterator`, `StringIterator`)
+  - `Array.prototype.values()`, `.keys()`, `.entries()`, `[@@iterator]()` returning lazy iterators
+  - `String.prototype[@@iterator]()` with Unicode code point iteration
+  - Spread elements in arrays and function calls (iterator-protocol aware)
   - Rest parameters in function declarations
-  - Destructuring (array and object patterns in declarations and parameters)
+  - Destructuring (array and object patterns, iterator-protocol aware)
   - RegExp literals and `RegExp` constructor with `test`, `exec`, `toString`
   - Array prototype methods (`push`, `pop`, `shift`, `unshift`, `indexOf`, `lastIndexOf`, `includes`, `join`, `toString`, `concat`, `slice`, `splice`, `reverse`, `fill`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `some`, `every`, `find`, `findIndex`, `findLast`, `findLastIndex`, `sort`, `flat`, `flatMap`, `at`)
   - `Array.isArray`, `Array.from`, `Array.of`
