@@ -7047,6 +7047,7 @@ test262/test/language/expressions/function/forbidden-ext/b2/func-expr-forbidden-
 test262/test/language/expressions/function/name-arguments-non-strict.js
 test262/test/language/expressions/function/name-eval-non-strict.js
 test262/test/language/expressions/function/param-arguments-non-strict.js
+test262/test/language/expressions/function/param-dflt-yield-strict.js
 test262/test/language/expressions/function/param-duplicated-non-strict.js
 test262/test/language/expressions/function/param-duplicated-strict-body-1.js
 test262/test/language/expressions/function/param-duplicated-strict-body-2.js
@@ -7083,6 +7084,7 @@ test262/test/language/expressions/generators/named-strict-error-reassign-fn-name
 test262/test/language/expressions/generators/named-yield-as-binding-identifier.js
 test262/test/language/expressions/generators/named-yield-as-identifier-reference.js
 test262/test/language/expressions/generators/named-yield-as-label-identifier.js
+test262/test/language/expressions/generators/param-dflt-yield.js
 test262/test/language/expressions/generators/prototype-typeof.js
 test262/test/language/expressions/generators/prototype-uniqueness.js
 test262/test/language/expressions/generators/rest-params-trailing-comma-early-error.js
@@ -7091,6 +7093,7 @@ test262/test/language/expressions/generators/yield-as-binding-identifier.js
 test262/test/language/expressions/generators/yield-as-identifier-reference.js
 test262/test/language/expressions/generators/yield-as-label-identifier.js
 test262/test/language/expressions/generators/yield-as-logical-or-expression.js
+test262/test/language/expressions/generators/yield-as-parameter.js
 test262/test/language/expressions/generators/yield-star-after-newline.js
 test262/test/language/expressions/generators/yield-weak-binding.js
 test262/test/language/expressions/greater-than-or-equal/S11.8.4_A1.js
@@ -11305,6 +11308,7 @@ test262/test/language/statements/function/line-terminator.js
 test262/test/language/statements/function/name-arguments-non-strict.js
 test262/test/language/statements/function/name-eval-non-strict.js
 test262/test/language/statements/function/param-arguments-non-strict.js
+test262/test/language/statements/function/param-dflt-yield-strict.js
 test262/test/language/statements/function/param-duplicated-non-strict.js
 test262/test/language/statements/function/param-duplicated-strict-body-1.js
 test262/test/language/statements/function/param-duplicated-strict-body-2.js
@@ -11337,6 +11341,7 @@ test262/test/language/statements/generators/dstr/dflt-ary-ptrn-rest-not-final-ar
 test262/test/language/statements/generators/dstr/dflt-ary-ptrn-rest-not-final-id.js
 test262/test/language/statements/generators/dstr/dflt-ary-ptrn-rest-not-final-obj.js
 test262/test/language/statements/generators/generator-created-after-decl-inst.js
+test262/test/language/statements/generators/param-dflt-yield.js
 test262/test/language/statements/generators/prototype-typeof.js
 test262/test/language/statements/generators/prototype-uniqueness.js
 test262/test/language/statements/generators/rest-params-trailing-comma-early-error.js
@@ -11344,6 +11349,7 @@ test262/test/language/statements/generators/yield-as-binding-identifier.js
 test262/test/language/statements/generators/yield-as-identifier-reference.js
 test262/test/language/statements/generators/yield-as-label-identifier.js
 test262/test/language/statements/generators/yield-as-logical-or-expression.js
+test262/test/language/statements/generators/yield-as-parameter.js
 test262/test/language/statements/generators/yield-star-after-newline.js
 test262/test/language/statements/generators/yield-weak-binding.js
 test262/test/language/statements/if/S12.5_A1.1_T1.js

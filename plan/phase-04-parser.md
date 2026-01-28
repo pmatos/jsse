@@ -141,7 +141,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [x] `with` in strict mode
 - [x] `delete` of unqualified identifier in strict mode
 - [x] Duplicate `__proto__` in object literals
-- [ ] `yield` in generator parameters
+- [x] `yield` in generator parameters
 - [ ] `await` in async function parameters
 - [ ] Duplicate export names
 - [x] `new.target` outside functions

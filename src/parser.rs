@@ -33,6 +33,7 @@ pub struct Parser<'a> {
     labels: Vec<(String, bool)>, // (name, is_iteration)
     allow_super_property: bool,
     allow_super_call: bool,
+    in_formal_parameters: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -61,6 +62,7 @@ impl<'a> Parser<'a> {
             labels: Vec::new(),
             allow_super_property: false,
             allow_super_call: false,
+            in_formal_parameters: false,
         })
     }
 
@@ -993,7 +995,12 @@ impl<'a> Parser<'a> {
             }
             None => return Err(self.error("Expected function name")),
         };
+        let prev_generator = self.in_generator;
+        if is_generator {
+            self.in_generator = true;
+        }
         let params = self.parse_formal_parameters()?;
+        self.in_generator = prev_generator;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
         if body_strict {
             self.check_duplicate_params_strict(&params)?;
@@ -1174,7 +1181,12 @@ impl<'a> Parser<'a> {
         is_generator: bool,
         is_constructor: bool,
     ) -> Result<FunctionExpr, ParseError> {
+        let prev_generator = self.in_generator;
+        if is_generator {
+            self.in_generator = true;
+        }
         let params = self.parse_formal_parameters()?;
+        self.in_generator = prev_generator;
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
         if body_strict {
@@ -1191,6 +1203,8 @@ impl<'a> Parser<'a> {
 
     fn parse_formal_parameters(&mut self) -> Result<Vec<Pattern>, ParseError> {
         self.eat(&Token::LeftParen)?;
+        let prev_formal = self.in_formal_parameters;
+        self.in_formal_parameters = true;
         let mut params = Vec::new();
         while self.current != Token::RightParen {
             if self.current == Token::Ellipsis {
@@ -1213,6 +1227,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.eat(&Token::RightParen)?;
+        self.in_formal_parameters = prev_formal;
         Ok(params)
     }
 
@@ -1369,6 +1384,11 @@ impl<'a> Parser<'a> {
     fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
         // YieldExpression in generator context
         if self.in_generator && self.current == Token::Keyword(Keyword::Yield) {
+            if self.in_formal_parameters {
+                return Err(self.error(
+                    "Yield expression is not allowed in formal parameters of a generator function",
+                ));
+            }
             return self.parse_yield_expression();
         }
 
@@ -2173,7 +2193,12 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        let prev_generator = self.in_generator;
+        if is_generator {
+            self.in_generator = true;
+        }
         let params = self.parse_formal_parameters()?;
+        self.in_generator = prev_generator;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, false)?;
         if body_strict {
             self.check_duplicate_params_strict(&params)?;
