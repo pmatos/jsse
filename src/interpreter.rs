@@ -26,6 +26,7 @@ type EnvRef = Rc<RefCell<Environment>>;
 pub struct Environment {
     bindings: HashMap<String, Binding>,
     parent: Option<EnvRef>,
+    pub strict: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -44,9 +45,11 @@ enum BindingKind {
 
 impl Environment {
     fn new(parent: Option<EnvRef>) -> EnvRef {
+        let strict = parent.as_ref().map_or(false, |p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
             parent,
+            strict,
         }))
     }
 
@@ -233,6 +236,7 @@ pub struct JsObjectData {
     pub private_fields: HashMap<String, JsValue>,
     pub class_private_field_defs: Vec<PrivateFieldDef>,
     pub iterator_state: Option<IteratorState>,
+    pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
 }
 
 impl JsObjectData {
@@ -249,10 +253,18 @@ impl JsObjectData {
             private_fields: HashMap::new(),
             class_private_field_defs: Vec::new(),
             iterator_state: None,
+            parameter_map: None,
         }
     }
 
     pub fn get_property(&self, key: &str) -> JsValue {
+        if let Some(ref map) = self.parameter_map {
+            if let Some((env_ref, param_name)) = map.get(key) {
+                if let Some(val) = env_ref.borrow().get(param_name) {
+                    return val;
+                }
+            }
+        }
         if let Some(desc) = self.properties.get(key) {
             if let Some(ref val) = desc.value {
                 return val.clone();
@@ -273,7 +285,15 @@ impl JsObjectData {
 
     pub fn get_property_descriptor(&self, key: &str) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
-            return Some(desc.clone());
+            let mut d = desc.clone();
+            if let Some(ref map) = self.parameter_map {
+                if let Some((env_ref, param_name)) = map.get(key) {
+                    if let Some(val) = env_ref.borrow().get(param_name) {
+                        d.value = Some(val);
+                    }
+                }
+            }
+            return Some(d);
         }
         if let Some(ref elems) = self.array_elements
             && let Ok(idx) = key.parse::<usize>()
@@ -359,6 +379,25 @@ impl JsObjectData {
         } else if !self.extensible {
             return false;
         }
+        if let Some(ref mut map) = self.parameter_map {
+            if map.contains_key(&key) {
+                if let Some(ref val) = desc.value {
+                    if let Some((env_ref, param_name)) = map.get(&key) {
+                        let _ = env_ref.borrow_mut().set(param_name, val.clone());
+                    }
+                }
+                if desc.get.is_some() || desc.set.is_some() {
+                    map.remove(&key);
+                } else if desc.writable == Some(false) {
+                    if let Some(ref val) = desc.value {
+                        if let Some((env_ref, param_name)) = map.get(&key) {
+                            let _ = env_ref.borrow_mut().set(param_name, val.clone());
+                        }
+                    }
+                    map.remove(&key);
+                }
+            }
+        }
         if !self.properties.contains_key(&key) {
             self.property_order.push(key.clone());
         }
@@ -367,6 +406,11 @@ impl JsObjectData {
     }
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) {
+        if let Some(ref map) = self.parameter_map {
+            if let Some((env_ref, param_name)) = map.get(key) {
+                let _ = env_ref.borrow_mut().set(param_name, value.clone());
+            }
+        }
         if let Some(desc) = self.properties.get_mut(key) {
             if desc.writable != Some(false) {
                 desc.value = Some(value);
@@ -5051,6 +5095,8 @@ impl Interpreter {
         args: &[JsValue],
         callee: JsValue,
         is_strict: bool,
+        func_env: Option<&EnvRef>,
+        param_names: &[String],
     ) -> JsValue {
         let obj = self.create_object();
         {
@@ -5098,6 +5144,16 @@ impl Interpreter {
                         set: None,
                     },
                 );
+
+                if let Some(env) = func_env {
+                    let mut map = HashMap::new();
+                    for (i, name) in param_names.iter().enumerate() {
+                        map.insert(i.to_string(), (env.clone(), name.clone()));
+                    }
+                    if !map.is_empty() {
+                        o.parameter_map = Some(map);
+                    }
+                }
             }
         }
 
@@ -5120,6 +5176,30 @@ impl Interpreter {
                             enumerable: Some(false),
                             configurable: Some(false),
                         },
+                    );
+                }
+            }
+        }
+
+        // Add Symbol.iterator (Array.prototype[@@iterator]) to both strict and non-strict
+        if let Some(key) = self.get_symbol_iterator_key() {
+            let iter_fn = self.create_function(JsFunction::Native(
+                "[Symbol.iterator]".to_string(),
+                Rc::new(|interp, this_val, _args| {
+                    if let JsValue::Object(o) = this_val {
+                        return Completion::Normal(
+                            interp.create_array_iterator(o.id, IteratorKind::Value),
+                        );
+                    }
+                    let err = interp.create_type_error("Symbol.iterator called on non-object");
+                    Completion::Throw(err)
+                }),
+            ));
+            if let JsValue::Object(ref o) = result {
+                if let Some(obj_rc) = self.get_object(o.id) {
+                    obj_rc.borrow_mut().insert_property(
+                        key,
+                        PropertyDescriptor::data(iter_fn, true, false, true),
                     );
                 }
             }
@@ -5158,6 +5238,9 @@ impl Interpreter {
     }
 
     fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
+        if Self::is_strict_mode_body(stmts) {
+            env.borrow_mut().strict = true;
+        }
         // Hoist var and function declarations
         for stmt in stmts {
             match stmt {
@@ -5904,6 +5987,9 @@ impl Interpreter {
                         }
                         obj_mut.properties.remove(&key);
                         obj_mut.property_order.retain(|k| k != &key);
+                        if let Some(ref mut map) = obj_mut.parameter_map {
+                            map.remove(&key);
+                        }
                     }
                     Completion::Normal(JsValue::Boolean(true))
                 }
@@ -6919,8 +7005,25 @@ impl Interpreter {
                                     initialized: true,
                                 },
                             );
-                            let arguments_obj =
-                                self.create_arguments_object(args, func_val.clone(), is_strict);
+                            let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let env_strict = func_env.borrow().strict;
+                            let use_mapped = is_simple && !is_strict && !env_strict;
+                            let param_names: Vec<String> = if use_mapped {
+                                params.iter().filter_map(|p| {
+                                    if let Pattern::Identifier(name) = p { Some(name.clone()) } else { None }
+                                }).collect()
+                            } else {
+                                Vec::new()
+                            };
+                            let mapped_env = if use_mapped {
+                                Some(&func_env)
+                            } else {
+                                None
+                            };
+                            let arguments_obj = self.create_arguments_object(
+                                args, func_val.clone(), is_strict,
+                                mapped_env, &param_names,
+                            );
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                         }

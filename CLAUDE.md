@@ -25,7 +25,8 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Run test262: `uv run python scripts/run-test262.py`
 - Run linter: `./scripts/lint.sh`
 - Python scripts are run via `uv run python` (no virtualenv setup needed).
-- Ensure forward progress. 
+- Ensure forward progress.
   - We should implement new features to ensure new tests pass without regressing on previously passing tests.
+- Each test runs under a time limit (default 60s) and a memory limit (512 MB) to prevent runaway tests from crashing the system. These limits are enforced in `scripts/run-test262.py`.
 - Any validation that's spec-correct but not in test262 should have its own tests in test262-extra/
   - it should include spec part that is tested and follow the exact same patterns of test262 tests.

@@ -131,17 +131,17 @@ def build_test_source(
 
     flags = metadata.get("flags", [])
 
+    source = test_file.read_text(encoding="utf-8", errors="replace")
+
+    if "onlyStrict" in flags:
+        parts.append('"use strict";\n')
+
     if "raw" not in flags:
         parts.append(read_harness_file(test262_dir, "assert.js"))
         parts.append(read_harness_file(test262_dir, "sta.js"))
 
         for inc in metadata.get("includes", []):
             parts.append(read_harness_file(test262_dir, inc))
-
-    source = test_file.read_text(encoding="utf-8", errors="replace")
-
-    if "onlyStrict" in flags:
-        source = '"use strict";\n' + source
 
     parts.append(source)
     return "\n".join(parts)
@@ -188,11 +188,17 @@ def run_single_test(
         tmp.write(combined)
         tmp_path = tmp.name
 
+    def limit_memory():
+        import resource
+        mem_limit = 512 * 1024 * 1024  # 512 MB
+        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+
     try:
         result = subprocess.run(
             [jsse, tmp_path],
             timeout=timeout,
             capture_output=True,
+            preexec_fn=limit_memory,
         )
         exit_code = result.returncode
     except subprocess.TimeoutExpired:
