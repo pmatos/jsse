@@ -225,6 +225,7 @@ pub enum IteratorState {
 }
 
 pub struct JsObjectData {
+    pub id: Option<u64>,
     pub properties: HashMap<String, PropertyDescriptor>,
     pub property_order: Vec<String>,
     pub prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -242,6 +243,7 @@ pub struct JsObjectData {
 impl JsObjectData {
     fn new() -> Self {
         Self {
+            id: None,
             properties: HashMap::new(),
             property_order: Vec::new(),
             prototype: None,
@@ -449,9 +451,11 @@ impl JsObjectData {
     }
 }
 
+const GC_THRESHOLD: usize = 4096;
+
 pub struct Interpreter {
     global_env: EnvRef,
-    objects: Vec<Rc<RefCell<JsObjectData>>>,
+    objects: Vec<Option<Rc<RefCell<JsObjectData>>>>,
     object_prototype: Option<Rc<RefCell<JsObjectData>>>,
     array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     string_prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -463,6 +467,8 @@ pub struct Interpreter {
     string_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
+    free_list: Vec<usize>,
+    gc_alloc_count: usize,
 }
 
 impl Interpreter {
@@ -501,6 +507,8 @@ impl Interpreter {
             string_iterator_prototype: None,
             next_symbol_id: 1,
             new_target: None,
+            free_list: Vec::new(),
+            gc_alloc_count: 0,
         };
         interp.setup_globals();
         interp
@@ -513,8 +521,8 @@ impl Interpreter {
     }
 
     fn setup_globals(&mut self) {
-        let console_id = self.objects.len() as u64;
         let console = self.create_object();
+        let console_id = console.borrow().id.unwrap();
         {
             let log_fn = self.create_function(JsFunction::Native(
                 "log".to_string(),
@@ -560,9 +568,8 @@ impl Interpreter {
                                 o.insert_value("message".to_string(), msg);
                             }
                         }
-                        Completion::Normal(JsValue::Object(crate::types::JsObject {
-                            id: interp.objects.len() as u64 - 1,
-                        }))
+                        let id = obj.borrow().id.unwrap();
+                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                     }),
                 ),
             );
@@ -673,9 +680,8 @@ impl Interpreter {
                                 JsValue::String(JsString::from_str("Test262Error")),
                             );
                         }
-                        Completion::Normal(JsValue::Object(crate::types::JsObject {
-                            id: interp.objects.len() as u64 - 1,
-                        }))
+                        let id = obj.borrow().id.unwrap();
+                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                     }),
                 ),
             );
@@ -731,9 +737,8 @@ impl Interpreter {
                                 JsValue::String(JsString::from_str(&error_name)),
                             );
                         }
-                        Completion::Normal(JsValue::Object(crate::types::JsObject {
-                            id: interp.objects.len() as u64 - 1,
-                        }))
+                        let id = obj.borrow().id.unwrap();
+                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                     }),
                 ),
             );
@@ -751,10 +756,9 @@ impl Interpreter {
                     {
                         return Completion::Normal(val.clone());
                     }
-                    let _obj = interp.create_object();
-                    Completion::Normal(JsValue::Object(crate::types::JsObject {
-                        id: interp.objects.len() as u64 - 1,
-                    }))
+                    let obj = interp.create_object();
+                    let id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),
             ),
         );
@@ -1073,8 +1077,8 @@ impl Interpreter {
         );
 
         // Math object
-        let math_id = self.objects.len() as u64;
         let math_obj = self.create_object();
+        let math_id = math_obj.borrow().id.unwrap();
         {
             let mut m = math_obj.borrow_mut();
             m.class_name = "Math".to_string();
@@ -1418,11 +1422,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("parse".to_string(), json_parse);
         let json_val = JsValue::Object(crate::types::JsObject {
-            id: self
-                .objects
-                .iter()
-                .position(|o| Rc::ptr_eq(o, &json_obj))
-                .unwrap() as u64,
+            id: json_obj.borrow().id.unwrap(),
         });
         self.global_env
             .borrow_mut()
@@ -1474,11 +1474,7 @@ impl Interpreter {
         // globalThis - create a global object
         let global_obj = self.create_object();
         let global_val = JsValue::Object(crate::types::JsObject {
-            id: self
-                .objects
-                .iter()
-                .position(|o| Rc::ptr_eq(o, &global_obj))
-                .unwrap() as u64,
+            id: global_obj.borrow().id.unwrap(),
         });
         self.global_env
             .borrow_mut()
@@ -1636,10 +1632,8 @@ impl Interpreter {
                 );
                 obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
                 let rc = Rc::new(RefCell::new(obj));
-                interp.objects.push(rc);
-                Completion::Normal(JsValue::Object(crate::types::JsObject {
-                    id: interp.objects.len() as u64 - 1,
-                }))
+                let id = interp.allocate_object_slot(rc);
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             }),
         ));
         // Set prototype on constructor
@@ -1649,11 +1643,7 @@ impl Interpreter {
             obj.borrow_mut().insert_value(
                 "prototype".to_string(),
                 JsValue::Object(crate::types::JsObject {
-                    id: self
-                        .objects
-                        .iter()
-                        .position(|o| Rc::ptr_eq(o, &regexp_proto))
-                        .unwrap() as u64,
+                    id: regexp_proto.borrow().id.unwrap(),
                 }),
             );
         }
@@ -1891,9 +1881,8 @@ impl Interpreter {
                                 r.insert_value("set".to_string(), s);
                             }
                         }
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                            id: interp.objects.len() as u64 - 1,
-                        }));
+                        let id = result.borrow().id.unwrap();
+                        return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                     }
                     Completion::Normal(JsValue::Undefined)
                 }),
@@ -1965,13 +1954,10 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                         && let Some(proto) = &obj.borrow().prototype
                     {
-                        // Find the id of the prototype object
-                        for (i, stored) in interp.objects.iter().enumerate() {
-                            if Rc::ptr_eq(stored, proto) {
-                                return Completion::Normal(JsValue::Object(
-                                    crate::types::JsObject { id: i as u64 },
-                                ));
-                            }
+                        if let Some(id) = proto.borrow().id {
+                            return Completion::Normal(JsValue::Object(
+                                crate::types::JsObject { id },
+                            ));
                         }
                     }
                     Completion::Normal(JsValue::Null)
@@ -1998,9 +1984,8 @@ impl Interpreter {
                         }
                         _ => {}
                     }
-                    Completion::Normal(JsValue::Object(crate::types::JsObject {
-                        id: interp.objects.len() as u64 - 1,
-                    }))
+                    let id = new_obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),
             ));
             obj_func
@@ -2424,20 +2409,12 @@ impl Interpreter {
                                         .borrow_mut()
                                         .insert_value("set".to_string(), s.clone());
                                 }
-                                let did = interp
-                                    .objects
-                                    .iter()
-                                    .position(|o| Rc::ptr_eq(o, &desc_result))
-                                    .unwrap() as u64;
+                                let did = desc_result.borrow().id.unwrap();
                                 let dval = JsValue::Object(crate::types::JsObject { id: did });
                                 result.borrow_mut().insert_value(key, dval);
                             }
                         }
-                        let id = interp
-                            .objects
-                            .iter()
-                            .position(|o| Rc::ptr_eq(o, &result))
-                            .unwrap() as u64;
+                        let id = result.borrow().id.unwrap();
                         return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                     }
                     Completion::Normal(JsValue::Undefined)
@@ -2474,11 +2451,7 @@ impl Interpreter {
                             }
                         }
                     }
-                    let id = interp
-                        .objects
-                        .iter()
-                        .position(|o| Rc::ptr_eq(o, &obj))
-                        .unwrap() as u64;
+                    let id = obj.borrow().id.unwrap();
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),
             ));
@@ -2506,9 +2479,8 @@ impl Interpreter {
         obj.borrow_mut().insert_value("value".to_string(), value);
         obj.borrow_mut()
             .insert_value("done".to_string(), JsValue::Boolean(done));
-        JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        })
+        let id = obj.borrow().id.unwrap();
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn get_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
@@ -2900,10 +2872,8 @@ impl Interpreter {
             done: false,
         });
         let obj = Rc::new(RefCell::new(obj_data));
-        self.objects.push(obj);
-        JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        })
+        let id = self.allocate_object_slot(obj);
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn create_string_iterator(&mut self, string: JsString) -> JsValue {
@@ -2920,10 +2890,8 @@ impl Interpreter {
             done: false,
         });
         let obj = Rc::new(RefCell::new(obj_data));
-        self.objects.push(obj);
-        JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        })
+        let id = self.allocate_object_slot(obj);
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn setup_array_prototype(&mut self) {
@@ -4117,10 +4085,8 @@ impl Interpreter {
         obj_data.insert_value("length".to_string(), JsValue::Number(values.len() as f64));
         obj_data.array_elements = Some(values);
         let obj = Rc::new(RefCell::new(obj_data));
-        self.objects.push(obj);
-        JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        })
+        let id = self.allocate_object_slot(obj);
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn setup_string_prototype(&mut self) {
@@ -4755,11 +4721,7 @@ impl Interpreter {
             && let Some(num_obj) = self.get_object(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject {
-                id: self
-                    .objects
-                    .iter()
-                    .position(|o| Rc::ptr_eq(o, &proto))
-                    .unwrap() as u64,
+                id: proto.borrow().id.unwrap(),
             });
             num_obj
                 .borrow_mut()
@@ -4833,11 +4795,7 @@ impl Interpreter {
             && let Some(bool_obj) = self.get_object(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject {
-                id: self
-                    .objects
-                    .iter()
-                    .position(|o| Rc::ptr_eq(o, &proto))
-                    .unwrap() as u64,
+                id: proto.borrow().id.unwrap(),
             });
             bool_obj
                 .borrow_mut()
@@ -4888,9 +4846,8 @@ impl Interpreter {
                 JsValue::String(JsString::from_str(name)),
             );
         }
-        JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        })
+        let id = obj.borrow().id.unwrap();
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn setup_function_prototype(&mut self, obj_proto: &Rc<RefCell<JsObjectData>>) {
@@ -4995,11 +4952,160 @@ impl Interpreter {
             .insert_builtin("toString".to_string(), combined_tostring);
     }
 
+    fn allocate_object_slot(&mut self, obj: Rc<RefCell<JsObjectData>>) -> u64 {
+        self.gc_alloc_count += 1;
+        let id = if let Some(idx) = self.free_list.pop() {
+            self.objects[idx] = Some(obj.clone());
+            idx as u64
+        } else {
+            let idx = self.objects.len();
+            self.objects.push(Some(obj.clone()));
+            idx as u64
+        };
+        obj.borrow_mut().id = Some(id);
+        id
+    }
+
+    fn maybe_gc(&mut self) {
+        if self.gc_alloc_count < GC_THRESHOLD {
+            return;
+        }
+        self.gc_alloc_count = 0;
+        let obj_count = self.objects.len();
+        let mut marks = vec![false; obj_count];
+
+        // Collect roots
+        let mut worklist: Vec<u64> = Vec::new();
+        Self::collect_env_roots(&self.global_env, &mut worklist);
+        for proto in [
+            &self.object_prototype,
+            &self.array_prototype,
+            &self.string_prototype,
+            &self.number_prototype,
+            &self.boolean_prototype,
+            &self.regexp_prototype,
+            &self.iterator_prototype,
+            &self.array_iterator_prototype,
+            &self.string_iterator_prototype,
+        ] {
+            if let Some(p) = proto {
+                if let Some(id) = p.borrow().id {
+                    worklist.push(id);
+                }
+            }
+        }
+        if let Some(JsValue::Object(o)) = &self.new_target {
+            worklist.push(o.id);
+        }
+
+        // Mark phase (BFS)
+        while let Some(id) = worklist.pop() {
+            let idx = id as usize;
+            if idx >= obj_count || marks[idx] {
+                continue;
+            }
+            marks[idx] = true;
+            let obj_rc = match &self.objects[idx] {
+                Some(rc) => rc.clone(),
+                None => continue,
+            };
+            let obj = obj_rc.borrow();
+
+            // Trace prototype
+            if let Some(ref proto) = obj.prototype {
+                if let Some(pid) = proto.borrow().id {
+                    worklist.push(pid);
+                }
+            }
+
+            // Trace properties
+            for desc in obj.properties.values() {
+                if let Some(ref v) = desc.value {
+                    Self::collect_value_roots(v, &mut worklist);
+                }
+                if let Some(ref v) = desc.get {
+                    Self::collect_value_roots(v, &mut worklist);
+                }
+                if let Some(ref v) = desc.set {
+                    Self::collect_value_roots(v, &mut worklist);
+                }
+            }
+
+            // Trace array elements
+            if let Some(ref elems) = obj.array_elements {
+                for v in elems {
+                    Self::collect_value_roots(v, &mut worklist);
+                }
+            }
+
+            // Trace primitive value
+            if let Some(ref v) = obj.primitive_value {
+                Self::collect_value_roots(v, &mut worklist);
+            }
+
+            // Trace private fields
+            for v in obj.private_fields.values() {
+                Self::collect_value_roots(v, &mut worklist);
+            }
+
+            // Trace callable (closure environments)
+            if let Some(ref func) = obj.callable {
+                if let JsFunction::User { closure, .. } = func {
+                    Self::collect_env_roots(closure, &mut worklist);
+                }
+            }
+
+            // Trace parameter_map environments
+            if let Some(ref map) = obj.parameter_map {
+                for (env_ref, _) in map.values() {
+                    Self::collect_env_roots(env_ref, &mut worklist);
+                }
+            }
+
+            // Trace iterator state
+            if let Some(ref state) = obj.iterator_state {
+                if let IteratorState::ArrayIterator { array_id, .. } = state {
+                    worklist.push(*array_id);
+                }
+            }
+        }
+
+        // Sweep phase
+        for i in 0..obj_count {
+            if !marks[i] && self.objects[i].is_some() {
+                self.objects[i] = None;
+                self.free_list.push(i);
+            }
+        }
+    }
+
+    fn collect_value_roots(val: &JsValue, worklist: &mut Vec<u64>) {
+        if let JsValue::Object(o) = val {
+            worklist.push(o.id);
+        }
+    }
+
+    fn collect_env_roots(env: &EnvRef, worklist: &mut Vec<u64>) {
+        let mut current = Some(env.clone());
+        let mut seen = std::collections::HashSet::new();
+        while let Some(e) = current {
+            let ptr = Rc::as_ptr(&e) as usize;
+            if !seen.insert(ptr) {
+                break;
+            }
+            let borrowed = e.borrow();
+            for binding in borrowed.bindings.values() {
+                Self::collect_value_roots(&binding.value, worklist);
+            }
+            current = borrowed.parent.clone();
+        }
+    }
+
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
         let mut data = JsObjectData::new();
         data.prototype = self.object_prototype.clone();
         let obj = Rc::new(RefCell::new(data));
-        self.objects.push(obj.clone());
+        self.allocate_object_slot(obj.clone());
         obj
     }
 
@@ -5063,16 +5169,13 @@ impl Interpreter {
         );
         // Non-arrow functions get a prototype property
         if !is_arrow {
-            let _proto = self.create_object();
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: self.objects.len() as u64 - 1,
-            });
+            let proto = self.create_object();
+            let proto_id = proto.borrow().id.unwrap();
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj_data.insert_value("prototype".to_string(), proto_val.clone());
-            // prototype.constructor will be set after we know the function's id
         }
         let obj = Rc::new(RefCell::new(obj_data));
-        self.objects.push(obj.clone());
-        let func_id = self.objects.len() as u64 - 1;
+        let func_id = self.allocate_object_slot(obj.clone());
         let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
         // Set prototype.constructor = func
         if !is_arrow
@@ -5087,7 +5190,7 @@ impl Interpreter {
     }
 
     fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
-        self.objects.get(id as usize).cloned()
+        self.objects.get(id as usize).and_then(|slot| slot.clone())
     }
 
     fn create_arguments_object(
@@ -5157,9 +5260,8 @@ impl Interpreter {
             }
         }
 
-        let result = JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        });
+        let result_id = obj.borrow().id.unwrap();
+        let result = JsValue::Object(crate::types::JsObject { id: result_id });
 
         if is_strict {
             // Strict: callee is an accessor that throws TypeError on get/set
@@ -5209,6 +5311,7 @@ impl Interpreter {
     }
 
     pub fn run(&mut self, program: &Program) -> Completion {
+        self.maybe_gc();
         self.exec_statements(&program.body, &self.global_env.clone())
     }
 
@@ -5268,6 +5371,7 @@ impl Interpreter {
 
         let mut result = JsValue::Undefined;
         for stmt in stmts {
+            self.maybe_gc();
             let comp = self.exec_statement(stmt, env);
             match comp {
                 Completion::Normal(val) => result = val,
@@ -5557,9 +5661,8 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            let rest_val = JsValue::Object(crate::types::JsObject {
-                                id: self.objects.len() as u64 - 1,
-                            });
+                            let rest_id = rest_obj.borrow().id.unwrap();
+                            let rest_val = JsValue::Object(crate::types::JsObject { id: rest_id });
                             self.bind_pattern(pat, rest_val, kind, env)?;
                         }
                     }
@@ -6138,10 +6241,8 @@ impl Interpreter {
                 obj.insert_value("sticky".to_string(), JsValue::Boolean(flags.contains('y')));
                 obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
                 let rc = Rc::new(RefCell::new(obj));
-                self.objects.push(rc);
-                JsValue::Object(crate::types::JsObject {
-                    id: self.objects.len() as u64 - 1,
-                })
+                let id = self.allocate_object_slot(rc);
+                JsValue::Object(crate::types::JsObject { id })
             }
         }
     }
@@ -6247,10 +6348,8 @@ impl Interpreter {
                     obj_data.prototype = self.object_prototype.clone();
                 }
                 let obj = Rc::new(RefCell::new(obj_data));
-                self.objects.push(obj);
-                Completion::Normal(JsValue::Object(crate::types::JsObject {
-                    id: self.objects.len() as u64 - 1,
-                }))
+                let id = self.allocate_object_slot(obj);
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             }
             JsValue::Object(_) => Completion::Normal(val.clone()),
         }
@@ -7098,7 +7197,7 @@ impl Interpreter {
             Vec::new()
         };
         // Initialize private fields on the new instance
-        let new_obj_id = self.objects.len() as u64 - 1;
+        let new_obj_id = new_obj.borrow().id.unwrap();
         let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
         // Create a temporary env for evaluating initializers with `this` bound
         let init_env = Environment::new(Some(env.clone()));
@@ -7576,10 +7675,8 @@ impl Interpreter {
             }
         }
         let obj = Rc::new(RefCell::new(obj_data));
-        self.objects.push(obj);
-        Completion::Normal(JsValue::Object(crate::types::JsObject {
-            id: self.objects.len() as u64 - 1,
-        }))
+        let id = self.allocate_object_slot(obj);
+        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
     }
 }
 
@@ -7714,7 +7811,7 @@ fn abstract_relational(left: &JsValue, right: &JsValue) -> Option<bool> {
     number_ops::less_than(ln, rn)
 }
 
-fn typeof_val<'a>(val: &JsValue, objects: &[Rc<RefCell<JsObjectData>>]) -> &'a str {
+fn typeof_val<'a>(val: &JsValue, objects: &[Option<Rc<RefCell<JsObjectData>>>]) -> &'a str {
     match val {
         JsValue::Undefined => "undefined",
         JsValue::Null => "object",
@@ -7724,7 +7821,7 @@ fn typeof_val<'a>(val: &JsValue, objects: &[Rc<RefCell<JsObjectData>>]) -> &'a s
         JsValue::Symbol(_) => "symbol",
         JsValue::BigInt(_) => "bigint",
         JsValue::Object(o) => {
-            if let Some(obj) = objects.get(o.id as usize)
+            if let Some(Some(obj)) = objects.get(o.id as usize)
                 && obj.borrow().callable.is_some()
             {
                 return "function";
@@ -7867,11 +7964,7 @@ fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion {
                 }
             }
         }
-        let id = interp
-            .objects
-            .iter()
-            .position(|o| Rc::ptr_eq(o, &obj))
-            .unwrap() as u64;
+        let id = obj.borrow().id.unwrap();
         return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
     }
     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
