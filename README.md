@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 12,482  | 29,594  | 29.67%    |
+| 48,257      | 42,076  | 6,181   | 12,878  | 29,198  | 30.61%    |
 
 *Skipped: module and async tests (async parsing supported, runtime not yet implemented).*
 
@@ -63,6 +63,8 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Proper Error objects (`TypeError`, `ReferenceError`, `SyntaxError`, `RangeError`) with prototype chains and `instanceof` support
   - `JSON.stringify`, `JSON.parse`
   - `String.fromCharCode`
+  - `Map` built-in (constructor, `get`, `set`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`)
+  - `Set` built-in (constructor, `add`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`, ES2025 set methods: `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`)
   - `globalThis`
   - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
