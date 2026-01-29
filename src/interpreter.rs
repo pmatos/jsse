@@ -485,6 +485,7 @@ pub struct Interpreter {
     map_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     set_prototype: Option<Rc<RefCell<JsObjectData>>>,
     set_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    date_prototype: Option<Rc<RefCell<JsObjectData>>>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
     free_list: Vec<usize>,
@@ -529,6 +530,7 @@ impl Interpreter {
             map_iterator_prototype: None,
             set_prototype: None,
             set_iterator_prototype: None,
+            date_prototype: None,
             next_symbol_id: 1,
             new_target: None,
             free_list: Vec::new(),
@@ -1015,6 +1017,7 @@ impl Interpreter {
         self.setup_boolean_prototype();
         self.setup_map_prototype();
         self.setup_set_prototype();
+        self.setup_date_builtin();
 
         // Global functions
         self.register_global_fn(
@@ -1981,9 +1984,9 @@ impl Interpreter {
                         && let Some(proto) = &obj.borrow().prototype
                     {
                         if let Some(id) = proto.borrow().id {
-                            return Completion::Normal(JsValue::Object(
-                                crate::types::JsObject { id },
-                            ));
+                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                id,
+                            }));
                         }
                     }
                     Completion::Normal(JsValue::Null)
@@ -2737,8 +2740,9 @@ impl Interpreter {
                     let global_iter = interp.global_env.borrow().get("Iterator");
                     if let Some(JsValue::Object(gi)) = global_iter {
                         if gi.id == nt.id {
-                            let err = interp
-                                .create_type_error("Abstract class Iterator not directly constructable");
+                            let err = interp.create_type_error(
+                                "Abstract class Iterator not directly constructable",
+                            );
                             return Completion::Throw(err);
                         }
                     }
@@ -3006,16 +3010,11 @@ impl Interpreter {
         self.string_iterator_prototype = Some(str_iter_proto);
     }
 
-    fn create_iterator_helper_object(
-        &mut self,
-        next_fn: JsValue,
-        return_fn: JsValue,
-    ) -> JsValue {
+    fn create_iterator_helper_object(&mut self, next_fn: JsValue, return_fn: JsValue) -> JsValue {
         let obj = self.create_object();
         obj.borrow_mut().prototype = self.iterator_prototype.clone();
         obj.borrow_mut().class_name = "Iterator Helper".to_string();
-        obj.borrow_mut()
-            .insert_builtin("next".to_string(), next_fn);
+        obj.borrow_mut().insert_builtin("next".to_string(), next_fn);
         obj.borrow_mut()
             .insert_builtin("return".to_string(), return_fn);
         // Add @@iterator returning this
@@ -3024,8 +3023,10 @@ impl Interpreter {
             Rc::new(|_interp, this, _args| Completion::Normal(this.clone())),
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
-            obj.borrow_mut()
-                .insert_property(key, PropertyDescriptor::data(iter_self_fn, true, false, true));
+            obj.borrow_mut().insert_property(
+                key,
+                PropertyDescriptor::data(iter_self_fn, true, false, true),
+            );
         }
         // Add @@toStringTag
         obj.borrow_mut().insert_property(
@@ -3540,7 +3541,8 @@ impl Interpreter {
                 let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let limit = to_number(&limit_val);
                 if limit.is_nan() || limit < 0.0 {
-                    let err = interp.create_error("RangeError", "take limit must be a non-negative number");
+                    let err = interp
+                        .create_error("RangeError", "take limit must be a non-negative number");
                     return Completion::Throw(err);
                 }
                 let limit = if limit.is_infinite() {
@@ -3586,9 +3588,7 @@ impl Interpreter {
                                     state_next.borrow_mut().3 = false;
                                     interp.iterator_close(&iter, JsValue::Undefined);
                                 }
-                                Completion::Normal(
-                                    interp.create_iter_result_object(value, false),
-                                )
+                                Completion::Normal(interp.create_iter_result_object(value, false))
                             }
                             Ok(None) => {
                                 state_next.borrow_mut().3 = false;
@@ -3637,8 +3637,8 @@ impl Interpreter {
                 let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let limit = to_number(&limit_val);
                 if limit.is_nan() || limit < 0.0 {
-                    let err =
-                        interp.create_error("RangeError", "drop limit must be a non-negative number");
+                    let err = interp
+                        .create_error("RangeError", "drop limit must be a non-negative number");
                     return Completion::Throw(err);
                 }
                 let limit = if limit.is_infinite() {
@@ -3695,9 +3695,7 @@ impl Interpreter {
                         match interp.iterator_step_direct(&iter, &next_method) {
                             Ok(Some(result)) => {
                                 let value = interp.iterator_value(&result);
-                                Completion::Normal(
-                                    interp.create_iter_result_object(value, false),
-                                )
+                                Completion::Normal(interp.create_iter_result_object(value, false))
                             }
                             Ok(None) => {
                                 state_next.borrow_mut().4 = false;
@@ -4027,8 +4025,8 @@ impl Interpreter {
                         match interp.call_function(&next_method, &iter, &[]) {
                             Completion::Normal(v) => {
                                 if !matches!(v, JsValue::Object(_)) {
-                                    let err =
-                                        interp.create_type_error("Iterator result is not an object");
+                                    let err = interp
+                                        .create_type_error("Iterator result is not an object");
                                     return Completion::Throw(err);
                                 }
                                 if interp.iterator_complete(&v) {
@@ -4072,8 +4070,7 @@ impl Interpreter {
 
         if let JsValue::Object(ctor_obj) = iterator_ctor {
             if let Some(obj) = self.get_object(ctor_obj.id) {
-                obj.borrow_mut()
-                    .insert_builtin("from".to_string(), from_fn);
+                obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
         }
 
@@ -4087,12 +4084,15 @@ impl Interpreter {
                 for arg in args {
                     if let Some(ref key) = sym_key {
                         let iter_fn = match arg {
-                            JsValue::Object(o) => {
-                                interp.get_object(o.id).map(|od| od.borrow().get_property(key)).unwrap_or(JsValue::Undefined)
-                            }
+                            JsValue::Object(o) => interp
+                                .get_object(o.id)
+                                .map(|od| od.borrow().get_property(key))
+                                .unwrap_or(JsValue::Undefined),
                             JsValue::String(_) => {
                                 let str_proto = interp.string_prototype.clone();
-                                str_proto.map(|p| p.borrow().get_property(key)).unwrap_or(JsValue::Undefined)
+                                str_proto
+                                    .map(|p| p.borrow().get_property(key))
+                                    .unwrap_or(JsValue::Undefined)
                             }
                             _ => JsValue::Undefined,
                         };
@@ -4125,13 +4125,7 @@ impl Interpreter {
                         loop {
                             let (ref iterables, idx, ref cur_iter, ref cur_next, alive) = {
                                 let s = state_next.borrow();
-                                (
-                                    s.0.clone(),
-                                    s.1,
-                                    s.2.clone(),
-                                    s.3.clone(),
-                                    s.4,
-                                )
+                                (s.0.clone(), s.1, s.2.clone(), s.3.clone(), s.4)
                             };
                             if !alive {
                                 return Completion::Normal(
@@ -4181,7 +4175,10 @@ impl Interpreter {
                                         return Completion::Throw(err);
                                     }
                                     let next_method = if let JsValue::Object(io) = &new_iter {
-                                        interp.get_object(io.id).map(|od| od.borrow().get_property("next")).unwrap_or(JsValue::Undefined)
+                                        interp
+                                            .get_object(io.id)
+                                            .map(|od| od.borrow().get_property("next"))
+                                            .unwrap_or(JsValue::Undefined)
                                     } else {
                                         JsValue::Undefined
                                     };
@@ -6212,7 +6209,13 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let state = obj.borrow().iterator_state.clone();
-                        if let Some(IteratorState::MapIterator { map_id, index, kind, done }) = state {
+                        if let Some(IteratorState::MapIterator {
+                            map_id,
+                            index,
+                            kind,
+                            done,
+                        }) = state
+                        {
                             if done {
                                 return Completion::Normal(
                                     interp.create_iter_result_object(JsValue::Undefined, true),
@@ -6228,12 +6231,19 @@ impl Interpreter {
                                                 IteratorKind::Key => entry.0.clone(),
                                                 IteratorKind::Value => entry.1.clone(),
                                                 IteratorKind::KeyValue => {
-                                                    interp.create_array(vec![entry.0.clone(), entry.1.clone()])
+                                                    interp.create_array(vec![
+                                                        entry.0.clone(),
+                                                        entry.1.clone(),
+                                                    ])
                                                 }
                                             };
-                                            obj.borrow_mut().iterator_state = Some(IteratorState::MapIterator {
-                                                map_id, index: i + 1, kind, done: false,
-                                            });
+                                            obj.borrow_mut().iterator_state =
+                                                Some(IteratorState::MapIterator {
+                                                    map_id,
+                                                    index: i + 1,
+                                                    kind,
+                                                    done: false,
+                                                });
                                             return Completion::Normal(
                                                 interp.create_iter_result_object(result, false),
                                             );
@@ -6243,7 +6253,10 @@ impl Interpreter {
                                 }
                             }
                             obj.borrow_mut().iterator_state = Some(IteratorState::MapIterator {
-                                map_id, index, kind, done: true,
+                                map_id,
+                                index,
+                                kind,
+                                done: true,
                             });
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::Undefined, true),
@@ -6251,11 +6264,14 @@ impl Interpreter {
                         }
                     }
                 }
-                let err = interp.create_type_error("Map Iterator.prototype.next requires a Map Iterator");
+                let err =
+                    interp.create_type_error("Map Iterator.prototype.next requires a Map Iterator");
                 Completion::Throw(err)
             }),
         ));
-        map_iter_proto.borrow_mut().insert_builtin("next".to_string(), map_iter_next);
+        map_iter_proto
+            .borrow_mut()
+            .insert_builtin("next".to_string(), map_iter_next);
 
         if let Some(key) = self.get_symbol_iterator_key() {
             let iter_self_fn = self.create_function(JsFunction::Native(
@@ -6271,14 +6287,23 @@ impl Interpreter {
         self.map_iterator_prototype = Some(map_iter_proto);
 
         // Helper to create map iterators
-        fn create_map_iterator(interp: &mut Interpreter, map_id: u64, kind: IteratorKind) -> JsValue {
+        fn create_map_iterator(
+            interp: &mut Interpreter,
+            map_id: u64,
+            kind: IteratorKind,
+        ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype = interp.map_iterator_prototype.clone()
+            obj_data.prototype = interp
+                .map_iterator_prototype
+                .clone()
                 .or(interp.iterator_prototype.clone())
                 .or(interp.object_prototype.clone());
             obj_data.class_name = "Map Iterator".to_string();
             obj_data.iterator_state = Some(IteratorState::MapIterator {
-                map_id, index: 0, kind, done: false,
+                map_id,
+                index: 0,
+                kind,
+                done: false,
             });
             let obj = Rc::new(RefCell::new(obj_data));
             let id = interp.allocate_object_slot(obj);
@@ -6292,7 +6317,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().map_data.is_some() {
-                            return Completion::Normal(create_map_iterator(interp, o.id, IteratorKind::KeyValue));
+                            return Completion::Normal(create_map_iterator(
+                                interp,
+                                o.id,
+                                IteratorKind::KeyValue,
+                            ));
                         }
                     }
                 }
@@ -6300,14 +6329,15 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("entries".to_string(), entries_fn.clone());
+        proto
+            .borrow_mut()
+            .insert_builtin("entries".to_string(), entries_fn.clone());
 
         // Map.prototype[@@iterator] = entries
         if let Some(key) = self.get_symbol_iterator_key() {
-            proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(entries_fn, true, false, true),
-            );
+            proto
+                .borrow_mut()
+                .insert_property(key, PropertyDescriptor::data(entries_fn, true, false, true));
         }
 
         // Map.prototype.keys
@@ -6317,7 +6347,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().map_data.is_some() {
-                            return Completion::Normal(create_map_iterator(interp, o.id, IteratorKind::Key));
+                            return Completion::Normal(create_map_iterator(
+                                interp,
+                                o.id,
+                                IteratorKind::Key,
+                            ));
                         }
                     }
                 }
@@ -6325,7 +6359,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("keys".to_string(), keys_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("keys".to_string(), keys_fn);
 
         // Map.prototype.values
         let values_fn = self.create_function(JsFunction::Native(
@@ -6334,7 +6370,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().map_data.is_some() {
-                            return Completion::Normal(create_map_iterator(interp, o.id, IteratorKind::Value));
+                            return Completion::Normal(create_map_iterator(
+                                interp,
+                                o.id,
+                                IteratorKind::Value,
+                            ));
                         }
                     }
                 }
@@ -6342,7 +6382,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("values".to_string(), values_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("values".to_string(), values_fn);
 
         // Map.prototype.get
         let get_fn = self.create_function(JsFunction::Native(
@@ -6439,7 +6481,9 @@ impl Interpreter {
                             let mut borrowed = obj.borrow_mut();
                             let entries = borrowed.map_data.as_mut().unwrap();
                             for entry in entries.iter_mut() {
-                                let matches = entry.as_ref().map_or(false, |e| same_value_zero(&e.0, &key));
+                                let matches = entry
+                                    .as_ref()
+                                    .map_or(false, |e| same_value_zero(&e.0, &key));
                                 if matches {
                                     *entry = None;
                                     return Completion::Normal(JsValue::Boolean(true));
@@ -6453,7 +6497,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("delete".to_string(), delete_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("delete".to_string(), delete_fn);
 
         // Map.prototype.clear
         let clear_fn = self.create_function(JsFunction::Native(
@@ -6472,7 +6518,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("clear".to_string(), clear_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("clear".to_string(), clear_fn);
 
         // Map.prototype.forEach
         let foreach_fn = self.create_function(JsFunction::Native(
@@ -6510,7 +6558,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("forEach".to_string(), foreach_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("forEach".to_string(), foreach_fn);
 
         // Map.prototype.size (getter)
         let size_getter = self.create_function(JsFunction::Native(
@@ -6671,7 +6721,9 @@ impl Interpreter {
             PropertyDescriptor::data(map_ctor.clone(), true, false, true),
         );
 
-        self.global_env.borrow_mut().declare("Map", BindingKind::Var);
+        self.global_env
+            .borrow_mut()
+            .declare("Map", BindingKind::Var);
         let _ = self.global_env.borrow_mut().set("Map", map_ctor);
 
         self.map_prototype = Some(proto);
@@ -6702,7 +6754,13 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let state = obj.borrow().iterator_state.clone();
-                        if let Some(IteratorState::SetIterator { set_id, index, kind, done }) = state {
+                        if let Some(IteratorState::SetIterator {
+                            set_id,
+                            index,
+                            kind,
+                            done,
+                        }) = state
+                        {
                             if done {
                                 return Completion::Normal(
                                     interp.create_iter_result_object(JsValue::Undefined, true),
@@ -6715,14 +6773,19 @@ impl Interpreter {
                                     while i < entries.len() {
                                         if let Some(ref val) = entries[i] {
                                             let result = match kind {
-                                                IteratorKind::Value | IteratorKind::Key => val.clone(),
-                                                IteratorKind::KeyValue => {
-                                                    interp.create_array(vec![val.clone(), val.clone()])
+                                                IteratorKind::Value | IteratorKind::Key => {
+                                                    val.clone()
                                                 }
+                                                IteratorKind::KeyValue => interp
+                                                    .create_array(vec![val.clone(), val.clone()]),
                                             };
-                                            obj.borrow_mut().iterator_state = Some(IteratorState::SetIterator {
-                                                set_id, index: i + 1, kind, done: false,
-                                            });
+                                            obj.borrow_mut().iterator_state =
+                                                Some(IteratorState::SetIterator {
+                                                    set_id,
+                                                    index: i + 1,
+                                                    kind,
+                                                    done: false,
+                                                });
                                             return Completion::Normal(
                                                 interp.create_iter_result_object(result, false),
                                             );
@@ -6732,7 +6795,10 @@ impl Interpreter {
                                 }
                             }
                             obj.borrow_mut().iterator_state = Some(IteratorState::SetIterator {
-                                set_id, index, kind, done: true,
+                                set_id,
+                                index,
+                                kind,
+                                done: true,
                             });
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::Undefined, true),
@@ -6740,11 +6806,14 @@ impl Interpreter {
                         }
                     }
                 }
-                let err = interp.create_type_error("Set Iterator.prototype.next requires a Set Iterator");
+                let err =
+                    interp.create_type_error("Set Iterator.prototype.next requires a Set Iterator");
                 Completion::Throw(err)
             }),
         ));
-        set_iter_proto.borrow_mut().insert_builtin("next".to_string(), set_iter_next);
+        set_iter_proto
+            .borrow_mut()
+            .insert_builtin("next".to_string(), set_iter_next);
 
         if let Some(key) = self.get_symbol_iterator_key() {
             let iter_self_fn = self.create_function(JsFunction::Native(
@@ -6759,14 +6828,23 @@ impl Interpreter {
 
         self.set_iterator_prototype = Some(set_iter_proto);
 
-        fn create_set_iterator(interp: &mut Interpreter, set_id: u64, kind: IteratorKind) -> JsValue {
+        fn create_set_iterator(
+            interp: &mut Interpreter,
+            set_id: u64,
+            kind: IteratorKind,
+        ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype = interp.set_iterator_prototype.clone()
+            obj_data.prototype = interp
+                .set_iterator_prototype
+                .clone()
                 .or(interp.iterator_prototype.clone())
                 .or(interp.object_prototype.clone());
             obj_data.class_name = "Set Iterator".to_string();
             obj_data.iterator_state = Some(IteratorState::SetIterator {
-                set_id, index: 0, kind, done: false,
+                set_id,
+                index: 0,
+                kind,
+                done: false,
             });
             let obj = Rc::new(RefCell::new(obj_data));
             let id = interp.allocate_object_slot(obj);
@@ -6780,7 +6858,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().set_data.is_some() {
-                            return Completion::Normal(create_set_iterator(interp, o.id, IteratorKind::Value));
+                            return Completion::Normal(create_set_iterator(
+                                interp,
+                                o.id,
+                                IteratorKind::Value,
+                            ));
                         }
                     }
                 }
@@ -6788,17 +6870,20 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("values".to_string(), values_fn.clone());
+        proto
+            .borrow_mut()
+            .insert_builtin("values".to_string(), values_fn.clone());
 
         // Set.prototype.keys = Set.prototype.values
-        proto.borrow_mut().insert_builtin("keys".to_string(), values_fn.clone());
+        proto
+            .borrow_mut()
+            .insert_builtin("keys".to_string(), values_fn.clone());
 
         // Set.prototype[@@iterator] = values
         if let Some(key) = self.get_symbol_iterator_key() {
-            proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(values_fn, true, false, true),
-            );
+            proto
+                .borrow_mut()
+                .insert_property(key, PropertyDescriptor::data(values_fn, true, false, true));
         }
 
         // Set.prototype.entries
@@ -6808,7 +6893,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().set_data.is_some() {
-                            return Completion::Normal(create_set_iterator(interp, o.id, IteratorKind::KeyValue));
+                            return Completion::Normal(create_set_iterator(
+                                interp,
+                                o.id,
+                                IteratorKind::KeyValue,
+                            ));
                         }
                     }
                 }
@@ -6816,7 +6905,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("entries".to_string(), entries_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("entries".to_string(), entries_fn);
 
         // Set.prototype.add
         let add_fn = self.create_function(JsFunction::Native(
@@ -6886,7 +6977,8 @@ impl Interpreter {
                             let mut borrowed = obj.borrow_mut();
                             let entries = borrowed.set_data.as_mut().unwrap();
                             for entry in entries.iter_mut() {
-                                let matches = entry.as_ref().map_or(false, |e| same_value_zero(e, &value));
+                                let matches =
+                                    entry.as_ref().map_or(false, |e| same_value_zero(e, &value));
                                 if matches {
                                     *entry = None;
                                     return Completion::Normal(JsValue::Boolean(true));
@@ -6900,7 +6992,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("delete".to_string(), delete_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("delete".to_string(), delete_fn);
 
         // Set.prototype.clear
         let clear_fn = self.create_function(JsFunction::Native(
@@ -6919,7 +7013,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("clear".to_string(), clear_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("clear".to_string(), clear_fn);
 
         // Set.prototype.forEach
         let foreach_fn = self.create_function(JsFunction::Native(
@@ -6957,7 +7053,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("forEach".to_string(), foreach_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("forEach".to_string(), foreach_fn);
 
         // Set.prototype.size (getter)
         let size_getter = self.create_function(JsFunction::Native(
@@ -7011,7 +7109,8 @@ impl Interpreter {
                                 new_entries.push(Some(entry.clone()));
                             }
                             // Iterate other's keys
-                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[]) {
+                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[])
+                            {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
@@ -7019,28 +7118,40 @@ impl Interpreter {
                                 let next_fn = if let JsValue::Object(io) = &keys_iter {
                                     if let Some(iter_obj) = interp.get_object(io.id) {
                                         iter_obj.borrow().get_property("next")
-                                    } else { JsValue::Undefined }
-                                } else { JsValue::Undefined };
-                                let next_result = match interp.call_function(&next_fn, &keys_iter, &[]) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
+                                    } else {
+                                        JsValue::Undefined
+                                    }
+                                } else {
+                                    JsValue::Undefined
                                 };
+                                let next_result =
+                                    match interp.call_function(&next_fn, &keys_iter, &[]) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
                                 let (done, value) = extract_iter_result(interp, &next_result);
-                                if done { break; }
+                                if done {
+                                    break;
+                                }
                                 let mut val = value;
                                 if let JsValue::Number(n) = &val {
                                     if *n == 0.0 && n.is_sign_negative() {
                                         val = JsValue::Number(0.0);
                                     }
                                 }
-                                let exists = new_entries.iter().flatten().any(|e| same_value_zero(e, &val));
+                                let exists = new_entries
+                                    .iter()
+                                    .flatten()
+                                    .any(|e| same_value_zero(e, &val));
                                 if !exists {
                                     new_entries.push(Some(val));
                                 }
                             }
                             new_obj.borrow_mut().set_data = Some(new_entries);
                             let id = new_obj.borrow().id.unwrap();
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
+                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                id,
+                            }));
                         }
                     }
                 }
@@ -7048,7 +7159,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("union".to_string(), union_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("union".to_string(), union_fn);
 
         // Set.prototype.intersection
         let intersection_fn = self.create_function(JsFunction::Native(
@@ -7128,7 +7241,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("intersection".to_string(), intersection_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("intersection".to_string(), intersection_fn);
 
         // Set.prototype.difference
         let difference_fn = self.create_function(JsFunction::Native(
@@ -7151,7 +7266,11 @@ impl Interpreter {
 
                             if this_size as f64 <= other_rec.size {
                                 for entry in entries.iter().flatten() {
-                                    let has_result = match interp.call_function(&other_rec.has, &other, &[entry.clone()]) {
+                                    let has_result = match interp.call_function(
+                                        &other_rec.has,
+                                        &other,
+                                        &[entry.clone()],
+                                    ) {
                                         Completion::Normal(v) => v,
                                         other => return other,
                                     };
@@ -7165,24 +7284,34 @@ impl Interpreter {
                                 for entry in entries.iter().flatten() {
                                     new_entries.push(Some(entry.clone()));
                                 }
-                                let keys_iter = match interp.call_function(&other_rec.keys, &other, &[]) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
+                                let keys_iter =
+                                    match interp.call_function(&other_rec.keys, &other, &[]) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
                                 loop {
                                     let next_fn = if let JsValue::Object(io) = &keys_iter {
                                         if let Some(iter_obj) = interp.get_object(io.id) {
                                             iter_obj.borrow().get_property("next")
-                                        } else { JsValue::Undefined }
-                                    } else { JsValue::Undefined };
-                                    let next_result = match interp.call_function(&next_fn, &keys_iter, &[]) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
+                                        } else {
+                                            JsValue::Undefined
+                                        }
+                                    } else {
+                                        JsValue::Undefined
                                     };
+                                    let next_result =
+                                        match interp.call_function(&next_fn, &keys_iter, &[]) {
+                                            Completion::Normal(v) => v,
+                                            other => return other,
+                                        };
                                     let (done, value) = extract_iter_result(interp, &next_result);
-                                    if done { break; }
+                                    if done {
+                                        break;
+                                    }
                                     for entry in new_entries.iter_mut() {
-                                        let matches = entry.as_ref().map_or(false, |e| same_value_zero(e, &value));
+                                        let matches = entry
+                                            .as_ref()
+                                            .map_or(false, |e| same_value_zero(e, &value));
                                         if matches {
                                             *entry = None;
                                             break;
@@ -7192,7 +7321,9 @@ impl Interpreter {
                             }
                             new_obj.borrow_mut().set_data = Some(new_entries);
                             let id = new_obj.borrow().id.unwrap();
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
+                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                id,
+                            }));
                         }
                     }
                 }
@@ -7200,7 +7331,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("difference".to_string(), difference_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("difference".to_string(), difference_fn);
 
         // Set.prototype.symmetricDifference
         let sym_diff_fn = self.create_function(JsFunction::Native(
@@ -7222,7 +7355,8 @@ impl Interpreter {
                             for entry in entries.iter().flatten() {
                                 new_entries.push(Some(entry.clone()));
                             }
-                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[]) {
+                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[])
+                            {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
@@ -7230,14 +7364,21 @@ impl Interpreter {
                                 let next_fn = if let JsValue::Object(io) = &keys_iter {
                                     if let Some(iter_obj) = interp.get_object(io.id) {
                                         iter_obj.borrow().get_property("next")
-                                    } else { JsValue::Undefined }
-                                } else { JsValue::Undefined };
-                                let next_result = match interp.call_function(&next_fn, &keys_iter, &[]) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
+                                    } else {
+                                        JsValue::Undefined
+                                    }
+                                } else {
+                                    JsValue::Undefined
                                 };
+                                let next_result =
+                                    match interp.call_function(&next_fn, &keys_iter, &[]) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
                                 let (done, value) = extract_iter_result(interp, &next_result);
-                                if done { break; }
+                                if done {
+                                    break;
+                                }
                                 let mut val = value;
                                 if let JsValue::Number(n) = &val {
                                     if *n == 0.0 && n.is_sign_negative() {
@@ -7246,11 +7387,14 @@ impl Interpreter {
                                 }
                                 // Re-read this set data
                                 let current = obj.borrow().set_data.clone().unwrap_or_default();
-                                let in_this = current.iter().flatten().any(|e| same_value_zero(e, &val));
+                                let in_this =
+                                    current.iter().flatten().any(|e| same_value_zero(e, &val));
                                 if in_this {
                                     // Remove from result
                                     for entry in new_entries.iter_mut() {
-                                        let matches = entry.as_ref().map_or(false, |e| same_value_zero(e, &val));
+                                        let matches = entry
+                                            .as_ref()
+                                            .map_or(false, |e| same_value_zero(e, &val));
                                         if matches {
                                             *entry = None;
                                             break;
@@ -7262,15 +7406,20 @@ impl Interpreter {
                             }
                             new_obj.borrow_mut().set_data = Some(new_entries);
                             let id = new_obj.borrow().id.unwrap();
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
+                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                id,
+                            }));
                         }
                     }
                 }
-                let err = interp.create_type_error("Set.prototype.symmetricDifference requires a Set");
+                let err =
+                    interp.create_type_error("Set.prototype.symmetricDifference requires a Set");
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("symmetricDifference".to_string(), sym_diff_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("symmetricDifference".to_string(), sym_diff_fn);
 
         // Set.prototype.isSubsetOf
         let is_subset_fn = self.create_function(JsFunction::Native(
@@ -7290,7 +7439,11 @@ impl Interpreter {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
                             for entry in entries.iter().flatten() {
-                                let has_result = match interp.call_function(&other_rec.has, &other, &[entry.clone()]) {
+                                let has_result = match interp.call_function(
+                                    &other_rec.has,
+                                    &other,
+                                    &[entry.clone()],
+                                ) {
                                     Completion::Normal(v) => v,
                                     other => return other,
                                 };
@@ -7307,7 +7460,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("isSubsetOf".to_string(), is_subset_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("isSubsetOf".to_string(), is_subset_fn);
 
         // Set.prototype.isSupersetOf
         let is_superset_fn = self.create_function(JsFunction::Native(
@@ -7326,7 +7481,8 @@ impl Interpreter {
                             if (this_size as f64) < other_rec.size {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
-                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[]) {
+                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[])
+                            {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
@@ -7334,16 +7490,24 @@ impl Interpreter {
                                 let next_fn = if let JsValue::Object(io) = &keys_iter {
                                     if let Some(iter_obj) = interp.get_object(io.id) {
                                         iter_obj.borrow().get_property("next")
-                                    } else { JsValue::Undefined }
-                                } else { JsValue::Undefined };
-                                let next_result = match interp.call_function(&next_fn, &keys_iter, &[]) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
+                                    } else {
+                                        JsValue::Undefined
+                                    }
+                                } else {
+                                    JsValue::Undefined
                                 };
+                                let next_result =
+                                    match interp.call_function(&next_fn, &keys_iter, &[]) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
                                 let (done, value) = extract_iter_result(interp, &next_result);
-                                if done { break; }
+                                if done {
+                                    break;
+                                }
                                 let current = obj.borrow().set_data.clone().unwrap_or_default();
-                                let in_this = current.iter().flatten().any(|e| same_value_zero(e, &value));
+                                let in_this =
+                                    current.iter().flatten().any(|e| same_value_zero(e, &value));
                                 if !in_this {
                                     return Completion::Normal(JsValue::Boolean(false));
                                 }
@@ -7356,7 +7520,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("isSupersetOf".to_string(), is_superset_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("isSupersetOf".to_string(), is_superset_fn);
 
         // Set.prototype.isDisjointFrom
         let is_disjoint_fn = self.create_function(JsFunction::Native(
@@ -7374,7 +7540,11 @@ impl Interpreter {
                             let this_size = entries.iter().filter(|e| e.is_some()).count();
                             if this_size as f64 <= other_rec.size {
                                 for entry in entries.iter().flatten() {
-                                    let has_result = match interp.call_function(&other_rec.has, &other, &[entry.clone()]) {
+                                    let has_result = match interp.call_function(
+                                        &other_rec.has,
+                                        &other,
+                                        &[entry.clone()],
+                                    ) {
                                         Completion::Normal(v) => v,
                                         other => return other,
                                     };
@@ -7384,24 +7554,35 @@ impl Interpreter {
                                     }
                                 }
                             } else {
-                                let keys_iter = match interp.call_function(&other_rec.keys, &other, &[]) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
+                                let keys_iter =
+                                    match interp.call_function(&other_rec.keys, &other, &[]) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
                                 loop {
                                     let next_fn = if let JsValue::Object(io) = &keys_iter {
                                         if let Some(iter_obj) = interp.get_object(io.id) {
                                             iter_obj.borrow().get_property("next")
-                                        } else { JsValue::Undefined }
-                                    } else { JsValue::Undefined };
-                                    let next_result = match interp.call_function(&next_fn, &keys_iter, &[]) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
+                                        } else {
+                                            JsValue::Undefined
+                                        }
+                                    } else {
+                                        JsValue::Undefined
                                     };
+                                    let next_result =
+                                        match interp.call_function(&next_fn, &keys_iter, &[]) {
+                                            Completion::Normal(v) => v,
+                                            other => return other,
+                                        };
                                     let (done, value) = extract_iter_result(interp, &next_result);
-                                    if done { break; }
+                                    if done {
+                                        break;
+                                    }
                                     let current = obj.borrow().set_data.clone().unwrap_or_default();
-                                    let in_this = current.iter().flatten().any(|e| same_value_zero(e, &value));
+                                    let in_this = current
+                                        .iter()
+                                        .flatten()
+                                        .any(|e| same_value_zero(e, &value));
                                     if in_this {
                                         return Completion::Normal(JsValue::Boolean(false));
                                     }
@@ -7415,7 +7596,9 @@ impl Interpreter {
                 Completion::Throw(err)
             }),
         ));
-        proto.borrow_mut().insert_builtin("isDisjointFrom".to_string(), is_disjoint_fn);
+        proto
+            .borrow_mut()
+            .insert_builtin("isDisjointFrom".to_string(), is_disjoint_fn);
 
         // @@toStringTag
         proto.borrow_mut().insert_property(
@@ -7515,7 +7698,9 @@ impl Interpreter {
             PropertyDescriptor::data(set_ctor.clone(), true, false, true),
         );
 
-        self.global_env.borrow_mut().declare("Set", BindingKind::Var);
+        self.global_env
+            .borrow_mut()
+            .declare("Set", BindingKind::Var);
         let _ = self.global_env.borrow_mut().set("Set", set_ctor);
 
         self.set_prototype = Some(proto);
@@ -7523,6 +7708,940 @@ impl Interpreter {
 
     fn create_type_error(&mut self, msg: &str) -> JsValue {
         self.create_error("TypeError", msg)
+    }
+
+    fn setup_date_builtin(&mut self) {
+        let proto = self.create_object();
+        proto.borrow_mut().class_name = "Date".to_string();
+        proto.borrow_mut().primitive_value = Some(JsValue::Number(f64::NAN));
+
+        fn this_time_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+            {
+                let b = obj.borrow();
+                if b.class_name == "Date" {
+                    if let Some(JsValue::Number(t)) = &b.primitive_value {
+                        return Some(*t);
+                    }
+                }
+            }
+            None
+        }
+
+        // Getter methods
+        let methods: Vec<(
+            &str,
+            Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
+        )> = vec![
+            (
+                "getTime",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) => Completion::Normal(JsValue::Number(t)),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "valueOf",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) => Completion::Normal(JsValue::Number(t)),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getFullYear",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(year_from_time(local_time(t)))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getMonth",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(month_from_time(local_time(t)))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getDate",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(date_from_time(local_time(t)))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getDay",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(week_day(local_time(t)))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getHours",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(hour_from_time(local_time(t)))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getMinutes",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(min_from_time(local_time(t)))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getSeconds",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(sec_from_time(local_time(t)))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getMilliseconds",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(ms_from_time(local_time(t)))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getUTCFullYear",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(year_from_time(t))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getUTCMonth",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(month_from_time(t))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getUTCDate",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(date_from_time(t))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getUTCDay",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(week_day(t))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getUTCHours",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(hour_from_time(t))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getUTCMinutes",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(min_from_time(t))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getUTCSeconds",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(sec_from_time(t))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getUTCMilliseconds",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number(ms_from_time(t))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "getTimezoneOffset",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                    Some(t) => Completion::Normal(JsValue::Number((t - local_time(t)) / 60_000.0)),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            // Setter methods
+            (
+                "setTime",
+                Rc::new(|interp, this, args| {
+                    let Some(_) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let v = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let v = time_clip(v);
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setMilliseconds",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let ms = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let lt = local_time(t);
+                    let time =
+                        make_time(hour_from_time(lt), min_from_time(lt), sec_from_time(lt), ms);
+                    let v = time_clip(utc_time(make_date(day(lt), time)));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setUTCMilliseconds",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let ms = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let time = make_time(hour_from_time(t), min_from_time(t), sec_from_time(t), ms);
+                    let v = time_clip(make_date(day(t), time));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setSeconds",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let s = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let lt = local_time(t);
+                    let ms = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| ms_from_time(lt));
+                    let time = make_time(hour_from_time(lt), min_from_time(lt), s, ms);
+                    let v = time_clip(utc_time(make_date(day(lt), time)));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setUTCSeconds",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let s = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let ms = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| ms_from_time(t));
+                    let time = make_time(hour_from_time(t), min_from_time(t), s, ms);
+                    let v = time_clip(make_date(day(t), time));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setMinutes",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let m = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let lt = local_time(t);
+                    let s = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| sec_from_time(lt));
+                    let ms = args
+                        .get(2)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| ms_from_time(lt));
+                    let time = make_time(hour_from_time(lt), m, s, ms);
+                    let v = time_clip(utc_time(make_date(day(lt), time)));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setUTCMinutes",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let m = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let s = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| sec_from_time(t));
+                    let ms = args
+                        .get(2)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| ms_from_time(t));
+                    let time = make_time(hour_from_time(t), m, s, ms);
+                    let v = time_clip(make_date(day(t), time));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setHours",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let h = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let lt = local_time(t);
+                    let m = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| min_from_time(lt));
+                    let s = args
+                        .get(2)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| sec_from_time(lt));
+                    let ms = args
+                        .get(3)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| ms_from_time(lt));
+                    let time = make_time(h, m, s, ms);
+                    let v = time_clip(utc_time(make_date(day(lt), time)));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setUTCHours",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let h = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let m = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| min_from_time(t));
+                    let s = args
+                        .get(2)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| sec_from_time(t));
+                    let ms = args
+                        .get(3)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| ms_from_time(t));
+                    let time = make_time(h, m, s, ms);
+                    let v = time_clip(make_date(day(t), time));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setDate",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let dt = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let lt = local_time(t);
+                    let new_date = make_day(year_from_time(lt), month_from_time(lt), dt);
+                    let v = time_clip(utc_time(make_date(new_date, time_within_day(lt))));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setUTCDate",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let dt = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let new_date = make_day(year_from_time(t), month_from_time(t), dt);
+                    let v = time_clip(make_date(new_date, time_within_day(t)));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setMonth",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let m = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let lt = local_time(t);
+                    let dt = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| date_from_time(lt));
+                    let new_date = make_day(year_from_time(lt), m, dt);
+                    let v = time_clip(utc_time(make_date(new_date, time_within_day(lt))));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setUTCMonth",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let m = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let dt = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| date_from_time(t));
+                    let new_date = make_day(year_from_time(t), m, dt);
+                    let v = time_clip(make_date(new_date, time_within_day(t)));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setFullYear",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let t = if t.is_nan() { 0.0 } else { t };
+                    let y = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let lt = local_time(t);
+                    let m = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| month_from_time(lt));
+                    let dt = args
+                        .get(2)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| date_from_time(lt));
+                    let new_date = make_day(y, m, dt);
+                    let v = time_clip(utc_time(make_date(new_date, time_within_day(lt))));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            (
+                "setUTCFullYear",
+                Rc::new(|interp, this, args| {
+                    let Some(t) = this_time_value(interp, this) else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    let t = if t.is_nan() { 0.0 } else { t };
+                    let y = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let m = args
+                        .get(1)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| month_from_time(t));
+                    let dt = args
+                        .get(2)
+                        .map(|v| to_number(v))
+                        .unwrap_or_else(|| date_from_time(t));
+                    let new_date = make_day(y, m, dt);
+                    let v = time_clip(make_date(new_date, time_within_day(t)));
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                    }
+                    Completion::Normal(JsValue::Number(v))
+                }),
+            ),
+            // String formatting methods
+            (
+                "toString",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => {
+                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                    }
+                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_date_string(t),
+                    ))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "toDateString",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => {
+                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                    }
+                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_date_only_string(t),
+                    ))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "toTimeString",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => {
+                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                    }
+                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_time_only_string(t),
+                    ))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "toISOString",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if !t.is_finite() => {
+                        let e = interp.create_range_error("Invalid time value");
+                        Completion::Throw(e)
+                    }
+                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_iso_string(t),
+                    ))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "toUTCString",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => {
+                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                    }
+                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_utc_string(t),
+                    ))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "toJSON",
+                Rc::new(|interp, this, _args| {
+                    let num = interp.to_number_coerce(this);
+                    if !num.is_finite() {
+                        return Completion::Normal(JsValue::Null);
+                    }
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        let to_iso = obj.borrow().get_property("toISOString");
+                        if let JsValue::Object(_) = &to_iso {
+                            return interp.call_function(&to_iso, this, &[]);
+                        }
+                    }
+                    let e = interp.create_type_error("toISOString is not a function");
+                    Completion::Throw(e)
+                }),
+            ),
+            (
+                "toLocaleDateString",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => {
+                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                    }
+                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_date_only_string(t),
+                    ))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "toLocaleString",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => {
+                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                    }
+                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_date_string(t),
+                    ))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+            (
+                "toLocaleTimeString",
+                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                    Some(t) if t.is_nan() => {
+                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                    }
+                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_time_only_string(t),
+                    ))),
+                    None => {
+                        let e = interp.create_type_error("this is not a Date object");
+                        Completion::Throw(e)
+                    }
+                }),
+            ),
+        ];
+
+        for (name, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
+            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        // Symbol.toPrimitive
+        let to_prim_fn = self.create_function(JsFunction::Native(
+            "[Symbol.toPrimitive]".to_string(),
+            Rc::new(|interp, this, args| {
+                let Some(_) = this_time_value(interp, this) else {
+                    let e = interp.create_type_error("this is not a Date object");
+                    return Completion::Throw(e);
+                };
+                let hint = args.first().map(to_js_string).unwrap_or_default();
+                match hint.as_str() {
+                    "string" | "default" => {
+                        // Call toString
+                        if let JsValue::Object(o) = this
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            let ts = obj.borrow().get_property("toString");
+                            if let JsValue::Object(_) = &ts {
+                                return interp.call_function(&ts, this, &[]);
+                            }
+                        }
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                    "number" => {
+                        // Call valueOf
+                        if let JsValue::Object(o) = this
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            let vo = obj.borrow().get_property("valueOf");
+                            if let JsValue::Object(_) = &vo {
+                                return interp.call_function(&vo, this, &[]);
+                            }
+                        }
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                    _ => {
+                        let e = interp.create_type_error("Invalid hint");
+                        Completion::Throw(e)
+                    }
+                }
+            }),
+        ));
+        // Get the Symbol.toPrimitive key
+        if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+            && let JsValue::Object(sym_obj) = &sym_val
+            && let Some(sym_data) = self.get_object(sym_obj.id)
+        {
+            let tp_key = to_js_string(&sym_data.borrow().get_property("toPrimitive"));
+            proto.borrow_mut().insert_property(
+                tp_key,
+                PropertyDescriptor::data(to_prim_fn, false, false, true),
+            );
+        }
+
+        // Date constructor
+        let date_proto_clone = proto.clone();
+        let date_ctor = self.create_function(JsFunction::Native(
+            "Date".to_string(),
+            Rc::new(move |interp, this, args| {
+                // Called as function (no new) - return string
+                if interp.new_target.is_none() {
+                    let t = now_ms();
+                    return Completion::Normal(JsValue::String(JsString::from_str(
+                        &format_date_string(t),
+                    )));
+                }
+
+                // Called with new
+                let time_val = if args.is_empty() {
+                    now_ms()
+                } else if args.len() == 1 {
+                    let v = &args[0];
+                    if let JsValue::Object(o) = v
+                        && let Some(obj) = interp.get_object(o.id)
+                        && obj.borrow().class_name == "Date"
+                    {
+                        if let Some(JsValue::Number(t)) = obj.borrow().primitive_value.clone() {
+                            t
+                        } else {
+                            f64::NAN
+                        }
+                    } else if let JsValue::String(_) = v {
+                        parse_date_string(&to_js_string(v))
+                    } else {
+                        let n = to_number(v);
+                        time_clip(n)
+                    }
+                } else {
+                    // 2-7 args
+                    let y = to_number(&args[0]);
+                    let m = args.get(1).map(|v| to_number(v)).unwrap_or(0.0);
+                    let dt = args.get(2).map(|v| to_number(v)).unwrap_or(1.0);
+                    let h = args.get(3).map(|v| to_number(v)).unwrap_or(0.0);
+                    let min = args.get(4).map(|v| to_number(v)).unwrap_or(0.0);
+                    let s = args.get(5).map(|v| to_number(v)).unwrap_or(0.0);
+                    let ms = args.get(6).map(|v| to_number(v)).unwrap_or(0.0);
+                    let yr = if !y.is_nan() {
+                        let yi = y.trunc();
+                        if (0.0..=99.0).contains(&yi) {
+                            1900.0 + yi
+                        } else {
+                            y
+                        }
+                    } else {
+                        y
+                    };
+                    let d = make_day(yr, m, dt);
+                    let time = make_time(h, min, s, ms);
+                    time_clip(utc_time(make_date(d, time)))
+                };
+
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let mut b = obj.borrow_mut();
+                    b.class_name = "Date".to_string();
+                    b.primitive_value = Some(JsValue::Number(time_val));
+                    b.prototype = Some(date_proto_clone.clone());
+                }
+                Completion::Normal(this.clone())
+            }),
+        ));
+
+        // Set .length = 7 on Date constructor
+        if let JsValue::Object(o) = &date_ctor
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_property(
+                "length".to_string(),
+                PropertyDescriptor::data(JsValue::Number(7.0), false, false, true),
+            );
+
+            // Date.now()
+            let now_fn = self.create_function(JsFunction::Native(
+                "now".to_string(),
+                Rc::new(|_interp, _this, _args| {
+                    Completion::Normal(JsValue::Number(now_ms().floor()))
+                }),
+            ));
+            obj.borrow_mut().insert_builtin("now".to_string(), now_fn);
+
+            // Date.parse()
+            let parse_fn = self.create_function(JsFunction::Native(
+                "parse".to_string(),
+                Rc::new(|_interp, _this, args| {
+                    let s = args.first().map(to_js_string).unwrap_or_default();
+                    Completion::Normal(JsValue::Number(parse_date_string(&s)))
+                }),
+            ));
+            obj.borrow_mut()
+                .insert_builtin("parse".to_string(), parse_fn);
+
+            // Date.UTC()
+            let utc_fn = self.create_function(JsFunction::Native(
+                "UTC".to_string(),
+                Rc::new(|_interp, _this, args| {
+                    let y = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
+                    let m = args.get(1).map(|v| to_number(v)).unwrap_or(0.0);
+                    let dt = args.get(2).map(|v| to_number(v)).unwrap_or(1.0);
+                    let h = args.get(3).map(|v| to_number(v)).unwrap_or(0.0);
+                    let min = args.get(4).map(|v| to_number(v)).unwrap_or(0.0);
+                    let s = args.get(5).map(|v| to_number(v)).unwrap_or(0.0);
+                    let ms = args.get(6).map(|v| to_number(v)).unwrap_or(0.0);
+                    let yr = if !y.is_nan() {
+                        let yi = y.trunc();
+                        if (0.0..=99.0).contains(&yi) {
+                            1900.0 + yi
+                        } else {
+                            y
+                        }
+                    } else {
+                        y
+                    };
+                    let d = make_day(yr, m, dt);
+                    let time = make_time(h, min, s, ms);
+                    Completion::Normal(JsValue::Number(time_clip(make_date(d, time))))
+                }),
+            ));
+            obj.borrow_mut().insert_builtin("UTC".to_string(), utc_fn);
+
+            // Set Date.prototype
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            obj.borrow_mut()
+                .insert_value("prototype".to_string(), proto_val);
+        }
+
+        // Date.prototype.constructor
+        proto
+            .borrow_mut()
+            .insert_builtin("constructor".to_string(), date_ctor.clone());
+
+        self.global_env
+            .borrow_mut()
+            .declare("Date", BindingKind::Var);
+        let _ = self.global_env.borrow_mut().set("Date", date_ctor);
+        self.date_prototype = Some(proto);
+    }
+
+    fn create_range_error(&mut self, msg: &str) -> JsValue {
+        self.create_error("RangeError", msg)
     }
 
     fn create_reference_error(&mut self, msg: &str) -> JsValue {
@@ -7707,6 +8826,7 @@ impl Interpreter {
             &self.map_iterator_prototype,
             &self.set_prototype,
             &self.set_iterator_prototype,
+            &self.date_prototype,
         ] {
             if let Some(p) = proto {
                 if let Some(id) = p.borrow().id {
@@ -8037,10 +9157,9 @@ impl Interpreter {
             ));
             if let JsValue::Object(ref o) = result {
                 if let Some(obj_rc) = self.get_object(o.id) {
-                    obj_rc.borrow_mut().insert_property(
-                        key,
-                        PropertyDescriptor::data(iter_fn, true, false, true),
-                    );
+                    obj_rc
+                        .borrow_mut()
+                        .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
                 }
             }
         }
@@ -9842,24 +10961,31 @@ impl Interpreter {
                                     initialized: true,
                                 },
                             );
-                            let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let is_simple =
+                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let env_strict = func_env.borrow().strict;
                             let use_mapped = is_simple && !is_strict && !env_strict;
                             let param_names: Vec<String> = if use_mapped {
-                                params.iter().filter_map(|p| {
-                                    if let Pattern::Identifier(name) = p { Some(name.clone()) } else { None }
-                                }).collect()
+                                params
+                                    .iter()
+                                    .filter_map(|p| {
+                                        if let Pattern::Identifier(name) = p {
+                                            Some(name.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
                             } else {
                                 Vec::new()
                             };
-                            let mapped_env = if use_mapped {
-                                Some(&func_env)
-                            } else {
-                                None
-                            };
+                            let mapped_env = if use_mapped { Some(&func_env) } else { None };
                             let arguments_obj = self.create_arguments_object(
-                                args, func_val.clone(), is_strict,
-                                mapped_env, &param_names,
+                                args,
+                                func_val.clone(),
+                                is_strict,
+                                mapped_env,
+                                &param_names,
                             );
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
@@ -10510,8 +11636,14 @@ fn get_set_record(interp: &mut Interpreter, obj: &JsValue) -> Result<SetRecord, 
     if !matches!(obj, JsValue::Object(_)) {
         return Err(interp.create_type_error("GetSetRecord requires an object"));
     }
-    let o = if let JsValue::Object(o) = obj { o } else { unreachable!() };
-    let obj_rc = interp.get_object(o.id).ok_or_else(|| interp.create_type_error("invalid object"))?;
+    let o = if let JsValue::Object(o) = obj {
+        o
+    } else {
+        unreachable!()
+    };
+    let obj_rc = interp
+        .get_object(o.id)
+        .ok_or_else(|| interp.create_type_error("invalid object"))?;
 
     // Get size via getter - read the property descriptor
     let size_val = {
@@ -10527,9 +11659,7 @@ fn get_set_record(interp: &mut Interpreter, obj: &JsValue) -> Result<SetRecord, 
                     _ => JsValue::Undefined,
                 }
             }
-            _ => {
-                borrowed.get_property("size")
-            }
+            _ => borrowed.get_property("size"),
         }
     };
     let size = to_number(&size_val);
@@ -10541,12 +11671,14 @@ fn get_set_record(interp: &mut Interpreter, obj: &JsValue) -> Result<SetRecord, 
     }
 
     let has = obj_rc.borrow().get_property("has");
-    if !matches!(&has, JsValue::Object(ho) if interp.get_object(ho.id).map_or(false, |o| o.borrow().callable.is_some())) {
+    if !matches!(&has, JsValue::Object(ho) if interp.get_object(ho.id).map_or(false, |o| o.borrow().callable.is_some()))
+    {
         return Err(interp.create_type_error("Set-like object must have a callable has method"));
     }
 
     let keys = obj_rc.borrow().get_property("keys");
-    if !matches!(&keys, JsValue::Object(ko) if interp.get_object(ko.id).map_or(false, |o| o.borrow().callable.is_some())) {
+    if !matches!(&keys, JsValue::Object(ko) if interp.get_object(ko.id).map_or(false, |o| o.borrow().callable.is_some()))
+    {
         return Err(interp.create_type_error("Set-like object must have a callable keys method"));
     }
 
@@ -10837,6 +11969,554 @@ fn json_split_items(s: &str) -> Vec<String> {
         items.push(trimmed);
     }
     items
+}
+
+// === Date spec helper functions ===
+
+const MS_PER_DAY: f64 = 86_400_000.0;
+
+fn day(t: f64) -> f64 {
+    (t / MS_PER_DAY).floor()
+}
+
+fn time_within_day(t: f64) -> f64 {
+    t.rem_euclid(MS_PER_DAY)
+}
+
+fn days_in_year(y: f64) -> f64 {
+    let y = y as i64;
+    if y % 4 != 0 {
+        365.0
+    } else if y % 100 != 0 {
+        366.0
+    } else if y % 400 != 0 {
+        365.0
+    } else {
+        366.0
+    }
+}
+
+fn day_from_year(y: f64) -> f64 {
+    let y = y as i64;
+    365.0 * (y - 1970) as f64 + ((y - 1969) / 4) as f64 - ((y - 1901) / 100) as f64
+        + ((y - 1601) / 400) as f64
+}
+
+fn time_from_year(y: f64) -> f64 {
+    day_from_year(y) * MS_PER_DAY
+}
+
+fn year_from_time(t: f64) -> f64 {
+    if t.is_nan() || t.is_infinite() {
+        return f64::NAN;
+    }
+    let mut lo = (t / MS_PER_DAY / 366.0 + 1970.0).floor() as i64 - 1;
+    let mut hi = (t / MS_PER_DAY / 365.0 + 1970.0).ceil() as i64 + 1;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if time_from_year(mid as f64) <= t {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo - 1) as f64
+}
+
+fn in_leap_year(t: f64) -> bool {
+    days_in_year(year_from_time(t)) == 366.0
+}
+
+fn day_within_year(t: f64) -> f64 {
+    day(t) - day_from_year(year_from_time(t))
+}
+
+fn month_from_time(t: f64) -> f64 {
+    let d = day_within_year(t) as i32;
+    let leap = in_leap_year(t) as i32;
+    match d {
+        d if d < 31 => 0.0,
+        d if d < 59 + leap => 1.0,
+        d if d < 90 + leap => 2.0,
+        d if d < 120 + leap => 3.0,
+        d if d < 151 + leap => 4.0,
+        d if d < 181 + leap => 5.0,
+        d if d < 212 + leap => 6.0,
+        d if d < 243 + leap => 7.0,
+        d if d < 273 + leap => 8.0,
+        d if d < 304 + leap => 9.0,
+        d if d < 334 + leap => 10.0,
+        _ => 11.0,
+    }
+}
+
+fn date_from_time(t: f64) -> f64 {
+    let d = day_within_year(t) as i32;
+    let leap = in_leap_year(t) as i32;
+    let m = month_from_time(t) as i32;
+    (match m {
+        0 => d + 1,
+        1 => d - 30,
+        2 => d - 58 - leap,
+        3 => d - 89 - leap,
+        4 => d - 119 - leap,
+        5 => d - 150 - leap,
+        6 => d - 180 - leap,
+        7 => d - 211 - leap,
+        8 => d - 242 - leap,
+        9 => d - 272 - leap,
+        10 => d - 303 - leap,
+        _ => d - 333 - leap,
+    }) as f64
+}
+
+fn week_day(t: f64) -> f64 {
+    (day(t) + 4.0).rem_euclid(7.0)
+}
+
+fn hour_from_time(t: f64) -> f64 {
+    (time_within_day(t) / 3_600_000.0).floor().rem_euclid(24.0)
+}
+
+fn min_from_time(t: f64) -> f64 {
+    (time_within_day(t) / 60_000.0).floor().rem_euclid(60.0)
+}
+
+fn sec_from_time(t: f64) -> f64 {
+    (time_within_day(t) / 1000.0).floor().rem_euclid(60.0)
+}
+
+fn ms_from_time(t: f64) -> f64 {
+    time_within_day(t).rem_euclid(1000.0)
+}
+
+fn make_time(hour: f64, min: f64, sec: f64, ms: f64) -> f64 {
+    if !hour.is_finite() || !min.is_finite() || !sec.is_finite() || !ms.is_finite() {
+        return f64::NAN;
+    }
+    let h = hour.trunc();
+    let m = min.trunc();
+    let s = sec.trunc();
+    let milli = ms.trunc();
+    h * 3_600_000.0 + m * 60_000.0 + s * 1000.0 + milli
+}
+
+fn make_day(year: f64, month: f64, date: f64) -> f64 {
+    if !year.is_finite() || !month.is_finite() || !date.is_finite() {
+        return f64::NAN;
+    }
+    let y = year.trunc();
+    let m = month.trunc();
+    let dt = date.trunc();
+    let ym = y + (m / 12.0).floor();
+    let mn = m.rem_euclid(12.0);
+
+    let month_starts = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let day_count = day_from_year(ym);
+    let leap = if days_in_year(ym) == 366.0 && mn >= 2.0 {
+        1.0
+    } else {
+        0.0
+    };
+    day_count + month_starts[mn as usize] as f64 + leap + dt - 1.0
+}
+
+fn make_date(day: f64, time: f64) -> f64 {
+    if !day.is_finite() || !time.is_finite() {
+        return f64::NAN;
+    }
+    day * MS_PER_DAY + time
+}
+
+fn time_clip(time: f64) -> f64 {
+    if !time.is_finite() || time.abs() > 8.64e15 {
+        return f64::NAN;
+    }
+    let t = time.trunc();
+    if t == 0.0 { 0.0_f64 } else { t }
+}
+
+fn local_tza() -> f64 {
+    use chrono::Local;
+    let now = Local::now();
+    now.offset().local_minus_utc() as f64 * 1000.0
+}
+
+fn local_time(t: f64) -> f64 {
+    t + local_tza()
+}
+
+fn utc_time(t: f64) -> f64 {
+    t - local_tza()
+}
+
+fn now_ms() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as f64)
+        .unwrap_or(f64::NAN)
+}
+
+fn day_name(wd: f64) -> &'static str {
+    match wd as i32 {
+        0 => "Sun",
+        1 => "Mon",
+        2 => "Tue",
+        3 => "Wed",
+        4 => "Thu",
+        5 => "Fri",
+        _ => "Sat",
+    }
+}
+
+fn month_name(m: f64) -> &'static str {
+    match m as i32 {
+        0 => "Jan",
+        1 => "Feb",
+        2 => "Mar",
+        3 => "Apr",
+        4 => "May",
+        5 => "Jun",
+        6 => "Jul",
+        7 => "Aug",
+        8 => "Sep",
+        9 => "Oct",
+        10 => "Nov",
+        _ => "Dec",
+    }
+}
+
+fn format_date_string(t: f64) -> String {
+    let lt = local_time(t);
+    let wd = week_day(lt);
+    let y = year_from_time(lt);
+    let m = month_from_time(lt);
+    let d = date_from_time(lt);
+    let h = hour_from_time(lt);
+    let min = min_from_time(lt);
+    let s = sec_from_time(lt);
+
+    let offset_ms = local_tza();
+    let offset_min = (offset_ms / 60_000.0) as i32;
+    let sign = if offset_min >= 0 { '+' } else { '-' };
+    let abs_offset = offset_min.unsigned_abs();
+    let oh = abs_offset / 60;
+    let om = abs_offset % 60;
+
+    let tz_abbr = chrono::Local::now().format("%Z").to_string();
+    format!(
+        "{} {} {:02} {:04} {:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
+        day_name(wd),
+        month_name(m),
+        d as i32,
+        y as i32,
+        h as i32,
+        min as i32,
+        s as i32,
+        sign,
+        oh,
+        om,
+        tz_abbr
+    )
+}
+
+fn format_iso_string(t: f64) -> String {
+    let y = year_from_time(t);
+    let m = month_from_time(t) as i32 + 1;
+    let d = date_from_time(t) as i32;
+    let h = hour_from_time(t) as i32;
+    let min = min_from_time(t) as i32;
+    let s = sec_from_time(t) as i32;
+    let ms = ms_from_time(t) as i32;
+    let yi = y as i64;
+    if yi >= 0 && yi <= 9999 {
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+            yi, m, d, h, min, s, ms
+        )
+    } else if yi >= 0 {
+        format!(
+            "+{:06}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+            yi, m, d, h, min, s, ms
+        )
+    } else {
+        format!(
+            "-{:06}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+            yi.unsigned_abs(),
+            m,
+            d,
+            h,
+            min,
+            s,
+            ms
+        )
+    }
+}
+
+fn format_utc_string(t: f64) -> String {
+    let wd = week_day(t);
+    let y = year_from_time(t);
+    let m = month_from_time(t);
+    let d = date_from_time(t);
+    let h = hour_from_time(t);
+    let min = min_from_time(t);
+    let s = sec_from_time(t);
+    format!(
+        "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
+        day_name(wd),
+        d as i32,
+        month_name(m),
+        y as i32,
+        h as i32,
+        min as i32,
+        s as i32
+    )
+}
+
+fn format_date_only_string(t: f64) -> String {
+    let lt = local_time(t);
+    let wd = week_day(lt);
+    let y = year_from_time(lt);
+    let m = month_from_time(lt);
+    let d = date_from_time(lt);
+    format!(
+        "{} {} {:02} {:04}",
+        day_name(wd),
+        month_name(m),
+        d as i32,
+        y as i32
+    )
+}
+
+fn format_time_only_string(t: f64) -> String {
+    let lt = local_time(t);
+    let h = hour_from_time(lt);
+    let min = min_from_time(lt);
+    let s = sec_from_time(lt);
+
+    let offset_ms = local_tza();
+    let offset_min = (offset_ms / 60_000.0) as i32;
+    let sign = if offset_min >= 0 { '+' } else { '-' };
+    let abs_offset = offset_min.unsigned_abs();
+    let oh = abs_offset / 60;
+    let om = abs_offset % 60;
+
+    let tz_abbr = chrono::Local::now().format("%Z").to_string();
+    format!(
+        "{:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
+        h as i32, min as i32, s as i32, sign, oh, om, tz_abbr
+    )
+}
+
+fn parse_date_string(s: &str) -> f64 {
+    let s = s.trim();
+    if s.is_empty() {
+        return f64::NAN;
+    }
+
+    // Try ISO 8601 format
+    if let Some(t) = parse_iso_date(s) {
+        return t;
+    }
+
+    // Try toString() format: "Wed Jan 29 2026 12:34:56 GMT+0100 (CET)"
+    if let Some(t) = parse_tostring_format(s) {
+        return t;
+    }
+
+    f64::NAN
+}
+
+fn parse_iso_date(s: &str) -> Option<f64> {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+
+    let (year, pos) = parse_iso_year(s)?;
+
+    if pos >= len {
+        // Year only
+        let d = make_day(year as f64, 0.0, 1.0);
+        return Some(time_clip(make_date(d, 0.0)));
+    }
+
+    if bytes[pos] != b'-' {
+        return None;
+    }
+    let pos = pos + 1;
+    let month: i32 = s.get(pos..pos + 2)?.parse().ok()?;
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    let pos = pos + 2;
+
+    if pos >= len {
+        let d = make_day(year as f64, (month - 1) as f64, 1.0);
+        return Some(time_clip(make_date(d, 0.0)));
+    }
+
+    if bytes[pos] != b'-' {
+        return None;
+    }
+    let pos = pos + 1;
+    let day_val: i32 = s.get(pos..pos + 2)?.parse().ok()?;
+    if !(1..=31).contains(&day_val) {
+        return None;
+    }
+    let pos = pos + 2;
+
+    if pos >= len {
+        // Date only = UTC
+        let d = make_day(year as f64, (month - 1) as f64, day_val as f64);
+        return Some(time_clip(make_date(d, 0.0)));
+    }
+
+    if bytes[pos] != b'T' && bytes[pos] != b't' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    let hour: i32 = s.get(pos..pos + 2)?.parse().ok()?;
+    let pos = pos + 2;
+    if pos >= len || bytes[pos] != b':' {
+        return None;
+    }
+    let pos = pos + 1;
+    let minute: i32 = s.get(pos..pos + 2)?.parse().ok()?;
+    let pos = pos + 2;
+
+    let (second, ms_val, pos) = if pos < len && bytes[pos] == b':' {
+        let pos = pos + 1;
+        let sec: i32 = s.get(pos..pos + 2)?.parse().ok()?;
+        let pos = pos + 2;
+        if pos < len && bytes[pos] == b'.' {
+            let pos = pos + 1;
+            let frac_start = pos;
+            let mut frac_end = pos;
+            while frac_end < len && bytes[frac_end].is_ascii_digit() {
+                frac_end += 1;
+            }
+            let frac_str = s.get(frac_start..frac_end)?;
+            let ms = match frac_str.len() {
+                1 => frac_str.parse::<i32>().ok()? * 100,
+                2 => frac_str.parse::<i32>().ok()? * 10,
+                3 => frac_str.parse::<i32>().ok()?,
+                n if n > 3 => frac_str[..3].parse::<i32>().ok()?,
+                _ => 0,
+            };
+            (sec, ms, frac_end)
+        } else {
+            (sec, 0, pos)
+        }
+    } else {
+        (0, 0, pos)
+    };
+
+    let d = make_day(year as f64, (month - 1) as f64, day_val as f64);
+    let time = make_time(hour as f64, minute as f64, second as f64, ms_val as f64);
+    let dt = make_date(d, time);
+
+    // Timezone
+    if pos >= len {
+        // No timezone = local time
+        return Some(time_clip(utc_time(dt)));
+    }
+
+    let ch = bytes[pos];
+    if ch == b'Z' || ch == b'z' {
+        return Some(time_clip(dt));
+    }
+
+    if ch == b'+' || ch == b'-' {
+        let sign: f64 = if ch == b'+' { 1.0 } else { -1.0 };
+        let pos = pos + 1;
+        let tz_hour: f64 = s.get(pos..pos + 2)?.parse().ok()?;
+        let pos = pos + 2;
+        let tz_min: f64 = if pos < len && bytes[pos] == b':' {
+            s.get(pos + 1..pos + 3)?.parse().ok()?
+        } else if pos + 1 < len && bytes[pos].is_ascii_digit() {
+            s.get(pos..pos + 2)?.parse().ok()?
+        } else {
+            0.0
+        };
+        let offset = sign * (tz_hour * 60.0 + tz_min) * 60_000.0;
+        return Some(time_clip(dt - offset));
+    }
+
+    None
+}
+
+fn parse_iso_year(s: &str) -> Option<(i64, usize)> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    if bytes[0] == b'+' || bytes[0] == b'-' {
+        // Extended year ±YYYYYY
+        let sign: i64 = if bytes[0] == b'+' { 1 } else { -1 };
+        let yr: i64 = s.get(1..7)?.parse().ok()?;
+        Some((sign * yr, 7))
+    } else {
+        let yr: i64 = s.get(0..4)?.parse().ok()?;
+        Some((yr, 4))
+    }
+}
+
+fn parse_tostring_format(s: &str) -> Option<f64> {
+    // "Wed Jan 29 2026 12:34:56 GMT+0100 (CET)"
+    // or "Wed Jan 29 2026 12:34:56 GMT+0100"
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() < 5 {
+        return None;
+    }
+
+    let month_idx = match parts[1] {
+        "Jan" => 0,
+        "Feb" => 1,
+        "Mar" => 2,
+        "Apr" => 3,
+        "May" => 4,
+        "Jun" => 5,
+        "Jul" => 6,
+        "Aug" => 7,
+        "Sep" => 8,
+        "Oct" => 9,
+        "Nov" => 10,
+        "Dec" => 11,
+        _ => return None,
+    };
+
+    let day_val: i32 = parts[2].parse().ok()?;
+    let year: i64 = parts[3].parse().ok()?;
+    let time_parts: Vec<&str> = parts[4].split(':').collect();
+    if time_parts.len() != 3 {
+        return None;
+    }
+    let hour: i32 = time_parts[0].parse().ok()?;
+    let min: i32 = time_parts[1].parse().ok()?;
+    let sec: i32 = time_parts[2].parse().ok()?;
+
+    let d = make_day(year as f64, month_idx as f64, day_val as f64);
+    let time = make_time(hour as f64, min as f64, sec as f64, 0.0);
+    let dt = make_date(d, time);
+
+    if parts.len() > 5 && parts[5].starts_with("GMT") {
+        let tz = &parts[5][3..];
+        if tz.is_empty() {
+            return Some(time_clip(dt));
+        }
+        let sign: f64 = if tz.starts_with('+') { 1.0 } else { -1.0 };
+        let tz = &tz[1..];
+        if tz.len() >= 4 {
+            let tz_h: f64 = tz[..2].parse().ok()?;
+            let tz_m: f64 = tz[2..4].parse().ok()?;
+            let offset = sign * (tz_h * 60.0 + tz_m) * 60_000.0;
+            return Some(time_clip(dt - offset));
+        }
+    }
+
+    // Assume local
+    Some(time_clip(utc_time(dt)))
 }
 
 fn find_json_colon(s: &str) -> Option<usize> {

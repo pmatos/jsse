@@ -39,7 +39,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Promise | 0% | 0/281 |
 | Map | 50% | 103/204 |
 | Set | 68% | 261/383 |
-| Date | 0% | 0/594 |
+| Date | 51% | 305/594 |
 
 ---
 
@@ -53,7 +53,7 @@ These features block significant numbers of tests:
 4. **Iterator protocol** — Breaks `for...of`, spread on non-arrays, many built-in methods.
 4. **Promise** — Blocks all async/await runtime.
 5. ~~**Map/Set**~~ — ✅ Done (Map: 103/204, Set: 261/383). Remaining failures: native fn `.length` properties, Proxy/Reflect/Symbol.species deps.
-6. **Date** — Not implemented. 594 tests, fundamental.
+6. ~~**Date**~~ — ✅ Done (305/594, 51%). Constructor, static methods (now/parse/UTC), getters, setters, string formatting, Symbol.toPrimitive. Remaining failures: native fn `.length`/`.name`/prop-desc, Proxy/Reflect.construct, edge-case string parsing.
 
 ---
 
@@ -63,7 +63,7 @@ These features block significant numbers of tests:
 2. ~~**Garbage collection**~~ — ✅ Done
 3. ~~**Complete Iterator built-in**~~ — ✅ Done (138/510, 27%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat. Remaining failures need generators.
 3. ~~**Implement Map and Set**~~ — ✅ Done (364 new passes)
-4. **Implement Date** — 594 tests, fundamental built-in
+4. ~~**Implement Date**~~ — ✅ Done (305/594, 51%, 406 new passes overall)
 5. **Generator `yield` evaluation** — Enables iterator protocol, async later
 6. **Private fields runtime** — Parsing done, evaluation needed
 
