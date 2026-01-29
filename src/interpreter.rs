@@ -272,6 +272,9 @@ pub struct JsObjectData {
     pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
+    pub proxy_target: Option<Rc<RefCell<JsObjectData>>>,
+    pub proxy_handler: Option<Rc<RefCell<JsObjectData>>>,
+    pub proxy_revoked: bool,
 }
 
 impl JsObjectData {
@@ -292,7 +295,14 @@ impl JsObjectData {
             parameter_map: None,
             map_data: None,
             set_data: None,
+            proxy_target: None,
+            proxy_handler: None,
+            proxy_revoked: false,
         }
+    }
+
+    pub fn is_proxy(&self) -> bool {
+        self.proxy_target.is_some()
     }
 
     pub fn get_property(&self, key: &str) -> JsValue {
@@ -1525,6 +1535,10 @@ impl Interpreter {
         // RegExp constructor and prototype
         self.setup_regexp();
 
+        // Reflect and Proxy built-ins
+        self.setup_reflect();
+        self.setup_proxy();
+
         // globalThis - create a global object
         let global_obj = self.create_object();
         let global_val = JsValue::Object(crate::types::JsObject {
@@ -1854,6 +1868,38 @@ impl Interpreter {
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
                     {
+                        // Proxy defineProperty trap
+                        if obj.borrow().is_proxy() {
+                            let target_inner = interp.get_proxy_target_val(o.id);
+                            let key_val = JsValue::String(JsString::from_str(&key));
+                            match interp.invoke_proxy_trap(
+                                o.id,
+                                "defineProperty",
+                                vec![target_inner.clone(), key_val, desc_val.clone()],
+                            ) {
+                                Ok(Some(v)) => {
+                                    if !to_boolean(&v) {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "'defineProperty' on proxy: trap returned falsish",
+                                        ));
+                                    }
+                                    return Completion::Normal(target);
+                                }
+                                Ok(None) => {
+                                    // No trap, fall through to target
+                                    if let JsValue::Object(ref t) = target_inner
+                                        && let Some(tobj) = interp.get_object(t.id)
+                                    {
+                                        if let Some(desc) = interp.to_property_descriptor(&desc_val)
+                                        {
+                                            tobj.borrow_mut().define_own_property(key, desc);
+                                        }
+                                    }
+                                    return Completion::Normal(target);
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
                         let mut desc = PropertyDescriptor {
                             value: None,
                             writable: None,
@@ -1909,34 +1955,40 @@ impl Interpreter {
                 Rc::new(|interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let key = args.get(1).map(to_js_string).unwrap_or_default();
-                    if let JsValue::Object(ref o) = target
-                        && let Some(obj) = interp.get_object(o.id)
-                        && let Some(desc) = obj.borrow().get_own_property(&key).cloned()
-                    {
-                        let result = interp.create_object();
-                        {
-                            let mut r = result.borrow_mut();
-                            if let Some(val) = desc.value {
-                                r.insert_value("value".to_string(), val);
-                            }
-                            if let Some(w) = desc.writable {
-                                r.insert_value("writable".to_string(), JsValue::Boolean(w));
-                            }
-                            if let Some(e) = desc.enumerable {
-                                r.insert_value("enumerable".to_string(), JsValue::Boolean(e));
-                            }
-                            if let Some(c) = desc.configurable {
-                                r.insert_value("configurable".to_string(), JsValue::Boolean(c));
-                            }
-                            if let Some(g) = desc.get {
-                                r.insert_value("get".to_string(), g);
-                            }
-                            if let Some(s) = desc.set {
-                                r.insert_value("set".to_string(), s);
+                    if let JsValue::Object(ref o) = target {
+                        // Proxy getOwnPropertyDescriptor trap
+                        if let Some(obj) = interp.get_object(o.id) {
+                            if obj.borrow().is_proxy() {
+                                let target_inner = interp.get_proxy_target_val(o.id);
+                                let key_val = JsValue::String(JsString::from_str(&key));
+                                match interp.invoke_proxy_trap(
+                                    o.id,
+                                    "getOwnPropertyDescriptor",
+                                    vec![target_inner.clone(), key_val],
+                                ) {
+                                    Ok(Some(v)) => return Completion::Normal(v),
+                                    Ok(None) => {
+                                        // No trap, fall through to target
+                                        if let JsValue::Object(ref t) = target_inner
+                                            && let Some(tobj) = interp.get_object(t.id)
+                                            && let Some(desc) =
+                                                tobj.borrow().get_own_property(&key).cloned()
+                                        {
+                                            return Completion::Normal(
+                                                interp.from_property_descriptor(&desc),
+                                            );
+                                        }
+                                        return Completion::Normal(JsValue::Undefined);
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
                             }
                         }
-                        let id = result.borrow().id.unwrap();
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
+                        if let Some(obj) = interp.get_object(o.id)
+                            && let Some(desc) = obj.borrow().get_own_property(&key).cloned()
+                        {
+                            return Completion::Normal(interp.from_property_descriptor(&desc));
+                        }
                     }
                     Completion::Normal(JsValue::Undefined)
                 }),
@@ -1953,6 +2005,42 @@ impl Interpreter {
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
                     {
+                        // Proxy ownKeys trap
+                        if obj.borrow().is_proxy() {
+                            let target_inner = interp.get_proxy_target_val(o.id);
+                            match interp.invoke_proxy_trap(
+                                o.id,
+                                "ownKeys",
+                                vec![target_inner.clone()],
+                            ) {
+                                Ok(Some(v)) => {
+                                    // Filter to enumerable keys from trap result
+                                    // For simplicity, return all keys from trap
+                                    return Completion::Normal(v);
+                                }
+                                Ok(None) => {
+                                    // No trap, fall through to target
+                                    if let JsValue::Object(ref t) = target_inner
+                                        && let Some(tobj) = interp.get_object(t.id)
+                                    {
+                                        let b = tobj.borrow();
+                                        let keys: Vec<JsValue> = b
+                                            .property_order
+                                            .iter()
+                                            .filter(|k| {
+                                                b.properties
+                                                    .get(*k)
+                                                    .is_some_and(|d| d.enumerable != Some(false))
+                                            })
+                                            .map(|k| JsValue::String(JsString::from_str(k)))
+                                            .collect();
+                                        let arr = interp.create_array(keys);
+                                        return Completion::Normal(arr);
+                                    }
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
                         let borrowed = obj.borrow();
                         let keys: Vec<JsValue> = borrowed
                             .property_order
@@ -2006,12 +2094,39 @@ impl Interpreter {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
-                        && let Some(proto) = &obj.borrow().prototype
                     {
-                        if let Some(id) = proto.borrow().id {
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                id,
-                            }));
+                        // Proxy getPrototypeOf trap
+                        if obj.borrow().is_proxy() {
+                            let target_inner = interp.get_proxy_target_val(o.id);
+                            match interp.invoke_proxy_trap(
+                                o.id,
+                                "getPrototypeOf",
+                                vec![target_inner.clone()],
+                            ) {
+                                Ok(Some(v)) => return Completion::Normal(v),
+                                Ok(None) => {
+                                    // No trap, fall through to target
+                                    if let JsValue::Object(ref t) = target_inner
+                                        && let Some(tobj) = interp.get_object(t.id)
+                                        && let Some(proto) = &tobj.borrow().prototype
+                                    {
+                                        if let Some(id) = proto.borrow().id {
+                                            return Completion::Normal(JsValue::Object(
+                                                crate::types::JsObject { id },
+                                            ));
+                                        }
+                                    }
+                                    return Completion::Normal(JsValue::Null);
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        if let Some(proto) = &obj.borrow().prototype {
+                            if let Some(id) = proto.borrow().id {
+                                return Completion::Normal(JsValue::Object(
+                                    crate::types::JsObject { id },
+                                ));
+                            }
                         }
                     }
                     Completion::Normal(JsValue::Null)
@@ -2178,6 +2293,32 @@ impl Interpreter {
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
                     {
+                        // Proxy ownKeys trap
+                        if obj.borrow().is_proxy() {
+                            let target_inner = interp.get_proxy_target_val(o.id);
+                            match interp.invoke_proxy_trap(
+                                o.id,
+                                "ownKeys",
+                                vec![target_inner.clone()],
+                            ) {
+                                Ok(Some(v)) => return Completion::Normal(v),
+                                Ok(None) => {
+                                    if let JsValue::Object(ref t) = target_inner
+                                        && let Some(tobj) = interp.get_object(t.id)
+                                    {
+                                        let names: Vec<JsValue> = tobj
+                                            .borrow()
+                                            .property_order
+                                            .iter()
+                                            .map(|k| JsValue::String(JsString::from_str(k)))
+                                            .collect();
+                                        let arr = interp.create_array(names);
+                                        return Completion::Normal(arr);
+                                    }
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
                         let names: Vec<JsValue> = obj
                             .borrow()
                             .property_order
@@ -2202,6 +2343,33 @@ impl Interpreter {
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
                     {
+                        // Proxy preventExtensions trap
+                        if obj.borrow().is_proxy() {
+                            let target_inner = interp.get_proxy_target_val(o.id);
+                            match interp.invoke_proxy_trap(
+                                o.id,
+                                "preventExtensions",
+                                vec![target_inner.clone()],
+                            ) {
+                                Ok(Some(v)) => {
+                                    if !to_boolean(&v) {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "'preventExtensions' on proxy: trap returned falsish",
+                                        ));
+                                    }
+                                    return Completion::Normal(target);
+                                }
+                                Ok(None) => {
+                                    if let JsValue::Object(ref t) = target_inner
+                                        && let Some(tobj) = interp.get_object(t.id)
+                                    {
+                                        tobj.borrow_mut().extensible = false;
+                                    }
+                                    return Completion::Normal(target);
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
                         obj.borrow_mut().extensible = false;
                     }
                     Completion::Normal(target)
@@ -2219,6 +2387,30 @@ impl Interpreter {
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
                     {
+                        // Proxy isExtensible trap
+                        if obj.borrow().is_proxy() {
+                            let target_inner = interp.get_proxy_target_val(o.id);
+                            match interp.invoke_proxy_trap(
+                                o.id,
+                                "isExtensible",
+                                vec![target_inner.clone()],
+                            ) {
+                                Ok(Some(v)) => {
+                                    return Completion::Normal(JsValue::Boolean(to_boolean(&v)));
+                                }
+                                Ok(None) => {
+                                    if let JsValue::Object(ref t) = target_inner
+                                        && let Some(tobj) = interp.get_object(t.id)
+                                    {
+                                        return Completion::Normal(JsValue::Boolean(
+                                            tobj.borrow().extensible,
+                                        ));
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
                         return Completion::Normal(JsValue::Boolean(obj.borrow().extensible));
                     }
                     Completion::Normal(JsValue::Boolean(false))
@@ -2328,6 +2520,44 @@ impl Interpreter {
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
                     {
+                        // Proxy setPrototypeOf trap
+                        if obj.borrow().is_proxy() {
+                            let target_inner = interp.get_proxy_target_val(o.id);
+                            match interp.invoke_proxy_trap(
+                                o.id,
+                                "setPrototypeOf",
+                                vec![target_inner.clone(), proto.clone()],
+                            ) {
+                                Ok(Some(v)) => {
+                                    if !to_boolean(&v) {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "'setPrototypeOf' on proxy: trap returned falsish",
+                                        ));
+                                    }
+                                    return Completion::Normal(target);
+                                }
+                                Ok(None) => {
+                                    // No trap, fall through to target
+                                    if let JsValue::Object(ref t) = target_inner
+                                        && let Some(tobj) = interp.get_object(t.id)
+                                    {
+                                        match &proto {
+                                            JsValue::Null => {
+                                                tobj.borrow_mut().prototype = None;
+                                            }
+                                            JsValue::Object(p) => {
+                                                if let Some(po) = interp.get_object(p.id) {
+                                                    tobj.borrow_mut().prototype = Some(po);
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    return Completion::Normal(target);
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
                         match &proto {
                             JsValue::Null => {
                                 obj.borrow_mut().prototype = None;
@@ -8780,6 +9010,559 @@ impl Interpreter {
         JsValue::Object(crate::types::JsObject { id })
     }
 
+    fn setup_reflect(&mut self) {
+        let reflect_obj = self.create_object();
+        let reflect_id = reflect_obj.borrow().id.unwrap();
+
+        // Reflect.apply(target, thisArg, argsList)
+        let apply_fn = self.create_function(JsFunction::Native(
+            "apply".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.apply requires a function target"),
+                    );
+                }
+                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let args_list = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                let call_args = if matches!(args_list, JsValue::Object(_)) {
+                    match interp.iterate_to_vec(&args_list) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    Vec::new()
+                };
+                interp.call_function(&target, &this_arg, &call_args)
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("apply".to_string(), apply_fn);
+
+        // Reflect.construct(target, argsList, newTarget?)
+        let construct_fn = self.create_function(JsFunction::Native(
+            "construct".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.construct requires a constructor"),
+                    );
+                }
+                // Check target is callable
+                if let JsValue::Object(ref to) = target {
+                    if let Some(tobj) = interp.get_object(to.id) {
+                        if tobj.borrow().callable.is_none() {
+                            return Completion::Throw(
+                                interp.create_type_error("target is not a constructor"),
+                            );
+                        }
+                    }
+                }
+                let args_list = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let new_target = args.get(2).cloned().unwrap_or(target.clone());
+                // Check newTarget is a constructor (has [[Construct]])
+                if let JsValue::Object(ref nto) = new_target {
+                    if let Some(ntobj) = interp.get_object(nto.id) {
+                        let b = ntobj.borrow();
+                        let is_ctor = match &b.callable {
+                            Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
+                            Some(JsFunction::Native(..)) => b.has_own_property("prototype"),
+                            None => false,
+                        };
+                        if !is_ctor {
+                            return Completion::Throw(
+                                interp.create_type_error("newTarget is not a constructor"),
+                            );
+                        }
+                    }
+                } else {
+                    return Completion::Throw(
+                        interp.create_type_error("newTarget is not a constructor"),
+                    );
+                }
+                let call_args = if matches!(args_list, JsValue::Object(_)) {
+                    match interp.iterate_to_vec(&args_list) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    Vec::new()
+                };
+                // Create new object
+                let new_obj = interp.create_object();
+                // Set prototype from newTarget.prototype
+                if let JsValue::Object(nt) = &new_target
+                    && let Some(nt_obj) = interp.get_object(nt.id)
+                {
+                    let proto = nt_obj.borrow().get_property("prototype");
+                    if let JsValue::Object(proto_obj) = &proto
+                        && let Some(proto_rc) = interp.get_object(proto_obj.id)
+                    {
+                        new_obj.borrow_mut().prototype = Some(proto_rc);
+                    }
+                }
+                let new_obj_id = new_obj.borrow().id.unwrap();
+                let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+                let prev_new_target = interp.new_target.take();
+                interp.new_target = Some(new_target);
+                let result = interp.call_function(&target, &this_val, &call_args);
+                interp.new_target = prev_new_target;
+                match result {
+                    Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
+                        Completion::Normal(v)
+                    }
+                    Completion::Normal(_) => Completion::Normal(this_val),
+                    other => other,
+                }
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("construct".to_string(), construct_fn);
+
+        // Reflect.defineProperty(target, key, desc)
+        let def_prop_fn = self.create_function(JsFunction::Native(
+            "defineProperty".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.defineProperty requires an object"),
+                    );
+                }
+                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                let desc_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    if let Some(desc) = interp.to_property_descriptor(&desc_val) {
+                        obj.borrow_mut().define_own_property(key, desc);
+                        return Completion::Normal(JsValue::Boolean(true));
+                    }
+                }
+                Completion::Normal(JsValue::Boolean(false))
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("defineProperty".to_string(), def_prop_fn);
+
+        // Reflect.deleteProperty(target, key)
+        let del_prop_fn = self.create_function(JsFunction::Native(
+            "deleteProperty".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.deleteProperty requires an object"),
+                    );
+                }
+                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let mut obj_mut = obj.borrow_mut();
+                    if let Some(desc) = obj_mut.properties.get(&key)
+                        && desc.configurable == Some(false)
+                    {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                    obj_mut.properties.remove(&key);
+                    obj_mut.property_order.retain(|k| k != &key);
+                    return Completion::Normal(JsValue::Boolean(true));
+                }
+                Completion::Normal(JsValue::Boolean(false))
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("deleteProperty".to_string(), del_prop_fn);
+
+        // Reflect.get(target, key, receiver?)
+        let get_fn = self.create_function(JsFunction::Native(
+            "get".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.get requires an object"),
+                    );
+                }
+                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                let receiver = args.get(2).cloned().unwrap_or(target.clone());
+                if let JsValue::Object(ref o) = target {
+                    interp.get_object_property(o.id, &key, &receiver)
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("get".to_string(), get_fn);
+
+        // Reflect.getOwnPropertyDescriptor(target, key)
+        let gopd_fn =
+            self.create_function(JsFunction::Native(
+                "getOwnPropertyDescriptor".to_string(),
+                Rc::new(|interp, _this, args| {
+                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !matches!(target, JsValue::Object(_)) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Reflect.getOwnPropertyDescriptor requires an object",
+                        ));
+                    }
+                    let key = args.get(1).map(to_js_string).unwrap_or_default();
+                    if let JsValue::Object(ref o) = target
+                        && let Some(obj) = interp.get_object(o.id)
+                        && let Some(desc) = obj.borrow().get_own_property(&key).cloned()
+                    {
+                        return Completion::Normal(interp.from_property_descriptor(&desc));
+                    }
+                    Completion::Normal(JsValue::Undefined)
+                }),
+            ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("getOwnPropertyDescriptor".to_string(), gopd_fn);
+
+        // Reflect.getPrototypeOf(target)
+        let gpo_fn = self.create_function(JsFunction::Native(
+            "getPrototypeOf".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.getPrototypeOf requires an object"),
+                    );
+                }
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(proto) = &obj.borrow().prototype
+                {
+                    if let Some(id) = proto.borrow().id {
+                        return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
+                    }
+                }
+                Completion::Normal(JsValue::Null)
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("getPrototypeOf".to_string(), gpo_fn);
+
+        // Reflect.has(target, key)
+        let has_fn = self.create_function(JsFunction::Native(
+            "has".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.has requires an object"),
+                    );
+                }
+                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    return Completion::Normal(JsValue::Boolean(obj.borrow().has_property(&key)));
+                }
+                Completion::Normal(JsValue::Boolean(false))
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("has".to_string(), has_fn);
+
+        // Reflect.isExtensible(target)
+        let is_ext_fn = self.create_function(JsFunction::Native(
+            "isExtensible".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.isExtensible requires an object"),
+                    );
+                }
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    return Completion::Normal(JsValue::Boolean(obj.borrow().extensible));
+                }
+                Completion::Normal(JsValue::Boolean(false))
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("isExtensible".to_string(), is_ext_fn);
+
+        // Reflect.ownKeys(target)
+        let own_keys_fn = self.create_function(JsFunction::Native(
+            "ownKeys".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.ownKeys requires an object"),
+                    );
+                }
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let keys: Vec<JsValue> = obj
+                        .borrow()
+                        .property_order
+                        .iter()
+                        .map(|k| JsValue::String(JsString::from_str(k)))
+                        .collect();
+                    let arr = interp.create_array(keys);
+                    return Completion::Normal(arr);
+                }
+                Completion::Normal(interp.create_array(Vec::new()))
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("ownKeys".to_string(), own_keys_fn);
+
+        // Reflect.preventExtensions(target)
+        let pe_fn = self.create_function(JsFunction::Native(
+            "preventExtensions".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.preventExtensions requires an object"),
+                    );
+                }
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    obj.borrow_mut().extensible = false;
+                }
+                Completion::Normal(JsValue::Boolean(true))
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("preventExtensions".to_string(), pe_fn);
+
+        // Reflect.set(target, key, value, receiver?)
+        let set_fn = self.create_function(JsFunction::Native(
+            "set".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.set requires an object"),
+                    );
+                }
+                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                let receiver = args.get(3).cloned().unwrap_or(target.clone());
+                if let JsValue::Object(ref o) = receiver
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    // Check for setter
+                    let desc = obj.borrow().get_property_descriptor(&key);
+                    if let Some(ref d) = desc
+                        && let Some(ref setter) = d.set
+                    {
+                        let setter = setter.clone();
+                        return match interp.call_function(&setter, &receiver, &[value]) {
+                            Completion::Normal(_) => Completion::Normal(JsValue::Boolean(true)),
+                            Completion::Throw(e) => Completion::Throw(e),
+                            _ => Completion::Normal(JsValue::Boolean(true)),
+                        };
+                    }
+                    // Check writable
+                    if let Some(ref d) = desc
+                        && d.writable == Some(false)
+                    {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                    obj.borrow_mut().set_property_value(&key, value);
+                    return Completion::Normal(JsValue::Boolean(true));
+                }
+                Completion::Normal(JsValue::Boolean(false))
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("set".to_string(), set_fn);
+
+        // Reflect.setPrototypeOf(target, proto)
+        let spo_fn = self.create_function(JsFunction::Native(
+            "setPrototypeOf".to_string(),
+            Rc::new(|interp, _this, args| {
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Reflect.setPrototypeOf requires an object"),
+                    );
+                }
+                let proto = args.get(1).cloned().unwrap_or(JsValue::Null);
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    match &proto {
+                        JsValue::Null => {
+                            obj.borrow_mut().prototype = None;
+                        }
+                        JsValue::Object(p) => {
+                            if let Some(proto_obj) = interp.get_object(p.id) {
+                                obj.borrow_mut().prototype = Some(proto_obj);
+                            }
+                        }
+                        _ => {
+                            return Completion::Normal(JsValue::Boolean(false));
+                        }
+                    }
+                    return Completion::Normal(JsValue::Boolean(true));
+                }
+                Completion::Normal(JsValue::Boolean(false))
+            }),
+        ));
+        reflect_obj
+            .borrow_mut()
+            .insert_builtin("setPrototypeOf".to_string(), spo_fn);
+
+        // Register Reflect as global
+        let reflect_val = JsValue::Object(crate::types::JsObject { id: reflect_id });
+        self.global_env
+            .borrow_mut()
+            .declare("Reflect", BindingKind::Const);
+        let _ = self.global_env.borrow_mut().set("Reflect", reflect_val);
+    }
+
+    fn setup_proxy(&mut self) {
+        // Proxy constructor
+        let proxy_fn = self.create_function(JsFunction::Native(
+            "Proxy".to_string(),
+            Rc::new(|interp, _this, args| {
+                // Must be called with new (we check new.target)
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("Constructor Proxy requires 'new'"),
+                    );
+                }
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let handler = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(target, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Cannot create proxy with a non-object as target"),
+                    );
+                }
+                if !matches!(handler, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp
+                            .create_type_error("Cannot create proxy with a non-object as handler"),
+                    );
+                }
+                let proxy_obj = interp.create_object();
+                proxy_obj.borrow_mut().class_name = "Proxy".to_string();
+                if let JsValue::Object(ref t) = target
+                    && let Some(target_rc) = interp.get_object(t.id)
+                {
+                    // Copy callable if target is callable
+                    let callable = target_rc.borrow().callable.clone();
+                    if callable.is_some() {
+                        proxy_obj.borrow_mut().callable = callable;
+                    }
+                    proxy_obj.borrow_mut().proxy_target = Some(target_rc);
+                }
+                if let JsValue::Object(ref h) = handler
+                    && let Some(handler_rc) = interp.get_object(h.id)
+                {
+                    proxy_obj.borrow_mut().proxy_handler = Some(handler_rc);
+                }
+                let proxy_id = proxy_obj.borrow().id.unwrap();
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id: proxy_id }))
+            }),
+        ));
+
+        // Override eval_new behavior: Proxy constructor returns proxy_obj, not new_obj
+        // The proxy constructor already returns an Object, so eval_new will use it.
+
+        // Proxy.revocable(target, handler)
+        if let JsValue::Object(ref pf) = proxy_fn
+            && let Some(proxy_func_obj) = self.get_object(pf.id)
+        {
+            let revocable_fn = self.create_function(JsFunction::Native(
+                "revocable".to_string(),
+                Rc::new(|interp, _this, args| {
+                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let handler = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    if !matches!(target, JsValue::Object(_)) {
+                        return Completion::Throw(
+                            interp.create_type_error(
+                                "Cannot create proxy with a non-object as target",
+                            ),
+                        );
+                    }
+                    if !matches!(handler, JsValue::Object(_)) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Cannot create proxy with a non-object as handler",
+                        ));
+                    }
+                    let proxy_obj = interp.create_object();
+                    proxy_obj.borrow_mut().class_name = "Proxy".to_string();
+                    if let JsValue::Object(ref t) = target
+                        && let Some(target_rc) = interp.get_object(t.id)
+                    {
+                        let callable = target_rc.borrow().callable.clone();
+                        if callable.is_some() {
+                            proxy_obj.borrow_mut().callable = callable;
+                        }
+                        proxy_obj.borrow_mut().proxy_target = Some(target_rc);
+                    }
+                    if let JsValue::Object(ref h) = handler
+                        && let Some(handler_rc) = interp.get_object(h.id)
+                    {
+                        proxy_obj.borrow_mut().proxy_handler = Some(handler_rc);
+                    }
+                    let proxy_id = proxy_obj.borrow().id.unwrap();
+                    let proxy_val = JsValue::Object(crate::types::JsObject { id: proxy_id });
+
+                    // Create revoke function that captures proxy_id
+                    let revoke_fn = interp.create_function(JsFunction::Native(
+                        "".to_string(),
+                        Rc::new(move |interp2, _this2, _args2| {
+                            if let Some(p) = interp2.get_object(proxy_id) {
+                                let mut pm = p.borrow_mut();
+                                pm.proxy_revoked = true;
+                                pm.proxy_target = None;
+                                pm.proxy_handler = None;
+                            }
+                            Completion::Normal(JsValue::Undefined)
+                        }),
+                    ));
+
+                    let result = interp.create_object();
+                    result
+                        .borrow_mut()
+                        .insert_value("proxy".to_string(), proxy_val);
+                    result
+                        .borrow_mut()
+                        .insert_value("revoke".to_string(), revoke_fn);
+                    let result_id = result.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
+                }),
+            ));
+            proxy_func_obj
+                .borrow_mut()
+                .insert_value("revocable".to_string(), revocable_fn);
+        }
+
+        self.global_env
+            .borrow_mut()
+            .declare("Proxy", BindingKind::Var);
+        let _ = self.global_env.borrow_mut().set("Proxy", proxy_fn);
+    }
+
     fn setup_function_prototype(&mut self, obj_proto: &Rc<RefCell<JsObjectData>>) {
         // Add call to Object.prototype (simplified - applies to all functions via prototype chain)
         let call_fn = self.create_function(JsFunction::Native(
@@ -9013,6 +9796,18 @@ impl Interpreter {
                 }
             }
 
+            // Trace proxy target/handler
+            if let Some(ref target) = obj.proxy_target {
+                if let Some(tid) = target.borrow().id {
+                    worklist.push(tid);
+                }
+            }
+            if let Some(ref handler) = obj.proxy_handler {
+                if let Some(hid) = handler.borrow().id {
+                    worklist.push(hid);
+                }
+            }
+
             // Trace iterator state
             if let Some(ref state) = obj.iterator_state {
                 match state {
@@ -9065,6 +9860,76 @@ impl Interpreter {
             }
             current = borrowed.parent.clone();
         }
+    }
+
+    fn to_property_descriptor(&mut self, val: &JsValue) -> Option<PropertyDescriptor> {
+        if let JsValue::Object(d) = val
+            && let Some(desc_obj) = self.get_object(d.id)
+        {
+            let b = desc_obj.borrow();
+            let mut desc = PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: None,
+                set: None,
+                enumerable: None,
+                configurable: None,
+            };
+            let v = b.get_property("value");
+            if !matches!(v, JsValue::Undefined) || b.has_own_property("value") {
+                desc.value = Some(v);
+            }
+            let w = b.get_property("writable");
+            if !matches!(w, JsValue::Undefined) || b.has_own_property("writable") {
+                desc.writable = Some(to_boolean(&w));
+            }
+            let e = b.get_property("enumerable");
+            if !matches!(e, JsValue::Undefined) || b.has_own_property("enumerable") {
+                desc.enumerable = Some(to_boolean(&e));
+            }
+            let c = b.get_property("configurable");
+            if !matches!(c, JsValue::Undefined) || b.has_own_property("configurable") {
+                desc.configurable = Some(to_boolean(&c));
+            }
+            let g = b.get_property("get");
+            if !matches!(g, JsValue::Undefined) || b.has_own_property("get") {
+                desc.get = Some(g);
+            }
+            let s = b.get_property("set");
+            if !matches!(s, JsValue::Undefined) || b.has_own_property("set") {
+                desc.set = Some(s);
+            }
+            Some(desc)
+        } else {
+            None
+        }
+    }
+
+    fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
+        let result = self.create_object();
+        {
+            let mut r = result.borrow_mut();
+            if let Some(ref val) = desc.value {
+                r.insert_value("value".to_string(), val.clone());
+            }
+            if let Some(w) = desc.writable {
+                r.insert_value("writable".to_string(), JsValue::Boolean(w));
+            }
+            if let Some(e) = desc.enumerable {
+                r.insert_value("enumerable".to_string(), JsValue::Boolean(e));
+            }
+            if let Some(c) = desc.configurable {
+                r.insert_value("configurable".to_string(), JsValue::Boolean(c));
+            }
+            if let Some(ref g) = desc.get {
+                r.insert_value("get".to_string(), g.clone());
+            }
+            if let Some(ref s) = desc.set {
+                r.insert_value("set".to_string(), s.clone());
+            }
+        }
+        let id = result.borrow().id.unwrap();
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
@@ -9964,6 +10829,37 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
+                // Proxy has trap for `in` operator
+                if *op == BinaryOp::In {
+                    if let JsValue::Object(ref o) = rval {
+                        if let Some(_) = self.get_proxy_info(o.id) {
+                            let key = to_js_string(&lval);
+                            let target_val = self.get_proxy_target_val(o.id);
+                            let key_val = JsValue::String(JsString::from_str(&key));
+                            match self.invoke_proxy_trap(
+                                o.id,
+                                "has",
+                                vec![target_val.clone(), key_val],
+                            ) {
+                                Ok(Some(v)) => {
+                                    return Completion::Normal(JsValue::Boolean(to_boolean(&v)));
+                                }
+                                Ok(None) => {
+                                    // No trap, fall through to target
+                                    if let JsValue::Object(ref t) = target_val
+                                        && let Some(tobj) = self.get_object(t.id)
+                                    {
+                                        return Completion::Normal(JsValue::Boolean(
+                                            tobj.borrow().has_property(&key),
+                                        ));
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                    }
+                }
                 Completion::Normal(self.eval_binary(*op, &lval, &rval))
             }
             Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
@@ -10065,6 +10961,37 @@ impl Interpreter {
                     if let JsValue::Object(o) = &obj_val
                         && let Some(obj) = self.get_object(o.id)
                     {
+                        // Proxy deleteProperty trap
+                        if obj.borrow().is_proxy() {
+                            let target_val = self.get_proxy_target_val(o.id);
+                            let key_val = JsValue::String(JsString::from_str(&key));
+                            match self.invoke_proxy_trap(
+                                o.id,
+                                "deleteProperty",
+                                vec![target_val.clone(), key_val],
+                            ) {
+                                Ok(Some(v)) => {
+                                    return Completion::Normal(JsValue::Boolean(to_boolean(&v)));
+                                }
+                                Ok(None) => {
+                                    // No trap, fall through to target
+                                    if let JsValue::Object(ref t) = target_val
+                                        && let Some(tobj) = self.get_object(t.id)
+                                    {
+                                        let mut tm = tobj.borrow_mut();
+                                        if let Some(desc) = tm.properties.get(&key)
+                                            && desc.configurable == Some(false)
+                                        {
+                                            return Completion::Normal(JsValue::Boolean(false));
+                                        }
+                                        tm.properties.remove(&key);
+                                        tm.property_order.retain(|k| k != &key);
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(true));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
                         let mut obj_mut = obj.borrow_mut();
                         if let Some(desc) = obj_mut.properties.get(&key)
                             && desc.configurable == Some(false)
@@ -10796,6 +11723,35 @@ impl Interpreter {
                         let lval = obj.borrow().get_property(&key);
                         self.apply_compound_assign(op, &lval, &rval)
                     };
+                    // Proxy set trap
+                    if obj.borrow().is_proxy() {
+                        let target_val = self.get_proxy_target_val(o.id);
+                        let key_val = JsValue::String(JsString::from_str(&key));
+                        let receiver = obj_val.clone();
+                        match self.invoke_proxy_trap(
+                            o.id,
+                            "set",
+                            vec![target_val.clone(), key_val, final_val.clone(), receiver],
+                        ) {
+                            Ok(Some(v)) => {
+                                if to_boolean(&v) {
+                                    return Completion::Normal(final_val);
+                                }
+                                return Completion::Normal(final_val);
+                            }
+                            Ok(None) => {
+                                // No trap, fall through to target
+                                if let JsValue::Object(ref t) = target_val
+                                    && let Some(tobj) = self.get_object(t.id)
+                                {
+                                    tobj.borrow_mut()
+                                        .set_property_value(&key, final_val.clone());
+                                }
+                                return Completion::Normal(final_val);
+                            }
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    }
                     // Check for setter
                     let desc = obj.borrow().get_property_descriptor(&key);
                     if let Some(ref d) = desc
@@ -11300,6 +12256,23 @@ impl Interpreter {
         if let JsValue::Object(o) = func_val
             && let Some(obj) = self.get_object(o.id)
         {
+            // Proxy apply trap
+            if obj.borrow().is_proxy() {
+                let target_val = self.get_proxy_target_val(o.id);
+                let args_array = self.create_array(args.to_vec());
+                match self.invoke_proxy_trap(
+                    o.id,
+                    "apply",
+                    vec![target_val.clone(), _this_val.clone(), args_array],
+                ) {
+                    Ok(Some(v)) => return Completion::Normal(v),
+                    Ok(None) => {
+                        // No trap, call target directly
+                        return self.call_function(&target_val, _this_val, args);
+                    }
+                    Err(e) => return Completion::Throw(e),
+                }
+            }
             let callable = obj.borrow().callable.clone();
             if let Some(func) = callable {
                 return match func {
@@ -11444,6 +12417,57 @@ impl Interpreter {
             Ok(args) => args,
             Err(e) => return Completion::Throw(e),
         };
+        // Proxy construct trap
+        if let JsValue::Object(ref co) = callee_val
+            && self.get_proxy_info(co.id).is_some()
+        {
+            let target_val = self.get_proxy_target_val(co.id);
+            let args_array = self.create_array(evaluated_args.clone());
+            let new_target = callee_val.clone();
+            match self.invoke_proxy_trap(
+                co.id,
+                "construct",
+                vec![target_val.clone(), args_array, new_target],
+            ) {
+                Ok(Some(v)) => {
+                    if matches!(v, JsValue::Object(_)) {
+                        return Completion::Normal(v);
+                    }
+                    return Completion::Throw(
+                        self.create_type_error("'construct' on proxy: trap returned non-Object"),
+                    );
+                }
+                Ok(None) => {
+                    // No trap, forward to target constructor
+                    // Temporarily replace callee with target for normal eval_new path
+                    let prev_new_target = self.new_target.take();
+                    self.new_target = Some(callee_val.clone());
+                    let new_obj = self.create_object();
+                    if let JsValue::Object(ref t) = target_val
+                        && let Some(func_obj) = self.get_object(t.id)
+                    {
+                        let proto = func_obj.borrow().get_property_value("prototype");
+                        if let Some(JsValue::Object(proto_obj)) = proto
+                            && let Some(proto_rc) = self.get_object(proto_obj.id)
+                        {
+                            new_obj.borrow_mut().prototype = Some(proto_rc);
+                        }
+                    }
+                    let new_obj_id = new_obj.borrow().id.unwrap();
+                    let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+                    let result = self.call_function(&target_val, &this_val, &evaluated_args);
+                    self.new_target = prev_new_target;
+                    return match result {
+                        Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
+                            Completion::Normal(v)
+                        }
+                        Completion::Normal(_) => Completion::Normal(this_val),
+                        other => other,
+                    };
+                }
+                Err(e) => return Completion::Throw(e),
+            }
+        }
         // Create new object for 'this'
         let new_obj = self.create_object();
         // Set prototype from constructor.prototype if available
@@ -11503,7 +12527,86 @@ impl Interpreter {
         }
     }
 
+    fn get_proxy_info(&self, obj_id: u64) -> Option<(bool, Option<u64>, Option<u64>)> {
+        if let Some(obj) = self.get_object(obj_id) {
+            let b = obj.borrow();
+            if b.is_proxy() || b.proxy_revoked {
+                let target_id = b.proxy_target.as_ref().and_then(|t| t.borrow().id);
+                let handler_id = b.proxy_handler.as_ref().and_then(|h| h.borrow().id);
+                return Some((b.proxy_revoked, target_id, handler_id));
+            }
+        }
+        None
+    }
+
+    fn invoke_proxy_trap(
+        &mut self,
+        proxy_id: u64,
+        trap_name: &str,
+        args: Vec<JsValue>,
+    ) -> Result<Option<JsValue>, JsValue> {
+        let info = self.get_proxy_info(proxy_id);
+        match info {
+            Some((true, _, _)) => Err(self.create_type_error(&format!(
+                "Cannot perform '{}' on a proxy that has been revoked",
+                trap_name
+            ))),
+            Some((false, Some(target_id), Some(handler_id))) => {
+                let trap_val = if let Some(handler) = self.get_object(handler_id) {
+                    handler.borrow().get_property(trap_name)
+                } else {
+                    JsValue::Undefined
+                };
+                if matches!(trap_val, JsValue::Undefined | JsValue::Null) {
+                    return Ok(None); // No trap, fall through to target
+                }
+                let handler_val = JsValue::Object(crate::types::JsObject { id: handler_id });
+                match self.call_function(&trap_val, &handler_val, &args) {
+                    Completion::Normal(v) => Ok(Some(v)),
+                    Completion::Throw(e) => Err(e),
+                    _ => Ok(Some(JsValue::Undefined)),
+                }
+            }
+            Some((false, _, _)) => Err(self.create_type_error(&format!(
+                "Cannot perform '{}' on a proxy that has been revoked",
+                trap_name
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    fn get_proxy_target_val(&self, proxy_id: u64) -> JsValue {
+        if let Some(obj) = self.get_object(proxy_id) {
+            let b = obj.borrow();
+            if let Some(ref target) = b.proxy_target {
+                if let Some(tid) = target.borrow().id {
+                    return JsValue::Object(crate::types::JsObject { id: tid });
+                }
+            }
+        }
+        JsValue::Undefined
+    }
+
     fn get_object_property(&mut self, obj_id: u64, key: &str, this_val: &JsValue) -> Completion {
+        // Check if object is a proxy
+        if let Some(_) = self.get_proxy_info(obj_id) {
+            let target_val = self.get_proxy_target_val(obj_id);
+            let key_val = JsValue::String(JsString::from_str(key));
+            let receiver = this_val.clone();
+            match self.invoke_proxy_trap(obj_id, "get", vec![target_val.clone(), key_val, receiver])
+            {
+                Ok(Some(v)) => return Completion::Normal(v),
+                Ok(None) => {
+                    // No trap, fall through to target
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.get_object_property(t.id, key, this_val);
+                    }
+                    return Completion::Normal(JsValue::Undefined);
+                }
+                Err(e) => return Completion::Throw(e),
+            }
+        }
+
         let desc = if let Some(obj) = self.get_object(obj_id) {
             obj.borrow().get_property_descriptor(key)
         } else {

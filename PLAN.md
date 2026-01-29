@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 14,219 / 42,076 run (33.79%)
+**Current pass rate:** 14,359 / 42,076 run (34.13%)
 *Skipped: 6,181 module and async tests*
 
 ---
@@ -23,7 +23,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | 7 | [Functions & Classes](plan/phase-07-functions-classes.md) | §15 | 🟡 ~60% | Functions, classes, generators work; async doesn't |
 | 8 | [Modules & Scripts](plan/phase-08-modules.md) | §16 | ⬜ 0% | Script/module evaluation, import/export |
 | 9 | [Built-in Objects](plan/phase-09-builtins.md) | §19–28 | 🟡 ~40% | Object, Array, String, Math, JSON work |
-| 10 | [Advanced Features](plan/phase-10-advanced.md) | §17,25–27,B | ⬜ 0% | Error handling, memory model, Proxy, Reflect, Annex B |
+| 10 | [Advanced Features](plan/phase-10-advanced.md) | §17,25–27,B | 🟡 ~20% | Error handling, memory model, Proxy, Reflect, Annex B |
 
 ---
 
@@ -40,6 +40,8 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Map | 50% | 103/204 |
 | Set | 68% | 261/383 |
 | Date | 51% | 305/594 |
+| Reflect | 35% | 54/153 |
+| Proxy | 39% | 120/311 |
 
 ---
 
@@ -65,7 +67,8 @@ These features block significant numbers of tests:
 3. ~~**Implement Map and Set**~~ — ✅ Done (364 new passes)
 4. ~~**Implement Date**~~ — ✅ Done (305/594, 51%, 406 new passes overall)
 5. ~~**Generator `yield` evaluation**~~ — ✅ Done (965 new passes)
-6. **Private fields runtime** — Parsing done, evaluation needed
+6. ~~**Proxy and Reflect**~~ — ✅ Done (Reflect: 54/153, Proxy: 120/311, 140 net new passes). All 13 traps wired, Proxy.revocable implemented. Remaining: invariant enforcement, Symbol property keys.
+7. **Private fields runtime** — Parsing done, evaluation needed
 
 ---
 
