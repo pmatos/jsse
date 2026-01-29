@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 12,482 / 42,076 run (29.67%)
+**Current pass rate:** 12,878 / 42,076 run (30.61%)
 *Skipped: 6,181 module and async tests*
 
 ---
@@ -37,8 +37,8 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Function | 19% | 95/509 |
 | Iterator | 27% | 138/510 |
 | Promise | 0% | 0/281 |
-| Map | 0% | 0/204 |
-| Set | 0% | 0/383 |
+| Map | 50% | 103/204 |
+| Set | 68% | 261/383 |
 | Date | 0% | 0/594 |
 
 ---
@@ -52,7 +52,7 @@ These features block significant numbers of tests:
 3. **Generator `yield` evaluation** — Parsing works, runtime doesn't. Blocks ~245 remaining Iterator tests and async.
 4. **Iterator protocol** — Breaks `for...of`, spread on non-arrays, many built-in methods.
 4. **Promise** — Blocks all async/await runtime.
-5. **Map/Set** — Not implemented. 587 tests, relatively isolated.
+5. ~~**Map/Set**~~ — ✅ Done (Map: 103/204, Set: 261/383). Remaining failures: native fn `.length` properties, Proxy/Reflect/Symbol.species deps.
 6. **Date** — Not implemented. 594 tests, fundamental.
 
 ---
@@ -62,7 +62,7 @@ These features block significant numbers of tests:
 1. ~~**Complete `arguments` object (mapped arguments)**~~ — ✅ Done
 2. ~~**Garbage collection**~~ — ✅ Done
 3. ~~**Complete Iterator built-in**~~ — ✅ Done (138/510, 27%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat. Remaining failures need generators.
-3. **Implement Map and Set** — 587 tests, relatively isolated
+3. ~~**Implement Map and Set**~~ — ✅ Done (364 new passes)
 4. **Implement Date** — 594 tests, fundamental built-in
 5. **Generator `yield` evaluation** — Enables iterator protocol, async later
 6. **Private fields runtime** — Parsing done, evaluation needed
