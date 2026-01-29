@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 12,878 / 42,076 run (30.61%)
+**Current pass rate:** 14,219 / 42,076 run (33.79%)
 *Skipped: 6,181 module and async tests*
 
 ---
@@ -20,7 +20,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | 4 | [Parser (AST)](plan/phase-04-parser.md) | §13–16 | 🟡 ~95% | Expressions, statements, functions (modules missing) |
 | 5 | [Runtime Core](plan/phase-05-runtime.md) | §6–10 | 🟡 ~30% | Environments, execution contexts, objects |
 | 6 | [Evaluation — Expressions & Statements](plan/phase-06-evaluation.md) | §13–14 | 🟡 ~60% | Most operators/statements work |
-| 7 | [Functions & Classes](plan/phase-07-functions-classes.md) | §15 | 🟡 ~50% | Functions, classes work; generators/async don't |
+| 7 | [Functions & Classes](plan/phase-07-functions-classes.md) | §15 | 🟡 ~60% | Functions, classes, generators work; async doesn't |
 | 8 | [Modules & Scripts](plan/phase-08-modules.md) | §16 | ⬜ 0% | Script/module evaluation, import/export |
 | 9 | [Built-in Objects](plan/phase-09-builtins.md) | §19–28 | 🟡 ~40% | Object, Array, String, Math, JSON work |
 | 10 | [Advanced Features](plan/phase-10-advanced.md) | §17,25–27,B | ⬜ 0% | Error handling, memory model, Proxy, Reflect, Annex B |

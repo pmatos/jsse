@@ -12,12 +12,19 @@ pub enum Completion {
     Throw(JsValue),
     Break(Option<String>),
     Continue(Option<String>),
+    Yield(JsValue),
 }
 
 impl Completion {
     fn is_abrupt(&self) -> bool {
         !matches!(self, Completion::Normal(_))
     }
+}
+
+struct GeneratorContext {
+    target_yield: usize,
+    current_yield: usize,
+    sent_value: JsValue,
 }
 
 type EnvRef = Rc<RefCell<Environment>>;
@@ -122,6 +129,7 @@ pub enum JsFunction {
         closure: EnvRef,
         is_arrow: bool,
         is_strict: bool,
+        is_generator: bool,
     },
     Native(
         String,
@@ -139,6 +147,7 @@ impl Clone for JsFunction {
                 closure,
                 is_arrow,
                 is_strict,
+                is_generator,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
@@ -146,6 +155,7 @@ impl Clone for JsFunction {
                 closure: closure.clone(),
                 is_arrow: *is_arrow,
                 is_strict: *is_strict,
+                is_generator: *is_generator,
             },
             JsFunction::Native(name, f) => JsFunction::Native(name.clone(), f.clone()),
         }
@@ -232,6 +242,16 @@ pub enum IteratorState {
         set_id: u64,
         index: usize,
         kind: IteratorKind,
+        done: bool,
+    },
+    Generator {
+        body: Vec<Statement>,
+        params: Vec<Pattern>,
+        closure: EnvRef,
+        is_strict: bool,
+        args: Vec<JsValue>,
+        this_val: JsValue,
+        target_yield: usize,
         done: bool,
     },
 }
@@ -486,10 +506,12 @@ pub struct Interpreter {
     set_prototype: Option<Rc<RefCell<JsObjectData>>>,
     set_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     date_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
     free_list: Vec<usize>,
     gc_alloc_count: usize,
+    generator_context: Option<GeneratorContext>,
 }
 
 impl Interpreter {
@@ -531,10 +553,12 @@ impl Interpreter {
             set_prototype: None,
             set_iterator_prototype: None,
             date_prototype: None,
+            generator_prototype: None,
             next_symbol_id: 1,
             new_target: None,
             free_list: Vec::new(),
             gc_alloc_count: 0,
+            generator_context: None,
         };
         interp.setup_globals();
         interp
@@ -863,6 +887,7 @@ impl Interpreter {
         }
 
         self.setup_iterator_prototypes();
+        self.setup_generator_prototype();
         self.setup_array_prototype();
         self.setup_string_prototype();
 
@@ -4271,6 +4296,76 @@ impl Interpreter {
         let obj = Rc::new(RefCell::new(obj_data));
         let id = self.allocate_object_slot(obj);
         JsValue::Object(crate::types::JsObject { id })
+    }
+
+    fn setup_generator_prototype(&mut self) {
+        let gen_proto = self.create_object();
+        gen_proto.borrow_mut().class_name = "Generator".to_string();
+        gen_proto.borrow_mut().prototype = self.iterator_prototype.clone();
+
+        // next(value)
+        let next_fn = self.create_function(JsFunction::Native(
+            "next".to_string(),
+            Rc::new(|interp, this, args| {
+                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.generator_next(this, value)
+            }),
+        ));
+        gen_proto.borrow_mut().insert_property(
+            "next".to_string(),
+            PropertyDescriptor::data(next_fn, true, false, true),
+        );
+
+        // return(value)
+        let return_fn = self.create_function(JsFunction::Native(
+            "return".to_string(),
+            Rc::new(|interp, this, args| {
+                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.generator_return(this, value)
+            }),
+        ));
+        gen_proto.borrow_mut().insert_property(
+            "return".to_string(),
+            PropertyDescriptor::data(return_fn, true, false, true),
+        );
+
+        // throw(exception)
+        let throw_fn = self.create_function(JsFunction::Native(
+            "throw".to_string(),
+            Rc::new(|interp, this, args| {
+                let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.generator_throw(this, exception)
+            }),
+        ));
+        gen_proto.borrow_mut().insert_property(
+            "throw".to_string(),
+            PropertyDescriptor::data(throw_fn, true, false, true),
+        );
+
+        // Symbol.iterator returns this
+        let iter_self_fn = self.create_function(JsFunction::Native(
+            "[Symbol.iterator]".to_string(),
+            Rc::new(|_interp, this, _args| Completion::Normal(this.clone())),
+        ));
+        if let Some(key) = self.get_symbol_iterator_key() {
+            gen_proto.borrow_mut().insert_property(
+                key,
+                PropertyDescriptor::data(iter_self_fn, true, false, true),
+            );
+        }
+
+        // Symbol.toStringTag
+        gen_proto.borrow_mut().insert_property(
+            "Symbol(Symbol.toStringTag)".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("Generator")),
+                false,
+                false,
+                true,
+            ),
+        );
+
+        self.generator_prototype = Some(gen_proto);
     }
 
     fn setup_array_prototype(&mut self) {
@@ -8827,6 +8922,7 @@ impl Interpreter {
             &self.set_prototype,
             &self.set_iterator_prototype,
             &self.date_prototype,
+            &self.generator_prototype,
         ] {
             if let Some(p) = proto {
                 if let Some(id) = p.borrow().id {
@@ -8923,6 +9019,18 @@ impl Interpreter {
                     IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
                     IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
                     IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
+                    IteratorState::Generator {
+                        closure,
+                        args,
+                        this_val,
+                        ..
+                    } => {
+                        Self::collect_env_roots(closure, &mut worklist);
+                        for arg in args {
+                            Self::collect_value_roots(arg, &mut worklist);
+                        }
+                        Self::collect_value_roots(this_val, &mut worklist);
+                    }
                     _ => {}
                 }
             }
@@ -8997,6 +9105,13 @@ impl Interpreter {
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
         let is_arrow = matches!(&func, JsFunction::User { is_arrow: true, .. });
+        let is_gen = matches!(
+            &func,
+            JsFunction::User {
+                is_generator: true,
+                ..
+            }
+        );
         let (fn_name, fn_length) = match &func {
             JsFunction::User { name, params, .. } => {
                 let n = name.clone().unwrap_or_default();
@@ -9011,7 +9126,11 @@ impl Interpreter {
         let mut obj_data = JsObjectData::new();
         obj_data.prototype = self.object_prototype.clone();
         obj_data.callable = Some(func);
-        obj_data.class_name = "Function".to_string();
+        obj_data.class_name = if is_gen {
+            "GeneratorFunction".to_string()
+        } else {
+            "Function".to_string()
+        };
         obj_data.insert_property(
             "length".to_string(),
             PropertyDescriptor::data(JsValue::Number(fn_length as f64), false, false, true),
@@ -9028,6 +9147,9 @@ impl Interpreter {
         // Non-arrow functions get a prototype property
         if !is_arrow {
             let proto = self.create_object();
+            if is_gen {
+                proto.borrow_mut().prototype = self.generator_prototype.clone();
+            }
             let proto_id = proto.borrow().id.unwrap();
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj_data.insert_value("prototype".to_string(), proto_val.clone());
@@ -9035,8 +9157,9 @@ impl Interpreter {
         let obj = Rc::new(RefCell::new(obj_data));
         let func_id = self.allocate_object_slot(obj.clone());
         let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
-        // Set prototype.constructor = func
+        // Set prototype.constructor = func (not for generators)
         if !is_arrow
+            && !is_gen
             && let Some(JsValue::Object(proto_ref)) = obj.borrow().get_property_value("prototype")
             && let Some(proto_obj) = self.get_object(proto_ref.id)
         {
@@ -9218,6 +9341,7 @@ impl Interpreter {
                         closure: env.clone(),
                         is_arrow: false,
                         is_strict: Self::is_strict_mode_body(&f.body),
+                        is_generator: f.is_generator,
                     };
                     let val = self.create_function(func);
                     let _ = env.borrow_mut().set(&f.name, val);
@@ -9869,6 +9993,7 @@ impl Interpreter {
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: Self::is_strict_mode_body(&f.body),
+                    is_generator: f.is_generator,
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -9886,6 +10011,7 @@ impl Interpreter {
                     closure: env.clone(),
                     is_arrow: true,
                     is_strict: Self::is_strict_mode_body(&body_stmts),
+                    is_generator: false,
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -9966,12 +10092,73 @@ impl Interpreter {
                 Completion::Normal(result)
             }
             Expression::Spread(_) => Completion::Normal(JsValue::Undefined), // handled by caller
-            Expression::Yield(expr, _delegate) => {
-                // Stub: generators not yet implemented, evaluate the expression and return it
-                if let Some(expr) = expr {
-                    self.eval_expr(expr, env)
+            Expression::Yield(expr, delegate) => {
+                if *delegate {
+                    let iterable = if let Some(e) = expr {
+                        match self.eval_expr(e, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    let iterator = match self.get_iterator(&iterable) {
+                        Ok(it) => it,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    loop {
+                        let next_result = match self.iterator_next(&iterator) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let (done_val, value) = if let JsValue::Object(ref ro) = next_result {
+                            if let Some(robj) = self.get_object(ro.id) {
+                                let d = robj.borrow().get_property("done");
+                                let v = robj.borrow().get_property("value");
+                                (d, v)
+                            } else {
+                                (JsValue::Undefined, JsValue::Undefined)
+                            }
+                        } else {
+                            (JsValue::Undefined, JsValue::Undefined)
+                        };
+                        if to_boolean(&done_val) {
+                            break Completion::Normal(value);
+                        }
+                        if let Some(ref mut ctx) = self.generator_context {
+                            let current = ctx.current_yield;
+                            ctx.current_yield += 1;
+                            if current < ctx.target_yield {
+                                continue;
+                            }
+                            if current == ctx.target_yield {
+                                return Completion::Yield(value);
+                            }
+                        }
+                        return Completion::Yield(value);
+                    }
                 } else {
-                    Completion::Normal(JsValue::Undefined)
+                    if let Some(ref mut ctx) = self.generator_context {
+                        let current = ctx.current_yield;
+                        ctx.current_yield += 1;
+                        if current < ctx.target_yield {
+                            return Completion::Normal(ctx.sent_value.clone());
+                        }
+                        let value = if let Some(e) = expr {
+                            match self.eval_expr(e, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        return Completion::Yield(value);
+                    }
+                    if let Some(e) = expr {
+                        self.eval_expr(e, env)
+                    } else {
+                        Completion::Normal(JsValue::Undefined)
+                    }
                 }
             }
             Expression::Template(tmpl) => {
@@ -10917,6 +11104,193 @@ impl Interpreter {
         self.call_function(&func_val, &this_val, &evaluated_args)
     }
 
+    fn generator_next(&mut self, this: &JsValue, sent_value: JsValue) -> Completion {
+        let JsValue::Object(o) = this else {
+            let err = self.create_type_error("Generator.prototype.next called on non-object");
+            return Completion::Throw(err);
+        };
+        let Some(obj_rc) = self.get_object(o.id) else {
+            let err = self.create_type_error("Generator.prototype.next called on non-object");
+            return Completion::Throw(err);
+        };
+
+        // Extract state (must release borrow before executing body)
+        let state = obj_rc.borrow().iterator_state.clone();
+        let Some(IteratorState::Generator {
+            body,
+            params,
+            closure,
+            is_strict,
+            args,
+            this_val,
+            target_yield,
+            done,
+        }) = state
+        else {
+            let err = self.create_type_error("not a generator object");
+            return Completion::Throw(err);
+        };
+
+        if done {
+            return Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true));
+        }
+
+        // Create fresh function environment and bind params
+        let func_env = Environment::new(Some(closure.clone()));
+        for (i, param) in params.iter().enumerate() {
+            if let Pattern::Rest(inner) = param {
+                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
+                let rest_arr = self.create_array(rest);
+                let _ = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env);
+                break;
+            }
+            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+            let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
+        }
+        func_env.borrow_mut().bindings.insert(
+            "this".to_string(),
+            Binding {
+                value: this_val.clone(),
+                kind: BindingKind::Const,
+                initialized: true,
+            },
+        );
+        // arguments object
+        let arguments_obj =
+            self.create_arguments_object(&args, JsValue::Undefined, is_strict, None, &[]);
+        func_env.borrow_mut().declare("arguments", BindingKind::Var);
+        let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+
+        // Set generator context for replay
+        self.generator_context = Some(GeneratorContext {
+            target_yield,
+            current_yield: 0,
+            sent_value,
+        });
+
+        let result = self.exec_statements(&body, &func_env);
+        let _ctx = self.generator_context.take();
+
+        match result {
+            Completion::Yield(v) => {
+                // Advance target_yield for next call
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                    body: body.clone(),
+                    params: params.clone(),
+                    closure: closure.clone(),
+                    is_strict,
+                    args: args.clone(),
+                    this_val: this_val.clone(),
+                    target_yield: target_yield + 1,
+                    done: false,
+                });
+                Completion::Normal(self.create_iter_result_object(v, false))
+            }
+            Completion::Return(v) => {
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
+                    target_yield,
+                    done: true,
+                });
+                Completion::Normal(self.create_iter_result_object(v, true))
+            }
+            Completion::Normal(_) => {
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
+                    target_yield,
+                    done: true,
+                });
+                Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true))
+            }
+            Completion::Throw(e) => {
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
+                    target_yield,
+                    done: true,
+                });
+                Completion::Throw(e)
+            }
+            other => other,
+        }
+    }
+
+    fn generator_return(&mut self, this: &JsValue, value: JsValue) -> Completion {
+        let JsValue::Object(o) = this else {
+            let err = self.create_type_error("Generator.prototype.return called on non-object");
+            return Completion::Throw(err);
+        };
+        if let Some(obj_rc) = self.get_object(o.id)
+            && let Some(IteratorState::Generator {
+                body,
+                params,
+                closure,
+                is_strict,
+                args,
+                this_val,
+                target_yield,
+                ..
+            }) = obj_rc.borrow().iterator_state.clone()
+        {
+            obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                body,
+                params,
+                closure,
+                is_strict,
+                args,
+                this_val,
+                target_yield,
+                done: true,
+            });
+        }
+        Completion::Normal(self.create_iter_result_object(value, true))
+    }
+
+    fn generator_throw(&mut self, this: &JsValue, exception: JsValue) -> Completion {
+        let JsValue::Object(o) = this else {
+            let err = self.create_type_error("Generator.prototype.throw called on non-object");
+            return Completion::Throw(err);
+        };
+        if let Some(obj_rc) = self.get_object(o.id)
+            && let Some(IteratorState::Generator {
+                body,
+                params,
+                closure,
+                is_strict,
+                args,
+                this_val,
+                target_yield,
+                ..
+            }) = obj_rc.borrow().iterator_state.clone()
+        {
+            obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                body,
+                params,
+                closure,
+                is_strict,
+                args,
+                this_val,
+                target_yield,
+                done: true,
+            });
+        }
+        Completion::Throw(exception)
+    }
+
     fn call_function(
         &mut self,
         func_val: &JsValue,
@@ -10936,8 +11310,38 @@ impl Interpreter {
                         closure,
                         is_arrow,
                         is_strict,
+                        is_generator,
                         ..
                     } => {
+                        if is_generator {
+                            // Create a generator object instead of executing
+                            let gen_obj = self.create_object();
+                            // Set prototype from the function's .prototype property
+                            if let Some(func_obj_rc) = self.get_object(o.id) {
+                                let proto_val =
+                                    func_obj_rc.borrow().get_property_value("prototype");
+                                if let Some(JsValue::Object(ref p)) = proto_val {
+                                    if let Some(proto_rc) = self.get_object(p.id) {
+                                        gen_obj.borrow_mut().prototype = Some(proto_rc);
+                                    }
+                                }
+                            }
+                            gen_obj.borrow_mut().class_name = "Generator".to_string();
+                            gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                                body: body.clone(),
+                                params: params.clone(),
+                                closure: closure.clone(),
+                                is_strict,
+                                args: args.to_vec(),
+                                this_val: _this_val.clone(),
+                                target_yield: 0,
+                                done: false,
+                            });
+                            let gen_id = gen_obj.borrow().id.unwrap();
+                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                id: gen_id,
+                            }));
+                        }
                         let func_env = Environment::new(Some(closure));
                         // Bind parameters
                         for (i, param) in params.iter().enumerate() {
@@ -10993,6 +11397,7 @@ impl Interpreter {
                         let result = self.exec_statements(&body, &func_env);
                         match result {
                             Completion::Return(v) | Completion::Normal(v) => Completion::Normal(v),
+                            Completion::Yield(_) => Completion::Normal(JsValue::Undefined),
                             other => other,
                         }
                     }
@@ -11251,6 +11656,7 @@ impl Interpreter {
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
+                is_generator: false,
             }
         } else if super_val.is_some() {
             JsFunction::User {
@@ -11260,6 +11666,7 @@ impl Interpreter {
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
+                is_generator: false,
             }
         } else {
             JsFunction::User {
@@ -11269,6 +11676,7 @@ impl Interpreter {
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
+                is_generator: false,
             }
         };
 
@@ -11329,7 +11737,8 @@ impl Interpreter {
                         body: m.value.body.clone(),
                         closure: class_env.clone(),
                         is_arrow: false,
-                        is_strict: true, // class methods are always strict
+                        is_strict: true,
+                        is_generator: m.value.is_generator,
                     };
                     let method_val = self.create_function(method_func);
 

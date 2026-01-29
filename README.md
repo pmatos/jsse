@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 13,284  | 28,792  | 31.57%    |
+| 48,257      | 42,076  | 6,181   | 14,219  | 27,857  | 33.79%    |
 
 *Skipped: module and async tests (async parsing supported, runtime not yet implemented).*
 
@@ -65,6 +65,8 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - `String.fromCharCode`
   - `Map` built-in (constructor, `get`, `set`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`)
   - `Set` built-in (constructor, `add`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`, ES2025 set methods: `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`)
+  - Generator functions (`function*`, `yield`, `yield*`) with replay-based execution
+  - Generator prototype (`next`, `return`, `throw`, `Symbol.iterator`, `Symbol.toStringTag`)
   - `globalThis`
   - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
