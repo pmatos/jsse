@@ -68,7 +68,8 @@ These features block significant numbers of tests:
 4. ~~**Implement Date**~~ — ✅ Done (305/594, 51%, 406 new passes overall)
 5. ~~**Generator `yield` evaluation**~~ — ✅ Done (965 new passes)
 6. ~~**Proxy and Reflect**~~ — ✅ Done (Reflect: 54/153, Proxy: 120/311, 140 net new passes). All 13 traps wired, Proxy.revocable implemented. Remaining: invariant enforcement, Symbol property keys.
-7. **Private fields runtime** — Parsing done, evaluation needed
+7. ~~**Native function `.length` and Constructor `.prototype` exposure**~~ — ✅ Done (375 new passes, 50 regressions, net +325). All 210+ native functions now report correct arity via `.length`. Array.prototype and String.prototype accessible via constructors.
+8. **Private fields runtime** — Parsing done, evaluation needed
 
 ---
 

@@ -133,8 +133,19 @@ pub enum JsFunction {
     },
     Native(
         String,
+        usize,
         Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
     ),
+}
+
+impl JsFunction {
+    pub fn native(
+        name: String,
+        arity: usize,
+        f: impl Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
+    ) -> Self {
+        JsFunction::Native(name, arity, Rc::new(f))
+    }
 }
 
 impl Clone for JsFunction {
@@ -157,7 +168,9 @@ impl Clone for JsFunction {
                 is_strict: *is_strict,
                 is_generator: *is_generator,
             },
-            JsFunction::Native(name, f) => JsFunction::Native(name.clone(), f.clone()),
+            JsFunction::Native(name, arity, f) => {
+                JsFunction::Native(name.clone(), *arity, f.clone())
+            }
         }
     }
 }
@@ -166,7 +179,9 @@ impl std::fmt::Debug for JsFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             JsFunction::User { name, .. } => write!(f, "JsFunction::User({name:?})"),
-            JsFunction::Native(name, _) => write!(f, "JsFunction::Native({name:?})"),
+            JsFunction::Native(name, arity, _) => {
+                write!(f, "JsFunction::Native({name:?}, {arity})")
+            }
         }
     }
 }
@@ -584,13 +599,14 @@ impl Interpreter {
         let console = self.create_object();
         let console_id = console.borrow().id.unwrap();
         {
-            let log_fn = self.create_function(JsFunction::Native(
+            let log_fn = self.create_function(JsFunction::native(
                 "log".to_string(),
-                Rc::new(|_interp, _this, args| {
+                0,
+                |_interp, _this, args| {
                     let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
                     println!("{}", parts.join(" "));
                     Completion::Normal(JsValue::Undefined)
-                }),
+                },
             ));
             console.borrow_mut().insert_value("log".to_string(), log_fn);
         }
@@ -606,32 +622,29 @@ impl Interpreter {
             self.register_global_fn(
                 "Error",
                 BindingKind::Var,
-                JsFunction::Native(
-                    error_name.clone(),
-                    Rc::new(move |interp, this, args| {
-                        let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                let mut o = obj.borrow_mut();
-                                o.class_name = "Error".to_string();
-                                if !matches!(msg, JsValue::Undefined) {
-                                    o.insert_value("message".to_string(), msg);
-                                }
-                            }
-                            return Completion::Normal(this.clone());
-                        }
-                        let obj = interp.create_object();
-                        {
+                JsFunction::native(error_name.clone(), 0, move |interp, this, args| {
+                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(o) = this {
+                        if let Some(obj) = interp.get_object(o.id) {
                             let mut o = obj.borrow_mut();
                             o.class_name = "Error".to_string();
                             if !matches!(msg, JsValue::Undefined) {
                                 o.insert_value("message".to_string(), msg);
                             }
                         }
-                        let id = obj.borrow().id.unwrap();
-                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                    }),
-                ),
+                        return Completion::Normal(this.clone());
+                    }
+                    let obj = interp.create_object();
+                    {
+                        let mut o = obj.borrow_mut();
+                        o.class_name = "Error".to_string();
+                        if !matches!(msg, JsValue::Undefined) {
+                            o.insert_value("message".to_string(), msg);
+                        }
+                    }
+                    let id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                }),
             );
         }
 
@@ -660,9 +673,10 @@ impl Interpreter {
 
         // Add toString to Error.prototype
         if let Some(ref ep) = error_prototype {
-            let tostring_fn = self.create_function(JsFunction::Native(
+            let tostring_fn = self.create_function(JsFunction::native(
                 "toString".to_string(),
-                Rc::new(|interp, this_val, _args| {
+                0,
+                |interp, this_val, _args| {
                     if let JsValue::Object(o) = this_val
                         && let Some(obj) = interp.get_object(o.id)
                     {
@@ -684,7 +698,7 @@ impl Interpreter {
                         };
                     }
                     Completion::Normal(JsValue::String(JsString::from_str("Error")))
-                }),
+                },
             ));
             ep.borrow_mut()
                 .insert_builtin("toString".to_string(), tostring_fn);
@@ -704,29 +718,10 @@ impl Interpreter {
             self.register_global_fn(
                 "Test262Error",
                 BindingKind::Var,
-                JsFunction::Native(
-                    "Test262Error".to_string(),
-                    Rc::new(move |interp, this, args| {
-                        let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                let mut o = obj.borrow_mut();
-                                o.class_name = "Test262Error".to_string();
-                                if let Some(ref ep) = error_proto_clone {
-                                    o.prototype = Some(ep.clone());
-                                }
-                                if !matches!(msg, JsValue::Undefined) {
-                                    o.insert_value("message".to_string(), msg);
-                                }
-                                o.insert_value(
-                                    "name".to_string(),
-                                    JsValue::String(JsString::from_str("Test262Error")),
-                                );
-                            }
-                            return Completion::Normal(this.clone());
-                        }
-                        let obj = interp.create_object();
-                        {
+                JsFunction::native("Test262Error".to_string(), 1, move |interp, this, args| {
+                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(o) = this {
+                        if let Some(obj) = interp.get_object(o.id) {
                             let mut o = obj.borrow_mut();
                             o.class_name = "Test262Error".to_string();
                             if let Some(ref ep) = error_proto_clone {
@@ -740,10 +735,26 @@ impl Interpreter {
                                 JsValue::String(JsString::from_str("Test262Error")),
                             );
                         }
-                        let id = obj.borrow().id.unwrap();
-                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                    }),
-                ),
+                        return Completion::Normal(this.clone());
+                    }
+                    let obj = interp.create_object();
+                    {
+                        let mut o = obj.borrow_mut();
+                        o.class_name = "Test262Error".to_string();
+                        if let Some(ref ep) = error_proto_clone {
+                            o.prototype = Some(ep.clone());
+                        }
+                        if !matches!(msg, JsValue::Undefined) {
+                            o.insert_value("message".to_string(), msg);
+                        }
+                        o.insert_value(
+                            "name".to_string(),
+                            JsValue::String(JsString::from_str("Test262Error")),
+                        );
+                    }
+                    let id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                }),
             );
         }
 
@@ -761,46 +772,43 @@ impl Interpreter {
             self.register_global_fn(
                 name,
                 BindingKind::Var,
-                JsFunction::Native(
-                    error_name.clone(),
-                    Rc::new(move |interp, this, args| {
-                        let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                let mut o = obj.borrow_mut();
-                                o.class_name = error_name.clone();
-                                if let Some(ref ep) = error_proto_clone {
-                                    o.prototype = Some(ep.clone());
-                                }
-                                if !matches!(msg, JsValue::Undefined) {
-                                    o.insert_value("message".to_string(), msg.clone());
-                                }
-                                o.insert_value(
-                                    "name".to_string(),
-                                    JsValue::String(JsString::from_str(&error_name)),
-                                );
-                            }
-                            return Completion::Normal(this.clone());
-                        }
-                        let obj = interp.create_object();
-                        {
+                JsFunction::native(error_name.clone(), 0, move |interp, this, args| {
+                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(o) = this {
+                        if let Some(obj) = interp.get_object(o.id) {
                             let mut o = obj.borrow_mut();
                             o.class_name = error_name.clone();
                             if let Some(ref ep) = error_proto_clone {
                                 o.prototype = Some(ep.clone());
                             }
                             if !matches!(msg, JsValue::Undefined) {
-                                o.insert_value("message".to_string(), msg);
+                                o.insert_value("message".to_string(), msg.clone());
                             }
                             o.insert_value(
                                 "name".to_string(),
                                 JsValue::String(JsString::from_str(&error_name)),
                             );
                         }
-                        let id = obj.borrow().id.unwrap();
-                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                    }),
-                ),
+                        return Completion::Normal(this.clone());
+                    }
+                    let obj = interp.create_object();
+                    {
+                        let mut o = obj.borrow_mut();
+                        o.class_name = error_name.clone();
+                        if let Some(ref ep) = error_proto_clone {
+                            o.prototype = Some(ep.clone());
+                        }
+                        if !matches!(msg, JsValue::Undefined) {
+                            o.insert_value("message".to_string(), msg);
+                        }
+                        o.insert_value(
+                            "name".to_string(),
+                            JsValue::String(JsString::from_str(&error_name)),
+                        );
+                    }
+                    let id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                }),
             );
         }
 
@@ -808,19 +816,16 @@ impl Interpreter {
         self.register_global_fn(
             "Object",
             BindingKind::Var,
-            JsFunction::Native(
-                "Object".to_string(),
-                Rc::new(|interp, _this, args| {
-                    if let Some(val) = args.first()
-                        && matches!(val, JsValue::Object(_))
-                    {
-                        return Completion::Normal(val.clone());
-                    }
-                    let obj = interp.create_object();
-                    let id = obj.borrow().id.unwrap();
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                }),
-            ),
+            JsFunction::native("Object".to_string(), 1, |interp, _this, args| {
+                if let Some(val) = args.first()
+                    && matches!(val, JsValue::Object(_))
+                {
+                    return Completion::Normal(val.clone());
+                }
+                let obj = interp.create_object();
+                let id = obj.borrow().id.unwrap();
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+            }),
         );
 
         self.setup_object_statics();
@@ -829,26 +834,24 @@ impl Interpreter {
         self.register_global_fn(
             "Array",
             BindingKind::Var,
-            JsFunction::Native(
-                "Array".to_string(),
-                Rc::new(|interp, _this, args| {
-                    if args.len() == 1
-                        && let JsValue::Number(n) = &args[0]
-                    {
-                        let arr = interp.create_array(vec![JsValue::Undefined; *n as usize]);
-                        return Completion::Normal(arr);
-                    }
-                    let arr = interp.create_array(args.to_vec());
-                    Completion::Normal(arr)
-                }),
-            ),
+            JsFunction::native("Array".to_string(), 1, |interp, _this, args| {
+                if args.len() == 1
+                    && let JsValue::Number(n) = &args[0]
+                {
+                    let arr = interp.create_array(vec![JsValue::Undefined; *n as usize]);
+                    return Completion::Normal(arr);
+                }
+                let arr = interp.create_array(args.to_vec());
+                Completion::Normal(arr)
+            }),
         );
 
         // Symbol — must be before iterator prototypes so @@iterator key is available
         {
-            let symbol_fn = self.create_function(JsFunction::Native(
+            let symbol_fn = self.create_function(JsFunction::native(
                 "Symbol".to_string(),
-                Rc::new(|interp, _this, args| {
+                0,
+                |interp, _this, args| {
                     let desc = args.first().and_then(|v| {
                         if matches!(v, JsValue::Undefined) {
                             None
@@ -862,7 +865,7 @@ impl Interpreter {
                         id,
                         description: desc,
                     }))
-                }),
+                },
             ));
             if let JsValue::Object(ref o) = symbol_fn
                 && let Some(obj) = self.get_object(o.id)
@@ -905,67 +908,64 @@ impl Interpreter {
         self.register_global_fn(
             "String",
             BindingKind::Var,
-            JsFunction::Native(
-                "String".to_string(),
-                Rc::new(|interp, this, args| {
-                    let val = args
-                        .first()
-                        .cloned()
-                        .unwrap_or(JsValue::String(JsString::from_str("")));
-                    let s = to_js_string(&val);
-                    if let JsValue::Object(o) = this
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        obj.borrow_mut().primitive_value =
-                            Some(JsValue::String(JsString::from_str(&s)));
-                        obj.borrow_mut().class_name = "String".to_string();
-                    }
-                    Completion::Normal(JsValue::String(JsString::from_str(&s)))
-                }),
-            ),
+            JsFunction::native("String".to_string(), 1, |interp, this, args| {
+                let val = args
+                    .first()
+                    .cloned()
+                    .unwrap_or(JsValue::String(JsString::from_str("")));
+                let s = to_js_string(&val);
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    obj.borrow_mut().primitive_value =
+                        Some(JsValue::String(JsString::from_str(&s)));
+                    obj.borrow_mut().class_name = "String".to_string();
+                }
+                Completion::Normal(JsValue::String(JsString::from_str(&s)))
+            }),
         );
 
         // Number constructor/converter
         self.register_global_fn(
             "Number",
             BindingKind::Var,
-            JsFunction::Native(
-                "Number".to_string(),
-                Rc::new(|interp, this, args| {
-                    let val = args.first().cloned().unwrap_or(JsValue::Number(0.0));
-                    let n = to_number(&val);
-                    if let JsValue::Object(o) = this
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        obj.borrow_mut().primitive_value = Some(JsValue::Number(n));
-                        obj.borrow_mut().class_name = "Number".to_string();
-                    }
-                    Completion::Normal(JsValue::Number(n))
-                }),
-            ),
+            JsFunction::native("Number".to_string(), 1, |interp, this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Number(0.0));
+                let n = to_number(&val);
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    obj.borrow_mut().primitive_value = Some(JsValue::Number(n));
+                    obj.borrow_mut().class_name = "Number".to_string();
+                }
+                Completion::Normal(JsValue::Number(n))
+            }),
         );
 
         // Number static properties
         {
-            let is_finite_fn = self.create_function(JsFunction::Native(
+            let is_finite_fn = self.create_function(JsFunction::native(
                 "isFinite".to_string(),
-                Rc::new(|_interp, _this, args| {
+                1,
+                |_interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let result = matches!(&val, JsValue::Number(n) if n.is_finite());
                     Completion::Normal(JsValue::Boolean(result))
-                }),
+                },
             ));
-            let is_nan_fn = self.create_function(JsFunction::Native(
+            let is_nan_fn = self.create_function(JsFunction::native(
                 "isNaN".to_string(),
-                Rc::new(|_interp, _this, args| {
+                1,
+                |_interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let result = matches!(&val, JsValue::Number(n) if n.is_nan());
                     Completion::Normal(JsValue::Boolean(result))
-                }),
+                },
             ));
-            let is_integer_fn = self.create_function(JsFunction::Native(
+            let is_integer_fn = self.create_function(JsFunction::native(
                 "isInteger".to_string(),
-                Rc::new(|_interp, _this, args| {
+                1,
+                |_interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let result = if let JsValue::Number(n) = &val {
                         n.is_finite() && *n == n.trunc()
@@ -973,11 +973,12 @@ impl Interpreter {
                         false
                     };
                     Completion::Normal(JsValue::Boolean(result))
-                }),
+                },
             ));
-            let is_safe_fn = self.create_function(JsFunction::Native(
+            let is_safe_fn = self.create_function(JsFunction::native(
                 "isSafeInteger".to_string(),
-                Rc::new(|_interp, _this, args| {
+                1,
+                |_interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let result = if let JsValue::Number(n) = &val {
                         n.is_finite() && *n == n.trunc() && n.abs() <= 9007199254740991.0
@@ -985,7 +986,7 @@ impl Interpreter {
                         false
                     };
                     Completion::Normal(JsValue::Boolean(result))
-                }),
+                },
             ));
             let parse_int = self.global_env.borrow().get("parseInt");
             let parse_float = self.global_env.borrow().get("parseFloat");
@@ -1032,20 +1033,17 @@ impl Interpreter {
         self.register_global_fn(
             "Boolean",
             BindingKind::Var,
-            JsFunction::Native(
-                "Boolean".to_string(),
-                Rc::new(|interp, this, args| {
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let b = to_boolean(&val);
-                    if let JsValue::Object(o) = this
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        obj.borrow_mut().primitive_value = Some(JsValue::Boolean(b));
-                        obj.borrow_mut().class_name = "Boolean".to_string();
-                    }
-                    Completion::Normal(JsValue::Boolean(b))
-                }),
-            ),
+            JsFunction::native("Boolean".to_string(), 1, |interp, this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let b = to_boolean(&val);
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    obj.borrow_mut().primitive_value = Some(JsValue::Boolean(b));
+                    obj.borrow_mut().class_name = "Boolean".to_string();
+                }
+                Completion::Normal(JsValue::Boolean(b))
+            }),
         );
 
         self.setup_number_prototype();
@@ -1058,86 +1056,74 @@ impl Interpreter {
         self.register_global_fn(
             "parseInt",
             BindingKind::Var,
-            JsFunction::Native(
-                "parseInt".to_string(),
-                Rc::new(|_interp, _this, args| {
-                    let s = args.first().map(to_js_string).unwrap_or_default();
-                    let radix = args.get(1).map(|v| to_number(v) as i32).unwrap_or(10);
-                    let s = s.trim();
-                    let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
-                        (true, rest)
-                    } else if let Some(rest) = s.strip_prefix('+') {
-                        (false, rest)
+            JsFunction::native("parseInt".to_string(), 2, |_interp, _this, args| {
+                let s = args.first().map(to_js_string).unwrap_or_default();
+                let radix = args.get(1).map(|v| to_number(v) as i32).unwrap_or(10);
+                let s = s.trim();
+                let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
+                    (true, rest)
+                } else if let Some(rest) = s.strip_prefix('+') {
+                    (false, rest)
+                } else {
+                    (false, s)
+                };
+                let radix = if radix == 0 {
+                    if s.starts_with("0x") || s.starts_with("0X") {
+                        16
                     } else {
-                        (false, s)
-                    };
-                    let radix = if radix == 0 {
-                        if s.starts_with("0x") || s.starts_with("0X") {
-                            16
-                        } else {
-                            10
-                        }
-                    } else {
-                        radix
-                    };
-                    let s = if radix == 16 {
-                        s.strip_prefix("0x")
-                            .or_else(|| s.strip_prefix("0X"))
-                            .unwrap_or(s)
-                    } else {
-                        s
-                    };
-                    match i64::from_str_radix(s, radix as u32) {
-                        Ok(n) => {
-                            let n = if negative { -n } else { n };
-                            Completion::Normal(JsValue::Number(n as f64))
-                        }
-                        Err(_) => Completion::Normal(JsValue::Number(f64::NAN)),
+                        10
                     }
-                }),
-            ),
+                } else {
+                    radix
+                };
+                let s = if radix == 16 {
+                    s.strip_prefix("0x")
+                        .or_else(|| s.strip_prefix("0X"))
+                        .unwrap_or(s)
+                } else {
+                    s
+                };
+                match i64::from_str_radix(s, radix as u32) {
+                    Ok(n) => {
+                        let n = if negative { -n } else { n };
+                        Completion::Normal(JsValue::Number(n as f64))
+                    }
+                    Err(_) => Completion::Normal(JsValue::Number(f64::NAN)),
+                }
+            }),
         );
 
         self.register_global_fn(
             "parseFloat",
             BindingKind::Var,
-            JsFunction::Native(
-                "parseFloat".to_string(),
-                Rc::new(|_interp, _this, args| {
-                    let s = args.first().map(to_js_string).unwrap_or_default();
-                    let s = s.trim();
-                    match s.parse::<f64>() {
-                        Ok(n) => Completion::Normal(JsValue::Number(n)),
-                        Err(_) => Completion::Normal(JsValue::Number(f64::NAN)),
-                    }
-                }),
-            ),
+            JsFunction::native("parseFloat".to_string(), 1, |_interp, _this, args| {
+                let s = args.first().map(to_js_string).unwrap_or_default();
+                let s = s.trim();
+                match s.parse::<f64>() {
+                    Ok(n) => Completion::Normal(JsValue::Number(n)),
+                    Err(_) => Completion::Normal(JsValue::Number(f64::NAN)),
+                }
+            }),
         );
 
         self.register_global_fn(
             "isNaN",
             BindingKind::Var,
-            JsFunction::Native(
-                "isNaN".to_string(),
-                Rc::new(|_interp, _this, args| {
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let n = to_number(&val);
-                    Completion::Normal(JsValue::Boolean(n.is_nan()))
-                }),
-            ),
+            JsFunction::native("isNaN".to_string(), 1, |_interp, _this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let n = to_number(&val);
+                Completion::Normal(JsValue::Boolean(n.is_nan()))
+            }),
         );
 
         self.register_global_fn(
             "isFinite",
             BindingKind::Var,
-            JsFunction::Native(
-                "isFinite".to_string(),
-                Rc::new(|_interp, _this, args| {
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let n = to_number(&val);
-                    Completion::Normal(JsValue::Boolean(n.is_finite()))
-                }),
-            ),
+            JsFunction::native("isFinite".to_string(), 1, |_interp, _this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let n = to_number(&val);
+                Completion::Normal(JsValue::Boolean(n.is_finite()))
+            }),
         );
 
         // Math object
@@ -1198,19 +1184,21 @@ impl Interpreter {
             ("cbrt", f64::cbrt),
         ];
         for (name, op) in math_fns {
-            let fn_val = self.create_function(JsFunction::Native(
+            let fn_val = self.create_function(JsFunction::native(
                 name.to_string(),
-                Rc::new(move |_interp, _this, args| {
+                1,
+                move |_interp, _this, args| {
                     let x = args.first().map(to_number).unwrap_or(f64::NAN);
                     Completion::Normal(JsValue::Number(op(x)))
-                }),
+                },
             ));
             math_obj.borrow_mut().insert_value(name.to_string(), fn_val);
         }
         // Math.max, Math.min, Math.pow, Math.random, Math.atan2
-        let max_fn = self.create_function(JsFunction::Native(
+        let max_fn = self.create_function(JsFunction::native(
             "max".to_string(),
-            Rc::new(|_interp, _this, args| {
+            2,
+            |_interp, _this, args| {
                 if args.is_empty() {
                     return Completion::Normal(JsValue::Number(f64::NEG_INFINITY));
                 }
@@ -1225,14 +1213,15 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Number(result))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("max".to_string(), max_fn);
-        let min_fn = self.create_function(JsFunction::Native(
+        let min_fn = self.create_function(JsFunction::native(
             "min".to_string(),
-            Rc::new(|_interp, _this, args| {
+            2,
+            |_interp, _this, args| {
                 if args.is_empty() {
                     return Completion::Normal(JsValue::Number(f64::INFINITY));
                 }
@@ -1247,49 +1236,53 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Number(result))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("min".to_string(), min_fn);
-        let pow_fn = self.create_function(JsFunction::Native(
+        let pow_fn = self.create_function(JsFunction::native(
             "pow".to_string(),
-            Rc::new(|_interp, _this, args| {
+            2,
+            |_interp, _this, args| {
                 let base = args.first().map(to_number).unwrap_or(f64::NAN);
                 let exp = args.get(1).map(to_number).unwrap_or(f64::NAN);
                 Completion::Normal(JsValue::Number(base.powf(exp)))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("pow".to_string(), pow_fn);
-        let random_fn = self.create_function(JsFunction::Native(
+        let random_fn = self.create_function(JsFunction::native(
             "random".to_string(),
-            Rc::new(|_interp, _this, _args| {
+            0,
+            |_interp, _this, _args| {
                 Completion::Normal(JsValue::Number(0.5)) // deterministic for testing
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("random".to_string(), random_fn);
 
         // Math.atan2
-        let atan2_fn = self.create_function(JsFunction::Native(
+        let atan2_fn = self.create_function(JsFunction::native(
             "atan2".to_string(),
-            Rc::new(|_interp, _this, args| {
+            2,
+            |_interp, _this, args| {
                 let y = args.first().map(to_number).unwrap_or(f64::NAN);
                 let x = args.get(1).map(to_number).unwrap_or(f64::NAN);
                 Completion::Normal(JsValue::Number(y.atan2(x)))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("atan2".to_string(), atan2_fn);
 
         // Math.hypot
-        let hypot_fn = self.create_function(JsFunction::Native(
+        let hypot_fn = self.create_function(JsFunction::native(
             "hypot".to_string(),
-            Rc::new(|_interp, _this, args| {
+            2,
+            |_interp, _this, args| {
                 if args.is_empty() {
                     return Completion::Normal(JsValue::Number(0.0));
                 }
@@ -1305,69 +1298,74 @@ impl Interpreter {
                     sum += n * n;
                 }
                 Completion::Normal(JsValue::Number(sum.sqrt()))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("hypot".to_string(), hypot_fn);
 
         // Math.log2, Math.log10
-        let log2_fn = self.create_function(JsFunction::Native(
+        let log2_fn = self.create_function(JsFunction::native(
             "log2".to_string(),
-            Rc::new(|_interp, _this, args| {
+            1,
+            |_interp, _this, args| {
                 let x = args.first().map(to_number).unwrap_or(f64::NAN);
                 Completion::Normal(JsValue::Number(x.log2()))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("log2".to_string(), log2_fn);
-        let log10_fn = self.create_function(JsFunction::Native(
+        let log10_fn = self.create_function(JsFunction::native(
             "log10".to_string(),
-            Rc::new(|_interp, _this, args| {
+            1,
+            |_interp, _this, args| {
                 let x = args.first().map(to_number).unwrap_or(f64::NAN);
                 Completion::Normal(JsValue::Number(x.log10()))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("log10".to_string(), log10_fn);
 
         // Math.fround
-        let fround_fn = self.create_function(JsFunction::Native(
+        let fround_fn = self.create_function(JsFunction::native(
             "fround".to_string(),
-            Rc::new(|_interp, _this, args| {
+            1,
+            |_interp, _this, args| {
                 let x = args.first().map(to_number).unwrap_or(f64::NAN);
                 Completion::Normal(JsValue::Number((x as f32) as f64))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("fround".to_string(), fround_fn);
 
         // Math.clz32
-        let clz32_fn = self.create_function(JsFunction::Native(
+        let clz32_fn = self.create_function(JsFunction::native(
             "clz32".to_string(),
-            Rc::new(|_interp, _this, args| {
+            1,
+            |_interp, _this, args| {
                 let x = args.first().map(to_number).unwrap_or(0.0);
                 let n = number_ops::to_uint32(x);
                 Completion::Normal(JsValue::Number(n.leading_zeros() as f64))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
             .insert_builtin("clz32".to_string(), clz32_fn);
 
         // Math.imul
-        let imul_fn = self.create_function(JsFunction::Native(
+        let imul_fn = self.create_function(JsFunction::native(
             "imul".to_string(),
-            Rc::new(|_interp, _this, args| {
+            2,
+            |_interp, _this, args| {
                 let a = args.first().map(to_number).unwrap_or(0.0);
                 let b = args.get(1).map(to_number).unwrap_or(0.0);
                 let ia = number_ops::to_int32(a);
                 let ib = number_ops::to_int32(b);
                 Completion::Normal(JsValue::Number(ia.wrapping_mul(ib) as f64))
-            }),
+            },
         ));
         math_obj
             .borrow_mut()
@@ -1385,12 +1383,13 @@ impl Interpreter {
             ("atanh", f64::atanh),
         ];
         for (name, op) in extra_math_fns {
-            let fn_val = self.create_function(JsFunction::Native(
+            let fn_val = self.create_function(JsFunction::native(
                 name.to_string(),
-                Rc::new(move |_interp, _this, args| {
+                1,
+                move |_interp, _this, args| {
                     let x = args.first().map(to_number).unwrap_or(f64::NAN);
                     Completion::Normal(JsValue::Number(op(x)))
-                }),
+                },
             ));
             math_obj.borrow_mut().insert_value(name.to_string(), fn_val);
         }
@@ -1405,79 +1404,75 @@ impl Interpreter {
         self.register_global_fn(
             "eval",
             BindingKind::Var,
-            JsFunction::Native(
-                "eval".to_string(),
-                Rc::new(|interp, _this, args| {
-                    let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if !matches!(&arg, JsValue::String(_)) {
-                        return Completion::Normal(arg);
+            JsFunction::native("eval".to_string(), 1, |interp, _this, args| {
+                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(&arg, JsValue::String(_)) {
+                    return Completion::Normal(arg);
+                }
+                let code = to_js_string(&arg);
+                let mut p = match parser::Parser::new(&code) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return Completion::Throw(
+                            interp.create_error("SyntaxError", "Invalid eval source"),
+                        );
                     }
-                    let code = to_js_string(&arg);
-                    let mut p = match parser::Parser::new(&code) {
-                        Ok(p) => p,
-                        Err(_) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", "Invalid eval source"),
-                            );
-                        }
-                    };
-                    let program = match p.parse_program() {
-                        Ok(prog) => prog,
-                        Err(_) => {
-                            return Completion::Throw(
-                                interp.create_error("SyntaxError", "Invalid eval source"),
-                            );
-                        }
-                    };
-                    let env = interp.global_env.clone();
-                    let mut last = JsValue::Undefined;
-                    for stmt in &program.body {
-                        match interp.exec_statement(stmt, &env) {
-                            Completion::Normal(v) => {
-                                if !matches!(v, JsValue::Undefined) {
-                                    last = v;
-                                }
+                };
+                let program = match p.parse_program() {
+                    Ok(prog) => prog,
+                    Err(_) => {
+                        return Completion::Throw(
+                            interp.create_error("SyntaxError", "Invalid eval source"),
+                        );
+                    }
+                };
+                let env = interp.global_env.clone();
+                let mut last = JsValue::Undefined;
+                for stmt in &program.body {
+                    match interp.exec_statement(stmt, &env) {
+                        Completion::Normal(v) => {
+                            if !matches!(v, JsValue::Undefined) {
+                                last = v;
                             }
-                            other => return other,
                         }
+                        other => return other,
                     }
-                    Completion::Normal(last)
-                }),
-            ),
+                }
+                Completion::Normal(last)
+            }),
         );
 
         self.register_global_fn(
             "$DONOTEVALUATE",
             BindingKind::Var,
-            JsFunction::Native(
-                "$DONOTEVALUATE".to_string(),
-                Rc::new(|_interp, _this, _args| {
-                    Completion::Throw(JsValue::String(JsString::from_str(
-                        "Test262: $DONOTEVALUATE was called",
-                    )))
-                }),
-            ),
+            JsFunction::native("$DONOTEVALUATE".to_string(), 0, |_interp, _this, _args| {
+                Completion::Throw(JsValue::String(JsString::from_str(
+                    "Test262: $DONOTEVALUATE was called",
+                )))
+            }),
         );
 
         // JSON object
         let json_obj = self.create_object();
-        let json_stringify = self.create_function(JsFunction::Native(
+        let json_stringify = self.create_function(JsFunction::native(
             "stringify".to_string(),
-            Rc::new(|interp, _this, args: &[JsValue]| {
+            3,
+            |interp, _this, args: &[JsValue]| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let result = json_stringify_value(interp, &val);
                 match result {
                     Some(s) => Completion::Normal(JsValue::String(JsString::from_str(&s))),
                     None => Completion::Normal(JsValue::Undefined),
                 }
-            }),
+            },
         ));
-        let json_parse = self.create_function(JsFunction::Native(
+        let json_parse = self.create_function(JsFunction::native(
             "parse".to_string(),
-            Rc::new(|interp, _this, args: &[JsValue]| {
+            2,
+            |interp, _this, args: &[JsValue]| {
                 let s = args.first().map(to_js_string).unwrap_or_default();
                 json_parse_value(interp, &s)
-            }),
+            },
         ));
         json_obj
             .borrow_mut()
@@ -1497,9 +1492,10 @@ impl Interpreter {
         {
             let string_ctor = self.global_env.borrow().get("String");
             if let Some(JsValue::Object(ref o)) = string_ctor {
-                let from_char_code = self.create_function(JsFunction::Native(
+                let from_char_code = self.create_function(JsFunction::native(
                     "fromCharCode".to_string(),
-                    Rc::new(|_interp, _this, args: &[JsValue]| {
+                    1,
+                    |_interp, _this, args: &[JsValue]| {
                         let s: String = args
                             .iter()
                             .map(|a| {
@@ -1508,11 +1504,12 @@ impl Interpreter {
                             })
                             .collect();
                         Completion::Normal(JsValue::String(JsString::from_str(&s)))
-                    }),
+                    },
                 ));
-                let from_code_point = self.create_function(JsFunction::Native(
+                let from_code_point = self.create_function(JsFunction::native(
                     "fromCodePoint".to_string(),
-                    Rc::new(|_interp, _this, args: &[JsValue]| {
+                    1,
+                    |_interp, _this, args: &[JsValue]| {
                         let mut s = String::new();
                         for a in args {
                             let n = to_number(a) as u32;
@@ -1521,7 +1518,7 @@ impl Interpreter {
                             }
                         }
                         Completion::Normal(JsValue::String(JsString::from_str(&s)))
-                    }),
+                    },
                 ));
                 if let Some(obj) = self.get_object(o.id) {
                     obj.borrow_mut()
@@ -1555,9 +1552,10 @@ impl Interpreter {
         regexp_proto.borrow_mut().class_name = "RegExp".to_string();
 
         // RegExp.prototype.test
-        let test_fn = self.create_function(JsFunction::Native(
+        let test_fn = self.create_function(JsFunction::native(
             "test".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let input = args.first().map(to_js_string).unwrap_or_default();
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -1582,16 +1580,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         regexp_proto
             .borrow_mut()
             .insert_builtin("test".to_string(), test_fn);
 
         // RegExp.prototype.exec
-        let exec_fn = self.create_function(JsFunction::Native(
+        let exec_fn = self.create_function(JsFunction::native(
             "exec".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let input = args.first().map(to_js_string).unwrap_or_default();
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -1632,16 +1631,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Null)
-            }),
+            },
         ));
         regexp_proto
             .borrow_mut()
             .insert_builtin("exec".to_string(), exec_fn);
 
         // RegExp.prototype.toString
-        let tostring_fn = self.create_function(JsFunction::Native(
+        let tostring_fn = self.create_function(JsFunction::native(
             "toString".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -1661,7 +1661,7 @@ impl Interpreter {
                     ))));
                 }
                 Completion::Normal(JsValue::String(JsString::from_str("/(?:)/")))
-            }),
+            },
         ));
         regexp_proto
             .borrow_mut()
@@ -1670,9 +1670,10 @@ impl Interpreter {
         let regexp_proto_rc = regexp_proto.clone();
 
         // RegExp constructor
-        let regexp_ctor = self.create_function(JsFunction::Native(
+        let regexp_ctor = self.create_function(JsFunction::native(
             "RegExp".to_string(),
-            Rc::new(move |interp, _this, args| {
+            2,
+            move |interp, _this, args| {
                 let pattern_str = args.first().map(to_js_string).unwrap_or_default();
                 let flags_str = args.get(1).map(to_js_string).unwrap_or_default();
                 let mut obj = JsObjectData::new();
@@ -1702,7 +1703,7 @@ impl Interpreter {
                 let rc = Rc::new(RefCell::new(obj));
                 let id = interp.allocate_object_slot(rc);
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-            }),
+            },
         ));
         // Set prototype on constructor
         if let JsValue::Object(ref o) = regexp_ctor
@@ -1741,9 +1742,10 @@ impl Interpreter {
                 self.object_prototype = Some(proto_obj.clone());
 
                 // Add hasOwnProperty to Object.prototype
-                let has_own_fn = self.create_function(JsFunction::Native(
+                let has_own_fn = self.create_function(JsFunction::native(
                     "hasOwnProperty".to_string(),
-                    Rc::new(|interp, this_val, args| {
+                    1,
+                    |interp, this_val, args| {
                         let key = args.first().map(to_js_string).unwrap_or_default();
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id)
@@ -1753,16 +1755,17 @@ impl Interpreter {
                             ));
                         }
                         Completion::Normal(JsValue::Boolean(false))
-                    }),
+                    },
                 ));
                 proto_obj
                     .borrow_mut()
                     .insert_builtin("hasOwnProperty".to_string(), has_own_fn);
 
                 // Object.prototype.toString
-                let obj_tostring_fn = self.create_function(JsFunction::Native(
+                let obj_tostring_fn = self.create_function(JsFunction::native(
                     "toString".to_string(),
-                    Rc::new(|interp, this_val, _args| {
+                    0,
+                    |interp, this_val, _args| {
                         let tag = match this_val {
                             JsValue::Object(o) => {
                                 if let Some(obj) = interp.get_object(o.id) {
@@ -1787,16 +1790,17 @@ impl Interpreter {
                         Completion::Normal(JsValue::String(JsString::from_str(&format!(
                             "[object {tag}]"
                         ))))
-                    }),
+                    },
                 ));
                 proto_obj
                     .borrow_mut()
                     .insert_builtin("toString".to_string(), obj_tostring_fn);
 
                 // Object.prototype.valueOf
-                let obj_valueof_fn = self.create_function(JsFunction::Native(
+                let obj_valueof_fn = self.create_function(JsFunction::native(
                     "valueOf".to_string(),
-                    Rc::new(|interp, this_val, _args| {
+                    0,
+                    |interp, this_val, _args| {
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id)
                             && let Some(pv) = obj.borrow().primitive_value.clone()
@@ -1804,16 +1808,17 @@ impl Interpreter {
                             return Completion::Normal(pv);
                         }
                         Completion::Normal(this_val.clone())
-                    }),
+                    },
                 ));
                 proto_obj
                     .borrow_mut()
                     .insert_builtin("valueOf".to_string(), obj_valueof_fn);
 
                 // Object.prototype.propertyIsEnumerable
-                let pie_fn = self.create_function(JsFunction::Native(
+                let pie_fn = self.create_function(JsFunction::native(
                     "propertyIsEnumerable".to_string(),
-                    Rc::new(|interp, this_val, args| {
+                    1,
+                    |interp, this_val, args| {
                         let key = args.first().map(to_js_string).unwrap_or_default();
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id)
@@ -1824,16 +1829,17 @@ impl Interpreter {
                             ));
                         }
                         Completion::Normal(JsValue::Boolean(false))
-                    }),
+                    },
                 ));
                 proto_obj
                     .borrow_mut()
                     .insert_builtin("propertyIsEnumerable".to_string(), pie_fn);
 
                 // Object.prototype.isPrototypeOf
-                let ipof_fn = self.create_function(JsFunction::Native(
+                let ipof_fn = self.create_function(JsFunction::native(
                     "isPrototypeOf".to_string(),
-                    Rc::new(|interp, this_val, args| {
+                    1,
+                    |interp, this_val, args| {
                         let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                         if let (JsValue::Object(this_o), JsValue::Object(target_o)) =
                             (this_val, &target)
@@ -1849,7 +1855,7 @@ impl Interpreter {
                             }
                         }
                         Completion::Normal(JsValue::Boolean(false))
-                    }),
+                    },
                 ));
                 proto_obj
                     .borrow_mut()
@@ -1859,9 +1865,10 @@ impl Interpreter {
             }
 
             // Add Object.defineProperty
-            let define_property_fn = self.create_function(JsFunction::Native(
+            let define_property_fn = self.create_function(JsFunction::native(
                 "defineProperty".to_string(),
-                Rc::new(|interp, _this, args| {
+                3,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let key = args.get(1).map(to_js_string).unwrap_or_default();
                     let desc_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
@@ -1943,16 +1950,17 @@ impl Interpreter {
                         obj.borrow_mut().define_own_property(key, desc);
                     }
                     Completion::Normal(target)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("defineProperty".to_string(), define_property_fn);
 
             // Add Object.getOwnPropertyDescriptor
-            let get_own_prop_desc_fn = self.create_function(JsFunction::Native(
+            let get_own_prop_desc_fn = self.create_function(JsFunction::native(
                 "getOwnPropertyDescriptor".to_string(),
-                Rc::new(|interp, _this, args| {
+                2,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let key = args.get(1).map(to_js_string).unwrap_or_default();
                     if let JsValue::Object(ref o) = target {
@@ -1991,16 +1999,17 @@ impl Interpreter {
                         }
                     }
                     Completion::Normal(JsValue::Undefined)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("getOwnPropertyDescriptor".to_string(), get_own_prop_desc_fn);
 
             // Add Object.keys
-            let keys_fn = self.create_function(JsFunction::Native(
+            let keys_fn = self.create_function(JsFunction::native(
                 "keys".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2057,16 +2066,17 @@ impl Interpreter {
                         return Completion::Normal(arr);
                     }
                     Completion::Normal(JsValue::Undefined)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("keys".to_string(), keys_fn);
 
             // Add Object.freeze
-            let freeze_fn = self.create_function(JsFunction::Native(
+            let freeze_fn = self.create_function(JsFunction::native(
                 "freeze".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2081,16 +2091,17 @@ impl Interpreter {
                         }
                     }
                     Completion::Normal(target)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("freeze".to_string(), freeze_fn);
 
             // Add Object.getPrototypeOf
-            let get_proto_fn = self.create_function(JsFunction::Native(
+            let get_proto_fn = self.create_function(JsFunction::native(
                 "getPrototypeOf".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2130,16 +2141,17 @@ impl Interpreter {
                         }
                     }
                     Completion::Normal(JsValue::Null)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("getPrototypeOf".to_string(), get_proto_fn);
 
             // Add Object.create
-            let create_fn = self.create_function(JsFunction::Native(
+            let create_fn = self.create_function(JsFunction::native(
                 "create".to_string(),
-                Rc::new(|interp, _this, args| {
+                2,
+                |interp, _this, args| {
                     let proto_arg = args.first().cloned().unwrap_or(JsValue::Null);
                     let new_obj = interp.create_object();
                     match &proto_arg {
@@ -2155,16 +2167,17 @@ impl Interpreter {
                     }
                     let id = new_obj.borrow().id.unwrap();
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("create".to_string(), create_fn);
 
             // Object.entries
-            let entries_fn = self.create_function(JsFunction::Native(
+            let entries_fn = self.create_function(JsFunction::native(
                 "entries".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2192,16 +2205,17 @@ impl Interpreter {
                         return Completion::Normal(arr);
                     }
                     Completion::Normal(interp.create_array(Vec::new()))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("entries".to_string(), entries_fn);
 
             // Object.values
-            let values_fn = self.create_function(JsFunction::Native(
+            let values_fn = self.create_function(JsFunction::native(
                 "values".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2222,16 +2236,17 @@ impl Interpreter {
                         return Completion::Normal(arr);
                     }
                     Completion::Normal(interp.create_array(Vec::new()))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("values".to_string(), values_fn);
 
             // Object.assign
-            let assign_fn = self.create_function(JsFunction::Native(
+            let assign_fn = self.create_function(JsFunction::native(
                 "assign".to_string(),
-                Rc::new(|interp, _this, args| {
+                2,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(t) = &target {
                         for source in args.iter().skip(1) {
@@ -2264,16 +2279,17 @@ impl Interpreter {
                         }
                     }
                     Completion::Normal(target)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("assign".to_string(), assign_fn);
 
             // Object.is
-            let is_fn = self.create_function(JsFunction::Native(
+            let is_fn = self.create_function(JsFunction::native(
                 "is".to_string(),
-                Rc::new(|_interp, _this, args| {
+                2,
+                |_interp, _this, args| {
                     let a = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let b = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     let result = match (&a, &b) {
@@ -2281,14 +2297,15 @@ impl Interpreter {
                         _ => strict_equality(&a, &b),
                     };
                     Completion::Normal(JsValue::Boolean(result))
-                }),
+                },
             ));
             obj_func.borrow_mut().insert_value("is".to_string(), is_fn);
 
             // Object.getOwnPropertyNames
-            let gopn_fn = self.create_function(JsFunction::Native(
+            let gopn_fn = self.create_function(JsFunction::native(
                 "getOwnPropertyNames".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2329,16 +2346,17 @@ impl Interpreter {
                         return Completion::Normal(arr);
                     }
                     Completion::Normal(interp.create_array(Vec::new()))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("getOwnPropertyNames".to_string(), gopn_fn);
 
             // Object.preventExtensions
-            let pe_fn = self.create_function(JsFunction::Native(
+            let pe_fn = self.create_function(JsFunction::native(
                 "preventExtensions".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2373,16 +2391,17 @@ impl Interpreter {
                         obj.borrow_mut().extensible = false;
                     }
                     Completion::Normal(target)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("preventExtensions".to_string(), pe_fn);
 
             // Object.isExtensible
-            let ie_fn = self.create_function(JsFunction::Native(
+            let ie_fn = self.create_function(JsFunction::native(
                 "isExtensible".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2414,16 +2433,17 @@ impl Interpreter {
                         return Completion::Normal(JsValue::Boolean(obj.borrow().extensible));
                     }
                     Completion::Normal(JsValue::Boolean(false))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("isExtensible".to_string(), ie_fn);
 
             // Object.isFrozen
-            let frozen_fn = self.create_function(JsFunction::Native(
+            let frozen_fn = self.create_function(JsFunction::native(
                 "isFrozen".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2439,16 +2459,17 @@ impl Interpreter {
                         return Completion::Normal(JsValue::Boolean(all_frozen));
                     }
                     Completion::Normal(JsValue::Boolean(true))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("isFrozen".to_string(), frozen_fn);
 
             // Object.isSealed
-            let sealed_fn = self.create_function(JsFunction::Native(
+            let sealed_fn = self.create_function(JsFunction::native(
                 "isSealed".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2464,16 +2485,17 @@ impl Interpreter {
                         return Completion::Normal(JsValue::Boolean(all_sealed));
                     }
                     Completion::Normal(JsValue::Boolean(true))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("isSealed".to_string(), sealed_fn);
 
             // Object.seal
-            let seal_fn = self.create_function(JsFunction::Native(
+            let seal_fn = self.create_function(JsFunction::native(
                 "seal".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2485,16 +2507,17 @@ impl Interpreter {
                         }
                     }
                     Completion::Normal(target)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("seal".to_string(), seal_fn);
 
             // Object.hasOwn
-            let has_own_fn = self.create_function(JsFunction::Native(
+            let has_own_fn = self.create_function(JsFunction::native(
                 "hasOwn".to_string(),
-                Rc::new(|interp, _this, args| {
+                2,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let key = args.get(1).map(to_js_string).unwrap_or_default();
                     if let JsValue::Object(o) = &target
@@ -2505,16 +2528,17 @@ impl Interpreter {
                         ));
                     }
                     Completion::Normal(JsValue::Boolean(false))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("hasOwn".to_string(), has_own_fn);
 
             // Object.setPrototypeOf
-            let set_proto_fn = self.create_function(JsFunction::Native(
+            let set_proto_fn = self.create_function(JsFunction::native(
                 "setPrototypeOf".to_string(),
-                Rc::new(|interp, _this, args| {
+                2,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let proto = args.get(1).cloned().unwrap_or(JsValue::Null);
                     if let JsValue::Object(ref o) = target
@@ -2571,16 +2595,17 @@ impl Interpreter {
                         }
                     }
                     Completion::Normal(target)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("setPrototypeOf".to_string(), set_proto_fn);
 
             // Object.defineProperties
-            let def_props_fn = self.create_function(JsFunction::Native(
+            let def_props_fn = self.create_function(JsFunction::native(
                 "defineProperties".to_string(),
-                Rc::new(|interp, _this, args| {
+                2,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let descs = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref t) = target
@@ -2641,16 +2666,17 @@ impl Interpreter {
                         }
                     }
                     Completion::Normal(target)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("defineProperties".to_string(), def_props_fn);
 
             // Object.getOwnPropertyDescriptors
-            let get_descs_fn = self.create_function(JsFunction::Native(
+            let get_descs_fn = self.create_function(JsFunction::native(
                 "getOwnPropertyDescriptors".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref t) = target
                         && let Some(obj) = interp.get_object(t.id)
@@ -2702,16 +2728,17 @@ impl Interpreter {
                         return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                     }
                     Completion::Normal(JsValue::Undefined)
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
                 .insert_value("getOwnPropertyDescriptors".to_string(), get_descs_fn);
 
             // Object.fromEntries
-            let from_entries_fn = self.create_function(JsFunction::Native(
+            let from_entries_fn = self.create_function(JsFunction::native(
                 "fromEntries".to_string(),
-                Rc::new(|interp, _this, args| {
+                1,
+                |interp, _this, args| {
                     let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let obj = interp.create_object();
                     if let JsValue::Object(ref arr) = iterable
@@ -2737,7 +2764,7 @@ impl Interpreter {
                     }
                     let id = obj.borrow().id.unwrap();
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                }),
+                },
             ));
             obj_func
                 .borrow_mut()
@@ -2954,9 +2981,10 @@ impl Interpreter {
         iter_proto.borrow_mut().class_name = "Iterator".to_string();
 
         // %IteratorPrototype%[@@iterator]() returns this
-        let iter_self_fn = self.create_function(JsFunction::Native(
+        let iter_self_fn = self.create_function(JsFunction::native(
             "[Symbol.iterator]".to_string(),
-            Rc::new(|_interp, this, _args| Completion::Normal(this.clone())),
+            0,
+            |_interp, this, _args| Completion::Normal(this.clone()),
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
             iter_proto.borrow_mut().insert_property(
@@ -2978,9 +3006,10 @@ impl Interpreter {
         self.iterator_prototype = Some(iter_proto.clone());
 
         // Iterator constructor (abstract — throws TypeError when called directly)
-        let iterator_ctor = self.create_function(JsFunction::Native(
+        let iterator_ctor = self.create_function(JsFunction::native(
             "Iterator".to_string(),
-            Rc::new(move |interp, this, _args| {
+            0,
+            move |interp, this, _args| {
                 // §27.1.1.1: If NewTarget is undefined, throw TypeError
                 // If NewTarget === Iterator, throw TypeError (abstract class)
                 if interp.new_target.is_none() {
@@ -3003,7 +3032,7 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(this.clone())
-            }),
+            },
         ));
 
         // Set Iterator.prototype
@@ -3049,9 +3078,10 @@ impl Interpreter {
         arr_iter_proto.borrow_mut().prototype = Some(iter_proto.clone());
         arr_iter_proto.borrow_mut().class_name = "Array Iterator".to_string();
 
-        let arr_iter_next = self.create_function(JsFunction::Native(
+        let arr_iter_next = self.create_function(JsFunction::native(
             "next".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let state = obj.borrow().iterator_state.clone();
@@ -3161,7 +3191,7 @@ impl Interpreter {
                     let err = interp.create_type_error("next called on non-object");
                     Completion::Throw(err)
                 }
-            }),
+            },
         ));
         arr_iter_proto
             .borrow_mut()
@@ -3185,9 +3215,10 @@ impl Interpreter {
         str_iter_proto.borrow_mut().prototype = Some(iter_proto.clone());
         str_iter_proto.borrow_mut().class_name = "String Iterator".to_string();
 
-        let str_iter_next = self.create_function(JsFunction::Native(
+        let str_iter_next = self.create_function(JsFunction::native(
             "next".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let state = obj.borrow().iterator_state.clone();
@@ -3246,7 +3277,7 @@ impl Interpreter {
                     let err = interp.create_type_error("next called on non-object");
                     Completion::Throw(err)
                 }
-            }),
+            },
         ));
         str_iter_proto
             .borrow_mut()
@@ -3273,9 +3304,10 @@ impl Interpreter {
         obj.borrow_mut()
             .insert_builtin("return".to_string(), return_fn);
         // Add @@iterator returning this
-        let iter_self_fn = self.create_function(JsFunction::Native(
+        let iter_self_fn = self.create_function(JsFunction::native(
             "[Symbol.iterator]".to_string(),
-            Rc::new(|_interp, this, _args| Completion::Normal(this.clone())),
+            0,
+            |_interp, this, _args| Completion::Normal(this.clone()),
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
             obj.borrow_mut().insert_property(
@@ -3299,9 +3331,10 @@ impl Interpreter {
 
     fn setup_iterator_helper_methods(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
         // toArray()
-        let to_array_fn = self.create_function(JsFunction::Native(
+        let to_array_fn = self.create_function(JsFunction::native(
             "toArray".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 let (iter, next_method) = match interp.get_iterator_direct(this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -3319,16 +3352,17 @@ impl Interpreter {
                 }
                 let arr = interp.create_array(values);
                 Completion::Normal(arr)
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("toArray".to_string(), to_array_fn);
 
         // forEach(fn)
-        let for_each_fn = self.create_function(JsFunction::Native(
+        let for_each_fn = self.create_function(JsFunction::native(
             "forEach".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&callback, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
@@ -3365,16 +3399,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("forEach".to_string(), for_each_fn);
 
         // some(predicate)
-        let some_fn = self.create_function(JsFunction::Native(
+        let some_fn = self.create_function(JsFunction::native(
             "some".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
@@ -3416,16 +3451,17 @@ impl Interpreter {
                         }
                     }
                 }
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("some".to_string(), some_fn);
 
         // every(predicate)
-        let every_fn = self.create_function(JsFunction::Native(
+        let every_fn = self.create_function(JsFunction::native(
             "every".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
@@ -3467,16 +3503,17 @@ impl Interpreter {
                         }
                     }
                 }
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("every".to_string(), every_fn);
 
         // find(predicate)
-        let find_fn = self.create_function(JsFunction::Native(
+        let find_fn = self.create_function(JsFunction::native(
             "find".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
@@ -3518,16 +3555,17 @@ impl Interpreter {
                         }
                     }
                 }
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("find".to_string(), find_fn);
 
         // reduce(reducer, [initial])
-        let reduce_fn = self.create_function(JsFunction::Native(
+        let reduce_fn = self.create_function(JsFunction::native(
             "reduce".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let reducer = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&reducer, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
@@ -3585,7 +3623,7 @@ impl Interpreter {
                         }
                     }
                 }
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
@@ -3597,9 +3635,10 @@ impl Interpreter {
 
     fn setup_iterator_lazy_helpers(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
         // map(mapper)
-        let map_fn = self.create_function(JsFunction::Native(
+        let map_fn = self.create_function(JsFunction::native(
             "map".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&mapper, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
@@ -3615,9 +3654,10 @@ impl Interpreter {
                     Rc::new(RefCell::new((iter, next_method, mapper, 0.0, true)));
 
                 let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::Native(
+                let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, next_method, mapper, counter, alive) = {
                             let s = state_next.borrow();
                             (s.0.clone(), s.1.clone(), s.2.clone(), s.3, s.4)
@@ -3661,13 +3701,14 @@ impl Interpreter {
                                 Completion::Throw(e)
                             }
                         }
-                    }),
+                    },
                 ));
 
                 let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::Native(
+                let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, alive) = {
                             let s = state_ret.borrow();
                             (s.0.clone(), s.4)
@@ -3679,21 +3720,22 @@ impl Interpreter {
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
-                    }),
+                    },
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 Completion::Normal(helper)
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("map".to_string(), map_fn);
 
         // filter(predicate)
-        let filter_fn = self.create_function(JsFunction::Native(
+        let filter_fn = self.create_function(JsFunction::native(
             "filter".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
@@ -3709,9 +3751,10 @@ impl Interpreter {
                     Rc::new(RefCell::new((iter, next_method, predicate, 0.0, true)));
 
                 let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::Native(
+                let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, next_method, pred, mut counter, alive) = {
                             let s = state_next.borrow();
                             (s.0.clone(), s.1.clone(), s.2.clone(), s.3, s.4)
@@ -3760,13 +3803,14 @@ impl Interpreter {
                                 }
                             }
                         }
-                    }),
+                    },
                 ));
 
                 let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::Native(
+                let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, alive) = {
                             let s = state_ret.borrow();
                             (s.0.clone(), s.4)
@@ -3778,21 +3822,22 @@ impl Interpreter {
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
-                    }),
+                    },
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 Completion::Normal(helper)
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("filter".to_string(), filter_fn);
 
         // take(limit)
-        let take_fn = self.create_function(JsFunction::Native(
+        let take_fn = self.create_function(JsFunction::native(
             "take".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let limit = to_number(&limit_val);
                 if limit.is_nan() || limit < 0.0 {
@@ -3815,9 +3860,10 @@ impl Interpreter {
                     Rc::new(RefCell::new((iter, next_method, limit, true)));
 
                 let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::Native(
+                let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, next_method, remaining, alive) = {
                             let s = state_next.borrow();
                             (s.0.clone(), s.1.clone(), s.2, s.3)
@@ -3856,13 +3902,14 @@ impl Interpreter {
                                 Completion::Throw(e)
                             }
                         }
-                    }),
+                    },
                 ));
 
                 let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::Native(
+                let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, alive) = {
                             let s = state_ret.borrow();
                             (s.0.clone(), s.3)
@@ -3874,21 +3921,22 @@ impl Interpreter {
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
-                    }),
+                    },
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 Completion::Normal(helper)
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("take".to_string(), take_fn);
 
         // drop(limit)
-        let drop_fn = self.create_function(JsFunction::Native(
+        let drop_fn = self.create_function(JsFunction::native(
             "drop".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let limit = to_number(&limit_val);
                 if limit.is_nan() || limit < 0.0 {
@@ -3911,9 +3959,10 @@ impl Interpreter {
                     Rc::new(RefCell::new((iter, next_method, limit, false, true)));
 
                 let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::Native(
+                let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, next_method, to_skip, skipped, alive) = {
                             let s = state_next.borrow();
                             (s.0.clone(), s.1.clone(), s.2, s.3, s.4)
@@ -3963,13 +4012,14 @@ impl Interpreter {
                                 Completion::Throw(e)
                             }
                         }
-                    }),
+                    },
                 ));
 
                 let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::Native(
+                let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, alive) = {
                             let s = state_ret.borrow();
                             (s.0.clone(), s.4)
@@ -3981,21 +4031,22 @@ impl Interpreter {
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
-                    }),
+                    },
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 Completion::Normal(helper)
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
             .insert_builtin("drop".to_string(), drop_fn);
 
         // flatMap(mapper)
-        let flat_map_fn = self.create_function(JsFunction::Native(
+        let flat_map_fn = self.create_function(JsFunction::native(
             "flatMap".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&mapper, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
@@ -4029,9 +4080,10 @@ impl Interpreter {
                 )));
 
                 let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::Native(
+                let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         loop {
                             let (
                                 outer_iter,
@@ -4147,13 +4199,14 @@ impl Interpreter {
                                 }
                             }
                         }
-                    }),
+                    },
                 ));
 
                 let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::Native(
+                let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (outer_iter, inner_iter, alive) = {
                             let s = state_ret.borrow();
                             (s.0.clone(), s.4.clone(), s.6)
@@ -4170,12 +4223,12 @@ impl Interpreter {
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
-                    }),
+                    },
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 Completion::Normal(helper)
-            }),
+            },
         ));
         iter_proto
             .borrow_mut()
@@ -4184,9 +4237,10 @@ impl Interpreter {
 
     fn setup_iterator_static_methods(&mut self, iterator_ctor: &JsValue) {
         // Iterator.from(obj)
-        let from_fn = self.create_function(JsFunction::Native(
+        let from_fn = self.create_function(JsFunction::native(
             "from".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 let obj = args.first().cloned().unwrap_or(JsValue::Undefined);
 
                 // Try Symbol.iterator first
@@ -4265,9 +4319,10 @@ impl Interpreter {
                     Rc::new(RefCell::new((iter, next_method, true)));
 
                 let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::Native(
+                let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, next_method, alive) = {
                             let s = state_next.borrow();
                             (s.0.clone(), s.1.clone(), s.2)
@@ -4297,13 +4352,14 @@ impl Interpreter {
                                 interp.create_iter_result_object(JsValue::Undefined, true),
                             ),
                         }
-                    }),
+                    },
                 ));
 
                 let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::Native(
+                let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (iter, alive) = {
                             let s = state_ret.borrow();
                             (s.0.clone(), s.2)
@@ -4315,12 +4371,12 @@ impl Interpreter {
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
-                    }),
+                    },
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 Completion::Normal(helper)
-            }),
+            },
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor {
@@ -4330,9 +4386,10 @@ impl Interpreter {
         }
 
         // Iterator.concat(...iterables)
-        let concat_fn = self.create_function(JsFunction::Native(
+        let concat_fn = self.create_function(JsFunction::native(
             "concat".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 // Validate all args are iterable first
                 let sym_key = interp.get_symbol_iterator_key();
                 let mut iterables: Vec<(JsValue, JsValue)> = Vec::new();
@@ -4374,9 +4431,10 @@ impl Interpreter {
                 > = Rc::new(RefCell::new((iterables, 0, None, None, true)));
 
                 let state_next = state.clone();
-                let next_fn = interp.create_function(JsFunction::Native(
+                let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         loop {
                             let (ref iterables, idx, ref cur_iter, ref cur_next, alive) = {
                                 let s = state_next.borrow();
@@ -4453,13 +4511,14 @@ impl Interpreter {
                                 }
                             }
                         }
-                    }),
+                    },
                 ));
 
                 let state_ret = state.clone();
-                let return_fn = interp.create_function(JsFunction::Native(
+                let return_fn = interp.create_function(JsFunction::native(
                     "return".to_string(),
-                    Rc::new(move |interp, _this, _args| {
+                    0,
+                    move |interp, _this, _args| {
                         let (cur_iter, alive) = {
                             let s = state_ret.borrow();
                             (s.2.clone(), s.4)
@@ -4475,12 +4534,12 @@ impl Interpreter {
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
-                    }),
+                    },
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
                 Completion::Normal(helper)
-            }),
+            },
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor {
@@ -4534,12 +4593,13 @@ impl Interpreter {
         gen_proto.borrow_mut().prototype = self.iterator_prototype.clone();
 
         // next(value)
-        let next_fn = self.create_function(JsFunction::Native(
+        let next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
-            Rc::new(|interp, this, args| {
+            0,
+            |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 interp.generator_next(this, value)
-            }),
+            },
         ));
         gen_proto.borrow_mut().insert_property(
             "next".to_string(),
@@ -4547,12 +4607,13 @@ impl Interpreter {
         );
 
         // return(value)
-        let return_fn = self.create_function(JsFunction::Native(
+        let return_fn = self.create_function(JsFunction::native(
             "return".to_string(),
-            Rc::new(|interp, this, args| {
+            0,
+            |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 interp.generator_return(this, value)
-            }),
+            },
         ));
         gen_proto.borrow_mut().insert_property(
             "return".to_string(),
@@ -4560,12 +4621,13 @@ impl Interpreter {
         );
 
         // throw(exception)
-        let throw_fn = self.create_function(JsFunction::Native(
+        let throw_fn = self.create_function(JsFunction::native(
             "throw".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
                 interp.generator_throw(this, exception)
-            }),
+            },
         ));
         gen_proto.borrow_mut().insert_property(
             "throw".to_string(),
@@ -4573,9 +4635,10 @@ impl Interpreter {
         );
 
         // Symbol.iterator returns this
-        let iter_self_fn = self.create_function(JsFunction::Native(
+        let iter_self_fn = self.create_function(JsFunction::native(
             "[Symbol.iterator]".to_string(),
-            Rc::new(|_interp, this, _args| Completion::Normal(this.clone())),
+            0,
+            |_interp, this, _args| Completion::Normal(this.clone()),
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
             gen_proto.borrow_mut().insert_property(
@@ -4603,9 +4666,10 @@ impl Interpreter {
         proto.borrow_mut().class_name = "Array".to_string();
 
         // Array.prototype.push
-        let push_fn = self.create_function(JsFunction::Native(
+        let push_fn = self.create_function(JsFunction::native(
             "push".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4620,16 +4684,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("push".to_string(), push_fn);
 
         // Array.prototype.pop
-        let pop_fn = self.create_function(JsFunction::Native(
+        let pop_fn = self.create_function(JsFunction::native(
             "pop".to_string(),
-            Rc::new(|interp, this_val, _args: &[JsValue]| {
+            0,
+            |interp, this_val, _args: &[JsValue]| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4642,14 +4707,15 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto.borrow_mut().insert_builtin("pop".to_string(), pop_fn);
 
         // Array.prototype.shift
-        let shift_fn = self.create_function(JsFunction::Native(
+        let shift_fn = self.create_function(JsFunction::native(
             "shift".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4665,16 +4731,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("shift".to_string(), shift_fn);
 
         // Array.prototype.unshift
-        let unshift_fn = self.create_function(JsFunction::Native(
+        let unshift_fn = self.create_function(JsFunction::native(
             "unshift".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4690,16 +4757,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("unshift".to_string(), unshift_fn);
 
         // Array.prototype.indexOf
-        let indexof_fn = self.create_function(JsFunction::Native(
+        let indexof_fn = self.create_function(JsFunction::native(
             "indexOf".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4720,16 +4788,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Number(-1.0))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("indexOf".to_string(), indexof_fn);
 
         // Array.prototype.lastIndexOf
-        let lastindexof_fn = self.create_function(JsFunction::Native(
+        let lastindexof_fn = self.create_function(JsFunction::native(
             "lastIndexOf".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4751,16 +4820,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Number(-1.0))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("lastIndexOf".to_string(), lastindexof_fn);
 
         // Array.prototype.includes
-        let includes_fn = self.create_function(JsFunction::Native(
+        let includes_fn = self.create_function(JsFunction::native(
             "includes".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4776,16 +4846,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("includes".to_string(), includes_fn);
 
         // Array.prototype.join
-        let join_fn = self.create_function(JsFunction::Native(
+        let join_fn = self.create_function(JsFunction::native(
             "join".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4816,16 +4887,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::String(JsString::from_str("")))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("join".to_string(), join_fn);
 
         // Array.prototype.toString
-        let tostring_fn = self.create_function(JsFunction::Native(
+        let tostring_fn = self.create_function(JsFunction::native(
             "toString".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4847,16 +4919,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::String(JsString::from_str("[object Object]")))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("toString".to_string(), tostring_fn);
 
         // Array.prototype.concat
-        let concat_fn = self.create_function(JsFunction::Native(
+        let concat_fn = self.create_function(JsFunction::native(
             "concat".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let mut result = Vec::new();
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -4876,16 +4949,17 @@ impl Interpreter {
                 }
                 let arr = interp.create_array(result);
                 Completion::Normal(arr)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("concat".to_string(), concat_fn);
 
         // Array.prototype.slice
-        let slice_fn = self.create_function(JsFunction::Native(
+        let slice_fn = self.create_function(JsFunction::native(
             "slice".to_string(),
-            Rc::new(|interp, this_val, args| {
+            2,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4930,16 +5004,17 @@ impl Interpreter {
                 }
                 let arr = interp.create_array(Vec::new());
                 Completion::Normal(arr)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("slice".to_string(), slice_fn);
 
         // Array.prototype.reverse
-        let reverse_fn = self.create_function(JsFunction::Native(
+        let reverse_fn = self.create_function(JsFunction::native(
             "reverse".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4949,16 +5024,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(this_val.clone())
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("reverse".to_string(), reverse_fn);
 
         // Array.prototype.forEach
-        let foreach_fn = self.create_function(JsFunction::Native(
+        let foreach_fn = self.create_function(JsFunction::native(
             "forEach".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -4975,16 +5051,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("forEach".to_string(), foreach_fn);
 
         // Array.prototype.map
-        let map_fn = self.create_function(JsFunction::Native(
+        let map_fn = self.create_function(JsFunction::native(
             "map".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let mut result = Vec::new();
                 if let JsValue::Object(o) = this_val
@@ -5002,14 +5079,15 @@ impl Interpreter {
                 }
                 let arr = interp.create_array(result);
                 Completion::Normal(arr)
-            }),
+            },
         ));
         proto.borrow_mut().insert_builtin("map".to_string(), map_fn);
 
         // Array.prototype.filter
-        let filter_fn = self.create_function(JsFunction::Native(
+        let filter_fn = self.create_function(JsFunction::native(
             "filter".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let mut result = Vec::new();
                 if let JsValue::Object(o) = this_val
@@ -5031,16 +5109,17 @@ impl Interpreter {
                 }
                 let arr = interp.create_array(result);
                 Completion::Normal(arr)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("filter".to_string(), filter_fn);
 
         // Array.prototype.reduce
-        let reduce_fn = self.create_function(JsFunction::Native(
+        let reduce_fn = self.create_function(JsFunction::native(
             "reduce".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5070,16 +5149,17 @@ impl Interpreter {
                     return Completion::Normal(acc);
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("reduce".to_string(), reduce_fn);
 
         // Array.prototype.some
-        let some_fn = self.create_function(JsFunction::Native(
+        let some_fn = self.create_function(JsFunction::native(
             "some".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5099,16 +5179,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("some".to_string(), some_fn);
 
         // Array.prototype.every
-        let every_fn = self.create_function(JsFunction::Native(
+        let every_fn = self.create_function(JsFunction::native(
             "every".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5128,16 +5209,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Boolean(true))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("every".to_string(), every_fn);
 
         // Array.prototype.find
-        let find_fn = self.create_function(JsFunction::Native(
+        let find_fn = self.create_function(JsFunction::native(
             "find".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5157,16 +5239,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("find".to_string(), find_fn);
 
         // Array.prototype.findIndex
-        let findindex_fn = self.create_function(JsFunction::Native(
+        let findindex_fn = self.create_function(JsFunction::native(
             "findIndex".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5186,16 +5269,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Number(-1.0))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("findIndex".to_string(), findindex_fn);
 
         // Array.prototype.splice
-        let splice_fn = self.create_function(JsFunction::Native(
+        let splice_fn = self.create_function(JsFunction::native(
             "splice".to_string(),
-            Rc::new(|interp, this_val, args| {
+            2,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -5232,16 +5316,17 @@ impl Interpreter {
                 }
                 let arr = interp.create_array(Vec::new());
                 Completion::Normal(arr)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("splice".to_string(), splice_fn);
 
         // Array.prototype.fill
-        let fill_fn = self.create_function(JsFunction::Native(
+        let fill_fn = self.create_function(JsFunction::native(
             "fill".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -5281,16 +5366,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(this_val.clone())
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("fill".to_string(), fill_fn);
 
         // Array.isArray
-        let is_array_fn = self.create_function(JsFunction::Native(
+        let is_array_fn = self.create_function(JsFunction::native(
             "isArray".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5300,13 +5386,14 @@ impl Interpreter {
                     ));
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
 
         // Array.from
-        let array_from = self.create_function(JsFunction::Native(
+        let array_from = self.create_function(JsFunction::native(
             "from".to_string(),
-            Rc::new(|interp, _this, args: &[JsValue]| {
+            1,
+            |interp, _this, args: &[JsValue]| {
                 let source = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let map_fn = args.get(1).cloned();
                 let mut values = Vec::new();
@@ -5357,20 +5444,22 @@ impl Interpreter {
                     _ => {}
                 }
                 Completion::Normal(interp.create_array(values))
-            }),
+            },
         ));
         // Array.of
-        let array_of = self.create_function(JsFunction::Native(
+        let array_of = self.create_function(JsFunction::native(
             "of".to_string(),
-            Rc::new(|interp, _this, args: &[JsValue]| {
+            0,
+            |interp, _this, args: &[JsValue]| {
                 Completion::Normal(interp.create_array(args.to_vec()))
-            }),
+            },
         ));
 
         // Array.prototype.reduceRight
-        let reduce_right_fn = self.create_function(JsFunction::Native(
+        let reduce_right_fn = self.create_function(JsFunction::native(
             "reduceRight".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5405,16 +5494,17 @@ impl Interpreter {
                     return Completion::Normal(acc);
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("reduceRight".to_string(), reduce_right_fn);
 
         // Array.prototype.at
-        let at_fn = self.create_function(JsFunction::Native(
+        let at_fn = self.create_function(JsFunction::native(
             "at".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let idx = args.first().map(|v| to_number(v) as i64).unwrap_or(0);
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5427,14 +5517,15 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto.borrow_mut().insert_builtin("at".to_string(), at_fn);
 
         // Array.prototype.sort
-        let sort_fn = self.create_function(JsFunction::Native(
+        let sort_fn = self.create_function(JsFunction::native(
             "sort".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let compare_fn = args.first().cloned();
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
@@ -5480,16 +5571,17 @@ impl Interpreter {
                     *elems = pairs.into_iter().map(|(_, v)| v).collect();
                 }
                 Completion::Normal(this_val.clone())
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("sort".to_string(), sort_fn);
 
         // Array.prototype.flat
-        let flat_fn = self.create_function(JsFunction::Native(
+        let flat_fn = self.create_function(JsFunction::native(
             "flat".to_string(),
-            Rc::new(|interp, this_val, args| {
+            0,
+            |interp, this_val, args| {
                 let depth = args.first().map(|v| to_number(v) as i64).unwrap_or(1);
                 fn flatten(
                     interp: &Interpreter,
@@ -5519,16 +5611,17 @@ impl Interpreter {
                 let mut result = Vec::new();
                 flatten(interp, this_val, depth, &mut result);
                 Completion::Normal(interp.create_array(result))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("flat".to_string(), flat_fn);
 
         // Array.prototype.flatMap
-        let flatmap_fn = self.create_function(JsFunction::Native(
+        let flatmap_fn = self.create_function(JsFunction::native(
             "flatMap".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let mut result = Vec::new();
@@ -5557,16 +5650,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(interp.create_array(result))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("flatMap".to_string(), flatmap_fn);
 
         // Array.prototype.findLast / findLastIndex
-        let findlast_fn = self.create_function(JsFunction::Native(
+        let findlast_fn = self.create_function(JsFunction::native(
             "findLast".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
@@ -5593,15 +5687,16 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("findLast".to_string(), findlast_fn);
 
-        let findlastidx_fn = self.create_function(JsFunction::Native(
+        let findlastidx_fn = self.create_function(JsFunction::native(
             "findLastIndex".to_string(),
-            Rc::new(|interp, this_val, args| {
+            1,
+            |interp, this_val, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this_val
@@ -5628,16 +5723,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Number(-1.0))
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("findLastIndex".to_string(), findlastidx_fn);
 
         // Array.prototype.copyWithin
-        let copywithin_fn = self.create_function(JsFunction::Native(
+        let copywithin_fn = self.create_function(JsFunction::native(
             "copyWithin".to_string(),
-            Rc::new(|interp, this_val, args| {
+            2,
+            |interp, this_val, args| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -5685,16 +5781,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(this_val.clone())
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("copyWithin".to_string(), copywithin_fn);
 
         // Array.prototype.entries — returns lazy ArrayIterator (KeyValue)
-        let entries_fn = self.create_function(JsFunction::Native(
+        let entries_fn = self.create_function(JsFunction::native(
             "entries".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val {
                     return Completion::Normal(
                         interp.create_array_iterator(o.id, IteratorKind::KeyValue),
@@ -5702,16 +5799,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("entries called on non-object");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("entries".to_string(), entries_fn);
 
         // Array.prototype.keys — returns lazy ArrayIterator (Key)
-        let keys_fn = self.create_function(JsFunction::Native(
+        let keys_fn = self.create_function(JsFunction::native(
             "keys".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val {
                     return Completion::Normal(
                         interp.create_array_iterator(o.id, IteratorKind::Key),
@@ -5719,16 +5817,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("keys called on non-object");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("keys".to_string(), keys_fn);
 
         // Array.prototype.values — returns lazy ArrayIterator (Value)
-        let values_fn = self.create_function(JsFunction::Native(
+        let values_fn = self.create_function(JsFunction::native(
             "values".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val {
                     return Completion::Normal(
                         interp.create_array_iterator(o.id, IteratorKind::Value),
@@ -5736,16 +5835,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("values called on non-object");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("values".to_string(), values_fn);
 
         // Array.prototype[@@iterator] = Array.prototype.values
-        let iter_fn = self.create_function(JsFunction::Native(
+        let iter_fn = self.create_function(JsFunction::native(
             "[Symbol.iterator]".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val {
                     return Completion::Normal(
                         interp.create_array_iterator(o.id, IteratorKind::Value),
@@ -5753,7 +5853,7 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Symbol.iterator called on non-object");
                 Completion::Throw(err)
-            }),
+            },
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
             proto
@@ -5771,6 +5871,11 @@ impl Interpreter {
             obj.borrow_mut()
                 .insert_value("from".to_string(), array_from);
             obj.borrow_mut().insert_value("of".to_string(), array_of);
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            obj.borrow_mut()
+                .insert_value("prototype".to_string(), proto_val);
         }
 
         self.array_prototype = Some(proto);
@@ -5799,10 +5904,12 @@ impl Interpreter {
 
         let methods: Vec<(
             &str,
+            usize,
             Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
         )> = vec![
             (
                 "charAt",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let idx = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
@@ -5816,6 +5923,7 @@ impl Interpreter {
             ),
             (
                 "charCodeAt",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let idx = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
@@ -5829,6 +5937,7 @@ impl Interpreter {
             ),
             (
                 "codePointAt",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let idx = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
@@ -5851,6 +5960,7 @@ impl Interpreter {
             ),
             (
                 "indexOf",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let search = args.first().map(to_js_string).unwrap_or_default();
@@ -5864,6 +5974,7 @@ impl Interpreter {
             ),
             (
                 "lastIndexOf",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let search = args.first().map(to_js_string).unwrap_or_default();
@@ -5873,6 +5984,7 @@ impl Interpreter {
             ),
             (
                 "includes",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let search = args.first().map(to_js_string).unwrap_or_default();
@@ -5881,6 +5993,7 @@ impl Interpreter {
             ),
             (
                 "startsWith",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let search = args.first().map(to_js_string).unwrap_or_default();
@@ -5889,6 +6002,7 @@ impl Interpreter {
             ),
             (
                 "endsWith",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let search = args.first().map(to_js_string).unwrap_or_default();
@@ -5897,6 +6011,7 @@ impl Interpreter {
             ),
             (
                 "slice",
+                2,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let len = s.len() as i64;
@@ -5932,6 +6047,7 @@ impl Interpreter {
             ),
             (
                 "substring",
+                2,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let len = s.len();
@@ -5957,6 +6073,7 @@ impl Interpreter {
             ),
             (
                 "toLowerCase",
+                0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(
                         &to_js_string(this_val).to_lowercase(),
@@ -5965,6 +6082,7 @@ impl Interpreter {
             ),
             (
                 "toUpperCase",
+                0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(
                         &to_js_string(this_val).to_uppercase(),
@@ -5973,6 +6091,7 @@ impl Interpreter {
             ),
             (
                 "trim",
+                0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(
                         to_js_string(this_val).trim(),
@@ -5981,6 +6100,7 @@ impl Interpreter {
             ),
             (
                 "trimStart",
+                0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(
                         to_js_string(this_val).trim_start(),
@@ -5989,6 +6109,7 @@ impl Interpreter {
             ),
             (
                 "trimEnd",
+                0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(
                         to_js_string(this_val).trim_end(),
@@ -5997,6 +6118,7 @@ impl Interpreter {
             ),
             (
                 "repeat",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let count = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
@@ -6005,6 +6127,7 @@ impl Interpreter {
             ),
             (
                 "padStart",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let target_len = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
@@ -6022,6 +6145,7 @@ impl Interpreter {
             ),
             (
                 "padEnd",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let target_len = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
@@ -6039,6 +6163,7 @@ impl Interpreter {
             ),
             (
                 "concat",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let mut s = to_js_string(this_val);
                     for arg in args {
@@ -6049,18 +6174,21 @@ impl Interpreter {
             ),
             (
                 "toString",
+                0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(this_val))))
                 }),
             ),
             (
                 "valueOf",
+                0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(this_val))))
                 }),
             ),
             (
                 "split",
+                2,
                 Rc::new(|interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let separator = args.first();
@@ -6088,6 +6216,7 @@ impl Interpreter {
             ),
             (
                 "replace",
+                2,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let search = args.first().map(to_js_string).unwrap_or_default();
@@ -6098,6 +6227,7 @@ impl Interpreter {
             ),
             (
                 "replaceAll",
+                2,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let search = args.first().map(to_js_string).unwrap_or_default();
@@ -6109,6 +6239,7 @@ impl Interpreter {
             ),
             (
                 "at",
+                1,
                 Rc::new(|_interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let len = s.len() as i64;
@@ -6127,6 +6258,7 @@ impl Interpreter {
             ),
             (
                 "search",
+                1,
                 Rc::new(|interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let (source, flags) = match args.first() {
@@ -6173,6 +6305,7 @@ impl Interpreter {
             ),
             (
                 "match",
+                1,
                 Rc::new(|interp, this_val, args| {
                     let s = to_js_string(this_val);
                     let (source, flags) = match args.first() {
@@ -6246,15 +6379,16 @@ impl Interpreter {
             ),
         ];
 
-        for (name, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
+        for (name, arity, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
         // String.prototype[@@iterator]
-        let str_iter_fn = self.create_function(JsFunction::Native(
+        let str_iter_fn = self.create_function(JsFunction::native(
             "[Symbol.iterator]".to_string(),
-            Rc::new(|interp, this_val, _args| {
+            0,
+            |interp, this_val, _args| {
                 let s = match this_val {
                     JsValue::String(s) => s.clone(),
                     _ => {
@@ -6263,13 +6397,26 @@ impl Interpreter {
                     }
                 };
                 Completion::Normal(interp.create_string_iterator(s))
-            }),
+            },
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
             proto.borrow_mut().insert_property(
                 key,
                 PropertyDescriptor::data(str_iter_fn, true, false, true),
             );
+        }
+
+        // Set String.prototype on the String constructor
+        if let Some(str_val) = self.global_env.borrow().get("String")
+            && let JsValue::Object(o) = &str_val
+            && let Some(str_obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            str_obj
+                .borrow_mut()
+                .insert_value("prototype".to_string(), proto_val);
         }
 
         self.string_prototype = Some(proto);
@@ -6298,10 +6445,12 @@ impl Interpreter {
 
         let methods: Vec<(
             &str,
+            usize,
             Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
         )> = vec![
             (
                 "toString",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(n) = this_number_value(interp, this) else {
                         let err =
@@ -6335,6 +6484,7 @@ impl Interpreter {
             ),
             (
                 "valueOf",
+                0,
                 Rc::new(|interp, this, _args| {
                     let Some(n) = this_number_value(interp, this) else {
                         let err =
@@ -6346,6 +6496,7 @@ impl Interpreter {
             ),
             (
                 "toFixed",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(n) = this_number_value(interp, this) else {
                         let err =
@@ -6360,6 +6511,7 @@ impl Interpreter {
             ),
             (
                 "toExponential",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(n) = this_number_value(interp, this) else {
                         let err = interp
@@ -6379,6 +6531,7 @@ impl Interpreter {
             ),
             (
                 "toPrecision",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(n) = this_number_value(interp, this) else {
                         let err = interp
@@ -6401,6 +6554,7 @@ impl Interpreter {
             ),
             (
                 "toLocaleString",
+                0,
                 Rc::new(|interp, this, _args| {
                     let Some(n) = this_number_value(interp, this) else {
                         let err = interp
@@ -6414,8 +6568,8 @@ impl Interpreter {
             ),
         ];
 
-        for (name, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
+        for (name, arity, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
@@ -6458,10 +6612,12 @@ impl Interpreter {
 
         let methods: Vec<(
             &str,
+            usize,
             Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
         )> = vec![
             (
                 "toString",
+                0,
                 Rc::new(|interp, this, _args| {
                     let Some(b) = this_boolean_value(interp, this) else {
                         let err = interp
@@ -6477,6 +6633,7 @@ impl Interpreter {
             ),
             (
                 "valueOf",
+                0,
                 Rc::new(|interp, this, _args| {
                     let Some(b) = this_boolean_value(interp, this) else {
                         let err = interp
@@ -6488,8 +6645,8 @@ impl Interpreter {
             ),
         ];
 
-        for (name, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
+        for (name, arity, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
@@ -6528,9 +6685,10 @@ impl Interpreter {
             ),
         );
 
-        let map_iter_next = self.create_function(JsFunction::Native(
+        let map_iter_next = self.create_function(JsFunction::native(
             "next".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let state = obj.borrow().iterator_state.clone();
@@ -6592,16 +6750,17 @@ impl Interpreter {
                 let err =
                     interp.create_type_error("Map Iterator.prototype.next requires a Map Iterator");
                 Completion::Throw(err)
-            }),
+            },
         ));
         map_iter_proto
             .borrow_mut()
             .insert_builtin("next".to_string(), map_iter_next);
 
         if let Some(key) = self.get_symbol_iterator_key() {
-            let iter_self_fn = self.create_function(JsFunction::Native(
+            let iter_self_fn = self.create_function(JsFunction::native(
                 "[Symbol.iterator]".to_string(),
-                Rc::new(|_interp, this, _args| Completion::Normal(this.clone())),
+                0,
+                |_interp, this, _args| Completion::Normal(this.clone()),
             ));
             map_iter_proto.borrow_mut().insert_property(
                 key,
@@ -6636,9 +6795,10 @@ impl Interpreter {
         }
 
         // Map.prototype.entries
-        let entries_fn = self.create_function(JsFunction::Native(
+        let entries_fn = self.create_function(JsFunction::native(
             "entries".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().map_data.is_some() {
@@ -6652,7 +6812,7 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.entries requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
@@ -6666,9 +6826,10 @@ impl Interpreter {
         }
 
         // Map.prototype.keys
-        let keys_fn = self.create_function(JsFunction::Native(
+        let keys_fn = self.create_function(JsFunction::native(
             "keys".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().map_data.is_some() {
@@ -6682,16 +6843,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.keys requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("keys".to_string(), keys_fn);
 
         // Map.prototype.values
-        let values_fn = self.create_function(JsFunction::Native(
+        let values_fn = self.create_function(JsFunction::native(
             "values".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().map_data.is_some() {
@@ -6705,16 +6867,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.values requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("values".to_string(), values_fn);
 
         // Map.prototype.get
-        let get_fn = self.create_function(JsFunction::Native(
+        let get_fn = self.create_function(JsFunction::native(
             "get".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let map_data = obj.borrow().map_data.clone();
@@ -6731,14 +6894,15 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.get requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto.borrow_mut().insert_builtin("get".to_string(), get_fn);
 
         // Map.prototype.set
-        let set_fn = self.create_function(JsFunction::Native(
+        let set_fn = self.create_function(JsFunction::native(
             "set".to_string(),
-            Rc::new(|interp, this, args| {
+            2,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
@@ -6766,14 +6930,15 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.set requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto.borrow_mut().insert_builtin("set".to_string(), set_fn);
 
         // Map.prototype.has
-        let has_fn = self.create_function(JsFunction::Native(
+        let has_fn = self.create_function(JsFunction::native(
             "has".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let map_data = obj.borrow().map_data.clone();
@@ -6790,14 +6955,15 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.has requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto.borrow_mut().insert_builtin("has".to_string(), has_fn);
 
         // Map.prototype.delete
-        let delete_fn = self.create_function(JsFunction::Native(
+        let delete_fn = self.create_function(JsFunction::native(
             "delete".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
@@ -6820,16 +6986,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.delete requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("delete".to_string(), delete_fn);
 
         // Map.prototype.clear
-        let clear_fn = self.create_function(JsFunction::Native(
+        let clear_fn = self.create_function(JsFunction::native(
             "clear".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
@@ -6841,16 +7008,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.clear requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("clear".to_string(), clear_fn);
 
         // Map.prototype.forEach
-        let foreach_fn = self.create_function(JsFunction::Native(
+        let foreach_fn = self.create_function(JsFunction::native(
             "forEach".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
@@ -6881,16 +7049,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.forEach requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("forEach".to_string(), foreach_fn);
 
         // Map.prototype.size (getter)
-        let size_getter = self.create_function(JsFunction::Native(
+        let size_getter = self.create_function(JsFunction::native(
             "get size".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let map_data = obj.borrow().map_data.clone();
@@ -6902,7 +7071,7 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Map.prototype.size requires a Map");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto.borrow_mut().insert_property(
             "size".to_string(),
@@ -6933,9 +7102,10 @@ impl Interpreter {
 
         // Map constructor
         let map_proto_clone = proto.clone();
-        let map_ctor = self.create_function(JsFunction::Native(
+        let map_ctor = self.create_function(JsFunction::native(
             "Map".to_string(),
-            Rc::new(move |interp, _this, args| {
+            0,
+            move |interp, _this, args| {
                 if interp.new_target.is_none() {
                     let err = interp.create_type_error("Constructor Map requires 'new'");
                     return Completion::Throw(err);
@@ -7029,7 +7199,7 @@ impl Interpreter {
                 }
 
                 Completion::Normal(this_val)
-            }),
+            },
         ));
 
         // Set Map.prototype on ctor, ctor on prototype
@@ -7073,9 +7243,10 @@ impl Interpreter {
             ),
         );
 
-        let set_iter_next = self.create_function(JsFunction::Native(
+        let set_iter_next = self.create_function(JsFunction::native(
             "next".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let state = obj.borrow().iterator_state.clone();
@@ -7134,16 +7305,17 @@ impl Interpreter {
                 let err =
                     interp.create_type_error("Set Iterator.prototype.next requires a Set Iterator");
                 Completion::Throw(err)
-            }),
+            },
         ));
         set_iter_proto
             .borrow_mut()
             .insert_builtin("next".to_string(), set_iter_next);
 
         if let Some(key) = self.get_symbol_iterator_key() {
-            let iter_self_fn = self.create_function(JsFunction::Native(
+            let iter_self_fn = self.create_function(JsFunction::native(
                 "[Symbol.iterator]".to_string(),
-                Rc::new(|_interp, this, _args| Completion::Normal(this.clone())),
+                0,
+                |_interp, this, _args| Completion::Normal(this.clone()),
             ));
             set_iter_proto.borrow_mut().insert_property(
                 key,
@@ -7177,9 +7349,10 @@ impl Interpreter {
         }
 
         // Set.prototype.values
-        let values_fn = self.create_function(JsFunction::Native(
+        let values_fn = self.create_function(JsFunction::native(
             "values".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().set_data.is_some() {
@@ -7193,7 +7366,7 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.values requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
@@ -7212,9 +7385,10 @@ impl Interpreter {
         }
 
         // Set.prototype.entries
-        let entries_fn = self.create_function(JsFunction::Native(
+        let entries_fn = self.create_function(JsFunction::native(
             "entries".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         if obj.borrow().set_data.is_some() {
@@ -7228,16 +7402,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.entries requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("entries".to_string(), entries_fn);
 
         // Set.prototype.add
-        let add_fn = self.create_function(JsFunction::Native(
+        let add_fn = self.create_function(JsFunction::native(
             "add".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
@@ -7262,14 +7437,15 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.add requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto.borrow_mut().insert_builtin("add".to_string(), add_fn);
 
         // Set.prototype.has
-        let has_fn = self.create_function(JsFunction::Native(
+        let has_fn = self.create_function(JsFunction::native(
             "has".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7286,14 +7462,15 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.has requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto.borrow_mut().insert_builtin("has".to_string(), has_fn);
 
         // Set.prototype.delete
-        let delete_fn = self.create_function(JsFunction::Native(
+        let delete_fn = self.create_function(JsFunction::native(
             "delete".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
@@ -7315,16 +7492,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.delete requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("delete".to_string(), delete_fn);
 
         // Set.prototype.clear
-        let clear_fn = self.create_function(JsFunction::Native(
+        let clear_fn = self.create_function(JsFunction::native(
             "clear".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
@@ -7336,16 +7514,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.clear requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("clear".to_string(), clear_fn);
 
         // Set.prototype.forEach
-        let foreach_fn = self.create_function(JsFunction::Native(
+        let foreach_fn = self.create_function(JsFunction::native(
             "forEach".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
@@ -7376,16 +7555,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.forEach requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("forEach".to_string(), foreach_fn);
 
         // Set.prototype.size (getter)
-        let size_getter = self.create_function(JsFunction::Native(
+        let size_getter = self.create_function(JsFunction::native(
             "get size".to_string(),
-            Rc::new(|interp, this, _args| {
+            0,
+            |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7397,7 +7577,7 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.size requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto.borrow_mut().insert_property(
             "size".to_string(),
@@ -7414,9 +7594,10 @@ impl Interpreter {
         // ES2025 Set methods
 
         // Set.prototype.union
-        let union_fn = self.create_function(JsFunction::Native(
+        let union_fn = self.create_function(JsFunction::native(
             "union".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7482,16 +7663,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.union requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("union".to_string(), union_fn);
 
         // Set.prototype.intersection
-        let intersection_fn = self.create_function(JsFunction::Native(
+        let intersection_fn = self.create_function(JsFunction::native(
             "intersection".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7564,16 +7746,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.intersection requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("intersection".to_string(), intersection_fn);
 
         // Set.prototype.difference
-        let difference_fn = self.create_function(JsFunction::Native(
+        let difference_fn = self.create_function(JsFunction::native(
             "difference".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7654,16 +7837,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.difference requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("difference".to_string(), difference_fn);
 
         // Set.prototype.symmetricDifference
-        let sym_diff_fn = self.create_function(JsFunction::Native(
+        let sym_diff_fn = self.create_function(JsFunction::native(
             "symmetricDifference".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7740,16 +7924,17 @@ impl Interpreter {
                 let err =
                     interp.create_type_error("Set.prototype.symmetricDifference requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("symmetricDifference".to_string(), sym_diff_fn);
 
         // Set.prototype.isSubsetOf
-        let is_subset_fn = self.create_function(JsFunction::Native(
+        let is_subset_fn = self.create_function(JsFunction::native(
             "isSubsetOf".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7783,16 +7968,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.isSubsetOf requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("isSubsetOf".to_string(), is_subset_fn);
 
         // Set.prototype.isSupersetOf
-        let is_superset_fn = self.create_function(JsFunction::Native(
+        let is_superset_fn = self.create_function(JsFunction::native(
             "isSupersetOf".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7843,16 +8029,17 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.isSupersetOf requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
             .insert_builtin("isSupersetOf".to_string(), is_superset_fn);
 
         // Set.prototype.isDisjointFrom
-        let is_disjoint_fn = self.create_function(JsFunction::Native(
+        let is_disjoint_fn = self.create_function(JsFunction::native(
             "isDisjointFrom".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
@@ -7919,7 +8106,7 @@ impl Interpreter {
                 }
                 let err = interp.create_type_error("Set.prototype.isDisjointFrom requires a Set");
                 Completion::Throw(err)
-            }),
+            },
         ));
         proto
             .borrow_mut()
@@ -7941,9 +8128,10 @@ impl Interpreter {
 
         // Set constructor
         let set_proto_clone = proto.clone();
-        let set_ctor = self.create_function(JsFunction::Native(
+        let set_ctor = self.create_function(JsFunction::native(
             "Set".to_string(),
-            Rc::new(move |interp, _this, args| {
+            0,
+            move |interp, _this, args| {
                 if interp.new_target.is_none() {
                     let err = interp.create_type_error("Constructor Set requires 'new'");
                     return Completion::Throw(err);
@@ -8007,7 +8195,7 @@ impl Interpreter {
                 }
 
                 Completion::Normal(this_val)
-            }),
+            },
         ));
 
         if let JsValue::Object(ctor_obj) = &set_ctor {
@@ -8057,10 +8245,12 @@ impl Interpreter {
         // Getter methods
         let methods: Vec<(
             &str,
+            usize,
             Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
         )> = vec![
             (
                 "getTime",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) => Completion::Normal(JsValue::Number(t)),
                     None => {
@@ -8071,6 +8261,7 @@ impl Interpreter {
             ),
             (
                 "valueOf",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) => Completion::Normal(JsValue::Number(t)),
                     None => {
@@ -8081,6 +8272,7 @@ impl Interpreter {
             ),
             (
                 "getFullYear",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(year_from_time(local_time(t)))),
@@ -8092,6 +8284,7 @@ impl Interpreter {
             ),
             (
                 "getMonth",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(month_from_time(local_time(t)))),
@@ -8103,6 +8296,7 @@ impl Interpreter {
             ),
             (
                 "getDate",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(date_from_time(local_time(t)))),
@@ -8114,6 +8308,7 @@ impl Interpreter {
             ),
             (
                 "getDay",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(week_day(local_time(t)))),
@@ -8125,6 +8320,7 @@ impl Interpreter {
             ),
             (
                 "getHours",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(hour_from_time(local_time(t)))),
@@ -8136,6 +8332,7 @@ impl Interpreter {
             ),
             (
                 "getMinutes",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(min_from_time(local_time(t)))),
@@ -8147,6 +8344,7 @@ impl Interpreter {
             ),
             (
                 "getSeconds",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(sec_from_time(local_time(t)))),
@@ -8158,6 +8356,7 @@ impl Interpreter {
             ),
             (
                 "getMilliseconds",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(ms_from_time(local_time(t)))),
@@ -8169,6 +8368,7 @@ impl Interpreter {
             ),
             (
                 "getUTCFullYear",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(year_from_time(t))),
@@ -8180,6 +8380,7 @@ impl Interpreter {
             ),
             (
                 "getUTCMonth",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(month_from_time(t))),
@@ -8191,6 +8392,7 @@ impl Interpreter {
             ),
             (
                 "getUTCDate",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(date_from_time(t))),
@@ -8202,6 +8404,7 @@ impl Interpreter {
             ),
             (
                 "getUTCDay",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(week_day(t))),
@@ -8213,6 +8416,7 @@ impl Interpreter {
             ),
             (
                 "getUTCHours",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(hour_from_time(t))),
@@ -8224,6 +8428,7 @@ impl Interpreter {
             ),
             (
                 "getUTCMinutes",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(min_from_time(t))),
@@ -8235,6 +8440,7 @@ impl Interpreter {
             ),
             (
                 "getUTCSeconds",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(sec_from_time(t))),
@@ -8246,6 +8452,7 @@ impl Interpreter {
             ),
             (
                 "getUTCMilliseconds",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number(ms_from_time(t))),
@@ -8257,6 +8464,7 @@ impl Interpreter {
             ),
             (
                 "getTimezoneOffset",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
                     Some(t) => Completion::Normal(JsValue::Number((t - local_time(t)) / 60_000.0)),
@@ -8269,6 +8477,7 @@ impl Interpreter {
             // Setter methods
             (
                 "setTime",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(_) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8286,6 +8495,7 @@ impl Interpreter {
             ),
             (
                 "setMilliseconds",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8306,6 +8516,7 @@ impl Interpreter {
             ),
             (
                 "setUTCMilliseconds",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8324,6 +8535,7 @@ impl Interpreter {
             ),
             (
                 "setSeconds",
+                2,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8347,6 +8559,7 @@ impl Interpreter {
             ),
             (
                 "setUTCSeconds",
+                2,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8369,6 +8582,7 @@ impl Interpreter {
             ),
             (
                 "setMinutes",
+                3,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8396,6 +8610,7 @@ impl Interpreter {
             ),
             (
                 "setUTCMinutes",
+                3,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8422,6 +8637,7 @@ impl Interpreter {
             ),
             (
                 "setHours",
+                4,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8453,6 +8669,7 @@ impl Interpreter {
             ),
             (
                 "setUTCHours",
+                4,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8483,6 +8700,7 @@ impl Interpreter {
             ),
             (
                 "setDate",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8502,6 +8720,7 @@ impl Interpreter {
             ),
             (
                 "setUTCDate",
+                1,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8520,6 +8739,7 @@ impl Interpreter {
             ),
             (
                 "setMonth",
+                2,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8543,6 +8763,7 @@ impl Interpreter {
             ),
             (
                 "setUTCMonth",
+                2,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8565,6 +8786,7 @@ impl Interpreter {
             ),
             (
                 "setFullYear",
+                3,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8593,6 +8815,7 @@ impl Interpreter {
             ),
             (
                 "setUTCFullYear",
+                3,
                 Rc::new(|interp, this, args| {
                     let Some(t) = this_time_value(interp, this) else {
                         let e = interp.create_type_error("this is not a Date object");
@@ -8621,6 +8844,7 @@ impl Interpreter {
             // String formatting methods
             (
                 "toString",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
                         Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
@@ -8636,6 +8860,7 @@ impl Interpreter {
             ),
             (
                 "toDateString",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
                         Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
@@ -8651,6 +8876,7 @@ impl Interpreter {
             ),
             (
                 "toTimeString",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
                         Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
@@ -8666,6 +8892,7 @@ impl Interpreter {
             ),
             (
                 "toISOString",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if !t.is_finite() => {
                         let e = interp.create_range_error("Invalid time value");
@@ -8682,6 +8909,7 @@ impl Interpreter {
             ),
             (
                 "toUTCString",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
                         Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
@@ -8697,6 +8925,7 @@ impl Interpreter {
             ),
             (
                 "toJSON",
+                1,
                 Rc::new(|interp, this, _args| {
                     let num = interp.to_number_coerce(this);
                     if !num.is_finite() {
@@ -8716,6 +8945,7 @@ impl Interpreter {
             ),
             (
                 "toLocaleDateString",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
                         Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
@@ -8731,6 +8961,7 @@ impl Interpreter {
             ),
             (
                 "toLocaleString",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
                         Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
@@ -8746,6 +8977,7 @@ impl Interpreter {
             ),
             (
                 "toLocaleTimeString",
+                0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
                         Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
@@ -8761,15 +8993,16 @@ impl Interpreter {
             ),
         ];
 
-        for (name, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), func));
+        for (name, arity, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
         // Symbol.toPrimitive
-        let to_prim_fn = self.create_function(JsFunction::Native(
+        let to_prim_fn = self.create_function(JsFunction::native(
             "[Symbol.toPrimitive]".to_string(),
-            Rc::new(|interp, this, args| {
+            1,
+            |interp, this, args| {
                 let Some(_) = this_time_value(interp, this) else {
                     let e = interp.create_type_error("this is not a Date object");
                     return Completion::Throw(e);
@@ -8805,7 +9038,7 @@ impl Interpreter {
                         Completion::Throw(e)
                     }
                 }
-            }),
+            },
         ));
         // Get the Symbol.toPrimitive key
         if let Some(sym_val) = self.global_env.borrow().get("Symbol")
@@ -8821,9 +9054,10 @@ impl Interpreter {
 
         // Date constructor
         let date_proto_clone = proto.clone();
-        let date_ctor = self.create_function(JsFunction::Native(
+        let date_ctor = self.create_function(JsFunction::native(
             "Date".to_string(),
-            Rc::new(move |interp, this, args| {
+            7,
+            move |interp, this, args| {
                 // Called as function (no new) - return string
                 if interp.new_target.is_none() {
                     let t = now_ms();
@@ -8885,7 +9119,7 @@ impl Interpreter {
                     b.prototype = Some(date_proto_clone.clone());
                 }
                 Completion::Normal(this.clone())
-            }),
+            },
         ));
 
         // Set .length = 7 on Date constructor
@@ -8898,29 +9132,30 @@ impl Interpreter {
             );
 
             // Date.now()
-            let now_fn = self.create_function(JsFunction::Native(
+            let now_fn = self.create_function(JsFunction::native(
                 "now".to_string(),
-                Rc::new(|_interp, _this, _args| {
-                    Completion::Normal(JsValue::Number(now_ms().floor()))
-                }),
+                0,
+                |_interp, _this, _args| Completion::Normal(JsValue::Number(now_ms().floor())),
             ));
             obj.borrow_mut().insert_builtin("now".to_string(), now_fn);
 
             // Date.parse()
-            let parse_fn = self.create_function(JsFunction::Native(
+            let parse_fn = self.create_function(JsFunction::native(
                 "parse".to_string(),
-                Rc::new(|_interp, _this, args| {
+                2,
+                |_interp, _this, args| {
                     let s = args.first().map(to_js_string).unwrap_or_default();
                     Completion::Normal(JsValue::Number(parse_date_string(&s)))
-                }),
+                },
             ));
             obj.borrow_mut()
                 .insert_builtin("parse".to_string(), parse_fn);
 
             // Date.UTC()
-            let utc_fn = self.create_function(JsFunction::Native(
+            let utc_fn = self.create_function(JsFunction::native(
                 "UTC".to_string(),
-                Rc::new(|_interp, _this, args| {
+                7,
+                |_interp, _this, args| {
                     let y = args.first().map(|v| to_number(v)).unwrap_or(f64::NAN);
                     let m = args.get(1).map(|v| to_number(v)).unwrap_or(0.0);
                     let dt = args.get(2).map(|v| to_number(v)).unwrap_or(1.0);
@@ -8941,7 +9176,7 @@ impl Interpreter {
                     let d = make_day(yr, m, dt);
                     let time = make_time(h, min, s, ms);
                     Completion::Normal(JsValue::Number(time_clip(make_date(d, time))))
-                }),
+                },
             ));
             obj.borrow_mut().insert_builtin("UTC".to_string(), utc_fn);
 
@@ -9015,9 +9250,10 @@ impl Interpreter {
         let reflect_id = reflect_obj.borrow().id.unwrap();
 
         // Reflect.apply(target, thisArg, argsList)
-        let apply_fn = self.create_function(JsFunction::Native(
+        let apply_fn = self.create_function(JsFunction::native(
             "apply".to_string(),
-            Rc::new(|interp, _this, args| {
+            3,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9035,16 +9271,17 @@ impl Interpreter {
                     Vec::new()
                 };
                 interp.call_function(&target, &this_arg, &call_args)
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("apply".to_string(), apply_fn);
 
         // Reflect.construct(target, argsList, newTarget?)
-        let construct_fn = self.create_function(JsFunction::Native(
+        let construct_fn = self.create_function(JsFunction::native(
             "construct".to_string(),
-            Rc::new(|interp, _this, args| {
+            2,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9117,16 +9354,17 @@ impl Interpreter {
                     Completion::Normal(_) => Completion::Normal(this_val),
                     other => other,
                 }
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("construct".to_string(), construct_fn);
 
         // Reflect.defineProperty(target, key, desc)
-        let def_prop_fn = self.create_function(JsFunction::Native(
+        let def_prop_fn = self.create_function(JsFunction::native(
             "defineProperty".to_string(),
-            Rc::new(|interp, _this, args| {
+            3,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9144,16 +9382,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("defineProperty".to_string(), def_prop_fn);
 
         // Reflect.deleteProperty(target, key)
-        let del_prop_fn = self.create_function(JsFunction::Native(
+        let del_prop_fn = self.create_function(JsFunction::native(
             "deleteProperty".to_string(),
-            Rc::new(|interp, _this, args| {
+            2,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9175,16 +9414,17 @@ impl Interpreter {
                     return Completion::Normal(JsValue::Boolean(true));
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("deleteProperty".to_string(), del_prop_fn);
 
         // Reflect.get(target, key, receiver?)
-        let get_fn = self.create_function(JsFunction::Native(
+        let get_fn = self.create_function(JsFunction::native(
             "get".to_string(),
-            Rc::new(|interp, _this, args| {
+            2,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9198,7 +9438,7 @@ impl Interpreter {
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
@@ -9206,9 +9446,10 @@ impl Interpreter {
 
         // Reflect.getOwnPropertyDescriptor(target, key)
         let gopd_fn =
-            self.create_function(JsFunction::Native(
+            self.create_function(JsFunction::native(
                 "getOwnPropertyDescriptor".to_string(),
-                Rc::new(|interp, _this, args| {
+                2,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if !matches!(target, JsValue::Object(_)) {
                         return Completion::Throw(interp.create_type_error(
@@ -9223,16 +9464,17 @@ impl Interpreter {
                         return Completion::Normal(interp.from_property_descriptor(&desc));
                     }
                     Completion::Normal(JsValue::Undefined)
-                }),
+                },
             ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("getOwnPropertyDescriptor".to_string(), gopd_fn);
 
         // Reflect.getPrototypeOf(target)
-        let gpo_fn = self.create_function(JsFunction::Native(
+        let gpo_fn = self.create_function(JsFunction::native(
             "getPrototypeOf".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9248,16 +9490,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Normal(JsValue::Null)
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("getPrototypeOf".to_string(), gpo_fn);
 
         // Reflect.has(target, key)
-        let has_fn = self.create_function(JsFunction::Native(
+        let has_fn = self.create_function(JsFunction::native(
             "has".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9271,16 +9514,17 @@ impl Interpreter {
                     return Completion::Normal(JsValue::Boolean(obj.borrow().has_property(&key)));
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("has".to_string(), has_fn);
 
         // Reflect.isExtensible(target)
-        let is_ext_fn = self.create_function(JsFunction::Native(
+        let is_ext_fn = self.create_function(JsFunction::native(
             "isExtensible".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9293,16 +9537,17 @@ impl Interpreter {
                     return Completion::Normal(JsValue::Boolean(obj.borrow().extensible));
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("isExtensible".to_string(), is_ext_fn);
 
         // Reflect.ownKeys(target)
-        let own_keys_fn = self.create_function(JsFunction::Native(
+        let own_keys_fn = self.create_function(JsFunction::native(
             "ownKeys".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9322,16 +9567,17 @@ impl Interpreter {
                     return Completion::Normal(arr);
                 }
                 Completion::Normal(interp.create_array(Vec::new()))
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("ownKeys".to_string(), own_keys_fn);
 
         // Reflect.preventExtensions(target)
-        let pe_fn = self.create_function(JsFunction::Native(
+        let pe_fn = self.create_function(JsFunction::native(
             "preventExtensions".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9344,16 +9590,17 @@ impl Interpreter {
                     obj.borrow_mut().extensible = false;
                 }
                 Completion::Normal(JsValue::Boolean(true))
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("preventExtensions".to_string(), pe_fn);
 
         // Reflect.set(target, key, value, receiver?)
-        let set_fn = self.create_function(JsFunction::Native(
+        let set_fn = self.create_function(JsFunction::native(
             "set".to_string(),
-            Rc::new(|interp, _this, args| {
+            3,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9388,16 +9635,17 @@ impl Interpreter {
                     return Completion::Normal(JsValue::Boolean(true));
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
             .insert_builtin("set".to_string(), set_fn);
 
         // Reflect.setPrototypeOf(target, proto)
-        let spo_fn = self.create_function(JsFunction::Native(
+        let spo_fn = self.create_function(JsFunction::native(
             "setPrototypeOf".to_string(),
-            Rc::new(|interp, _this, args| {
+            2,
+            |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(target, JsValue::Object(_)) {
                     return Completion::Throw(
@@ -9424,7 +9672,7 @@ impl Interpreter {
                     return Completion::Normal(JsValue::Boolean(true));
                 }
                 Completion::Normal(JsValue::Boolean(false))
-            }),
+            },
         ));
         reflect_obj
             .borrow_mut()
@@ -9440,9 +9688,10 @@ impl Interpreter {
 
     fn setup_proxy(&mut self) {
         // Proxy constructor
-        let proxy_fn = self.create_function(JsFunction::Native(
+        let proxy_fn = self.create_function(JsFunction::native(
             "Proxy".to_string(),
-            Rc::new(|interp, _this, args| {
+            2,
+            |interp, _this, args| {
                 // Must be called with new (we check new.target)
                 if interp.new_target.is_none() {
                     return Completion::Throw(
@@ -9481,7 +9730,7 @@ impl Interpreter {
                 }
                 let proxy_id = proxy_obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: proxy_id }))
-            }),
+            },
         ));
 
         // Override eval_new behavior: Proxy constructor returns proxy_obj, not new_obj
@@ -9491,9 +9740,10 @@ impl Interpreter {
         if let JsValue::Object(ref pf) = proxy_fn
             && let Some(proxy_func_obj) = self.get_object(pf.id)
         {
-            let revocable_fn = self.create_function(JsFunction::Native(
+            let revocable_fn = self.create_function(JsFunction::native(
                 "revocable".to_string(),
-                Rc::new(|interp, _this, args| {
+                2,
+                |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let handler = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     if !matches!(target, JsValue::Object(_)) {
@@ -9528,9 +9778,10 @@ impl Interpreter {
                     let proxy_val = JsValue::Object(crate::types::JsObject { id: proxy_id });
 
                     // Create revoke function that captures proxy_id
-                    let revoke_fn = interp.create_function(JsFunction::Native(
+                    let revoke_fn = interp.create_function(JsFunction::native(
                         "".to_string(),
-                        Rc::new(move |interp2, _this2, _args2| {
+                        0,
+                        move |interp2, _this2, _args2| {
                             if let Some(p) = interp2.get_object(proxy_id) {
                                 let mut pm = p.borrow_mut();
                                 pm.proxy_revoked = true;
@@ -9538,7 +9789,7 @@ impl Interpreter {
                                 pm.proxy_handler = None;
                             }
                             Completion::Normal(JsValue::Undefined)
-                        }),
+                        },
                     ));
 
                     let result = interp.create_object();
@@ -9550,7 +9801,7 @@ impl Interpreter {
                         .insert_value("revoke".to_string(), revoke_fn);
                     let result_id = result.borrow().id.unwrap();
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
-                }),
+                },
             ));
             proxy_func_obj
                 .borrow_mut()
@@ -9565,22 +9816,24 @@ impl Interpreter {
 
     fn setup_function_prototype(&mut self, obj_proto: &Rc<RefCell<JsObjectData>>) {
         // Add call to Object.prototype (simplified - applies to all functions via prototype chain)
-        let call_fn = self.create_function(JsFunction::Native(
+        let call_fn = self.create_function(JsFunction::native(
             "call".to_string(),
-            Rc::new(|interp, _this, args| {
+            1,
+            |interp, _this, args| {
                 let this_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let call_args = if args.len() > 1 { &args[1..] } else { &[] };
                 interp.call_function(_this, &this_arg, call_args)
-            }),
+            },
         ));
         obj_proto
             .borrow_mut()
             .insert_builtin("call".to_string(), call_fn);
 
         // Add apply
-        let apply_fn = self.create_function(JsFunction::Native(
+        let apply_fn = self.create_function(JsFunction::native(
             "apply".to_string(),
-            Rc::new(|interp, _this, args| {
+            3,
+            |interp, _this, args| {
                 let this_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let arr_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let mut call_args = Vec::new();
@@ -9598,29 +9851,31 @@ impl Interpreter {
                     }
                 }
                 interp.call_function(_this, &this_arg, &call_args)
-            }),
+            },
         ));
         obj_proto
             .borrow_mut()
             .insert_builtin("apply".to_string(), apply_fn);
 
         // Function.prototype.bind
-        let bind_fn = self.create_function(JsFunction::Native(
+        let bind_fn = self.create_function(JsFunction::native(
             "bind".to_string(),
-            Rc::new(|interp, this_val, args: &[JsValue]| {
+            1,
+            |interp, this_val, args: &[JsValue]| {
                 let bind_this = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
                 let func = this_val.clone();
-                let bound = JsFunction::Native(
+                let bound = JsFunction::native(
                     "bound".to_string(),
-                    Rc::new(move |interp2, _this, call_args: &[JsValue]| {
+                    0,
+                    move |interp2, _this, call_args: &[JsValue]| {
                         let mut all_args = bound_args.clone();
                         all_args.extend_from_slice(call_args);
                         interp2.call_function(&func, &bind_this, &all_args)
-                    }),
+                    },
                 );
                 Completion::Normal(interp.create_function(bound))
-            }),
+            },
         ));
         obj_proto
             .borrow_mut()
@@ -9629,9 +9884,10 @@ impl Interpreter {
         // Merge Function.prototype.toString into Object.prototype.toString
         // The existing Object.prototype.toString already handles [object Type] for non-functions.
         // We override it with a combined version that handles both functions and objects.
-        let combined_tostring = self.create_function(JsFunction::Native(
+        let combined_tostring = self.create_function(JsFunction::native(
             "toString".to_string(),
-            Rc::new(|interp, this_val, _args: &[JsValue]| {
+            0,
+            |interp, this_val, _args: &[JsValue]| {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -9658,7 +9914,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&format!(
                     "[object {tag}]"
                 ))))
-            }),
+            },
         ));
         obj_proto
             .borrow_mut()
@@ -9941,16 +10197,15 @@ impl Interpreter {
     }
 
     fn create_thrower_function(&mut self) -> JsValue {
-        let func = JsFunction::Native(
+        let func = JsFunction::native(
             "%ThrowTypeError%".to_string(),
-            Rc::new(
-                |interp: &mut Interpreter, _this: &JsValue, _args: &[JsValue]| {
-                    let err = interp.create_type_error(
+            0,
+            |interp: &mut Interpreter, _this: &JsValue, _args: &[JsValue]| {
+                let err = interp.create_type_error(
                     "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them",
                 );
-                    Completion::Throw(err)
-                },
-            ),
+                Completion::Throw(err)
+            },
         );
         self.create_function(func)
     }
@@ -9986,7 +10241,7 @@ impl Interpreter {
                     .count();
                 (n, len)
             }
-            JsFunction::Native(name, _) => (name.clone(), 0),
+            JsFunction::Native(name, arity, _) => (name.clone(), *arity),
         };
         let mut obj_data = JsObjectData::new();
         obj_data.prototype = self.object_prototype.clone();
@@ -10131,9 +10386,10 @@ impl Interpreter {
 
         // Add Symbol.iterator (Array.prototype[@@iterator]) to both strict and non-strict
         if let Some(key) = self.get_symbol_iterator_key() {
-            let iter_fn = self.create_function(JsFunction::Native(
+            let iter_fn = self.create_function(JsFunction::native(
                 "[Symbol.iterator]".to_string(),
-                Rc::new(|interp, this_val, _args| {
+                0,
+                |interp, this_val, _args| {
                     if let JsValue::Object(o) = this_val {
                         return Completion::Normal(
                             interp.create_array_iterator(o.id, IteratorKind::Value),
@@ -10141,7 +10397,7 @@ impl Interpreter {
                     }
                     let err = interp.create_type_error("Symbol.iterator called on non-object");
                     Completion::Throw(err)
-                }),
+                },
             ));
             if let JsValue::Object(ref o) = result {
                 if let Some(obj_rc) = self.get_object(o.id) {
@@ -12276,7 +12532,7 @@ impl Interpreter {
             let callable = obj.borrow().callable.clone();
             if let Some(func) = callable {
                 return match func {
-                    JsFunction::Native(_, f) => f(self, _this_val, args),
+                    JsFunction::Native(_, _, f) => f(self, _this_val, args),
                     JsFunction::User {
                         params,
                         body,
