@@ -105,6 +105,7 @@ pub enum Expression {
     Sequence(Vec<Expression>),
     Import(Box<Expression>), // dynamic import
     NewTarget,
+    PrivateIdentifier(String),
 }
 
 #[derive(Clone, Debug)]

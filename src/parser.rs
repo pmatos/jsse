@@ -367,7 +367,8 @@ impl<'a> Parser<'a> {
             | Expression::Super
             | Expression::NewTarget
             | Expression::Function(_)
-            | Expression::Class(_) => false,
+            | Expression::Class(_)
+            | Expression::PrivateIdentifier(_) => false,
         }
     }
 
@@ -1899,7 +1900,19 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_relational(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_shift()?;
+        let mut left = if let Token::PrivateName(name) = &self.current {
+            let name = name.clone();
+            self.advance()?;
+            if matches!(self.current, Token::Keyword(Keyword::In)) {
+                Expression::PrivateIdentifier(name)
+            } else {
+                return Err(ParseError {
+                    message: format!("Unexpected token #{name}"),
+                });
+            }
+        } else {
+            self.parse_shift()?
+        };
         loop {
             let op = match &self.current {
                 Token::LessThan => BinaryOp::Lt,

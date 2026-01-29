@@ -222,9 +222,30 @@ impl PropertyDescriptor {
 }
 
 #[derive(Debug, Clone)]
-pub struct PrivateFieldDef {
-    pub name: String,
-    pub initializer: Option<Expression>,
+pub enum PrivateFieldDef {
+    Field {
+        name: String,
+        initializer: Option<Expression>,
+    },
+    Method {
+        name: String,
+        value: JsValue,
+    },
+    Accessor {
+        name: String,
+        get: Option<JsValue>,
+        set: Option<JsValue>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum PrivateElement {
+    Field(JsValue),
+    Method(JsValue),
+    Accessor {
+        get: Option<JsValue>,
+        set: Option<JsValue>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -281,7 +302,7 @@ pub struct JsObjectData {
     pub class_name: String,
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
-    pub private_fields: HashMap<String, JsValue>,
+    pub private_fields: HashMap<String, PrivateElement>,
     pub class_private_field_defs: Vec<PrivateFieldDef>,
     pub iterator_state: Option<IteratorState>,
     pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
@@ -10019,8 +10040,20 @@ impl Interpreter {
             }
 
             // Trace private fields
-            for v in obj.private_fields.values() {
-                Self::collect_value_roots(v, &mut worklist);
+            for elem in obj.private_fields.values() {
+                match elem {
+                    PrivateElement::Field(v) | PrivateElement::Method(v) => {
+                        Self::collect_value_roots(v, &mut worklist);
+                    }
+                    PrivateElement::Accessor { get, set } => {
+                        if let Some(g) = get {
+                            Self::collect_value_roots(g, &mut worklist);
+                        }
+                        if let Some(s) = set {
+                            Self::collect_value_roots(s, &mut worklist);
+                        }
+                    }
+                }
             }
 
             // Trace callable (closure environments)
@@ -11069,6 +11102,9 @@ impl Interpreter {
             Expression::NewTarget => {
                 Completion::Normal(self.new_target.clone().unwrap_or(JsValue::Undefined))
             }
+            Expression::PrivateIdentifier(_) => Completion::Throw(
+                self.create_type_error("Private identifier can only be used with 'in' operator"),
+            ),
             Expression::Unary(op, operand) => {
                 let val = match self.eval_expr(operand, env) {
                     Completion::Normal(v) => v,
@@ -11077,6 +11113,28 @@ impl Interpreter {
                 Completion::Normal(self.eval_unary(*op, &val))
             }
             Expression::Binary(op, left, right) => {
+                if *op == BinaryOp::In {
+                    if let Expression::PrivateIdentifier(name) = left.as_ref() {
+                        let rval = match self.eval_expr(right, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        return match &rval {
+                            JsValue::Object(o) => {
+                                if let Some(obj) = self.get_object(o.id) {
+                                    Completion::Normal(JsValue::Boolean(
+                                        obj.borrow().private_fields.contains_key(name),
+                                    ))
+                                } else {
+                                    Completion::Normal(JsValue::Boolean(false))
+                                }
+                            }
+                            _ => Completion::Throw(self.create_type_error(
+                                "Cannot use 'in' operator to search for a private field without an object",
+                            )),
+                        };
+                    }
+                }
                 let lval = match self.eval_expr(left, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -11404,8 +11462,20 @@ impl Interpreter {
                         if let MemberProperty::Private(name) = mp {
                             if let JsValue::Object(o) = &base_val {
                                 if let Some(obj) = self.get_object(o.id) {
-                                    return match obj.borrow().private_fields.get(name).cloned() {
-                                        Some(v) => Completion::Normal(v),
+                                    let elem = obj.borrow().private_fields.get(name).cloned();
+                                    return match elem {
+                                        Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
+                                            Completion::Normal(v)
+                                        }
+                                        Some(PrivateElement::Accessor { get, .. }) => {
+                                            if let Some(getter) = get {
+                                                self.call_function(&getter, &base_val, &[])
+                                            } else {
+                                                Completion::Throw(self.create_type_error(&format!(
+                                                    "Cannot read private member #{name} which has no getter"
+                                                )))
+                                            }
+                                        }
                                         None => Completion::Throw(self.create_type_error(&format!(
                                             "Cannot read private member #{name} from an object whose class did not declare it"
                                         ))),
@@ -11930,26 +12000,59 @@ impl Interpreter {
                     return match &obj_val {
                         JsValue::Object(o) => {
                             if let Some(obj) = self.get_object(o.id) {
-                                let final_val = if op == AssignOp::Assign {
-                                    rval
-                                } else {
-                                    let lval = obj
-                                        .borrow()
-                                        .private_fields
-                                        .get(name)
-                                        .cloned()
-                                        .unwrap_or(JsValue::Undefined);
-                                    self.apply_compound_assign(op, &lval, &rval)
-                                };
-                                if !obj.borrow().private_fields.contains_key(name) {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot write private member #{name} to an object whose class did not declare it"
-                                    )));
+                                let elem = obj.borrow().private_fields.get(name).cloned();
+                                match elem {
+                                    Some(PrivateElement::Field(_)) => {
+                                        let final_val = if op == AssignOp::Assign {
+                                            rval
+                                        } else {
+                                            let lval = if let Some(PrivateElement::Field(v)) = obj.borrow().private_fields.get(name) {
+                                                v.clone()
+                                            } else {
+                                                JsValue::Undefined
+                                            };
+                                            self.apply_compound_assign(op, &lval, &rval)
+                                        };
+                                        obj.borrow_mut()
+                                            .private_fields
+                                            .insert(name.clone(), PrivateElement::Field(final_val.clone()));
+                                        Completion::Normal(final_val)
+                                    }
+                                    Some(PrivateElement::Method(_)) => {
+                                        Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot assign to private method #{name}"
+                                        )))
+                                    }
+                                    Some(PrivateElement::Accessor { get, set }) => {
+                                        if let Some(setter) = &set {
+                                            let final_val = if op == AssignOp::Assign {
+                                                rval
+                                            } else {
+                                                let lval = if let Some(ref getter) = get {
+                                                    match self.call_function(getter, &obj_val, &[]) {
+                                                        Completion::Normal(v) => v,
+                                                        other => return other,
+                                                    }
+                                                } else {
+                                                    JsValue::Undefined
+                                                };
+                                                self.apply_compound_assign(op, &lval, &rval)
+                                            };
+                                            let setter = setter.clone();
+                                            self.call_function(&setter, &obj_val, &[final_val.clone()]);
+                                            Completion::Normal(final_val)
+                                        } else {
+                                            Completion::Throw(self.create_type_error(&format!(
+                                                "Cannot set private member #{name} which has no setter"
+                                            )))
+                                        }
+                                    }
+                                    None => {
+                                        Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot write private member #{name} to an object whose class did not declare it"
+                                        )))
+                                    }
                                 }
-                                obj.borrow_mut()
-                                    .private_fields
-                                    .insert(name.clone(), final_val.clone());
-                                Completion::Normal(final_val)
                             } else {
                                 Completion::Normal(JsValue::Undefined)
                             }
@@ -12225,10 +12328,55 @@ impl Interpreter {
                         };
                         to_js_string(&v)
                     }
-                    MemberProperty::Private(_) => {
-                        return Completion::Throw(
-                            self.create_type_error("Private fields are not yet supported"),
-                        );
+                    MemberProperty::Private(name) => {
+                        if let JsValue::Object(ref o) = obj_val {
+                            if let Some(obj) = self.get_object(o.id) {
+                                let elem = obj.borrow().private_fields.get(name).cloned();
+                                let func_val = match elem {
+                                    Some(PrivateElement::Field(v))
+                                    | Some(PrivateElement::Method(v)) => v,
+                                    Some(PrivateElement::Accessor { get, .. }) => {
+                                        if let Some(getter) = get {
+                                            match self.call_function(&getter, &obj_val, &[]) {
+                                                Completion::Normal(v) => v,
+                                                other => return other,
+                                            }
+                                        } else {
+                                            return Completion::Throw(self.create_type_error(&format!(
+                                                "Cannot read private member #{name} which has no getter"
+                                            )));
+                                        }
+                                    }
+                                    None => {
+                                        return Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot read private member #{name} from an object whose class did not declare it"
+                                        )));
+                                    }
+                                };
+                                let mut evaluated_args = Vec::new();
+                                for arg in args {
+                                    match arg {
+                                        Expression::Spread(inner) => {
+                                            let spread_val = match self.eval_expr(inner, env) {
+                                                Completion::Normal(v) => v,
+                                                other => return other,
+                                            };
+                                            if let Ok(items) = self.iterate_to_vec(&spread_val) {
+                                                evaluated_args.extend(items);
+                                            }
+                                        }
+                                        _ => match self.eval_expr(arg, env) {
+                                            Completion::Normal(v) => evaluated_args.push(v),
+                                            other => return other,
+                                        },
+                                    }
+                                }
+                                return self.call_function(&func_val, &obj_val, &evaluated_args);
+                            }
+                        }
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot read private member #{name} from a non-object"
+                        )));
                     }
                 };
                 // super.method() - look up on super constructor's prototype, bind this
@@ -12753,18 +12901,40 @@ impl Interpreter {
         init_env.borrow_mut().declare("this", BindingKind::Const);
         let _ = init_env.borrow_mut().set("this", this_val.clone());
         for def in &private_field_defs {
-            let val = if let Some(ref init) = def.initializer {
-                match self.eval_expr(init, &init_env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
+            match def {
+                PrivateFieldDef::Field { name, initializer } => {
+                    let val = if let Some(init) = initializer {
+                        match self.eval_expr(init, &init_env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if let Some(obj) = self.get_object(new_obj_id) {
+                        obj.borrow_mut()
+                            .private_fields
+                            .insert(name.clone(), PrivateElement::Field(val));
+                    }
                 }
-            } else {
-                JsValue::Undefined
-            };
-            if let Some(obj) = self.get_object(new_obj_id) {
-                obj.borrow_mut()
-                    .private_fields
-                    .insert(def.name.clone(), val);
+                PrivateFieldDef::Method { name, value } => {
+                    if let Some(obj) = self.get_object(new_obj_id) {
+                        obj.borrow_mut()
+                            .private_fields
+                            .insert(name.clone(), PrivateElement::Method(value.clone()));
+                    }
+                }
+                PrivateFieldDef::Accessor { name, get, set } => {
+                    if let Some(obj) = self.get_object(new_obj_id) {
+                        obj.borrow_mut().private_fields.insert(
+                            name.clone(),
+                            PrivateElement::Accessor {
+                                get: get.clone(),
+                                set: set.clone(),
+                            },
+                        );
+                    }
+                }
             }
         }
         let prev_new_target = self.new_target.take();
@@ -12887,9 +13057,20 @@ impl Interpreter {
             return match &obj_val {
                 JsValue::Object(o) => {
                     if let Some(obj) = self.get_object(o.id) {
-                        let val = obj.borrow().private_fields.get(name).cloned();
-                        match val {
-                            Some(v) => Completion::Normal(v),
+                        let elem = obj.borrow().private_fields.get(name).cloned();
+                        match elem {
+                            Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
+                                Completion::Normal(v)
+                            }
+                            Some(PrivateElement::Accessor { get, .. }) => {
+                                if let Some(getter) = get {
+                                    self.call_function(&getter, &obj_val, &[])
+                                } else {
+                                    Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot read private member #{name} which has no getter"
+                                    )))
+                                }
+                            }
                             None => Completion::Throw(self.create_type_error(&format!(
                                 "Cannot read private member #{name} from an object whose class did not declare it"
                             ))),
@@ -13085,8 +13266,154 @@ impl Interpreter {
                             Completion::Normal(v) => to_js_string(&v),
                             other => return other,
                         },
-                        PropertyKey::Private(_) => {
-                            // Private methods are not yet supported, skip them
+                        PropertyKey::Private(name) => {
+                            let method_func = JsFunction::User {
+                                name: Some(format!("#{name}")),
+                                params: m.value.params.clone(),
+                                body: m.value.body.clone(),
+                                closure: class_env.clone(),
+                                is_arrow: false,
+                                is_strict: true,
+                                is_generator: m.value.is_generator,
+                            };
+                            let method_val = self.create_function(method_func);
+
+                            if m.is_static {
+                                if let JsValue::Object(ref o) = ctor_val {
+                                    if let Some(func_obj) = self.get_object(o.id) {
+                                        match m.kind {
+                                            ClassMethodKind::Get => {
+                                                let existing = func_obj
+                                                    .borrow()
+                                                    .private_fields
+                                                    .get(name)
+                                                    .cloned();
+                                                let elem = if let Some(PrivateElement::Accessor {
+                                                    get: _,
+                                                    set,
+                                                }) = existing
+                                                {
+                                                    PrivateElement::Accessor {
+                                                        get: Some(method_val),
+                                                        set,
+                                                    }
+                                                } else {
+                                                    PrivateElement::Accessor {
+                                                        get: Some(method_val),
+                                                        set: None,
+                                                    }
+                                                };
+                                                func_obj
+                                                    .borrow_mut()
+                                                    .private_fields
+                                                    .insert(name.clone(), elem);
+                                            }
+                                            ClassMethodKind::Set => {
+                                                let existing = func_obj
+                                                    .borrow()
+                                                    .private_fields
+                                                    .get(name)
+                                                    .cloned();
+                                                let elem = if let Some(PrivateElement::Accessor {
+                                                    get,
+                                                    set: _,
+                                                }) = existing
+                                                {
+                                                    PrivateElement::Accessor {
+                                                        get,
+                                                        set: Some(method_val),
+                                                    }
+                                                } else {
+                                                    PrivateElement::Accessor {
+                                                        get: None,
+                                                        set: Some(method_val),
+                                                    }
+                                                };
+                                                func_obj
+                                                    .borrow_mut()
+                                                    .private_fields
+                                                    .insert(name.clone(), elem);
+                                            }
+                                            _ => {
+                                                func_obj.borrow_mut().private_fields.insert(
+                                                    name.clone(),
+                                                    PrivateElement::Method(method_val),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                if let JsValue::Object(ref o) = ctor_val {
+                                    if let Some(func_obj) = self.get_object(o.id) {
+                                        match m.kind {
+                                            ClassMethodKind::Get => {
+                                                let mut b = func_obj.borrow_mut();
+                                                let mut found = false;
+                                                for def in b.class_private_field_defs.iter_mut() {
+                                                    if let PrivateFieldDef::Accessor {
+                                                        name: n,
+                                                        get: g,
+                                                        ..
+                                                    } = def
+                                                    {
+                                                        if n == name {
+                                                            *g = Some(method_val.clone());
+                                                            found = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                if !found {
+                                                    b.class_private_field_defs.push(
+                                                        PrivateFieldDef::Accessor {
+                                                            name: name.clone(),
+                                                            get: Some(method_val),
+                                                            set: None,
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                            ClassMethodKind::Set => {
+                                                let mut b = func_obj.borrow_mut();
+                                                let mut found = false;
+                                                for def in b.class_private_field_defs.iter_mut() {
+                                                    if let PrivateFieldDef::Accessor {
+                                                        name: n,
+                                                        set: s,
+                                                        ..
+                                                    } = def
+                                                    {
+                                                        if n == name {
+                                                            *s = Some(method_val.clone());
+                                                            found = true;
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                                if !found {
+                                                    b.class_private_field_defs.push(
+                                                        PrivateFieldDef::Accessor {
+                                                            name: name.clone(),
+                                                            get: None,
+                                                            set: Some(method_val),
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                            _ => {
+                                                func_obj
+                                                    .borrow_mut()
+                                                    .class_private_field_defs
+                                                    .push(PrivateFieldDef::Method {
+                                                        name: name.clone(),
+                                                        value: method_val,
+                                                    });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             continue;
                         }
                     };
@@ -13159,7 +13486,7 @@ impl Interpreter {
                                 && let Some(func_obj) = self.get_object(o.id)
                             {
                                 func_obj.borrow_mut().class_private_field_defs.push(
-                                    PrivateFieldDef {
+                                    PrivateFieldDef::Field {
                                         name: name.clone(),
                                         initializer: p.value.clone(),
                                     },
@@ -13181,7 +13508,7 @@ impl Interpreter {
                                 func_obj
                                     .borrow_mut()
                                     .private_fields
-                                    .insert(name.clone(), val);
+                                    .insert(name.clone(), PrivateElement::Field(val));
                             }
                         }
                         continue;
