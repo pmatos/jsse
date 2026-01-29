@@ -49,7 +49,7 @@ These features block significant numbers of tests:
 
 1. ~~**`arguments` object**~~ — ✅ Done (82/203, 40.39%). Mapped arguments + Symbol.iterator implemented.
 2. ~~**Garbage collection**~~ — ✅ Done. Mark-and-sweep GC with free-list reuse (148 MB → 11 MB on 100k object alloc).
-3. **Generator `yield` evaluation** — Parsing works, runtime doesn't. Blocks ~245 remaining Iterator tests and async.
+3. ~~**Generator `yield` evaluation**~~ — ✅ Done (965 new passes, 33.79% overall). Replay-based yield with next/return/throw. Remaining: yield* delegation, throw resumption, GeneratorFunction constructor.
 4. **Iterator protocol** — Breaks `for...of`, spread on non-arrays, many built-in methods.
 4. **Promise** — Blocks all async/await runtime.
 5. ~~**Map/Set**~~ — ✅ Done (Map: 103/204, Set: 261/383). Remaining failures: native fn `.length` properties, Proxy/Reflect/Symbol.species deps.
@@ -64,7 +64,7 @@ These features block significant numbers of tests:
 3. ~~**Complete Iterator built-in**~~ — ✅ Done (138/510, 27%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat. Remaining failures need generators.
 3. ~~**Implement Map and Set**~~ — ✅ Done (364 new passes)
 4. ~~**Implement Date**~~ — ✅ Done (305/594, 51%, 406 new passes overall)
-5. **Generator `yield` evaluation** — Enables iterator protocol, async later
+5. ~~**Generator `yield` evaluation**~~ — ✅ Done (965 new passes)
 6. **Private fields runtime** — Parsing done, evaluation needed
 
 ---
