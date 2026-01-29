@@ -48,7 +48,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 These features block significant numbers of tests:
 
 1. ~~**`arguments` object**~~ — ✅ Done (82/203, 40.39%). Mapped arguments + Symbol.iterator implemented.
-2. **Garbage collection** — No GC; all objects live forever. Causes OOM on heavy tests.
+2. ~~**Garbage collection**~~ — ✅ Done. Mark-and-sweep GC with free-list reuse (148 MB → 11 MB on 100k object alloc).
 3. **Generator `yield` evaluation** — Parsing works, runtime doesn't. Blocks iterator protocol.
 4. **Iterator protocol** — Breaks `for...of`, spread on non-arrays, many built-in methods.
 4. **Promise** — Blocks all async/await runtime.
@@ -60,7 +60,7 @@ These features block significant numbers of tests:
 ## Recommended Next Tasks (Priority Order)
 
 1. ~~**Complete `arguments` object (mapped arguments)**~~ — ✅ Done
-2. **Garbage collection** — Prevents OOM; enables long-running tests
+2. ~~**Garbage collection**~~ — ✅ Done
 3. **Complete Iterator built-in** — Many tests rely on iterator protocol
 3. **Implement Map and Set** — 587 tests, relatively isolated
 4. **Implement Date** — 594 tests, fundamental built-in
