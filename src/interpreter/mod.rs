@@ -106,7 +106,7 @@ impl Interpreter {
 
 
 
-    fn to_property_descriptor(&mut self, val: &JsValue) -> Option<PropertyDescriptor> {
+    fn to_property_descriptor(&mut self, val: &JsValue) -> Result<PropertyDescriptor, Option<JsValue>> {
         if let JsValue::Object(d) = val
             && let Some(desc_obj) = self.get_object(d.id)
         {
@@ -137,15 +137,52 @@ impl Interpreter {
             }
             let g = b.get_property("get");
             if !matches!(g, JsValue::Undefined) || b.has_own_property("get") {
-                desc.get = Some(g);
+                desc.get = Some(g.clone());
             }
             let s = b.get_property("set");
             if !matches!(s, JsValue::Undefined) || b.has_own_property("set") {
-                desc.set = Some(s);
+                desc.set = Some(s.clone());
             }
-            Some(desc)
+            drop(b);
+
+            // Validate: get must be callable or undefined
+            if let Some(ref getter) = desc.get {
+                if !matches!(getter, JsValue::Undefined) {
+                    let is_callable = if let JsValue::Object(o) = getter
+                        && let Some(obj) = self.get_object(o.id) {
+                        obj.borrow().callable.is_some()
+                    } else {
+                        false
+                    };
+                    if !is_callable {
+                        return Err(Some(self.create_type_error("Getter must be a function")));
+                    }
+                }
+            }
+            if let Some(ref setter) = desc.set {
+                if !matches!(setter, JsValue::Undefined) {
+                    let is_callable = if let JsValue::Object(o) = setter
+                        && let Some(obj) = self.get_object(o.id) {
+                        obj.borrow().callable.is_some()
+                    } else {
+                        false
+                    };
+                    if !is_callable {
+                        return Err(Some(self.create_type_error("Setter must be a function")));
+                    }
+                }
+            }
+
+            // Cannot have both accessor and data descriptor fields
+            if desc.is_accessor_descriptor() && desc.is_data_descriptor() {
+                return Err(Some(self.create_type_error(
+                    "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute",
+                )));
+            }
+
+            Ok(desc)
         } else {
-            None
+            Err(None)
         }
     }
 

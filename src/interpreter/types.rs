@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -447,7 +448,18 @@ impl JsObjectData {
     }
 
     pub fn define_own_property(&mut self, key: String, desc: PropertyDescriptor) -> bool {
-        if let Some(current) = self.properties.get(&key) {
+        if let Some(current) = self.properties.get(&key).cloned() {
+            // §10.1.6.3 step 2: if every field of desc is absent, return true
+            if desc.value.is_none()
+                && desc.writable.is_none()
+                && desc.get.is_none()
+                && desc.set.is_none()
+                && desc.enumerable.is_none()
+                && desc.configurable.is_none()
+            {
+                return true;
+            }
+
             if current.configurable == Some(false) {
                 if desc.configurable == Some(true) {
                     return false;
@@ -455,60 +467,169 @@ impl JsObjectData {
                 if desc.enumerable.is_some() && desc.enumerable != current.enumerable {
                     return false;
                 }
-                if current.is_data_descriptor()
-                    && desc.is_data_descriptor()
-                    && current.writable == Some(false)
-                {
-                    if desc.writable == Some(true) {
-                        return false;
+
+                let current_is_data = current.is_data_descriptor();
+                let current_is_accessor = current.is_accessor_descriptor();
+                let desc_is_data = desc.is_data_descriptor();
+                let desc_is_accessor = desc.is_accessor_descriptor();
+
+                // Cannot change between data and accessor on non-configurable
+                if current_is_data && !current_is_accessor && desc_is_accessor && !desc_is_data {
+                    return false;
+                }
+                if current_is_accessor && !current_is_data && desc_is_data && !desc_is_accessor {
+                    return false;
+                }
+
+                if current_is_data && !current_is_accessor {
+                    // Non-configurable data property
+                    if current.writable == Some(false) {
+                        if desc.writable == Some(true) {
+                            return false;
+                        }
+                        if let Some(ref new_val) = desc.value {
+                            if let Some(ref cur_val) = current.value {
+                                if !same_value(new_val, cur_val) {
+                                    return false;
+                                }
+                            } else {
+                                return false;
+                            }
+                        }
                     }
-                    if desc.value.is_some() {
-                        return false;
+                } else if current_is_accessor {
+                    // Non-configurable accessor property
+                    if let Some(ref new_get) = desc.get {
+                        let cur_get = current.get.as_ref().unwrap_or(&JsValue::Undefined);
+                        if !same_value(new_get, cur_get) {
+                            return false;
+                        }
+                    }
+                    if let Some(ref new_set) = desc.set {
+                        let cur_set = current.set.as_ref().unwrap_or(&JsValue::Undefined);
+                        if !same_value(new_set, cur_set) {
+                            return false;
+                        }
                     }
                 }
             }
-        } else if !self.extensible {
-            return false;
-        }
-        if let Some(ref mut map) = self.parameter_map {
-            if map.contains_key(&key) {
-                if let Some(ref val) = desc.value {
-                    if let Some((env_ref, param_name)) = map.get(&key) {
-                        let _ = env_ref.borrow_mut().set(param_name, val.clone());
-                    }
-                }
-                if desc.get.is_some() || desc.set.is_some() {
-                    map.remove(&key);
-                } else if desc.writable == Some(false) {
+
+            // Precompute type info before consuming desc
+            let desc_is_data = desc.is_data_descriptor();
+            let desc_is_accessor = desc.is_accessor_descriptor();
+            let desc_has_get = desc.get.is_some();
+            let desc_has_set = desc.set.is_some();
+            let desc_writable = desc.writable;
+
+            // Handle parameter map before consuming desc
+            if let Some(ref mut map) = self.parameter_map {
+                if map.contains_key(&key) {
                     if let Some(ref val) = desc.value {
                         if let Some((env_ref, param_name)) = map.get(&key) {
                             let _ = env_ref.borrow_mut().set(param_name, val.clone());
                         }
                     }
-                    map.remove(&key);
+                    if desc_has_get || desc_has_set {
+                        map.remove(&key);
+                    } else if desc_writable == Some(false) {
+                        if let Some(ref val) = desc.value {
+                            if let Some((env_ref, param_name)) = map.get(&key) {
+                                let _ = env_ref.borrow_mut().set(param_name, val.clone());
+                            }
+                        }
+                        map.remove(&key);
+                    }
                 }
             }
-        }
-        if !self.properties.contains_key(&key) {
+
+            let current_is_data = current.is_data_descriptor();
+            let current_is_accessor = current.is_accessor_descriptor();
+
+            // Build merged descriptor
+            let merged = if desc_is_data && !desc_is_accessor
+                && current_is_accessor && !current_is_data {
+                // Changing from accessor to data
+                PropertyDescriptor {
+                    value: desc.value.or(Some(JsValue::Undefined)),
+                    writable: desc.writable.or(Some(false)),
+                    get: None,
+                    set: None,
+                    enumerable: desc.enumerable.or(current.enumerable),
+                    configurable: desc.configurable.or(current.configurable),
+                }
+            } else if desc_is_accessor && !desc_is_data
+                && current_is_data && !current_is_accessor {
+                // Changing from data to accessor
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: desc.get,
+                    set: desc.set,
+                    enumerable: desc.enumerable.or(current.enumerable),
+                    configurable: desc.configurable.or(current.configurable),
+                }
+            } else {
+                // Normal merge: unspecified fields retain current values
+                PropertyDescriptor {
+                    value: desc.value.or(current.value),
+                    writable: desc.writable.or(current.writable),
+                    get: desc.get.or(current.get),
+                    set: desc.set.or(current.set),
+                    enumerable: desc.enumerable.or(current.enumerable),
+                    configurable: desc.configurable.or(current.configurable),
+                }
+            };
+
+            self.properties.insert(key, merged);
+        } else {
+            if !self.extensible {
+                return false;
+            }
+            // Handle parameter map for new properties
+            if let Some(ref mut map) = self.parameter_map {
+                if map.contains_key(&key) {
+                    if let Some(ref val) = desc.value {
+                        if let Some((env_ref, param_name)) = map.get(&key) {
+                            let _ = env_ref.borrow_mut().set(param_name, val.clone());
+                        }
+                    }
+                }
+            }
             self.property_order.push(key.clone());
+            // For new property, fill in defaults per spec
+            let is_accessor = desc.is_accessor_descriptor();
+            let new_desc = PropertyDescriptor {
+                value: desc.value.or(if !is_accessor { Some(JsValue::Undefined) } else { None }),
+                writable: desc.writable.or(if !is_accessor { Some(false) } else { None }),
+                get: desc.get,
+                set: desc.set,
+                enumerable: desc.enumerable.or(Some(false)),
+                configurable: desc.configurable.or(Some(false)),
+            };
+            self.properties.insert(key, new_desc);
         }
-        self.properties.insert(key, desc);
         true
     }
 
-    pub fn set_property_value(&mut self, key: &str, value: JsValue) {
+    pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
         if let Some(ref map) = self.parameter_map {
             if let Some((env_ref, param_name)) = map.get(key) {
                 let _ = env_ref.borrow_mut().set(param_name, value.clone());
             }
         }
         if let Some(desc) = self.properties.get_mut(key) {
-            if desc.writable != Some(false) {
-                desc.value = Some(value);
+            if desc.writable == Some(false) {
+                return false;
             }
+            desc.value = Some(value);
+            true
         } else {
+            if !self.extensible {
+                return false;
+            }
             self.properties
                 .insert(key.to_string(), PropertyDescriptor::data_default(value));
+            true
         }
     }
 

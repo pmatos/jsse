@@ -146,6 +146,21 @@ pub(crate) fn extract_iter_result(interp: &Interpreter, result: &JsValue) -> (bo
     (true, JsValue::Undefined)
 }
 
+pub(crate) fn same_value(left: &JsValue, right: &JsValue) -> bool {
+    match (left, right) {
+        (JsValue::Number(a), JsValue::Number(b)) => {
+            if a.is_nan() && b.is_nan() {
+                return true;
+            }
+            if *a == 0.0 && *b == 0.0 {
+                return a.is_sign_positive() == b.is_sign_positive();
+            }
+            a == b
+        }
+        _ => strict_equality(left, right),
+    }
+}
+
 pub(crate) fn same_value_zero(left: &JsValue, right: &JsValue) -> bool {
     match (left, right) {
         (JsValue::Number(a), JsValue::Number(b)) => {

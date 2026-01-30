@@ -31,7 +31,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
-| Object | 35% | 1,199/3,411 |
+| Object | 50% | 1,704/3,411 |
 | Array | 25% | 736/2,989 |
 | String | 24% | 294/1,215 |
 | Function | 19% | 95/509 |

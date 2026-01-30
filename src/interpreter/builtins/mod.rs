@@ -1166,6 +1166,11 @@ impl Interpreter {
                 3,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !matches!(target, JsValue::Object(_)) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Object.defineProperty called on non-object",
+                        ));
+                    }
                     let key = args.get(1).map(to_js_string).unwrap_or_default();
                     let desc_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target
@@ -1193,9 +1198,16 @@ impl Interpreter {
                                     if let JsValue::Object(ref t) = target_inner
                                         && let Some(tobj) = interp.get_object(t.id)
                                     {
-                                        if let Some(desc) = interp.to_property_descriptor(&desc_val)
-                                        {
-                                            tobj.borrow_mut().define_own_property(key, desc);
+                                        match interp.to_property_descriptor(&desc_val) {
+                                            Ok(desc) => {
+                                                if !tobj.borrow_mut().define_own_property(key, desc) {
+                                                    return Completion::Throw(interp.create_type_error(
+                                                        "Cannot define property, object is not extensible or property is non-configurable",
+                                                    ));
+                                                }
+                                            }
+                                            Err(Some(e)) => return Completion::Throw(e),
+                                            Err(None) => {}
                                         }
                                     }
                                     return Completion::Normal(target);
@@ -1203,47 +1215,17 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
-                        let mut desc = PropertyDescriptor {
-                            value: None,
-                            writable: None,
-                            get: None,
-                            set: None,
-                            enumerable: None,
-                            configurable: None,
-                        };
-                        if let JsValue::Object(ref d) = desc_val
-                            && let Some(desc_obj) = interp.get_object(d.id)
-                        {
-                            let b = desc_obj.borrow();
-                            let v = b.get_property("value");
-                            if !matches!(v, JsValue::Undefined) || b.has_own_property("value") {
-                                desc.value = Some(v);
+                        match interp.to_property_descriptor(&desc_val) {
+                            Ok(desc) => {
+                                if !obj.borrow_mut().define_own_property(key, desc) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define property, object is not extensible or property is non-configurable",
+                                    ));
+                                }
                             }
-                            let w = b.get_property("writable");
-                            if !matches!(w, JsValue::Undefined) || b.has_own_property("writable") {
-                                desc.writable = Some(to_boolean(&w));
-                            }
-                            let e = b.get_property("enumerable");
-                            if !matches!(e, JsValue::Undefined) || b.has_own_property("enumerable")
-                            {
-                                desc.enumerable = Some(to_boolean(&e));
-                            }
-                            let c = b.get_property("configurable");
-                            if !matches!(c, JsValue::Undefined)
-                                || b.has_own_property("configurable")
-                            {
-                                desc.configurable = Some(to_boolean(&c));
-                            }
-                            let g = b.get_property("get");
-                            if !matches!(g, JsValue::Undefined) || b.has_own_property("get") {
-                                desc.get = Some(g);
-                            }
-                            let s = b.get_property("set");
-                            if !matches!(s, JsValue::Undefined) || b.has_own_property("set") {
-                                desc.set = Some(s);
-                            }
+                            Err(Some(e)) => return Completion::Throw(e),
+                            Err(None) => {}
                         }
-                        obj.borrow_mut().define_own_property(key, desc);
                     }
                     Completion::Normal(target)
                 },
@@ -1976,60 +1958,40 @@ impl Interpreter {
                 2,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !matches!(target, JsValue::Object(_)) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Object.defineProperties called on non-object",
+                        ));
+                    }
                     let descs = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref t) = target
                         && let JsValue::Object(ref d) = descs
                         && let Some(desc_obj) = interp.get_object(d.id)
                     {
-                        let keys: Vec<String> =
-                            desc_obj.borrow().properties.keys().cloned().collect();
+                        // Collect enumerable own property keys
+                        let keys: Vec<String> = {
+                            let b = desc_obj.borrow();
+                            b.properties.iter().filter(|(_, prop)| {
+                                prop.enumerable != Some(false)
+                            }).map(|(k, _)| k.clone()).collect()
+                        };
+                        // Collect all descriptors first
+                        let mut descriptors: Vec<(String, PropertyDescriptor)> = Vec::new();
                         for key in keys {
                             let prop_desc_val = desc_obj.borrow().get_property(&key);
-                            if let JsValue::Object(ref pd) = prop_desc_val
-                                && let Some(pd_obj) = interp.get_object(pd.id)
-                            {
-                                let b = pd_obj.borrow();
-                                let mut desc = PropertyDescriptor {
-                                    value: None,
-                                    writable: None,
-                                    get: None,
-                                    set: None,
-                                    enumerable: None,
-                                    configurable: None,
-                                };
-                                let v = b.get_property("value");
-                                if !matches!(v, JsValue::Undefined) || b.has_own_property("value") {
-                                    desc.value = Some(v);
-                                }
-                                let w = b.get_property("writable");
-                                if !matches!(w, JsValue::Undefined)
-                                    || b.has_own_property("writable")
-                                {
-                                    desc.writable = Some(to_boolean(&w));
-                                }
-                                let e = b.get_property("enumerable");
-                                if !matches!(e, JsValue::Undefined)
-                                    || b.has_own_property("enumerable")
-                                {
-                                    desc.enumerable = Some(to_boolean(&e));
-                                }
-                                let c = b.get_property("configurable");
-                                if !matches!(c, JsValue::Undefined)
-                                    || b.has_own_property("configurable")
-                                {
-                                    desc.configurable = Some(to_boolean(&c));
-                                }
-                                let g = b.get_property("get");
-                                if !matches!(g, JsValue::Undefined) || b.has_own_property("get") {
-                                    desc.get = Some(g);
-                                }
-                                let s = b.get_property("set");
-                                if !matches!(s, JsValue::Undefined) || b.has_own_property("set") {
-                                    desc.set = Some(s);
-                                }
-                                drop(b);
-                                if let Some(target_obj) = interp.get_object(t.id) {
-                                    target_obj.borrow_mut().insert_property(key, desc);
+                            match interp.to_property_descriptor(&prop_desc_val) {
+                                Ok(desc) => descriptors.push((key, desc)),
+                                Err(Some(e)) => return Completion::Throw(e),
+                                Err(None) => {}
+                            }
+                        }
+                        // Apply all descriptors
+                        for (key, desc) in descriptors {
+                            if let Some(target_obj) = interp.get_object(t.id) {
+                                if !target_obj.borrow_mut().define_own_property(key, desc) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define property, object is not extensible or property is non-configurable",
+                                    ));
                                 }
                             }
                         }
@@ -2476,9 +2438,13 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if let Some(desc) = interp.to_property_descriptor(&desc_val) {
-                        obj.borrow_mut().define_own_property(key, desc);
-                        return Completion::Normal(JsValue::Boolean(true));
+                    match interp.to_property_descriptor(&desc_val) {
+                        Ok(desc) => {
+                            let result = obj.borrow_mut().define_own_property(key, desc);
+                            return Completion::Normal(JsValue::Boolean(result));
+                        }
+                        Err(Some(e)) => return Completion::Throw(e),
+                        Err(None) => {}
                     }
                 }
                 Completion::Normal(JsValue::Boolean(false))

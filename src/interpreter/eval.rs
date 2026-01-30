@@ -1026,8 +1026,13 @@ impl Interpreter {
                                 if let JsValue::Object(ref t) = target_val
                                     && let Some(tobj) = self.get_object(t.id)
                                 {
-                                    tobj.borrow_mut()
+                                    let success = tobj.borrow_mut()
                                         .set_property_value(&key, final_val.clone());
+                                    if !success && env.borrow().strict {
+                                        return Completion::Throw(self.create_type_error(
+                                            &format!("Cannot assign to read only property '{key}'"),
+                                        ));
+                                    }
                                 }
                                 return Completion::Normal(final_val);
                             }
@@ -1046,7 +1051,12 @@ impl Interpreter {
                             other => other,
                         };
                     }
-                    obj.borrow_mut().set_property_value(&key, final_val.clone());
+                    let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
+                    if !success && env.borrow().strict {
+                        return Completion::Throw(self.create_type_error(
+                            &format!("Cannot assign to read only property '{key}'"),
+                        ));
+                    }
                     return Completion::Normal(final_val);
                 }
                 Completion::Normal(rval)
