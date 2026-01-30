@@ -42,6 +42,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Date | 51% | 305/594 |
 | Reflect | 35% | 54/153 |
 | Proxy | 39% | 120/311 |
+| Symbol | 28% | 26/94 |
 
 ---
 
@@ -71,6 +72,7 @@ These features block significant numbers of tests:
 7. ~~**Native function `.length` and Constructor `.prototype` exposure**~~ — ✅ Done (375 new passes, 50 regressions, net +325). All 210+ native functions now report correct arity via `.length`. Array.prototype and String.prototype accessible via constructors.
 8. ~~**Private class elements runtime**~~ — ✅ Done (87 new passes, 1 regression). Private methods, private getters/setters, static private methods/accessors, `#x in obj` brand checks.
 9. ~~**WeakMap and WeakSet**~~ — ✅ Done (WeakMap: 72/141, WeakSet: 50/85, 129 new passes overall). Constructor with iterable, get/set/has/delete methods. Weak GC semantics implemented (ephemeron fixpoint, post-sweep cleanup).
+10. ~~**Symbol built-in**~~ — ✅ Done (26/94, 28%, 43 new passes overall). Symbol.prototype (toString, valueOf, description, @@toPrimitive, @@toStringTag), Symbol.for/keyFor registry, new Symbol() TypeError, symbol equality, primitive property access.
 
 ---
 

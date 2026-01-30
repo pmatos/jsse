@@ -555,6 +555,8 @@ pub struct Interpreter {
     weakset_prototype: Option<Rc<RefCell<JsObjectData>>>,
     date_prototype: Option<Rc<RefCell<JsObjectData>>>,
     generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    symbol_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    global_symbol_registry: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
     free_list: Vec<usize>,
@@ -604,6 +606,8 @@ impl Interpreter {
             weakset_prototype: None,
             date_prototype: None,
             generator_prototype: None,
+            symbol_prototype: None,
+            global_symbol_registry: HashMap::new(),
             next_symbol_id: 1,
             new_target: None,
             free_list: Vec::new(),
@@ -842,14 +846,19 @@ impl Interpreter {
             "Object",
             BindingKind::Var,
             JsFunction::native("Object".to_string(), 1, |interp, _this, args| {
-                if let Some(val) = args.first()
-                    && matches!(val, JsValue::Object(_))
-                {
-                    return Completion::Normal(val.clone());
+                match args.first() {
+                    Some(val) if matches!(val, JsValue::Object(_)) => {
+                        Completion::Normal(val.clone())
+                    }
+                    Some(val) if !matches!(val, JsValue::Undefined | JsValue::Null) => {
+                        interp.to_object(val)
+                    }
+                    _ => {
+                        let obj = interp.create_object();
+                        let id = obj.borrow().id.unwrap();
+                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                    }
                 }
-                let obj = interp.create_object();
-                let id = obj.borrow().id.unwrap();
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             }),
         );
 
@@ -877,6 +886,10 @@ impl Interpreter {
                 "Symbol".to_string(),
                 0,
                 |interp, _this, args| {
+                    if interp.new_target.is_some() {
+                        let err = interp.create_type_error("Symbol is not a constructor");
+                        return Completion::Throw(err);
+                    }
                     let desc = args.first().and_then(|v| {
                         if matches!(v, JsValue::Undefined) {
                             None
@@ -915,8 +928,51 @@ impl Interpreter {
                         id,
                         description: Some(JsString::from_str(desc)),
                     });
-                    obj.borrow_mut().insert_value(name.to_string(), sym);
+                    obj.borrow_mut().insert_property(
+                        name.to_string(),
+                        PropertyDescriptor::data(sym, false, false, false),
+                    );
                 }
+
+                // Symbol.for
+                let for_fn = self.create_function(JsFunction::Native(
+                    "for".to_string(),
+                    1,
+                    Rc::new(|interp, _this, args| {
+                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        if let Some(existing) = interp.global_symbol_registry.get(&key) {
+                            return Completion::Normal(JsValue::Symbol(existing.clone()));
+                        }
+                        let id = interp.next_symbol_id;
+                        interp.next_symbol_id += 1;
+                        let sym = crate::types::JsSymbol {
+                            id,
+                            description: Some(JsString::from_str(&key)),
+                        };
+                        interp.global_symbol_registry.insert(key, sym.clone());
+                        Completion::Normal(JsValue::Symbol(sym))
+                    }),
+                ));
+                obj.borrow_mut().insert_builtin("for".to_string(), for_fn);
+
+                // Symbol.keyFor
+                let key_for_fn = self.create_function(JsFunction::Native(
+                    "keyFor".to_string(),
+                    1,
+                    Rc::new(|interp, _this, args| {
+                        let Some(JsValue::Symbol(sym)) = args.first() else {
+                            let err = interp.create_type_error("Symbol.keyFor requires a symbol argument");
+                            return Completion::Throw(err);
+                        };
+                        for (key, reg_sym) in &interp.global_symbol_registry {
+                            if reg_sym.id == sym.id {
+                                return Completion::Normal(JsValue::String(JsString::from_str(key)));
+                            }
+                        }
+                        Completion::Normal(JsValue::Undefined)
+                    }),
+                ));
+                obj.borrow_mut().insert_builtin("keyFor".to_string(), key_for_fn);
             }
             self.global_env
                 .borrow_mut()
@@ -1071,6 +1127,7 @@ impl Interpreter {
             }),
         );
 
+        self.setup_symbol_prototype();
         self.setup_number_prototype();
         self.setup_boolean_prototype();
         self.setup_map_prototype();
@@ -6706,6 +6763,149 @@ impl Interpreter {
         self.string_prototype = Some(proto);
     }
 
+    fn setup_symbol_prototype(&mut self) {
+        let proto = self.create_object();
+        proto.borrow_mut().class_name = "Symbol".to_string();
+
+        fn this_symbol_value(interp: &Interpreter, this: &JsValue) -> Option<crate::types::JsSymbol> {
+            match this {
+                JsValue::Symbol(s) => Some(s.clone()),
+                JsValue::Object(o) => interp.get_object(o.id).and_then(|obj| {
+                    let b = obj.borrow();
+                    if b.class_name == "Symbol" {
+                        if let Some(JsValue::Symbol(s)) = &b.primitive_value {
+                            return Some(s.clone());
+                        }
+                    }
+                    None
+                }),
+                _ => None,
+            }
+        }
+
+        let methods: Vec<(
+            &str,
+            usize,
+            Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
+        )> = vec![
+            (
+                "toString",
+                0,
+                Rc::new(|interp, this, _args| {
+                    let Some(sym) = this_symbol_value(interp, this) else {
+                        let err = interp.create_type_error("Symbol.prototype.toString requires a Symbol");
+                        return Completion::Throw(err);
+                    };
+                    let desc = sym.description.as_ref().map(|d| d.to_rust_string()).unwrap_or_default();
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!("Symbol({desc})"))))
+                }),
+            ),
+            (
+                "valueOf",
+                0,
+                Rc::new(|interp, this, _args| {
+                    let Some(sym) = this_symbol_value(interp, this) else {
+                        let err = interp.create_type_error("Symbol.prototype.valueOf requires a Symbol");
+                        return Completion::Throw(err);
+                    };
+                    Completion::Normal(JsValue::Symbol(sym))
+                }),
+            ),
+        ];
+
+        for (name, arity, func) in methods {
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
+            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        // description getter
+        let desc_getter = self.create_function(JsFunction::Native(
+            "get description".to_string(),
+            0,
+            Rc::new(|interp, this, _args| {
+                let Some(sym) = this_symbol_value(interp, this) else {
+                    let err = interp.create_type_error("Symbol.prototype.description requires a Symbol");
+                    return Completion::Throw(err);
+                };
+                match sym.description {
+                    Some(d) => Completion::Normal(JsValue::String(d)),
+                    None => Completion::Normal(JsValue::Undefined),
+                }
+            }),
+        ));
+        proto.borrow_mut().insert_property(
+            "description".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(desc_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
+        // [Symbol.toPrimitive]
+        let to_prim_fn = self.create_function(JsFunction::Native(
+            "[Symbol.toPrimitive]".to_string(),
+            1,
+            Rc::new(|interp, this, _args| {
+                let Some(sym) = this_symbol_value(interp, this) else {
+                    let err = interp.create_type_error("Symbol[Symbol.toPrimitive] requires a Symbol");
+                    return Completion::Throw(err);
+                };
+                Completion::Normal(JsValue::Symbol(sym))
+            }),
+        ));
+        // Get the @@toPrimitive well-known symbol key
+        if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+            && let JsValue::Object(sym_obj) = &sym_val
+            && let Some(sym_data) = self.get_object(sym_obj.id)
+        {
+            let to_prim_sym = sym_data.borrow().get_property("toPrimitive");
+            if let JsValue::Symbol(s) = &to_prim_sym {
+                let key = format!("Symbol({})", s.description.as_ref().map(|d| d.to_rust_string()).unwrap_or_default());
+                proto.borrow_mut().insert_builtin(key, to_prim_fn);
+            }
+        }
+
+        // [Symbol.toStringTag] = "Symbol"
+        if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+            && let JsValue::Object(sym_obj) = &sym_val
+            && let Some(sym_data) = self.get_object(sym_obj.id)
+        {
+            let tag_sym = sym_data.borrow().get_property("toStringTag");
+            if let JsValue::Symbol(s) = &tag_sym {
+                let key = format!("Symbol({})", s.description.as_ref().map(|d| d.to_rust_string()).unwrap_or_default());
+                proto.borrow_mut().insert_property(
+                    key,
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str("Symbol")),
+                        false,
+                        false,
+                        true,
+                    ),
+                );
+            }
+        }
+
+        // Set Symbol.prototype on the Symbol constructor
+        if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+            && let JsValue::Object(o) = &sym_val
+            && let Some(sym_obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            sym_obj.borrow_mut().insert_value("prototype".to_string(), proto_val);
+            // Set constructor on prototype
+            let ctor_val = sym_val.clone();
+            proto.borrow_mut().insert_builtin("constructor".to_string(), ctor_val);
+        }
+
+        self.symbol_prototype = Some(proto);
+    }
+
     fn setup_number_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Number".to_string();
@@ -10719,6 +10919,7 @@ impl Interpreter {
             &self.generator_prototype,
             &self.weakmap_prototype,
             &self.weakset_prototype,
+            &self.symbol_prototype,
         ] {
             if let Some(p) = proto {
                 if let Some(id) = p.borrow().id {
@@ -12523,7 +12724,12 @@ impl Interpreter {
                             obj_data.prototype = Some(bp.clone());
                         }
                     }
-                    JsValue::Symbol(_) => obj_data.class_name = "Symbol".to_string(),
+                    JsValue::Symbol(_) => {
+                        obj_data.class_name = "Symbol".to_string();
+                        if let Some(ref sp) = self.symbol_prototype {
+                            obj_data.prototype = Some(sp.clone());
+                        }
+                    }
                     JsValue::BigInt(_) => obj_data.class_name = "BigInt".to_string(),
                     _ => unreachable!(),
                 }
@@ -13324,6 +13530,24 @@ impl Interpreter {
                     } else {
                         (JsValue::Undefined, obj_val)
                     }
+                } else if matches!(&obj_val, JsValue::Symbol(_)) {
+                    if let Some(ref p) = self.symbol_prototype {
+                        let desc = p.borrow().get_property_descriptor(&key);
+                        let method = match desc {
+                            Some(ref d) if d.get.is_some() => {
+                                let getter = d.get.clone().unwrap();
+                                match self.call_function(&getter, &obj_val, &[]) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            }
+                            Some(ref d) => d.value.clone().unwrap_or(JsValue::Undefined),
+                            None => JsValue::Undefined,
+                        };
+                        (method, obj_val)
+                    } else {
+                        (JsValue::Undefined, obj_val)
+                    }
                 } else if matches!(&obj_val, JsValue::Undefined | JsValue::Null) {
                     let err = self.create_type_error(&format!(
                         "Cannot read properties of {obj_val} (reading '{key}')"
@@ -13996,6 +14220,35 @@ impl Interpreter {
                     }
                 } else if let Some(ref sp) = self.string_prototype {
                     Completion::Normal(sp.borrow().get_property(&key))
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
+            JsValue::Symbol(_) => {
+                if let Some(ref sp) = self.symbol_prototype {
+                    let desc = sp.borrow().get_property_descriptor(&key);
+                    match desc {
+                        Some(ref d) if d.get.is_some() => {
+                            let getter = d.get.clone().unwrap();
+                            self.call_function(&getter, &obj_val, &[])
+                        }
+                        Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
+                        None => Completion::Normal(JsValue::Undefined),
+                    }
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
+            JsValue::Number(_) => {
+                if let Some(ref np) = self.number_prototype {
+                    Completion::Normal(np.borrow().get_property(&key))
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
+            JsValue::Boolean(_) => {
+                if let Some(ref bp) = self.boolean_prototype {
+                    Completion::Normal(bp.borrow().get_property(&key))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
@@ -14698,6 +14951,7 @@ fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
         (JsValue::Boolean(a), JsValue::Boolean(b)) => a == b,
         (JsValue::Number(a), JsValue::Number(b)) => number_ops::equal(*a, *b),
         (JsValue::String(a), JsValue::String(b)) => a == b,
+        (JsValue::Symbol(a), JsValue::Symbol(b)) => a.id == b.id,
         (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
         _ => false,
     }

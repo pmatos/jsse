@@ -599,6 +599,7 @@ test262/test/built-ins/Array/prototype/includes/fromIndex-minus-zero.js
 test262/test/built-ins/Array/prototype/includes/length-zero-returns-false.js
 test262/test/built-ins/Array/prototype/includes/no-arg.js
 test262/test/built-ins/Array/prototype/includes/samevaluezero.js
+test262/test/built-ins/Array/prototype/includes/search-found-returns-true.js
 test262/test/built-ins/Array/prototype/includes/search-not-found-returns-false.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-10-2.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-11.js
@@ -1976,6 +1977,7 @@ test262/test/built-ins/Map/prototype/forEach/this-not-object-throw.js
 test262/test/built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot-set.js
 test262/test/built-ins/Map/prototype/get/does-not-have-mapdata-internal-slot.js
 test262/test/built-ins/Map/prototype/get/returns-undefined.js
+test262/test/built-ins/Map/prototype/get/returns-value-different-key-types.js
 test262/test/built-ins/Map/prototype/get/returns-value-normalized-zero-key.js
 test262/test/built-ins/Map/prototype/get/this-not-object-throw.js
 test262/test/built-ins/Map/prototype/getOrInsert/does-not-have-mapdata-internal-slot-set.js
@@ -1990,6 +1992,7 @@ test262/test/built-ins/Map/prototype/has/does-not-have-mapdata-internal-slot-set
 test262/test/built-ins/Map/prototype/has/does-not-have-mapdata-internal-slot.js
 test262/test/built-ins/Map/prototype/has/normalizes-zero-key.js
 test262/test/built-ins/Map/prototype/has/return-false-different-key-types.js
+test262/test/built-ins/Map/prototype/has/return-true-different-key-types.js
 test262/test/built-ins/Map/prototype/has/this-not-object-throw.js
 test262/test/built-ins/Map/prototype/keys/does-not-have-mapdata-internal-slot-set.js
 test262/test/built-ins/Map/prototype/keys/does-not-have-mapdata-internal-slot.js
@@ -3570,7 +3573,9 @@ test262/test/built-ins/Object/is/same-value-x-y-null.js
 test262/test/built-ins/Object/is/same-value-x-y-number.js
 test262/test/built-ins/Object/is/same-value-x-y-object.js
 test262/test/built-ins/Object/is/same-value-x-y-string.js
+test262/test/built-ins/Object/is/same-value-x-y-symbol.js
 test262/test/built-ins/Object/is/same-value-x-y-undefined.js
+test262/test/built-ins/Object/is/symbol-object-is-same-value.js
 test262/test/built-ins/Object/isExtensible/15.2.3.13-0-1.js
 test262/test/built-ins/Object/isExtensible/15.2.3.13-0-2.js
 test262/test/built-ins/Object/isExtensible/15.2.3.13-0-3.js
@@ -3814,15 +3819,20 @@ test262/test/built-ins/Object/prototype/toLocaleString/S15.2.4.3_A12.js
 test262/test/built-ins/Object/prototype/toLocaleString/S15.2.4.3_A13.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-arguments.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-array.js
+test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-boolean.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-date.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-error.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-null.js
+test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-number.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-object.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-regexp.js
+test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-string.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-undefined.js
 test262/test/built-ins/Object/prototype/toString/direct-invocation.js
 test262/test/built-ins/Object/prototype/toString/symbol-tag-non-str.js
 test262/test/built-ins/Object/prototype/valueOf/S15.2.4.4_A11.js
+test262/test/built-ins/Object/prototype/valueOf/S15.2.4.4_A1_T1.js
+test262/test/built-ins/Object/prototype/valueOf/S15.2.4.4_A1_T2.js
 test262/test/built-ins/Object/prototype/valueOf/S15.2.4.4_A1_T4.js
 test262/test/built-ins/Object/prototype/valueOf/S15.2.4.4_A1_T5.js
 test262/test/built-ins/Object/prototype/valueOf/S15.2.4.4_A1_T6.js
@@ -4937,6 +4947,7 @@ test262/test/built-ins/Set/prototype/has/returns-true-when-value-present-nan.js
 test262/test/built-ins/Set/prototype/has/returns-true-when-value-present-null.js
 test262/test/built-ins/Set/prototype/has/returns-true-when-value-present-number.js
 test262/test/built-ins/Set/prototype/has/returns-true-when-value-present-string.js
+test262/test/built-ins/Set/prototype/has/returns-true-when-value-present-symbol.js
 test262/test/built-ins/Set/prototype/has/returns-true-when-value-present-undefined.js
 test262/test/built-ins/Set/prototype/has/this-not-object-throw-boolean.js
 test262/test/built-ins/Set/prototype/has/this-not-object-throw-null.js
@@ -5376,9 +5387,31 @@ test262/test/built-ins/StringIteratorPrototype/ancestry.js
 test262/test/built-ins/StringIteratorPrototype/next/next-iteration.js
 test262/test/built-ins/StringIteratorPrototype/next/next-missing-internal-slots.js
 test262/test/built-ins/Symbol/auto-boxing-non-strict.js
+test262/test/built-ins/Symbol/for/create-value.js
+test262/test/built-ins/Symbol/for/retrieve-value.js
+test262/test/built-ins/Symbol/invoked-with-new.js
+test262/test/built-ins/Symbol/keyFor/arg-non-symbol.js
+test262/test/built-ins/Symbol/keyFor/arg-symbol-registry-hit.js
+test262/test/built-ins/Symbol/keyFor/arg-symbol-registry-miss.js
 test262/test/built-ins/Symbol/not-callable.js
+test262/test/built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-non-obj.js
 test262/test/built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-obj-non-symbol-wrapper.js
+test262/test/built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-obj-symbol-wrapper.js
+test262/test/built-ins/Symbol/prototype/Symbol.toPrimitive/this-val-symbol.js
+test262/test/built-ins/Symbol/prototype/description/description-symboldescriptivestring.js
+test262/test/built-ins/Symbol/prototype/description/get.js
+test262/test/built-ins/Symbol/prototype/description/is-not-own-property.js
+test262/test/built-ins/Symbol/prototype/description/this-val-non-symbol.js
+test262/test/built-ins/Symbol/prototype/description/this-val-symbol.js
+test262/test/built-ins/Symbol/prototype/description/wrapper.js
+test262/test/built-ins/Symbol/prototype/toString/toString-default-attributes-non-strict.js
+test262/test/built-ins/Symbol/prototype/toString/toString.js
+test262/test/built-ins/Symbol/prototype/toString/undefined.js
+test262/test/built-ins/Symbol/prototype/valueOf/this-val-non-obj.js
+test262/test/built-ins/Symbol/prototype/valueOf/this-val-obj-non-symbol.js
+test262/test/built-ins/Symbol/prototype/valueOf/this-val-obj-symbol.js
 test262/test/built-ins/Symbol/prototype/valueOf/this-val-symbol.js
+test262/test/built-ins/Symbol/uniqueness.js
 test262/test/built-ins/ThrowTypeError/forbidden-arguments.js
 test262/test/built-ins/ThrowTypeError/forbidden-caller.js
 test262/test/built-ins/ThrowTypeError/is-function.js
@@ -5400,6 +5433,7 @@ test262/test/built-ins/WeakMap/prototype/delete/does-not-have-weakmapdata-intern
 test262/test/built-ins/WeakMap/prototype/delete/does-not-have-weakmapdata-internal-slot-object.js
 test262/test/built-ins/WeakMap/prototype/delete/does-not-have-weakmapdata-internal-slot-set.js
 test262/test/built-ins/WeakMap/prototype/delete/does-not-have-weakmapdata-internal-slot-weakmap-prototype.js
+test262/test/built-ins/WeakMap/prototype/delete/returns-false-if-key-cannot-be-held-weakly.js
 test262/test/built-ins/WeakMap/prototype/delete/returns-false-when-object-key-not-present.js
 test262/test/built-ins/WeakMap/prototype/delete/this-not-object-throw-boolean.js
 test262/test/built-ins/WeakMap/prototype/delete/this-not-object-throw-null.js
@@ -5432,6 +5466,7 @@ test262/test/built-ins/WeakMap/prototype/has/does-not-have-weakmapdata-internal-
 test262/test/built-ins/WeakMap/prototype/has/does-not-have-weakmapdata-internal-slot-object.js
 test262/test/built-ins/WeakMap/prototype/has/does-not-have-weakmapdata-internal-slot-set.js
 test262/test/built-ins/WeakMap/prototype/has/does-not-have-weakmapdata-internal-slot-weakmap-prototype.js
+test262/test/built-ins/WeakMap/prototype/has/returns-false-when-key-cannot-be-held-weakly.js
 test262/test/built-ins/WeakMap/prototype/has/returns-false-when-object-key-not-present.js
 test262/test/built-ins/WeakMap/prototype/has/returns-true-when-object-key-present.js
 test262/test/built-ins/WeakMap/prototype/has/this-not-object-throw-boolean.js
@@ -5487,6 +5522,7 @@ test262/test/built-ins/WeakSet/prototype/delete/does-not-have-weaksetdata-intern
 test262/test/built-ins/WeakSet/prototype/delete/does-not-have-weaksetdata-internal-slot-object.js
 test262/test/built-ins/WeakSet/prototype/delete/does-not-have-weaksetdata-internal-slot-weakset-prototype.js
 test262/test/built-ins/WeakSet/prototype/delete/returns-false-when-delete-is-noop.js
+test262/test/built-ins/WeakSet/prototype/delete/returns-false-when-value-cannot-be-held-weakly.js
 test262/test/built-ins/WeakSet/prototype/delete/this-not-object-throw-boolean.js
 test262/test/built-ins/WeakSet/prototype/delete/this-not-object-throw-null.js
 test262/test/built-ins/WeakSet/prototype/delete/this-not-object-throw-number.js
@@ -5498,6 +5534,7 @@ test262/test/built-ins/WeakSet/prototype/has/does-not-have-weaksetdata-internal-
 test262/test/built-ins/WeakSet/prototype/has/does-not-have-weaksetdata-internal-slot-object.js
 test262/test/built-ins/WeakSet/prototype/has/does-not-have-weaksetdata-internal-slot-weakset-prototype.js
 test262/test/built-ins/WeakSet/prototype/has/returns-false-when-object-value-not-present.js
+test262/test/built-ins/WeakSet/prototype/has/returns-false-when-value-cannot-be-held-weakly.js
 test262/test/built-ins/WeakSet/prototype/has/returns-true-when-object-value-present.js
 test262/test/built-ins/WeakSet/prototype/has/this-not-object-throw-boolean.js
 test262/test/built-ins/WeakSet/prototype/has/this-not-object-throw-null.js
@@ -6216,6 +6253,7 @@ test262/test/language/expressions/array/spread-obj-mult-spread.js
 test262/test/language/expressions/array/spread-obj-null.js
 test262/test/language/expressions/array/spread-obj-overrides-prev-properties.js
 test262/test/language/expressions/array/spread-obj-undefined.js
+test262/test/language/expressions/array/spread-obj-with-overrides.js
 test262/test/language/expressions/array/spread-sngl-empty.js
 test262/test/language/expressions/array/spread-sngl-expr.js
 test262/test/language/expressions/array/spread-sngl-iter.js
@@ -7159,6 +7197,7 @@ test262/test/language/expressions/call/spread-obj-mult-spread.js
 test262/test/language/expressions/call/spread-obj-null.js
 test262/test/language/expressions/call/spread-obj-overrides-prev-properties.js
 test262/test/language/expressions/call/spread-obj-undefined.js
+test262/test/language/expressions/call/spread-obj-with-overrides.js
 test262/test/language/expressions/call/spread-sngl-empty.js
 test262/test/language/expressions/call/spread-sngl-expr.js
 test262/test/language/expressions/call/spread-sngl-iter.js
@@ -9499,6 +9538,8 @@ test262/test/language/expressions/equals/S11.9.1_A7.6.js
 test262/test/language/expressions/equals/S11.9.1_A7.7.js
 test262/test/language/expressions/equals/S9.1_A1_T3.js
 test262/test/language/expressions/equals/bigint-and-non-finite.js
+test262/test/language/expressions/equals/symbol-abstract-equality-comparison.js
+test262/test/language/expressions/equals/symbol-strict-equality-comparison.js
 test262/test/language/expressions/exponentiation/applying-the-exp-operator_A1.js
 test262/test/language/expressions/exponentiation/applying-the-exp-operator_A10.js
 test262/test/language/expressions/exponentiation/applying-the-exp-operator_A11.js
@@ -10285,6 +10326,7 @@ test262/test/language/expressions/new/spread-obj-mult-spread.js
 test262/test/language/expressions/new/spread-obj-null.js
 test262/test/language/expressions/new/spread-obj-overrides-prev-properties.js
 test262/test/language/expressions/new/spread-obj-undefined.js
+test262/test/language/expressions/new/spread-obj-with-overrides.js
 test262/test/language/expressions/new/spread-sngl-empty.js
 test262/test/language/expressions/new/spread-sngl-expr.js
 test262/test/language/expressions/new/spread-sngl-iter.js
@@ -13817,6 +13859,7 @@ test262/test/language/statements/class/subclass/derived-class-return-override-fi
 test262/test/language/statements/class/subclass/derived-class-return-override-for-of-arrow.js
 test262/test/language/statements/class/subclass/derived-class-return-override-with-empty.js
 test262/test/language/statements/class/subclass/derived-class-return-override-with-object.js
+test262/test/language/statements/class/subclass/derived-class-return-override-with-symbol.js
 test262/test/language/statements/class/subclass/derived-class-return-override-with-this.js
 test262/test/language/statements/class/subclass/derived-class-return-override-with-undefined.js
 test262/test/language/statements/class/subclass/superclass-bound-function.js
