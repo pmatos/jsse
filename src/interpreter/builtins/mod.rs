@@ -1014,7 +1014,11 @@ impl Interpreter {
         self.global_env
             .borrow_mut()
             .declare("globalThis", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("globalThis", global_val);
+        let _ = self.global_env.borrow_mut().set("globalThis", global_val.clone());
+        self.global_env.borrow_mut().bindings.insert(
+            "this".to_string(),
+            Binding { value: global_val, kind: BindingKind::Const, initialized: true },
+        );
     }
 
 

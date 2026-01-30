@@ -107,10 +107,8 @@ impl Interpreter {
 
 
     fn to_property_descriptor(&mut self, val: &JsValue) -> Result<PropertyDescriptor, Option<JsValue>> {
-        if let JsValue::Object(d) = val
-            && let Some(desc_obj) = self.get_object(d.id)
-        {
-            let b = desc_obj.borrow();
+        if let JsValue::Object(d) = val {
+            let obj_id = d.id;
             let mut desc = PropertyDescriptor {
                 value: None,
                 writable: None,
@@ -119,31 +117,26 @@ impl Interpreter {
                 enumerable: None,
                 configurable: None,
             };
-            let v = b.get_property("value");
-            if !matches!(v, JsValue::Undefined) || b.has_own_property("value") {
-                desc.value = Some(v);
+
+            macro_rules! check_field {
+                ($field:expr, $key:expr, $assign:expr) => {
+                    let has = self.get_object(obj_id).map(|o| o.borrow().has_property($key)).unwrap_or(false);
+                    if has {
+                        match self.get_object_property(obj_id, $key, val) {
+                            Completion::Normal(v) => { $assign(v); },
+                            Completion::Throw(e) => return Err(Some(e)),
+                            _ => {}
+                        }
+                    }
+                };
             }
-            let w = b.get_property("writable");
-            if !matches!(w, JsValue::Undefined) || b.has_own_property("writable") {
-                desc.writable = Some(to_boolean(&w));
-            }
-            let e = b.get_property("enumerable");
-            if !matches!(e, JsValue::Undefined) || b.has_own_property("enumerable") {
-                desc.enumerable = Some(to_boolean(&e));
-            }
-            let c = b.get_property("configurable");
-            if !matches!(c, JsValue::Undefined) || b.has_own_property("configurable") {
-                desc.configurable = Some(to_boolean(&c));
-            }
-            let g = b.get_property("get");
-            if !matches!(g, JsValue::Undefined) || b.has_own_property("get") {
-                desc.get = Some(g.clone());
-            }
-            let s = b.get_property("set");
-            if !matches!(s, JsValue::Undefined) || b.has_own_property("set") {
-                desc.set = Some(s.clone());
-            }
-            drop(b);
+
+            check_field!(desc, "value", |v: JsValue| desc.value = Some(v));
+            check_field!(desc, "writable", |v: JsValue| desc.writable = Some(to_boolean(&v)));
+            check_field!(desc, "enumerable", |v: JsValue| desc.enumerable = Some(to_boolean(&v)));
+            check_field!(desc, "configurable", |v: JsValue| desc.configurable = Some(to_boolean(&v)));
+            check_field!(desc, "get", |v: JsValue| desc.get = Some(v));
+            check_field!(desc, "set", |v: JsValue| desc.set = Some(v));
 
             // Validate: get must be callable or undefined
             if let Some(ref getter) = desc.get {

@@ -1670,6 +1670,7 @@ impl Interpreter {
                                 id: gen_id,
                             }));
                         }
+                        let closure_strict = closure.borrow().strict;
                         let func_env = Environment::new(Some(closure));
                         // Bind parameters
                         for (i, param) in params.iter().enumerate() {
@@ -1685,10 +1686,15 @@ impl Interpreter {
                         }
                         // Arrow functions inherit `this` and `arguments` from closure
                         if !is_arrow {
+                            let effective_this = if !is_strict && !closure_strict && matches!(_this_val, JsValue::Undefined | JsValue::Null) {
+                                self.global_env.borrow().get("this").unwrap_or(_this_val.clone())
+                            } else {
+                                _this_val.clone()
+                            };
                             func_env.borrow_mut().bindings.insert(
                                 "this".to_string(),
                                 Binding {
-                                    value: _this_val.clone(),
+                                    value: effective_this,
                                     kind: BindingKind::Const,
                                     initialized: true,
                                 },
