@@ -18,6 +18,22 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 5. After running test262, update `README.md` with pass count and percentage.
 6. The spec is the ultimate source of truth with respect to JavaScript. Use it to determine the syntax and semantics of operations.
 
+## Source Layout
+- `src/main.rs` — CLI entry point (`jsse <file>` or `jsse -e "code"`)
+- `src/lexer.rs` — Tokenizer
+- `src/ast.rs` — AST node types
+- `src/parser.rs` — Recursive descent parser
+- `src/types.rs` — JS value types (`JsValue`, `JsString`, `JsSymbol`, `JsBigInt`, etc.)
+- `src/interpreter.rs` — Tree-walking interpreter, all built-ins, GC, runtime (~16k lines)
+- `scripts/` — Test runners and utilities
+- `plan/` — Per-phase implementation plans
+- `test262-pass.txt` — Tracks currently passing test262 tests (updated by the test runner)
+- `test262-extra/` — Custom spec-compliance tests not covered by test262
+
+## Building
+- `cargo build --release` — always build in release mode for test262 runs (debug is too slow)
+- The project uses Rust nightly features (`let_chains`, etc.)
+
 ## Testing
 - Primary validation: test262 suite
 - Custom tests: `tests/` directory
@@ -30,3 +46,13 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Each test runs under a time limit (default 60s) and a memory limit (512 MB) to prevent runaway tests from crashing the system. These limits are enforced in `scripts/run-test262.py`.
 - Any validation that's spec-correct but not in test262 should have its own tests in test262-extra/
   - it should include spec part that is tested and follow the exact same patterns of test262 tests.
+- Run test262 on a specific directory: `uv run python scripts/run-test262.py test262/test/built-ins/Symbol/`
+- Run custom tests: `uv run python scripts/run-custom-tests.py`
+- After implementation, also update `PLAN.md` with new pass counts for affected built-ins.
+
+## Architecture Notes
+- The interpreter is a single-pass tree-walker over the AST — no bytecode compilation.
+- Built-in prototypes (e.g. `string_prototype`, `symbol_prototype`) are stored as fields on `Interpreter` and wired up in `setup_builtins()` / `setup_*_prototype()` methods.
+- GC is mark-and-sweep with ephemeron support for WeakMap/WeakSet. Prototype fields must be added to the root set in `maybe_gc()`.
+- Generators use a replay-based approach (re-execute the function body, fast-forwarding past previous yields).
+- The `Object()` constructor calls `to_object()` to wrap primitives (String, Number, Boolean, Symbol, BigInt).
