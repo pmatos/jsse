@@ -1,5 +1,26 @@
 use super::super::*;
 
+fn is_ecma_whitespace(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0009}'
+            | '\u{000A}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{FEFF}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200A}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202F}'
+            | '\u{205F}'
+            | '\u{3000}'
+    )
+}
+
 impl Interpreter {
     pub(crate) fn setup_string_prototype(&mut self) {
         let proto = self.create_object();
@@ -116,36 +137,33 @@ impl Interpreter {
                 "slice",
                 2,
                 Rc::new(|_interp, this_val, args| {
-                    let s = to_js_string(this_val);
-                    let len = s.len() as i64;
-                    let start = args
-                        .first()
-                        .map(|v| {
-                            let n = to_number(v) as i64;
-                            if n < 0 {
-                                (len + n).max(0) as usize
-                            } else {
-                                n.min(len) as usize
-                            }
-                        })
-                        .unwrap_or(0);
-                    let end = args
-                        .get(1)
-                        .map(|v| {
-                            if matches!(v, JsValue::Undefined) {
-                                len as usize
-                            } else {
-                                let n = to_number(v) as i64;
-                                if n < 0 {
-                                    (len + n).max(0) as usize
-                                } else {
-                                    n.min(len) as usize
-                                }
-                            }
-                        })
-                        .unwrap_or(len as usize);
-                    let result = if start < end { &s[start..end] } else { "" };
-                    Completion::Normal(JsValue::String(JsString::from_str(result)))
+                    let js_str = match this_val {
+                        JsValue::String(s) => s.clone(),
+                        _ => JsString::from_str(&to_js_string(this_val)),
+                    };
+                    let len = js_str.len() as f64;
+                    let raw_start = args.first().map(|v| to_number(v)).unwrap_or(0.0);
+                    let int_start = if raw_start.is_nan() { 0.0 } else if raw_start == f64::NEG_INFINITY { f64::NEG_INFINITY } else { raw_start.trunc() };
+                    let from = if int_start < 0.0 {
+                        (len + int_start).max(0.0) as usize
+                    } else {
+                        int_start.min(len) as usize
+                    };
+                    let raw_end = args.get(1).map(|v| {
+                        if matches!(v, JsValue::Undefined) {
+                            len
+                        } else {
+                            to_number(v)
+                        }
+                    }).unwrap_or(len);
+                    let int_end = if raw_end.is_nan() { 0.0 } else if raw_end == f64::NEG_INFINITY { f64::NEG_INFINITY } else { raw_end.trunc() };
+                    let to = if int_end < 0.0 {
+                        (len + int_end).max(0.0) as usize
+                    } else {
+                        int_end.min(len) as usize
+                    };
+                    let result = js_str.slice_utf16(from, to);
+                    Completion::Normal(JsValue::String(result))
                 }),
             ),
             (
@@ -197,7 +215,7 @@ impl Interpreter {
                 0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(
-                        to_js_string(this_val).trim(),
+                        to_js_string(this_val).trim_matches(is_ecma_whitespace),
                     )))
                 }),
             ),
@@ -206,7 +224,7 @@ impl Interpreter {
                 0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(
-                        to_js_string(this_val).trim_start(),
+                        to_js_string(this_val).trim_start_matches(is_ecma_whitespace),
                     )))
                 }),
             ),
@@ -215,7 +233,7 @@ impl Interpreter {
                 0,
                 Rc::new(|_interp, this_val, _args| {
                     Completion::Normal(JsValue::String(JsString::from_str(
-                        to_js_string(this_val).trim_end(),
+                        to_js_string(this_val).trim_end_matches(is_ecma_whitespace),
                     )))
                 }),
             ),
@@ -308,7 +326,16 @@ impl Interpreter {
                         }
                     }
                     let s = to_js_string(this_val);
-                    let parts: Vec<JsValue> = if matches!(separator, JsValue::Undefined) {
+                    let limit_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let limit: u32 = if matches!(limit_arg, JsValue::Undefined) {
+                        u32::MAX
+                    } else {
+                        to_number(&limit_arg) as u32
+                    };
+                    if limit == 0 {
+                        return Completion::Normal(interp.create_array(vec![]));
+                    }
+                    let mut parts: Vec<JsValue> = if matches!(separator, JsValue::Undefined) {
                         vec![JsValue::String(JsString::from_str(&s))]
                     } else {
                         let sep_str = to_js_string(&separator);
@@ -322,6 +349,7 @@ impl Interpreter {
                                 .collect()
                         }
                     };
+                    parts.truncate(limit as usize);
                     Completion::Normal(interp.create_array(parts))
                 }),
             ),

@@ -51,6 +51,17 @@ impl JsString {
             .find(|&i| self.code_units[i..i + search_len] == search.code_units[..])
     }
 
+    pub fn slice_utf16(&self, start: usize, end: usize) -> JsString {
+        let s = start.min(self.code_units.len());
+        let e = end.min(self.code_units.len());
+        if s >= e {
+            return JsString { code_units: vec![] };
+        }
+        JsString {
+            code_units: self.code_units[s..e].to_vec(),
+        }
+    }
+
     // §6.1.4.2 StringLastIndexOf
     pub fn last_index_of(&self, search: &JsString, from: usize) -> Option<usize> {
         let s_len = self.code_units.len();
