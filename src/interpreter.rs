@@ -10717,6 +10717,8 @@ impl Interpreter {
             &self.set_iterator_prototype,
             &self.date_prototype,
             &self.generator_prototype,
+            &self.weakmap_prototype,
+            &self.weakset_prototype,
         ] {
             if let Some(p) = proto {
                 if let Some(id) = p.borrow().id {
@@ -10804,18 +10806,22 @@ impl Interpreter {
                 }
             }
 
-            // Trace map_data
-            if let Some(ref entries) = obj.map_data {
-                for entry in entries.iter().flatten() {
-                    Self::collect_value_roots(&entry.0, &mut worklist);
-                    Self::collect_value_roots(&entry.1, &mut worklist);
+            // Trace map_data (skip WeakMap — handled by ephemeron pass)
+            if obj.class_name != "WeakMap" {
+                if let Some(ref entries) = obj.map_data {
+                    for entry in entries.iter().flatten() {
+                        Self::collect_value_roots(&entry.0, &mut worklist);
+                        Self::collect_value_roots(&entry.1, &mut worklist);
+                    }
                 }
             }
 
-            // Trace set_data
-            if let Some(ref entries) = obj.set_data {
-                for val in entries.iter().flatten() {
-                    Self::collect_value_roots(val, &mut worklist);
+            // Trace set_data (skip WeakSet — cleared post-sweep)
+            if obj.class_name != "WeakSet" {
+                if let Some(ref entries) = obj.set_data {
+                    for val in entries.iter().flatten() {
+                        Self::collect_value_roots(val, &mut worklist);
+                    }
                 }
             }
 
@@ -10854,11 +10860,157 @@ impl Interpreter {
             }
         }
 
+        // Ephemeron fixpoint: mark WeakMap values whose keys are reachable
+        loop {
+            let mut new_marks = false;
+            for i in 0..obj_count {
+                if !marks[i] {
+                    continue;
+                }
+                let obj_rc = match &self.objects[i] {
+                    Some(rc) => rc.clone(),
+                    None => continue,
+                };
+                let obj = obj_rc.borrow();
+                if obj.class_name != "WeakMap" {
+                    continue;
+                }
+                if let Some(ref entries) = obj.map_data {
+                    for entry in entries.iter().flatten() {
+                        if let JsValue::Object(key_obj) = &entry.0 {
+                            let kid = key_obj.id as usize;
+                            if kid < obj_count && marks[kid] {
+                                // Key is reachable — mark the value
+                                if let JsValue::Object(val_obj) = &entry.1 {
+                                    let vid = val_obj.id as usize;
+                                    if vid < obj_count && !marks[vid] {
+                                        marks[vid] = true;
+                                        new_marks = true;
+                                        worklist.push(val_obj.id);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // BFS from any newly marked objects
+            while let Some(id) = worklist.pop() {
+                let idx = id as usize;
+                if idx >= obj_count || marks[idx] {
+                    continue;
+                }
+                marks[idx] = true;
+                new_marks = true;
+                let obj_rc = match &self.objects[idx] {
+                    Some(rc) => rc.clone(),
+                    None => continue,
+                };
+                let obj = obj_rc.borrow();
+                if let Some(ref proto) = obj.prototype {
+                    if let Some(pid) = proto.borrow().id {
+                        worklist.push(pid);
+                    }
+                }
+                for desc in obj.properties.values() {
+                    if let Some(ref v) = desc.value {
+                        Self::collect_value_roots(v, &mut worklist);
+                    }
+                    if let Some(ref v) = desc.get {
+                        Self::collect_value_roots(v, &mut worklist);
+                    }
+                    if let Some(ref v) = desc.set {
+                        Self::collect_value_roots(v, &mut worklist);
+                    }
+                }
+                if let Some(ref elems) = obj.array_elements {
+                    for v in elems {
+                        Self::collect_value_roots(v, &mut worklist);
+                    }
+                }
+                if let Some(ref v) = obj.primitive_value {
+                    Self::collect_value_roots(v, &mut worklist);
+                }
+                if let Some(ref func) = obj.callable {
+                    if let JsFunction::User { closure, .. } = func {
+                        Self::collect_env_roots(closure, &mut worklist);
+                    }
+                }
+                if obj.class_name != "WeakMap" {
+                    if let Some(ref entries) = obj.map_data {
+                        for entry in entries.iter().flatten() {
+                            Self::collect_value_roots(&entry.0, &mut worklist);
+                            Self::collect_value_roots(&entry.1, &mut worklist);
+                        }
+                    }
+                }
+                if obj.class_name != "WeakSet" {
+                    if let Some(ref entries) = obj.set_data {
+                        for val in entries.iter().flatten() {
+                            Self::collect_value_roots(val, &mut worklist);
+                        }
+                    }
+                }
+            }
+            if !new_marks {
+                break;
+            }
+        }
+
         // Sweep phase
         for i in 0..obj_count {
             if !marks[i] && self.objects[i].is_some() {
                 self.objects[i] = None;
                 self.free_list.push(i);
+            }
+        }
+
+        // Post-sweep: clear dead weak entries
+        for i in 0..obj_count {
+            if !marks[i] {
+                continue;
+            }
+            let obj_rc = match &self.objects[i] {
+                Some(rc) => rc.clone(),
+                None => continue,
+            };
+            let mut obj = obj_rc.borrow_mut();
+            if obj.class_name == "WeakMap" {
+                if let Some(ref mut entries) = obj.map_data {
+                    for entry in entries.iter_mut() {
+                        let dead = if let Some((ref k, _)) = *entry {
+                            if let JsValue::Object(key_obj) = k {
+                                let kid = key_obj.id as usize;
+                                kid >= obj_count || !marks[kid]
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if dead {
+                            *entry = None;
+                        }
+                    }
+                }
+            } else if obj.class_name == "WeakSet" {
+                if let Some(ref mut entries) = obj.set_data {
+                    for entry in entries.iter_mut() {
+                        let dead = if let Some(ref val) = *entry {
+                            if let JsValue::Object(val_obj) = val {
+                                let vid = val_obj.id as usize;
+                                vid >= obj_count || !marks[vid]
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if dead {
+                            *entry = None;
+                        }
+                    }
+                }
             }
         }
     }
