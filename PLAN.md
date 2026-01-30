@@ -70,6 +70,7 @@ These features block significant numbers of tests:
 6. ~~**Proxy and Reflect**~~ — ✅ Done (Reflect: 54/153, Proxy: 120/311, 140 net new passes). All 13 traps wired, Proxy.revocable implemented. Remaining: invariant enforcement, Symbol property keys.
 7. ~~**Native function `.length` and Constructor `.prototype` exposure**~~ — ✅ Done (375 new passes, 50 regressions, net +325). All 210+ native functions now report correct arity via `.length`. Array.prototype and String.prototype accessible via constructors.
 8. ~~**Private class elements runtime**~~ — ✅ Done (87 new passes, 1 regression). Private methods, private getters/setters, static private methods/accessors, `#x in obj` brand checks.
+9. ~~**WeakMap and WeakSet**~~ — ✅ Done (WeakMap: 72/141, WeakSet: 50/85, 129 new passes overall). Constructor with iterable, get/set/has/delete methods. No weak GC semantics needed for test262.
 
 ---
 
