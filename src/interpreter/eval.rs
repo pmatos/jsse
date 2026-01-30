@@ -1832,7 +1832,7 @@ impl Interpreter {
         // Create new object for 'this'
         let new_obj = self.create_object();
         // Set prototype from constructor.prototype if available
-        let private_field_defs = if let JsValue::Object(o) = &callee_val
+        let (private_field_defs, public_field_defs) = if let JsValue::Object(o) = &callee_val
             && let Some(func_obj) = self.get_object(o.id)
         {
             let proto = func_obj.borrow().get_property_value("prototype");
@@ -1845,10 +1845,13 @@ impl Interpreter {
             new_obj
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), callee_val.clone());
-            // Get private field definitions
-            func_obj.borrow().class_private_field_defs.clone()
+            let borrowed = func_obj.borrow();
+            (
+                borrowed.class_private_field_defs.clone(),
+                borrowed.class_public_field_defs.clone(),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         // Initialize private fields on the new instance
         let new_obj_id = new_obj.borrow().id.unwrap();
@@ -1892,6 +1895,19 @@ impl Interpreter {
                         );
                     }
                 }
+            }
+        }
+        for (key, initializer) in &public_field_defs {
+            let val = if let Some(init) = initializer {
+                match self.eval_expr(init, &init_env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                }
+            } else {
+                JsValue::Undefined
+            };
+            if let Some(obj) = self.get_object(new_obj_id) {
+                obj.borrow_mut().insert_value(key.clone(), val);
             }
         }
         let prev_new_target = self.new_target.take();
@@ -2458,7 +2474,7 @@ impl Interpreter {
                                 t.borrow_mut().insert_property(key, desc);
                             }
                             _ => {
-                                t.borrow_mut().insert_value(key, method_val);
+                                t.borrow_mut().insert_builtin(key, method_val);
                             }
                         }
                     }
@@ -2523,9 +2539,35 @@ impl Interpreter {
                         {
                             func_obj.borrow_mut().insert_value(key, val);
                         }
+                    } else {
+                        let key = match &p.key {
+                            PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
+                            PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                            PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => to_js_string(&v),
+                                other => return other,
+                            },
+                            PropertyKey::Private(_) => unreachable!(),
+                        };
+                        if let JsValue::Object(ref o) = ctor_val
+                            && let Some(func_obj) = self.get_object(o.id)
+                        {
+                            func_obj.borrow_mut().class_public_field_defs.push((key, p.value.clone()));
+                        }
                     }
                 }
-                ClassElement::StaticBlock(_) => {} // TODO
+                ClassElement::StaticBlock(body) => {
+                    let block_env = Environment::new(Some(env.clone()));
+                    block_env.borrow_mut().bindings.insert(
+                        "this".to_string(),
+                        Binding { value: ctor_val.clone(), kind: BindingKind::Const, initialized: true },
+                    );
+                    match self.exec_statements(body, &block_env) {
+                        Completion::Normal(_) => {}
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => {}
+                    }
+                }
             }
         }
 
