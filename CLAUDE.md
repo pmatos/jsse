@@ -22,9 +22,27 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - `src/main.rs` — CLI entry point (`jsse <file>` or `jsse -e "code"`)
 - `src/lexer.rs` — Tokenizer
 - `src/ast.rs` — AST node types
-- `src/parser.rs` — Recursive descent parser
 - `src/types.rs` — JS value types (`JsValue`, `JsString`, `JsSymbol`, `JsBigInt`, etc.)
-- `src/interpreter.rs` — Tree-walking interpreter, all built-ins, GC, runtime (~16k lines)
+- `src/parser/` — Recursive descent parser
+  - `mod.rs` — Parser struct, parse_program(), utility helpers
+  - `expressions.rs` — Expression parsing
+  - `statements.rs` — Statement parsing
+  - `declarations.rs` — Function, class, variable, destructuring parsing
+- `src/interpreter/` — Tree-walking interpreter
+  - `mod.rs` — Interpreter struct, new(), run(), object/property helpers
+  - `types.rs` — Completion, Environment, JsFunction, PropertyDescriptor, JsObjectData, etc.
+  - `helpers.rs` — Type conversion, equality, JSON, date math helpers
+  - `gc.rs` — Mark-and-sweep GC with ephemeron support
+  - `exec.rs` — Statement execution (exec_statements, loops, try/switch)
+  - `eval.rs` — Expression evaluation (eval_expr, eval_call, eval_new, etc.)
+  - `builtins/` — Built-in object setup
+    - `mod.rs` — setup_globals, setup_object_statics, setup_reflect, setup_proxy, setup_function_prototype
+    - `array.rs` — setup_array_prototype
+    - `string.rs` — setup_string_prototype
+    - `number.rs` — setup_number_prototype, setup_boolean_prototype, setup_symbol_prototype
+    - `iterators.rs` — setup_iterator_prototypes, setup_generator_prototype
+    - `collections.rs` — setup_map/set/weakmap/weakset_prototype
+    - `date.rs` — setup_date_builtin
 - `scripts/` — Test runners and utilities
 - `plan/` — Per-phase implementation plans
 - `test262-pass.txt` — Tracks currently passing test262 tests (updated by the test runner)
