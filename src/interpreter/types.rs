@@ -289,6 +289,14 @@ pub enum IteratorState {
         target_yield: usize,
         done: bool,
     },
+    RegExpStringIterator {
+        source: String,
+        flags: String,
+        string: String,
+        global: bool,
+        last_index: usize,
+        done: bool,
+    },
 }
 
 pub struct JsObjectData {

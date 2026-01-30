@@ -3,6 +3,7 @@ mod collections;
 mod date;
 mod iterators;
 mod number;
+mod regexp;
 mod string;
 
 use super::*;
@@ -303,6 +304,7 @@ impl Interpreter {
                     ("replace", "Symbol.replace"),
                     ("search", "Symbol.search"),
                     ("split", "Symbol.split"),
+                    ("matchAll", "Symbol.matchAll"),
                     ("unscopables", "Symbol.unscopables"),
                 ];
                 for (name, desc) in well_known {
@@ -1016,182 +1018,6 @@ impl Interpreter {
     }
 
 
-    fn setup_regexp(&mut self) {
-        let regexp_proto = self.create_object();
-        regexp_proto.borrow_mut().class_name = "RegExp".to_string();
-
-        // RegExp.prototype.test
-        let test_fn = self.create_function(JsFunction::native(
-            "test".to_string(),
-            1,
-            |interp, this_val, args| {
-                let input = args.first().map(to_js_string).unwrap_or_default();
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let source = if let JsValue::String(s) = obj.borrow().get_property("source") {
-                        s.to_rust_string()
-                    } else {
-                        String::new()
-                    };
-                    let flags = if let JsValue::String(s) = obj.borrow().get_property("flags") {
-                        s.to_rust_string()
-                    } else {
-                        String::new()
-                    };
-                    let pattern = if flags.contains('i') {
-                        format!("(?i){}", source)
-                    } else {
-                        source
-                    };
-                    if let Ok(re) = regex::Regex::new(&pattern) {
-                        return Completion::Normal(JsValue::Boolean(re.is_match(&input)));
-                    }
-                }
-                Completion::Normal(JsValue::Boolean(false))
-            },
-        ));
-        regexp_proto
-            .borrow_mut()
-            .insert_builtin("test".to_string(), test_fn);
-
-        // RegExp.prototype.exec
-        let exec_fn = self.create_function(JsFunction::native(
-            "exec".to_string(),
-            1,
-            |interp, this_val, args| {
-                let input = args.first().map(to_js_string).unwrap_or_default();
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let source = if let JsValue::String(s) = obj.borrow().get_property("source") {
-                        s.to_rust_string()
-                    } else {
-                        String::new()
-                    };
-                    let flags = if let JsValue::String(s) = obj.borrow().get_property("flags") {
-                        s.to_rust_string()
-                    } else {
-                        String::new()
-                    };
-                    let pattern = if flags.contains('i') {
-                        format!("(?i){}", source)
-                    } else {
-                        source
-                    };
-                    if let Ok(re) = regex::Regex::new(&pattern)
-                        && let Some(m) = re.find(&input)
-                    {
-                        let matched = JsValue::String(JsString::from_str(m.as_str()));
-                        let result = interp.create_array(vec![matched]);
-                        if let JsValue::Object(ref ro) = result
-                            && let Some(robj) = interp.get_object(ro.id)
-                        {
-                            robj.borrow_mut().insert_value(
-                                "index".to_string(),
-                                JsValue::Number(m.start() as f64),
-                            );
-                            robj.borrow_mut().insert_value(
-                                "input".to_string(),
-                                JsValue::String(JsString::from_str(&input)),
-                            );
-                        }
-                        return Completion::Normal(result);
-                    }
-                }
-                Completion::Normal(JsValue::Null)
-            },
-        ));
-        regexp_proto
-            .borrow_mut()
-            .insert_builtin("exec".to_string(), exec_fn);
-
-        // RegExp.prototype.toString
-        let tostring_fn = self.create_function(JsFunction::native(
-            "toString".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let source = if let JsValue::String(s) = obj.borrow().get_property("source") {
-                        s.to_rust_string()
-                    } else {
-                        String::new()
-                    };
-                    let flags = if let JsValue::String(s) = obj.borrow().get_property("flags") {
-                        s.to_rust_string()
-                    } else {
-                        String::new()
-                    };
-                    return Completion::Normal(JsValue::String(JsString::from_str(&format!(
-                        "/{}/{}",
-                        source, flags
-                    ))));
-                }
-                Completion::Normal(JsValue::String(JsString::from_str("/(?:)/")))
-            },
-        ));
-        regexp_proto
-            .borrow_mut()
-            .insert_builtin("toString".to_string(), tostring_fn);
-
-        let regexp_proto_rc = regexp_proto.clone();
-
-        // RegExp constructor
-        let regexp_ctor = self.create_function(JsFunction::native(
-            "RegExp".to_string(),
-            2,
-            move |interp, _this, args| {
-                let pattern_str = args.first().map(to_js_string).unwrap_or_default();
-                let flags_str = args.get(1).map(to_js_string).unwrap_or_default();
-                let mut obj = JsObjectData::new();
-                obj.prototype = Some(regexp_proto_rc.clone());
-                obj.class_name = "RegExp".to_string();
-                obj.insert_value(
-                    "source".to_string(),
-                    JsValue::String(JsString::from_str(&pattern_str)),
-                );
-                obj.insert_value(
-                    "flags".to_string(),
-                    JsValue::String(JsString::from_str(&flags_str)),
-                );
-                obj.insert_value(
-                    "global".to_string(),
-                    JsValue::Boolean(flags_str.contains('g')),
-                );
-                obj.insert_value(
-                    "ignoreCase".to_string(),
-                    JsValue::Boolean(flags_str.contains('i')),
-                );
-                obj.insert_value(
-                    "multiline".to_string(),
-                    JsValue::Boolean(flags_str.contains('m')),
-                );
-                obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
-                let rc = Rc::new(RefCell::new(obj));
-                let id = interp.allocate_object_slot(rc);
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-            },
-        ));
-        // Set prototype on constructor
-        if let JsValue::Object(ref o) = regexp_ctor
-            && let Some(obj) = self.get_object(o.id)
-        {
-            obj.borrow_mut().insert_value(
-                "prototype".to_string(),
-                JsValue::Object(crate::types::JsObject {
-                    id: regexp_proto.borrow().id.unwrap(),
-                }),
-            );
-        }
-        self.global_env
-            .borrow_mut()
-            .declare("RegExp", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("RegExp", regexp_ctor);
-
-        self.regexp_prototype = Some(regexp_proto);
-    }
 
 
     fn setup_object_statics(&mut self) {

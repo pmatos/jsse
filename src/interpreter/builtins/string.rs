@@ -293,47 +293,124 @@ impl Interpreter {
                 "split",
                 2,
                 Rc::new(|interp, this_val, args| {
-                    let s = to_js_string(this_val);
-                    let separator = args.first();
-                    let parts: Vec<JsValue> = if let Some(sep) = separator {
-                        if matches!(sep, JsValue::Undefined) {
-                            vec![JsValue::String(JsString::from_str(&s))]
-                        } else {
-                            let sep_str = to_js_string(sep);
-                            if sep_str.is_empty() {
-                                s.chars()
-                                    .map(|c| JsValue::String(JsString::from_str(&c.to_string())))
-                                    .collect()
-                            } else {
-                                s.split(&sep_str)
-                                    .map(|p| JsValue::String(JsString::from_str(p)))
-                                    .collect()
+                    let separator = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    // Check for Symbol.split on the separator
+                    if let JsValue::Object(ref o) = separator {
+                        if let Some(key) = interp.get_symbol_key("split") {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let method = obj.borrow().get_property(&key);
+                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                    let this_str = JsValue::String(JsString::from_str(&to_js_string(this_val)));
+                                    let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                    return interp.call_function(&method, &separator, &[this_str, limit]);
+                                }
                             }
                         }
-                    } else {
+                    }
+                    let s = to_js_string(this_val);
+                    let parts: Vec<JsValue> = if matches!(separator, JsValue::Undefined) {
                         vec![JsValue::String(JsString::from_str(&s))]
+                    } else {
+                        let sep_str = to_js_string(&separator);
+                        if sep_str.is_empty() {
+                            s.chars()
+                                .map(|c| JsValue::String(JsString::from_str(&c.to_string())))
+                                .collect()
+                        } else {
+                            s.split(&sep_str)
+                                .map(|p| JsValue::String(JsString::from_str(p)))
+                                .collect()
+                        }
                     };
-                    let arr = interp.create_array(parts);
-                    Completion::Normal(arr)
+                    Completion::Normal(interp.create_array(parts))
                 }),
             ),
             (
                 "replace",
                 2,
-                Rc::new(|_interp, this_val, args| {
+                Rc::new(|interp, this_val, args| {
+                    let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(ref o) = search_value {
+                        if let Some(key) = interp.get_symbol_key("replace") {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let method = obj.borrow().get_property(&key);
+                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                    let this_str = JsValue::String(JsString::from_str(&to_js_string(this_val)));
+                                    let replace_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                    return interp.call_function(&method, &search_value, &[this_str, replace_val]);
+                                }
+                            }
+                        }
+                    }
                     let s = to_js_string(this_val);
-                    let search = args.first().map(to_js_string).unwrap_or_default();
-                    let replacement = args.get(1).map(to_js_string).unwrap_or_default();
-                    let result = s.replacen(&search, &replacement, 1);
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    let search = to_js_string(&search_value);
+                    let replace_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    // Check if replacer is a function
+                    let is_fn = if let JsValue::Object(ref o) = replace_arg {
+                        interp.get_object(o.id).map(|obj| obj.borrow().callable.is_some()).unwrap_or(false)
+                    } else {
+                        false
+                    };
+                    if is_fn {
+                        if let Some(pos) = s.find(&search) {
+                            let matched = &s[pos..pos + search.len()];
+                            let r = interp.call_function(&replace_arg, &JsValue::Undefined, &[
+                                JsValue::String(JsString::from_str(matched)),
+                                JsValue::Number(pos as f64),
+                                JsValue::String(JsString::from_str(&s)),
+                            ]);
+                            let replacement = match r {
+                                Completion::Normal(v) => to_js_string(&v),
+                                other => return other,
+                            };
+                            let mut result = String::new();
+                            result.push_str(&s[..pos]);
+                            result.push_str(&replacement);
+                            result.push_str(&s[pos + search.len()..]);
+                            Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                        } else {
+                            Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                        }
+                    } else {
+                        let replacement = to_js_string(&replace_arg);
+                        let result = s.replacen(&search, &replacement, 1);
+                        Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    }
                 }),
             ),
             (
                 "replaceAll",
                 2,
-                Rc::new(|_interp, this_val, args| {
+                Rc::new(|interp, this_val, args| {
+                    let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(ref o) = search_value {
+                        // If regexp, must have global flag
+                        if let Some(obj) = interp.get_object(o.id) {
+                            let is_regexp = obj.borrow().class_name == "RegExp";
+                            if is_regexp {
+                                let flags_val = obj.borrow().get_property("flags");
+                                let flags = to_js_string(&flags_val);
+                                if !flags.contains('g') {
+                                    let err = interp.create_type_error(
+                                        "String.prototype.replaceAll called with a non-global RegExp argument",
+                                    );
+                                    return Completion::Throw(err);
+                                }
+                            }
+                        }
+                        if let Some(key) = interp.get_symbol_key("replace") {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let method = obj.borrow().get_property(&key);
+                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                    let this_str = JsValue::String(JsString::from_str(&to_js_string(this_val)));
+                                    let replace_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                    return interp.call_function(&method, &search_value, &[this_str, replace_val]);
+                                }
+                            }
+                        }
+                    }
                     let s = to_js_string(this_val);
-                    let search = args.first().map(to_js_string).unwrap_or_default();
+                    let search = to_js_string(&search_value);
                     let replacement = args.get(1).map(to_js_string).unwrap_or_default();
                     Completion::Normal(JsValue::String(JsString::from_str(
                         &s.replace(&search, &replacement),
@@ -363,42 +440,25 @@ impl Interpreter {
                 "search",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = to_js_string(this_val);
-                    let (source, flags) = match args.first() {
-                        Some(JsValue::Object(o)) => {
-                            let obj = interp.get_object(o.id);
-                            let src = obj
-                                .as_ref()
-                                .map(|ob| {
-                                    if let JsValue::String(sv) = ob.borrow().get_property("source")
-                                    {
-                                        sv.to_rust_string()
-                                    } else {
-                                        String::new()
-                                    }
-                                })
-                                .unwrap_or_default();
-                            let fl = obj
-                                .as_ref()
-                                .map(|ob| {
-                                    if let JsValue::String(sv) = ob.borrow().get_property("flags") {
-                                        sv.to_rust_string()
-                                    } else {
-                                        String::new()
-                                    }
-                                })
-                                .unwrap_or_default();
-                            (src, fl)
+                    let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(ref o) = regexp {
+                        if let Some(key) = interp.get_symbol_key("search") {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let method = obj.borrow().get_property(&key);
+                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                    let this_str = JsValue::String(JsString::from_str(&to_js_string(this_val)));
+                                    return interp.call_function(&method, &regexp, &[this_str]);
+                                }
+                            }
                         }
-                        Some(v) => (to_js_string(v), String::new()),
-                        None => (String::new(), String::new()),
-                    };
-                    let pat = if flags.contains('i') {
-                        format!("(?i){}", source)
+                    }
+                    let s = to_js_string(this_val);
+                    let source = if args.is_empty() {
+                        String::new()
                     } else {
-                        source
+                        to_js_string(&regexp)
                     };
-                    if let Ok(re) = regex::Regex::new(&pat)
+                    if let Ok(re) = regex::Regex::new(&source)
                         && let Some(m) = re.find(&s)
                     {
                         return Completion::Normal(JsValue::Number(m.start() as f64));
@@ -410,56 +470,28 @@ impl Interpreter {
                 "match",
                 1,
                 Rc::new(|interp, this_val, args| {
+                    let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(ref o) = regexp {
+                        if let Some(key) = interp.get_symbol_key("match") {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let method = obj.borrow().get_property(&key);
+                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                    let this_str = JsValue::String(JsString::from_str(&to_js_string(this_val)));
+                                    return interp.call_function(&method, &regexp, &[this_str]);
+                                }
+                            }
+                        }
+                    }
+                    // Fallback: create a RegExp and call @@match
                     let s = to_js_string(this_val);
-                    let (source, flags) = match args.first() {
-                        Some(JsValue::Object(o)) => {
-                            let obj = interp.get_object(o.id);
-                            let src = obj
-                                .as_ref()
-                                .map(|ob| {
-                                    if let JsValue::String(sv) = ob.borrow().get_property("source")
-                                    {
-                                        sv.to_rust_string()
-                                    } else {
-                                        String::new()
-                                    }
-                                })
-                                .unwrap_or_default();
-                            let fl = obj
-                                .as_ref()
-                                .map(|ob| {
-                                    if let JsValue::String(sv) = ob.borrow().get_property("flags") {
-                                        sv.to_rust_string()
-                                    } else {
-                                        String::new()
-                                    }
-                                })
-                                .unwrap_or_default();
-                            (src, fl)
-                        }
-                        Some(v) => (to_js_string(v), String::new()),
-                        None => (String::new(), String::new()),
-                    };
-                    let pat = if flags.contains('i') {
-                        format!("(?i){}", source)
+                    let source = if args.is_empty() {
+                        String::new()
                     } else {
-                        source
+                        to_js_string(&regexp)
                     };
-                    let re = match regex::Regex::new(&pat) {
-                        Ok(r) => r,
-                        Err(_) => return Completion::Normal(JsValue::Null),
-                    };
-                    if flags.contains('g') {
-                        let matches: Vec<JsValue> = re
-                            .find_iter(&s)
-                            .map(|m| JsValue::String(JsString::from_str(m.as_str())))
-                            .collect();
-                        if matches.is_empty() {
-                            Completion::Normal(JsValue::Null)
-                        } else {
-                            Completion::Normal(interp.create_array(matches))
-                        }
-                    } else if let Some(m) = re.find(&s) {
+                    if let Ok(re) = regex::Regex::new(&source)
+                        && let Some(m) = re.find(&s)
+                    {
                         let matched = JsValue::String(JsString::from_str(m.as_str()));
                         let result = interp.create_array(vec![matched]);
                         if let JsValue::Object(ro) = &result
@@ -478,6 +510,40 @@ impl Interpreter {
                     } else {
                         Completion::Normal(JsValue::Null)
                     }
+                }),
+            ),
+            (
+                "matchAll",
+                1,
+                Rc::new(|interp, this_val, args| {
+                    let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(ref o) = regexp {
+                        // Check if it's a regexp and if so, require global flag
+                        if let Some(obj) = interp.get_object(o.id) {
+                            let is_regexp = obj.borrow().class_name == "RegExp";
+                            if is_regexp {
+                                let flags_val = obj.borrow().get_property("flags");
+                                let flags = to_js_string(&flags_val);
+                                if !flags.contains('g') {
+                                    let err = interp.create_type_error(
+                                        "String.prototype.matchAll called with a non-global RegExp argument",
+                                    );
+                                    return Completion::Throw(err);
+                                }
+                            }
+                        }
+                        if let Some(key) = interp.get_symbol_key("matchAll") {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let method = obj.borrow().get_property(&key);
+                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                    let this_str = JsValue::String(JsString::from_str(&to_js_string(this_val)));
+                                    return interp.call_function(&method, &regexp, &[this_str]);
+                                }
+                            }
+                        }
+                    }
+                    let err = interp.create_type_error("matchAll requires a global RegExp");
+                    Completion::Throw(err)
                 }),
             ),
         ];
