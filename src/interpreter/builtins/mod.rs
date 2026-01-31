@@ -605,6 +605,70 @@ impl Interpreter {
             }),
         );
 
+        self.register_global_fn(
+            "encodeURI",
+            BindingKind::Var,
+            JsFunction::native("encodeURI".to_string(), 1, |interp, _this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let code_units = match &val {
+                    JsValue::String(s) => s.code_units.clone(),
+                    other => JsString::from_str(&to_js_string(other)).code_units,
+                };
+                match encode_uri_string(&code_units, true) {
+                    Ok(encoded) => Completion::Normal(JsValue::String(JsString::from_str(&encoded))),
+                    Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
+                }
+            }),
+        );
+
+        self.register_global_fn(
+            "encodeURIComponent",
+            BindingKind::Var,
+            JsFunction::native("encodeURIComponent".to_string(), 1, |interp, _this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let code_units = match &val {
+                    JsValue::String(s) => s.code_units.clone(),
+                    other => JsString::from_str(&to_js_string(other)).code_units,
+                };
+                match encode_uri_string(&code_units, false) {
+                    Ok(encoded) => Completion::Normal(JsValue::String(JsString::from_str(&encoded))),
+                    Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
+                }
+            }),
+        );
+
+        self.register_global_fn(
+            "decodeURI",
+            BindingKind::Var,
+            JsFunction::native("decodeURI".to_string(), 1, |interp, _this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let code_units = match &val {
+                    JsValue::String(s) => s.code_units.clone(),
+                    other => JsString::from_str(&to_js_string(other)).code_units,
+                };
+                match decode_uri_string(&code_units, true) {
+                    Ok(decoded) => Completion::Normal(JsValue::String(JsString { code_units: decoded })),
+                    Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
+                }
+            }),
+        );
+
+        self.register_global_fn(
+            "decodeURIComponent",
+            BindingKind::Var,
+            JsFunction::native("decodeURIComponent".to_string(), 1, |interp, _this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let code_units = match &val {
+                    JsValue::String(s) => s.code_units.clone(),
+                    other => JsString::from_str(&to_js_string(other)).code_units,
+                };
+                match decode_uri_string(&code_units, false) {
+                    Ok(decoded) => Completion::Normal(JsValue::String(JsString { code_units: decoded })),
+                    Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
+                }
+            }),
+        );
+
         // Math object
         let math_obj = self.create_object();
         let math_id = math_obj.borrow().id.unwrap();
@@ -975,14 +1039,14 @@ impl Interpreter {
                     "fromCharCode".to_string(),
                     1,
                     |_interp, _this, args: &[JsValue]| {
-                        let s: String = args
+                        let code_units: Vec<u16> = args
                             .iter()
                             .map(|a| {
                                 let n = to_number(a) as u32;
-                                char::from_u32(n).unwrap_or('\u{FFFD}')
+                                (n & 0xFFFF) as u16
                             })
                             .collect();
-                        Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                        Completion::Normal(JsValue::String(JsString { code_units }))
                     },
                 ));
                 let from_code_point = self.create_function(JsFunction::native(

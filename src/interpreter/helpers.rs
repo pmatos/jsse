@@ -1016,3 +1016,179 @@ pub(crate) fn find_json_colon(s: &str) -> Option<usize> {
     }
     None
 }
+
+fn is_uri_unreserved(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '!' | '~' | '*' | '\'' | '(' | ')')
+}
+
+fn is_uri_reserved(c: char) -> bool {
+    matches!(c, ';' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | ',' | '#')
+}
+
+fn percent_encode_byte(b: u8, out: &mut String) {
+    use std::fmt::Write;
+    write!(out, "%{:02X}", b).unwrap();
+}
+
+pub(crate) fn encode_uri_string(code_units: &[u16], preserve_reserved: bool) -> Result<String, String> {
+    let mut result = String::new();
+    let mut i = 0;
+    while i < code_units.len() {
+        let cu = code_units[i];
+        if cu <= 0x7F {
+            let c = cu as u8 as char;
+            if is_uri_unreserved(c) || (preserve_reserved && is_uri_reserved(c)) {
+                result.push(c);
+            } else {
+                let mut buf = [0u8; 4];
+                let encoded = c.encode_utf8(&mut buf);
+                for b in encoded.as_bytes() {
+                    percent_encode_byte(*b, &mut result);
+                }
+            }
+            i += 1;
+        } else if (0xD800..=0xDBFF).contains(&cu) {
+            if i + 1 >= code_units.len() || !(0xDC00..=0xDFFF).contains(&code_units[i + 1]) {
+                return Err("URI malformed".to_string());
+            }
+            let hi = cu as u32;
+            let lo = code_units[i + 1] as u32;
+            let cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+            let c = char::from_u32(cp).ok_or_else(|| "URI malformed".to_string())?;
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            for b in encoded.as_bytes() {
+                percent_encode_byte(*b, &mut result);
+            }
+            i += 2;
+        } else if (0xDC00..=0xDFFF).contains(&cu) {
+            return Err("URI malformed".to_string());
+        } else {
+            let c = char::from_u32(cu as u32).ok_or_else(|| "URI malformed".to_string())?;
+            let mut buf = [0u8; 4];
+            let encoded = c.encode_utf8(&mut buf);
+            for b in encoded.as_bytes() {
+                percent_encode_byte(*b, &mut result);
+            }
+            i += 1;
+        }
+    }
+    Ok(result)
+}
+
+pub(crate) fn decode_uri_string(code_units: &[u16], preserve_reserved: bool) -> Result<Vec<u16>, String> {
+    let mut result: Vec<u16> = Vec::new();
+    let len = code_units.len();
+    let mut i = 0;
+
+    while i < len {
+        let cu = code_units[i];
+        if cu != 0x25 { // '%'
+            result.push(cu);
+            i += 1;
+            continue;
+        }
+
+        if i + 2 >= len {
+            return Err("URI malformed".to_string());
+        }
+        let h1 = cu16_to_hex_val(code_units[i + 1])?;
+        let l1 = cu16_to_hex_val(code_units[i + 2])?;
+        let first_byte = (h1 << 4) | l1;
+        i += 3;
+
+        if first_byte <= 0x7F {
+            let c = first_byte as u8 as char;
+            if preserve_reserved && is_uri_reserved(c) {
+                result.push(0x25); // '%'
+                result.push(code_units[i - 2]);
+                result.push(code_units[i - 1]);
+            } else {
+                result.push(first_byte as u16);
+            }
+            continue;
+        }
+
+        let expected_len = if first_byte & 0xE0 == 0xC0 {
+            2
+        } else if first_byte & 0xF0 == 0xE0 {
+            3
+        } else if first_byte & 0xF8 == 0xF0 {
+            4
+        } else {
+            return Err("URI malformed".to_string());
+        };
+
+        let mut utf8_bytes = vec![first_byte as u8];
+        let start_i = i - 3;
+        for _ in 1..expected_len {
+            if i >= len || code_units[i] != 0x25 || i + 2 >= len {
+                return Err("URI malformed".to_string());
+            }
+            let hh = cu16_to_hex_val(code_units[i + 1])?;
+            let ll = cu16_to_hex_val(code_units[i + 2])?;
+            let cont = (hh << 4) | ll;
+            if cont & 0xC0 != 0x80 {
+                return Err("URI malformed".to_string());
+            }
+            utf8_bytes.push(cont as u8);
+            i += 3;
+        }
+
+        let s = std::str::from_utf8(&utf8_bytes).map_err(|_| "URI malformed".to_string())?;
+        let c = s.chars().next().ok_or_else(|| "URI malformed".to_string())?;
+
+        let cp = c as u32;
+        if (0xD800..=0xDFFF).contains(&cp) {
+            return Err("URI malformed".to_string());
+        }
+
+        let min_cp: u32 = match expected_len {
+            2 => 0x80,
+            3 => 0x800,
+            4 => 0x10000,
+            _ => unreachable!(),
+        };
+        if cp < min_cp {
+            return Err("URI malformed".to_string());
+        }
+
+        if preserve_reserved && is_uri_reserved(c) {
+            // Keep original percent-encoded form
+            for idx in start_i..i {
+                result.push(code_units[idx]);
+            }
+        } else {
+            // Encode char as UTF-16 code units
+            let mut buf = [0u16; 2];
+            let encoded = c.encode_utf16(&mut buf);
+            for unit in encoded.iter() {
+                result.push(*unit);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+fn cu16_to_hex_val(cu: u16) -> Result<u8, String> {
+    if cu > 0x7F {
+        return Err("URI malformed".to_string());
+    }
+    hex_val(cu as u8)
+}
+
+fn parse_hex_byte(h: u8, l: u8) -> Result<u8, String> {
+    let hi = hex_val(h)?;
+    let lo = hex_val(l)?;
+    Ok((hi << 4) | lo)
+}
+
+fn hex_val(b: u8) -> Result<u8, String> {
+    match b {
+        b'0'..=b'9' => Ok(b - b'0'),
+        b'a'..=b'f' => Ok(b - b'a' + 10),
+        b'A'..=b'F' => Ok(b - b'A' + 10),
+        _ => Err("URI malformed".to_string()),
+    }
+}

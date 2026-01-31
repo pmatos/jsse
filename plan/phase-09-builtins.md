@@ -16,8 +16,8 @@ Ordered roughly by dependency and importance.
 - [x] `isNaN()`
 - [x] `parseFloat()`
 - [x] `parseInt()`
-- [ ] `decodeURI()` / `decodeURIComponent()`
-- [ ] `encodeURI()` / `encodeURIComponent()`
+- [x] `decodeURI()` / `decodeURIComponent()` — 121/173 passing (70%)
+- [x] `encodeURI()` / `encodeURIComponent()` — 121/173 passing (70%)
 
 **Tests:** `built-ins/global/` (29), `built-ins/eval/` (10), `built-ins/isFinite/` (15), `built-ins/isNaN/` (15), `built-ins/parseFloat/` (54), `built-ins/parseInt/` (55), `built-ins/decodeURI/` (55), `built-ins/decodeURIComponent/` (56), `built-ins/encodeURI/` (31), `built-ins/encodeURIComponent/` (31), `built-ins/Infinity/` (6), `built-ins/NaN/` (6), `built-ins/undefined/` (8)
 
