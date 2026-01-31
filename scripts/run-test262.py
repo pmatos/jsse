@@ -167,9 +167,7 @@ def run_single_test(
     if "module" in flags:
         return (test_file_str, False, "skip_module")
 
-    # Skip async tests for now
-    if "async" in flags:
-        return (test_file_str, False, "skip_async")
+    is_async = "async" in flags
 
     negative = metadata.get("negative")
 
@@ -214,6 +212,14 @@ def run_single_test(
             passed = exit_code == 2
         else:
             passed = exit_code != 0
+    elif is_async:
+        stdout = result.stdout.decode("utf-8", errors="replace")
+        if "Test262:AsyncTestComplete" in stdout:
+            passed = exit_code == 0
+        elif "Test262:AsyncTestFailure" in stdout:
+            passed = False
+        else:
+            passed = exit_code == 0
     else:
         passed = exit_code == 0
 

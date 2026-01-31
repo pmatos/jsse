@@ -52,7 +52,7 @@ pub(crate) enum BindingKind {
 
 impl Environment {
     pub fn new(parent: Option<EnvRef>) -> EnvRef {
-        let strict = parent.as_ref().map_or(false, |p| p.borrow().strict);
+        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
             parent,
@@ -130,6 +130,7 @@ pub enum JsFunction {
         is_arrow: bool,
         is_strict: bool,
         is_generator: bool,
+        is_async: bool,
     },
     Native(
         String,
@@ -159,6 +160,7 @@ impl Clone for JsFunction {
                 is_arrow,
                 is_strict,
                 is_generator,
+                is_async,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
@@ -167,6 +169,7 @@ impl Clone for JsFunction {
                 is_arrow: *is_arrow,
                 is_strict: *is_strict,
                 is_generator: *is_generator,
+                is_async: *is_async,
             },
             JsFunction::Native(name, arity, f) => {
                 JsFunction::Native(name.clone(), *arity, f.clone())
@@ -385,6 +388,7 @@ pub struct JsObjectData {
     pub arraybuffer_data: Option<Rc<RefCell<Vec<u8>>>>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
+    pub promise_data: Option<PromiseData>,
 }
 
 impl JsObjectData {
@@ -412,6 +416,7 @@ impl JsObjectData {
             arraybuffer_data: None,
             typed_array_info: None,
             data_view_info: None,
+            promise_data: None,
         }
     }
 
@@ -420,13 +425,11 @@ impl JsObjectData {
     }
 
     pub fn get_property(&self, key: &str) -> JsValue {
-        if let Some(ref map) = self.parameter_map {
-            if let Some((env_ref, param_name)) = map.get(key) {
-                if let Some(val) = env_ref.borrow().get(param_name) {
+        if let Some(ref map) = self.parameter_map
+            && let Some((env_ref, param_name)) = map.get(key)
+                && let Some(val) = env_ref.borrow().get(param_name) {
                     return val;
                 }
-            }
-        }
         if let Some(desc) = self.properties.get(key) {
             if let Some(ref val) = desc.value {
                 return val.clone();
@@ -439,14 +442,13 @@ impl JsObjectData {
         {
             return elems[idx].clone();
         }
-        if let Some(ref ta) = self.typed_array_info {
-            if let Ok(idx) = key.parse::<usize>() {
+        if let Some(ref ta) = self.typed_array_info
+            && let Ok(idx) = key.parse::<usize>() {
                 if idx < ta.array_length {
                     return typed_array_get_index(ta, idx);
                 }
                 return JsValue::Undefined;
             }
-        }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property(key);
         }
@@ -456,13 +458,11 @@ impl JsObjectData {
     pub fn get_property_descriptor(&self, key: &str) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(ref map) = self.parameter_map {
-                if let Some((env_ref, param_name)) = map.get(key) {
-                    if let Some(val) = env_ref.borrow().get(param_name) {
+            if let Some(ref map) = self.parameter_map
+                && let Some((env_ref, param_name)) = map.get(key)
+                    && let Some(val) = env_ref.borrow().get(param_name) {
                         d.value = Some(val);
                     }
-                }
-            }
             return Some(d);
         }
         if let Some(ref elems) = self.array_elements
@@ -478,8 +478,8 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info {
-            if let Ok(idx) = key.parse::<usize>() {
+        if let Some(ref ta) = self.typed_array_info
+            && let Ok(idx) = key.parse::<usize>() {
                 if idx < ta.array_length {
                     return Some(PropertyDescriptor {
                         value: Some(typed_array_get_index(ta, idx)),
@@ -492,7 +492,6 @@ impl JsObjectData {
                 }
                 return None;
             }
-        }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property_descriptor(key);
         }
@@ -615,32 +614,32 @@ impl JsObjectData {
             let desc_writable = desc.writable;
 
             // Handle parameter map before consuming desc
-            if let Some(ref mut map) = self.parameter_map {
-                if map.contains_key(&key) {
-                    if let Some(ref val) = desc.value {
-                        if let Some((env_ref, param_name)) = map.get(&key) {
+            if let Some(ref mut map) = self.parameter_map
+                && map.contains_key(&key) {
+                    if let Some(ref val) = desc.value
+                        && let Some((env_ref, param_name)) = map.get(&key) {
                             let _ = env_ref.borrow_mut().set(param_name, val.clone());
                         }
-                    }
                     if desc_has_get || desc_has_set {
                         map.remove(&key);
                     } else if desc_writable == Some(false) {
-                        if let Some(ref val) = desc.value {
-                            if let Some((env_ref, param_name)) = map.get(&key) {
+                        if let Some(ref val) = desc.value
+                            && let Some((env_ref, param_name)) = map.get(&key) {
                                 let _ = env_ref.borrow_mut().set(param_name, val.clone());
                             }
-                        }
                         map.remove(&key);
                     }
                 }
-            }
 
             let current_is_data = current.is_data_descriptor();
             let current_is_accessor = current.is_accessor_descriptor();
 
             // Build merged descriptor
-            let merged = if desc_is_data && !desc_is_accessor
-                && current_is_accessor && !current_is_data {
+            let merged = if desc_is_data
+                && !desc_is_accessor
+                && current_is_accessor
+                && !current_is_data
+            {
                 // Changing from accessor to data
                 PropertyDescriptor {
                     value: desc.value.or(Some(JsValue::Undefined)),
@@ -650,8 +649,7 @@ impl JsObjectData {
                     enumerable: desc.enumerable.or(current.enumerable),
                     configurable: desc.configurable.or(current.configurable),
                 }
-            } else if desc_is_accessor && !desc_is_data
-                && current_is_data && !current_is_accessor {
+            } else if desc_is_accessor && !desc_is_data && current_is_data && !current_is_accessor {
                 // Changing from data to accessor
                 PropertyDescriptor {
                     value: None,
@@ -679,21 +677,24 @@ impl JsObjectData {
                 return false;
             }
             // Handle parameter map for new properties
-            if let Some(ref mut map) = self.parameter_map {
-                if map.contains_key(&key) {
-                    if let Some(ref val) = desc.value {
-                        if let Some((env_ref, param_name)) = map.get(&key) {
+            if let Some(ref mut map) = self.parameter_map
+                && map.contains_key(&key)
+                    && let Some(ref val) = desc.value
+                        && let Some((env_ref, param_name)) = map.get(&key) {
                             let _ = env_ref.borrow_mut().set(param_name, val.clone());
                         }
-                    }
-                }
-            }
             self.property_order.push(key.clone());
             // For new property, fill in defaults per spec
             let is_accessor = desc.is_accessor_descriptor();
             let new_desc = PropertyDescriptor {
-                value: desc.value.or(if !is_accessor { Some(JsValue::Undefined) } else { None }),
-                writable: desc.writable.or(if !is_accessor { Some(false) } else { None }),
+                value: desc.value.or(if !is_accessor {
+                    Some(JsValue::Undefined)
+                } else {
+                    None
+                }),
+                writable: desc
+                    .writable
+                    .or(if !is_accessor { Some(false) } else { None }),
                 get: desc.get,
                 set: desc.set,
                 enumerable: desc.enumerable.or(Some(false)),
@@ -705,17 +706,15 @@ impl JsObjectData {
     }
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
-        if let Some(ref ta) = self.typed_array_info {
-            if let Ok(idx) = key.parse::<usize>() {
+        if let Some(ref ta) = self.typed_array_info
+            && let Ok(idx) = key.parse::<usize>() {
                 let ta_clone = ta.clone();
                 return typed_array_set_index(&ta_clone, idx, &value);
             }
-        }
-        if let Some(ref map) = self.parameter_map {
-            if let Some((env_ref, param_name)) = map.get(key) {
+        if let Some(ref map) = self.parameter_map
+            && let Some((env_ref, param_name)) = map.get(key) {
                 let _ = env_ref.borrow_mut().set(param_name, value.clone());
             }
-        }
         if let Some(desc) = self.properties.get_mut(key) {
             if desc.writable == Some(false) {
                 return false;
@@ -775,15 +774,30 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
             JsValue::Number(v as f64)
         }
         TypedArrayKind::Int32 => {
-            let v = i32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
+            let v = i32::from_ne_bytes([
+                buf[offset],
+                buf[offset + 1],
+                buf[offset + 2],
+                buf[offset + 3],
+            ]);
             JsValue::Number(v as f64)
         }
         TypedArrayKind::Uint32 => {
-            let v = u32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
+            let v = u32::from_ne_bytes([
+                buf[offset],
+                buf[offset + 1],
+                buf[offset + 2],
+                buf[offset + 3],
+            ]);
             JsValue::Number(v as f64)
         }
         TypedArrayKind::Float32 => {
-            let v = f32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
+            let v = f32::from_ne_bytes([
+                buf[offset],
+                buf[offset + 1],
+                buf[offset + 2],
+                buf[offset + 3],
+            ]);
             JsValue::Number(v as f64)
         }
         TypedArrayKind::Float64 => {
@@ -794,12 +808,16 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
         TypedArrayKind::BigInt64 => {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt { value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)) })
+            JsValue::BigInt(crate::types::JsBigInt {
+                value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
+            })
         }
         TypedArrayKind::BigUint64 => {
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt { value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)) })
+            JsValue::BigInt(crate::types::JsBigInt {
+                value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
+            })
         }
     }
 }
@@ -870,19 +888,36 @@ fn to_number(v: &JsValue) -> f64 {
     }
 }
 
-fn to_int8(v: &JsValue) -> i8 { to_number(v) as i32 as i8 }
-fn to_uint8(v: &JsValue) -> u8 { to_number(v) as i32 as u8 }
+fn to_int8(v: &JsValue) -> i8 {
+    to_number(v) as i32 as i8
+}
+fn to_uint8(v: &JsValue) -> u8 {
+    to_number(v) as i32 as u8
+}
 fn to_uint8_clamped(v: &JsValue) -> u8 {
     let n = to_number(v);
-    if n.is_nan() { 0 }
-    else if n <= 0.0 { 0 }
-    else if n >= 255.0 { 255 }
-    else { (n + 0.5).floor() as u8 }
+    if n.is_nan() {
+        0
+    } else if n <= 0.0 {
+        0
+    } else if n >= 255.0 {
+        255
+    } else {
+        (n + 0.5).floor() as u8
+    }
 }
-fn to_int16(v: &JsValue) -> i16 { to_number(v) as i32 as i16 }
-fn to_uint16(v: &JsValue) -> u16 { to_number(v) as i32 as u16 }
-fn to_int32(v: &JsValue) -> i32 { to_number(v) as i32 }
-fn to_uint32(v: &JsValue) -> u32 { to_number(v) as u32 }
+fn to_int16(v: &JsValue) -> i16 {
+    to_number(v) as i32 as i16
+}
+fn to_uint16(v: &JsValue) -> u16 {
+    to_number(v) as i32 as u16
+}
+fn to_int32(v: &JsValue) -> i32 {
+    to_number(v) as i32
+}
+fn to_uint32(v: &JsValue) -> u32 {
+    to_number(v) as u32
+}
 fn to_bigint64(v: &JsValue) -> i64 {
     match v {
         JsValue::BigInt(b) => {
@@ -893,7 +928,9 @@ fn to_bigint64(v: &JsValue) -> i64 {
                 let len = bytes.len().min(8);
                 result[..len].copy_from_slice(&bytes[..len]);
                 if bytes.len() < 8 && !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80) != 0 {
-                    for byte in result.iter_mut().skip(len) { *byte = 0xFF; }
+                    for byte in result.iter_mut().skip(len) {
+                        *byte = 0xFF;
+                    }
                 }
                 i64::from_le_bytes(result)
             })
@@ -903,16 +940,55 @@ fn to_bigint64(v: &JsValue) -> i64 {
 }
 fn to_biguint64(v: &JsValue) -> u64 {
     match v {
-        JsValue::BigInt(b) => {
-            u64::try_from(&b.value).unwrap_or_else(|_| {
-                let bytes = b.value.to_signed_bytes_le();
-                let mut result = [0u8; 8];
-                let len = bytes.len().min(8);
-                result[..len].copy_from_slice(&bytes[..len]);
-                u64::from_le_bytes(result)
-            })
-        }
+        JsValue::BigInt(b) => u64::try_from(&b.value).unwrap_or_else(|_| {
+            let bytes = b.value.to_signed_bytes_le();
+            let mut result = [0u8; 8];
+            let len = bytes.len().min(8);
+            result[..len].copy_from_slice(&bytes[..len]);
+            u64::from_le_bytes(result)
+        }),
         _ => 0,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum PromiseState {
+    Pending,
+    Fulfilled(JsValue),
+    Rejected(JsValue),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PromiseReactionType {
+    Fulfill,
+    Reject,
+}
+
+#[derive(Debug, Clone)]
+pub struct PromiseReaction {
+    pub handler: Option<JsValue>,
+    pub promise_id: Option<u64>,
+    pub resolve: JsValue,
+    pub reject: JsValue,
+    pub reaction_type: PromiseReactionType,
+}
+
+#[derive(Debug, Clone)]
+pub struct PromiseData {
+    pub state: PromiseState,
+    pub fulfill_reactions: Vec<PromiseReaction>,
+    pub reject_reactions: Vec<PromiseReaction>,
+    pub is_handled: bool,
+}
+
+impl PromiseData {
+    pub fn new() -> Self {
+        Self {
+            state: PromiseState::Pending,
+            fulfill_reactions: Vec::new(),
+            reject_reactions: Vec::new(),
+            is_handled: false,
+        }
     }
 }
 

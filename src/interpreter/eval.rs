@@ -31,8 +31,8 @@ impl Interpreter {
                 Completion::Normal(self.eval_unary(*op, &val))
             }
             Expression::Binary(op, left, right) => {
-                if *op == BinaryOp::In {
-                    if let Expression::PrivateIdentifier(name) = left.as_ref() {
+                if *op == BinaryOp::In
+                    && let Expression::PrivateIdentifier(name) = left.as_ref() {
                         let rval = match self.eval_expr(right, env) {
                             Completion::Normal(v) => v,
                             other => return other,
@@ -52,7 +52,6 @@ impl Interpreter {
                             )),
                         };
                     }
-                }
                 let lval = match self.eval_expr(left, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -62,9 +61,9 @@ impl Interpreter {
                     other => return other,
                 };
                 // Proxy has trap for `in` operator
-                if *op == BinaryOp::In {
-                    if let JsValue::Object(ref o) = rval {
-                        if let Some(_) = self.get_proxy_info(o.id) {
+                if *op == BinaryOp::In
+                    && let JsValue::Object(ref o) = rval
+                        && self.get_proxy_info(o.id).is_some() {
                             let key = to_js_string(&lval);
                             let target_val = self.get_proxy_target_val(o.id);
                             let key_val = JsValue::String(JsString::from_str(&key));
@@ -90,8 +89,6 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
-                    }
-                }
                 Completion::Normal(self.eval_binary(*op, &lval, &rval))
             }
             Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
@@ -122,6 +119,7 @@ impl Interpreter {
                     is_arrow: false,
                     is_strict: Self::is_strict_mode_body(&f.body),
                     is_generator: f.is_generator,
+                    is_async: f.is_async,
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -140,6 +138,7 @@ impl Interpreter {
                     is_arrow: true,
                     is_strict: Self::is_strict_mode_body(&body_stmts),
                     is_generator: false,
+                    is_async: af.is_async,
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -320,6 +319,13 @@ impl Interpreter {
                     }
                 }
             }
+            Expression::Await(expr) => {
+                let val = match self.eval_expr(expr, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                self.await_value(&val)
+            }
             Expression::Template(tmpl) => {
                 let mut s = String::new();
                 for (i, quasi) in tmpl.quasis.iter().enumerate() {
@@ -357,8 +363,8 @@ impl Interpreter {
                         _ => Completion::Normal(JsValue::Undefined),
                     },
                     Expression::Call(callee, args) => {
-                        if let Expression::Identifier(method_name) = callee.as_ref() {
-                            if method_name.is_empty() {
+                        if let Expression::Identifier(method_name) = callee.as_ref()
+                            && method_name.is_empty() {
                                 let mut evaluated_args = Vec::new();
                                 for arg in args {
                                     let val = match self.eval_expr(arg, env) {
@@ -373,13 +379,12 @@ impl Interpreter {
                                     &evaluated_args,
                                 );
                             }
-                        }
                         Completion::Normal(JsValue::Undefined)
                     }
                     Expression::Member(_, mp) => {
-                        if let MemberProperty::Private(name) = mp {
-                            if let JsValue::Object(o) = &base_val {
-                                if let Some(obj) = self.get_object(o.id) {
+                        if let MemberProperty::Private(name) = mp
+                            && let JsValue::Object(o) = &base_val
+                                && let Some(obj) = self.get_object(o.id) {
                                     let elem = obj.borrow().private_fields.get(name).cloned();
                                     return match elem {
                                         Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
@@ -399,8 +404,6 @@ impl Interpreter {
                                         ))),
                                     };
                                 }
-                            }
-                        }
                         Completion::Normal(JsValue::Undefined)
                     }
                     other => {
@@ -1026,7 +1029,8 @@ impl Interpreter {
                                 if let JsValue::Object(ref t) = target_val
                                     && let Some(tobj) = self.get_object(t.id)
                                 {
-                                    let success = tobj.borrow_mut()
+                                    let success = tobj
+                                        .borrow_mut()
                                         .set_property_value(&key, final_val.clone());
                                     if !success && env.borrow().strict {
                                         return Completion::Throw(self.create_type_error(
@@ -1053,9 +1057,9 @@ impl Interpreter {
                     }
                     let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
                     if !success && env.borrow().strict {
-                        return Completion::Throw(self.create_type_error(
-                            &format!("Cannot assign to read only property '{key}'"),
-                        ));
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot assign to read only property '{key}'"
+                        )));
                     }
                     return Completion::Normal(final_val);
                 }
@@ -1262,8 +1266,8 @@ impl Interpreter {
                         to_js_string(&v)
                     }
                     MemberProperty::Private(name) => {
-                        if let JsValue::Object(ref o) = obj_val {
-                            if let Some(obj) = self.get_object(o.id) {
+                        if let JsValue::Object(ref o) = obj_val
+                            && let Some(obj) = self.get_object(o.id) {
                                 let elem = obj.borrow().private_fields.get(name).cloned();
                                 let func_val = match elem {
                                     Some(PrivateElement::Field(v))
@@ -1306,7 +1310,6 @@ impl Interpreter {
                                 }
                                 return self.call_function(&func_val, &obj_val, &evaluated_args);
                             }
-                        }
                         return Completion::Throw(self.create_type_error(&format!(
                             "Cannot read private member #{name} from a non-object"
                         )));
@@ -1639,8 +1642,21 @@ impl Interpreter {
                         is_arrow,
                         is_strict,
                         is_generator,
+                        is_async,
                         ..
                     } => {
+                        if is_async && !is_generator {
+                            return self.call_async_function(
+                                &params,
+                                &body,
+                                closure.clone(),
+                                is_arrow,
+                                is_strict,
+                                _this_val,
+                                args,
+                                func_val,
+                            );
+                        }
                         if is_generator {
                             // Create a generator object instead of executing
                             let gen_obj = self.create_object();
@@ -1648,11 +1664,10 @@ impl Interpreter {
                             if let Some(func_obj_rc) = self.get_object(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(JsValue::Object(ref p)) = proto_val {
-                                    if let Some(proto_rc) = self.get_object(p.id) {
+                                if let Some(JsValue::Object(ref p)) = proto_val
+                                    && let Some(proto_rc) = self.get_object(p.id) {
                                         gen_obj.borrow_mut().prototype = Some(proto_rc);
                                     }
-                                }
                             }
                             gen_obj.borrow_mut().class_name = "Generator".to_string();
                             gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {
@@ -1686,8 +1701,14 @@ impl Interpreter {
                         }
                         // Arrow functions inherit `this` and `arguments` from closure
                         if !is_arrow {
-                            let effective_this = if !is_strict && !closure_strict && matches!(_this_val, JsValue::Undefined | JsValue::Null) {
-                                self.global_env.borrow().get("this").unwrap_or(_this_val.clone())
+                            let effective_this = if !is_strict
+                                && !closure_strict
+                                && matches!(_this_val, JsValue::Undefined | JsValue::Null)
+                            {
+                                self.global_env
+                                    .borrow()
+                                    .get("this")
+                                    .unwrap_or(_this_val.clone())
                             } else {
                                 _this_val.clone()
                             };
@@ -1950,7 +1971,7 @@ impl Interpreter {
                 "Cannot perform '{}' on a proxy that has been revoked",
                 trap_name
             ))),
-            Some((false, Some(target_id), Some(handler_id))) => {
+            Some((false, Some(_target_id), Some(handler_id))) => {
                 let trap_val = if let Some(handler) = self.get_object(handler_id) {
                     handler.borrow().get_property(trap_name)
                 } else {
@@ -1977,18 +1998,22 @@ impl Interpreter {
     pub(crate) fn get_proxy_target_val(&self, proxy_id: u64) -> JsValue {
         if let Some(obj) = self.get_object(proxy_id) {
             let b = obj.borrow();
-            if let Some(ref target) = b.proxy_target {
-                if let Some(tid) = target.borrow().id {
+            if let Some(ref target) = b.proxy_target
+                && let Some(tid) = target.borrow().id {
                     return JsValue::Object(crate::types::JsObject { id: tid });
                 }
-            }
         }
         JsValue::Undefined
     }
 
-    pub(crate) fn get_object_property(&mut self, obj_id: u64, key: &str, this_val: &JsValue) -> Completion {
+    pub(crate) fn get_object_property(
+        &mut self,
+        obj_id: u64,
+        key: &str,
+        this_val: &JsValue,
+    ) -> Completion {
         // Check if object is a proxy
-        if let Some(_) = self.get_proxy_info(obj_id) {
+        if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
             let key_val = JsValue::String(JsString::from_str(key));
             let receiver = this_val.clone();
@@ -2095,7 +2120,9 @@ impl Interpreter {
                             let getter = d.get.clone().unwrap();
                             self.call_function(&getter, &obj_val, &[])
                         }
-                        Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
+                        Some(ref d) => {
+                            Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined))
+                        }
                         None => Completion::Normal(JsValue::Undefined),
                     }
                 } else {
@@ -2199,6 +2226,7 @@ impl Interpreter {
                 is_arrow: false,
                 is_strict: true,
                 is_generator: false,
+                is_async: false,
             }
         } else if super_val.is_some() {
             JsFunction::User {
@@ -2209,6 +2237,7 @@ impl Interpreter {
                 is_arrow: false,
                 is_strict: true,
                 is_generator: false,
+                is_async: false,
             }
         } else {
             JsFunction::User {
@@ -2219,6 +2248,7 @@ impl Interpreter {
                 is_arrow: false,
                 is_strict: true,
                 is_generator: false,
+                is_async: false,
             }
         };
 
@@ -2277,12 +2307,13 @@ impl Interpreter {
                                 is_arrow: false,
                                 is_strict: true,
                                 is_generator: m.value.is_generator,
+                                is_async: m.value.is_async,
                             };
                             let method_val = self.create_function(method_func);
 
                             if m.is_static {
-                                if let JsValue::Object(ref o) = ctor_val {
-                                    if let Some(func_obj) = self.get_object(o.id) {
+                                if let JsValue::Object(ref o) = ctor_val
+                                    && let Some(func_obj) = self.get_object(o.id) {
                                         match m.kind {
                                             ClassMethodKind::Get => {
                                                 let existing = func_obj
@@ -2344,75 +2375,67 @@ impl Interpreter {
                                             }
                                         }
                                     }
-                                }
-                            } else {
-                                if let JsValue::Object(ref o) = ctor_val {
-                                    if let Some(func_obj) = self.get_object(o.id) {
-                                        match m.kind {
-                                            ClassMethodKind::Get => {
-                                                let mut b = func_obj.borrow_mut();
-                                                let mut found = false;
-                                                for def in b.class_private_field_defs.iter_mut() {
-                                                    if let PrivateFieldDef::Accessor {
-                                                        name: n,
-                                                        get: g,
-                                                        ..
-                                                    } = def
-                                                    {
-                                                        if n == name {
-                                                            *g = Some(method_val.clone());
-                                                            found = true;
-                                                            break;
-                                                        }
-                                                    }
+                            } else if let JsValue::Object(ref o) = ctor_val
+                            && let Some(func_obj) = self.get_object(o.id) {
+                                match m.kind {
+                                    ClassMethodKind::Get => {
+                                        let mut b = func_obj.borrow_mut();
+                                        let mut found = false;
+                                        for def in b.class_private_field_defs.iter_mut() {
+                                            if let PrivateFieldDef::Accessor {
+                                                name: n,
+                                                get: g,
+                                                ..
+                                            } = def
+                                                && n == name {
+                                                    *g = Some(method_val.clone());
+                                                    found = true;
+                                                    break;
                                                 }
-                                                if !found {
-                                                    b.class_private_field_defs.push(
-                                                        PrivateFieldDef::Accessor {
-                                                            name: name.clone(),
-                                                            get: Some(method_val),
-                                                            set: None,
-                                                        },
-                                                    );
-                                                }
-                                            }
-                                            ClassMethodKind::Set => {
-                                                let mut b = func_obj.borrow_mut();
-                                                let mut found = false;
-                                                for def in b.class_private_field_defs.iter_mut() {
-                                                    if let PrivateFieldDef::Accessor {
-                                                        name: n,
-                                                        set: s,
-                                                        ..
-                                                    } = def
-                                                    {
-                                                        if n == name {
-                                                            *s = Some(method_val.clone());
-                                                            found = true;
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                                if !found {
-                                                    b.class_private_field_defs.push(
-                                                        PrivateFieldDef::Accessor {
-                                                            name: name.clone(),
-                                                            get: None,
-                                                            set: Some(method_val),
-                                                        },
-                                                    );
-                                                }
-                                            }
-                                            _ => {
-                                                func_obj
-                                                    .borrow_mut()
-                                                    .class_private_field_defs
-                                                    .push(PrivateFieldDef::Method {
-                                                        name: name.clone(),
-                                                        value: method_val,
-                                                    });
-                                            }
                                         }
+                                        if !found {
+                                            b.class_private_field_defs.push(
+                                                PrivateFieldDef::Accessor {
+                                                    name: name.clone(),
+                                                    get: Some(method_val),
+                                                    set: None,
+                                                },
+                                            );
+                                        }
+                                    }
+                                    ClassMethodKind::Set => {
+                                        let mut b = func_obj.borrow_mut();
+                                        let mut found = false;
+                                        for def in b.class_private_field_defs.iter_mut() {
+                                            if let PrivateFieldDef::Accessor {
+                                                name: n,
+                                                set: s,
+                                                ..
+                                            } = def
+                                                && n == name {
+                                                    *s = Some(method_val.clone());
+                                                    found = true;
+                                                    break;
+                                                }
+                                        }
+                                        if !found {
+                                            b.class_private_field_defs.push(
+                                                PrivateFieldDef::Accessor {
+                                                    name: name.clone(),
+                                                    get: None,
+                                                    set: Some(method_val),
+                                                },
+                                            );
+                                        }
+                                    }
+                                    _ => {
+                                        func_obj
+                                            .borrow_mut()
+                                            .class_private_field_defs
+                                            .push(PrivateFieldDef::Method {
+                                                name: name.clone(),
+                                                value: method_val,
+                                            });
                                     }
                                 }
                             }
@@ -2427,6 +2450,7 @@ impl Interpreter {
                         is_arrow: false,
                         is_strict: true,
                         is_generator: m.value.is_generator,
+                        is_async: m.value.is_async,
                     };
                     let method_val = self.create_function(method_func);
 
@@ -2552,7 +2576,10 @@ impl Interpreter {
                         if let JsValue::Object(ref o) = ctor_val
                             && let Some(func_obj) = self.get_object(o.id)
                         {
-                            func_obj.borrow_mut().class_public_field_defs.push((key, p.value.clone()));
+                            func_obj
+                                .borrow_mut()
+                                .class_public_field_defs
+                                .push((key, p.value.clone()));
                         }
                     }
                 }
@@ -2560,7 +2587,11 @@ impl Interpreter {
                     let block_env = Environment::new(Some(env.clone()));
                     block_env.borrow_mut().bindings.insert(
                         "this".to_string(),
-                        Binding { value: ctor_val.clone(), kind: BindingKind::Const, initialized: true },
+                        Binding {
+                            value: ctor_val.clone(),
+                            kind: BindingKind::Const,
+                            initialized: true,
+                        },
                     );
                     match self.exec_statements(body, &block_env) {
                         Completion::Normal(_) => {}
@@ -2664,5 +2695,141 @@ impl Interpreter {
         let obj = Rc::new(RefCell::new(obj_data));
         let id = self.allocate_object_slot(obj);
         Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+    }
+
+    fn call_async_function(
+        &mut self,
+        params: &[Pattern],
+        body: &[Statement],
+        closure: EnvRef,
+        is_arrow: bool,
+        is_strict: bool,
+        this_val: &JsValue,
+        args: &[JsValue],
+        func_val: &JsValue,
+    ) -> Completion {
+        let promise = self.create_promise_object();
+        let promise_id = if let JsValue::Object(ref o) = promise {
+            o.id
+        } else {
+            0
+        };
+        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+
+        let closure_strict = closure.borrow().strict;
+        let func_env = Environment::new(Some(closure));
+        for (i, param) in params.iter().enumerate() {
+            if let Pattern::Rest(inner) = param {
+                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
+                let rest_arr = self.create_array(rest);
+                let _ = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env);
+                break;
+            }
+            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+            let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
+        }
+        if !is_arrow {
+            let effective_this = if !is_strict
+                && !closure_strict
+                && matches!(this_val, JsValue::Undefined | JsValue::Null)
+            {
+                self.global_env
+                    .borrow()
+                    .get("this")
+                    .unwrap_or(this_val.clone())
+            } else {
+                this_val.clone()
+            };
+            func_env.borrow_mut().bindings.insert(
+                "this".to_string(),
+                Binding {
+                    value: effective_this,
+                    kind: BindingKind::Const,
+                    initialized: true,
+                },
+            );
+            let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+            let env_strict = func_env.borrow().strict;
+            let use_mapped = is_simple && !is_strict && !env_strict;
+            let param_names: Vec<String> = if use_mapped {
+                params
+                    .iter()
+                    .filter_map(|p| {
+                        if let Pattern::Identifier(name) = p {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let mapped_env = if use_mapped { Some(&func_env) } else { None };
+            let arguments_obj = self.create_arguments_object(
+                args,
+                func_val.clone(),
+                is_strict,
+                mapped_env,
+                &param_names,
+            );
+            func_env.borrow_mut().declare("arguments", BindingKind::Var);
+            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+        }
+
+        let result = self.exec_statements(body, &func_env);
+        match result {
+            Completion::Return(v) | Completion::Normal(v) => {
+                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);
+            }
+            Completion::Throw(e) => {
+                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+            }
+            _ => {}
+        }
+        self.drain_microtasks();
+        Completion::Normal(promise)
+    }
+
+    pub(crate) fn await_value(&mut self, val: &JsValue) -> Completion {
+        if self.is_promise(val) {
+            let promise_id = if let JsValue::Object(o) = val {
+                o.id
+            } else {
+                0
+            };
+            self.drain_microtasks();
+            match self.get_promise_state(promise_id) {
+                Some(PromiseState::Fulfilled(v)) => Completion::Normal(v),
+                Some(PromiseState::Rejected(r)) => Completion::Throw(r),
+                Some(PromiseState::Pending) => {
+                    for _ in 0..1000 {
+                        if self.microtask_queue.is_empty() {
+                            break;
+                        }
+                        self.drain_microtasks();
+                        match self.get_promise_state(promise_id) {
+                            Some(PromiseState::Fulfilled(v)) => return Completion::Normal(v),
+                            Some(PromiseState::Rejected(r)) => return Completion::Throw(r),
+                            _ => {}
+                        }
+                    }
+                    Completion::Normal(JsValue::Undefined)
+                }
+                None => Completion::Normal(val.clone()),
+            }
+        } else if let JsValue::Object(o) = val {
+            // Check for thenable
+            if let Some(obj) = self.get_object(o.id) {
+                let then_val = obj.borrow().get_property("then");
+                if self.is_callable(&then_val) {
+                    let p = self.promise_resolve_value(val);
+                    return self.await_value(&p);
+                }
+            }
+            Completion::Normal(val.clone())
+        } else {
+            Completion::Normal(val.clone())
+        }
     }
 }

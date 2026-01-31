@@ -106,7 +106,11 @@ fn format_precision(n: f64, precision: usize) -> String {
         // Strip trailing zeros after decimal if needed - actually spec says keep them
         let exp_sign = if exp >= 0 { "+" } else { "" };
         let result = format!("{formatted}e{exp_sign}{exp}");
-        if negative { format!("-{result}") } else { result }
+        if negative {
+            format!("-{result}")
+        } else {
+            result
+        }
     } else {
         // Fixed notation
         let frac_digits = if precision as i32 > e + 1 {
@@ -115,7 +119,11 @@ fn format_precision(n: f64, precision: usize) -> String {
             0
         };
         let formatted = format!("{x:.frac_digits$}");
-        if negative { format!("-{formatted}") } else { formatted }
+        if negative {
+            format!("-{formatted}")
+        } else {
+            formatted
+        }
     }
 }
 
@@ -124,16 +132,18 @@ impl Interpreter {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Symbol".to_string();
 
-        fn this_symbol_value(interp: &Interpreter, this: &JsValue) -> Option<crate::types::JsSymbol> {
+        fn this_symbol_value(
+            interp: &Interpreter,
+            this: &JsValue,
+        ) -> Option<crate::types::JsSymbol> {
             match this {
                 JsValue::Symbol(s) => Some(s.clone()),
                 JsValue::Object(o) => interp.get_object(o.id).and_then(|obj| {
                     let b = obj.borrow();
-                    if b.class_name == "Symbol" {
-                        if let Some(JsValue::Symbol(s)) = &b.primitive_value {
+                    if b.class_name == "Symbol"
+                        && let Some(JsValue::Symbol(s)) = &b.primitive_value {
                             return Some(s.clone());
                         }
-                    }
                     None
                 }),
                 _ => None,
@@ -150,11 +160,18 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this, _args| {
                     let Some(sym) = this_symbol_value(interp, this) else {
-                        let err = interp.create_type_error("Symbol.prototype.toString requires a Symbol");
+                        let err =
+                            interp.create_type_error("Symbol.prototype.toString requires a Symbol");
                         return Completion::Throw(err);
                     };
-                    let desc = sym.description.as_ref().map(|d| d.to_rust_string()).unwrap_or_default();
-                    Completion::Normal(JsValue::String(JsString::from_str(&format!("Symbol({desc})"))))
+                    let desc = sym
+                        .description
+                        .as_ref()
+                        .map(|d| d.to_rust_string())
+                        .unwrap_or_default();
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                        "Symbol({desc})"
+                    ))))
                 }),
             ),
             (
@@ -162,7 +179,8 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this, _args| {
                     let Some(sym) = this_symbol_value(interp, this) else {
-                        let err = interp.create_type_error("Symbol.prototype.valueOf requires a Symbol");
+                        let err =
+                            interp.create_type_error("Symbol.prototype.valueOf requires a Symbol");
                         return Completion::Throw(err);
                     };
                     Completion::Normal(JsValue::Symbol(sym))
@@ -181,7 +199,8 @@ impl Interpreter {
             0,
             Rc::new(|interp, this, _args| {
                 let Some(sym) = this_symbol_value(interp, this) else {
-                    let err = interp.create_type_error("Symbol.prototype.description requires a Symbol");
+                    let err =
+                        interp.create_type_error("Symbol.prototype.description requires a Symbol");
                     return Completion::Throw(err);
                 };
                 match sym.description {
@@ -208,7 +227,8 @@ impl Interpreter {
             1,
             Rc::new(|interp, this, _args| {
                 let Some(sym) = this_symbol_value(interp, this) else {
-                    let err = interp.create_type_error("Symbol[Symbol.toPrimitive] requires a Symbol");
+                    let err =
+                        interp.create_type_error("Symbol[Symbol.toPrimitive] requires a Symbol");
                     return Completion::Throw(err);
                 };
                 Completion::Normal(JsValue::Symbol(sym))
@@ -221,7 +241,13 @@ impl Interpreter {
         {
             let to_prim_sym = sym_data.borrow().get_property("toPrimitive");
             if let JsValue::Symbol(s) = &to_prim_sym {
-                let key = format!("Symbol({})", s.description.as_ref().map(|d| d.to_rust_string()).unwrap_or_default());
+                let key = format!(
+                    "Symbol({})",
+                    s.description
+                        .as_ref()
+                        .map(|d| d.to_rust_string())
+                        .unwrap_or_default()
+                );
                 proto.borrow_mut().insert_builtin(key, to_prim_fn);
             }
         }
@@ -233,7 +259,13 @@ impl Interpreter {
         {
             let tag_sym = sym_data.borrow().get_property("toStringTag");
             if let JsValue::Symbol(s) = &tag_sym {
-                let key = format!("Symbol({})", s.description.as_ref().map(|d| d.to_rust_string()).unwrap_or_default());
+                let key = format!(
+                    "Symbol({})",
+                    s.description
+                        .as_ref()
+                        .map(|d| d.to_rust_string())
+                        .unwrap_or_default()
+                );
                 proto.borrow_mut().insert_property(
                     key,
                     PropertyDescriptor::data(
@@ -254,15 +286,18 @@ impl Interpreter {
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });
-            sym_obj.borrow_mut().insert_value("prototype".to_string(), proto_val);
+            sym_obj
+                .borrow_mut()
+                .insert_value("prototype".to_string(), proto_val);
             // Set constructor on prototype
             let ctor_val = sym_val.clone();
-            proto.borrow_mut().insert_builtin("constructor".to_string(), ctor_val);
+            proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), ctor_val);
         }
 
         self.symbol_prototype = Some(proto);
     }
-
 
     pub(crate) fn setup_number_prototype(&mut self) {
         let proto = self.create_object();
@@ -321,7 +356,11 @@ impl Interpreter {
                     } else if n.is_nan() {
                         Completion::Normal(JsValue::String(JsString::from_str("NaN")))
                     } else if n.is_infinite() {
-                        Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })))
+                        Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 {
+                            "Infinity"
+                        } else {
+                            "-Infinity"
+                        })))
                     } else if n == 0.0 {
                         Completion::Normal(JsValue::String(JsString::from_str("0")))
                     } else {
@@ -351,10 +390,13 @@ impl Interpreter {
                             interp.create_type_error("Number.prototype.toFixed requires a Number");
                         return Completion::Throw(err);
                     };
-                    let f_raw = args.first().map(|v| to_number(v)).unwrap_or(0.0);
+                    let f_raw = args.first().map(to_number).unwrap_or(0.0);
                     let f = to_integer_or_infinity(f_raw);
-                    if f < 0.0 || f > 100.0 {
-                        let err = interp.create_error("RangeError", "toFixed() digits argument must be between 0 and 100");
+                    if !(0.0..=100.0).contains(&f) {
+                        let err = interp.create_error(
+                            "RangeError",
+                            "toFixed() digits argument must be between 0 and 100",
+                        );
                         return Completion::Throw(err);
                     }
                     let digits = f as usize;
@@ -362,7 +404,9 @@ impl Interpreter {
                         return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
                     }
                     if n.is_infinite() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })));
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            if n > 0.0 { "Infinity" } else { "-Infinity" },
+                        )));
                     }
                     Completion::Normal(JsValue::String(JsString::from_str(&format!(
                         "{n:.digits$}"
@@ -386,10 +430,15 @@ impl Interpreter {
                             return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
                         }
                         if n.is_infinite() {
-                            return Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })));
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                if n > 0.0 { "Infinity" } else { "-Infinity" },
+                            )));
                         }
-                        if f < 0.0 || f > 100.0 {
-                            let err = interp.create_error("RangeError", "toExponential() argument must be between 0 and 100");
+                        if !(0.0..=100.0).contains(&f) {
+                            let err = interp.create_error(
+                                "RangeError",
+                                "toExponential() argument must be between 0 and 100",
+                            );
                             return Completion::Throw(err);
                         }
                         let digits = f as usize;
@@ -400,7 +449,9 @@ impl Interpreter {
                             return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
                         }
                         if n.is_infinite() {
-                            return Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })));
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                if n > 0.0 { "Infinity" } else { "-Infinity" },
+                            )));
                         }
                         let result = format_exponential(n, None);
                         Completion::Normal(JsValue::String(JsString::from_str(&result)))
@@ -418,9 +469,9 @@ impl Interpreter {
                     };
                     let has_arg = args.first().is_some_and(|v| !v.is_undefined());
                     if !has_arg {
-                        return Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(
-                            &JsValue::Number(n),
-                        ))));
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            &to_js_string(&JsValue::Number(n)),
+                        )));
                     }
                     let p_raw = to_number(args.first().unwrap());
                     let p = to_integer_or_infinity(p_raw);
@@ -428,10 +479,15 @@ impl Interpreter {
                         return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
                     }
                     if n.is_infinite() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })));
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            if n > 0.0 { "Infinity" } else { "-Infinity" },
+                        )));
                     }
-                    if p < 1.0 || p > 100.0 {
-                        let err = interp.create_error("RangeError", "toPrecision() argument must be between 1 and 100");
+                    if !(1.0..=100.0).contains(&p) {
+                        let err = interp.create_error(
+                            "RangeError",
+                            "toPrecision() argument must be between 1 and 100",
+                        );
                         return Completion::Throw(err);
                     }
                     let precision = p as usize;
@@ -475,7 +531,6 @@ impl Interpreter {
 
         self.number_prototype = Some(proto);
     }
-
 
     pub(crate) fn setup_boolean_prototype(&mut self) {
         let proto = self.create_object();
@@ -553,5 +608,4 @@ impl Interpreter {
 
         self.boolean_prototype = Some(proto);
     }
-
 }

@@ -3,8 +3,8 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 15,828 / 42,076 run (37.62%)
-*Skipped: 6,181 module and async tests*
+**Current pass rate:** 20,232 / 47,458 run (42.63%)
+*Skipped: 799 module tests*
 
 ---
 
@@ -20,7 +20,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | 4 | [Parser (AST)](plan/phase-04-parser.md) | §13–16 | 🟡 ~95% | Expressions, statements, functions (modules missing) |
 | 5 | [Runtime Core](plan/phase-05-runtime.md) | §6–10 | 🟡 ~30% | Environments, execution contexts, objects |
 | 6 | [Evaluation — Expressions & Statements](plan/phase-06-evaluation.md) | §13–14 | 🟡 ~60% | Most operators/statements work |
-| 7 | [Functions & Classes](plan/phase-07-functions-classes.md) | §15 | 🟡 ~60% | Functions, classes, generators work; async doesn't |
+| 7 | [Functions & Classes](plan/phase-07-functions-classes.md) | §15 | 🟡 ~70% | Functions, classes, generators, async/await work |
 | 8 | [Modules & Scripts](plan/phase-08-modules.md) | §16 | ⬜ 0% | Script/module evaluation, import/export |
 | 9 | [Built-in Objects](plan/phase-09-builtins.md) | §19–28 | 🟡 ~40% | Object, Array, String, Math, JSON, URI encode/decode work |
 | 10 | [Advanced Features](plan/phase-10-advanced.md) | §17,25–27,B | 🟡 ~20% | Error handling, memory model, Proxy, Reflect, Annex B |
@@ -36,7 +36,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | String | 24% | 294/1,215 |
 | Function | 50% | 252/509 |
 | Iterator | 27% | 138/510 |
-| Promise | 0% | 0/281 |
+| Promise | 30% | 190/639 |
 | Map | 50% | 103/204 |
 | Set | 68% | 261/383 |
 | Date | 51% | 305/594 |
@@ -54,7 +54,7 @@ These features block significant numbers of tests:
 2. ~~**Garbage collection**~~ — ✅ Done. Mark-and-sweep GC with free-list reuse (148 MB → 11 MB on 100k object alloc).
 3. ~~**Generator `yield` evaluation**~~ — ✅ Done (965 new passes, 33.79% overall). Replay-based yield with next/return/throw. Remaining: yield* delegation, throw resumption, GeneratorFunction constructor.
 4. **Iterator protocol** — Breaks `for...of`, spread on non-arrays, many built-in methods.
-4. **Promise** — Blocks all async/await runtime.
+4. ~~**Promise**~~ — ✅ Done (190/639, 30%). Constructor, then/catch/finally, resolve/reject/all/allSettled/race/any. Async/await supported.
 5. ~~**Map/Set**~~ — ✅ Done (Map: 103/204, Set: 261/383). Remaining failures: native fn `.length` properties, Proxy/Reflect/Symbol.species deps.
 6. ~~**Date**~~ — ✅ Done (305/594, 51%). Constructor, static methods (now/parse/UTC), getters, setters, string formatting, Symbol.toPrimitive. Remaining failures: native fn `.length`/`.name`/prop-desc, Proxy/Reflect.construct, edge-case string parsing.
 

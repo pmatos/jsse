@@ -23,6 +23,7 @@ impl Interpreter {
                         is_arrow: false,
                         is_strict: Self::is_strict_mode_body(&f.body),
                         is_generator: f.is_generator,
+                        is_async: f.is_async,
                     };
                     let val = self.create_function(func);
                     let _ = env.borrow_mut().set(&f.name, val);

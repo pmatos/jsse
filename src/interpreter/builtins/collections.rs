@@ -24,8 +24,8 @@ impl Interpreter {
             "next".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let state = obj.borrow().iterator_state.clone();
                         if let Some(IteratorState::MapIterator {
                             map_id,
@@ -81,7 +81,6 @@ impl Interpreter {
                             );
                         }
                     }
-                }
                 let err =
                     interp.create_type_error("Map Iterator.prototype.next requires a Map Iterator");
                 Completion::Throw(err)
@@ -134,17 +133,15 @@ impl Interpreter {
             "entries".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().map_data.is_some() {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                        && obj.borrow().map_data.is_some() {
                             return Completion::Normal(create_map_iterator(
                                 interp,
                                 o.id,
                                 IteratorKind::KeyValue,
                             ));
                         }
-                    }
-                }
                 let err = interp.create_type_error("Map.prototype.entries requires a Map");
                 Completion::Throw(err)
             },
@@ -165,17 +162,15 @@ impl Interpreter {
             "keys".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().map_data.is_some() {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                        && obj.borrow().map_data.is_some() {
                             return Completion::Normal(create_map_iterator(
                                 interp,
                                 o.id,
                                 IteratorKind::Key,
                             ));
                         }
-                    }
-                }
                 let err = interp.create_type_error("Map.prototype.keys requires a Map");
                 Completion::Throw(err)
             },
@@ -189,17 +184,15 @@ impl Interpreter {
             "values".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().map_data.is_some() {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                        && obj.borrow().map_data.is_some() {
                             return Completion::Normal(create_map_iterator(
                                 interp,
                                 o.id,
                                 IteratorKind::Value,
                             ));
                         }
-                    }
-                }
                 let err = interp.create_type_error("Map.prototype.values requires a Map");
                 Completion::Throw(err)
             },
@@ -213,8 +206,8 @@ impl Interpreter {
             "get".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let map_data = obj.borrow().map_data.clone();
                         if let Some(entries) = map_data {
                             let key = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -226,7 +219,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Undefined);
                         }
                     }
-                }
                 let err = interp.create_type_error("Map.prototype.get requires a Map");
                 Completion::Throw(err)
             },
@@ -238,18 +230,17 @@ impl Interpreter {
             "set".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
                         if has_map {
                             let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
                             let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                             // Normalize -0 to +0
-                            if let JsValue::Number(n) = &key {
-                                if *n == 0.0 && n.is_sign_negative() {
+                            if let JsValue::Number(n) = &key
+                                && *n == 0.0 && n.is_sign_negative() {
                                     key = JsValue::Number(0.0);
                                 }
-                            }
                             let mut borrowed = obj.borrow_mut();
                             let entries = borrowed.map_data.as_mut().unwrap();
                             for entry in entries.iter_mut().flatten() {
@@ -262,7 +253,6 @@ impl Interpreter {
                             return Completion::Normal(this.clone());
                         }
                     }
-                }
                 let err = interp.create_type_error("Map.prototype.set requires a Map");
                 Completion::Throw(err)
             },
@@ -274,8 +264,8 @@ impl Interpreter {
             "has".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let map_data = obj.borrow().map_data.clone();
                         if let Some(entries) = map_data {
                             let key = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -287,7 +277,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                }
                 let err = interp.create_type_error("Map.prototype.has requires a Map");
                 Completion::Throw(err)
             },
@@ -299,8 +288,8 @@ impl Interpreter {
             "delete".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
                         if has_map {
                             let key = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -309,7 +298,7 @@ impl Interpreter {
                             for entry in entries.iter_mut() {
                                 let matches = entry
                                     .as_ref()
-                                    .map_or(false, |e| same_value_zero(&e.0, &key));
+                                    .is_some_and(|e| same_value_zero(&e.0, &key));
                                 if matches {
                                     *entry = None;
                                     return Completion::Normal(JsValue::Boolean(true));
@@ -318,7 +307,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                }
                 let err = interp.create_type_error("Map.prototype.delete requires a Map");
                 Completion::Throw(err)
             },
@@ -332,15 +320,14 @@ impl Interpreter {
             "clear".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
                         if has_map {
                             obj.borrow_mut().map_data = Some(Vec::new());
                             return Completion::Normal(JsValue::Undefined);
                         }
                     }
-                }
                 let err = interp.create_type_error("Map.prototype.clear requires a Map");
                 Completion::Throw(err)
             },
@@ -354,12 +341,12 @@ impl Interpreter {
             "forEach".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
                         if has_map {
                             let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            if !matches!(&callback, JsValue::Object(co) if interp.get_object(co.id).map_or(false, |o| o.borrow().callable.is_some())) {
+                            if !matches!(&callback, JsValue::Object(co) if interp.get_object(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
                                 let err = interp.create_type_error("Map.prototype.forEach callback is not a function");
                                 return Completion::Throw(err);
                             }
@@ -381,7 +368,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Undefined);
                         }
                     }
-                }
                 let err = interp.create_type_error("Map.prototype.forEach requires a Map");
                 Completion::Throw(err)
             },
@@ -395,15 +381,14 @@ impl Interpreter {
             "get size".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let map_data = obj.borrow().map_data.clone();
                         if let Some(entries) = map_data {
                             let count = entries.iter().filter(|e| e.is_some()).count();
                             return Completion::Normal(JsValue::Number(count as f64));
                         }
                     }
-                }
                 let err = interp.create_type_error("Map.prototype.size requires a Map");
                 Completion::Throw(err)
             },
@@ -457,7 +442,7 @@ impl Interpreter {
                 if !iterable.is_undefined() && !iterable.is_null() {
                     // Get adder = this.set
                     let adder = obj.borrow().get_property("set");
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).map_or(false, |o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("Map.prototype.set is not a function");
                         return Completion::Throw(err);
                     }
@@ -538,14 +523,13 @@ impl Interpreter {
         ));
 
         // Set Map.prototype on ctor, ctor on prototype
-        if let JsValue::Object(ctor_obj) = &map_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
+        if let JsValue::Object(ctor_obj) = &map_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id) {
                 obj.borrow_mut().insert_property(
                     "prototype".to_string(),
                     PropertyDescriptor::data(proto_val.clone(), false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(map_ctor.clone(), true, false, true),
@@ -558,7 +542,6 @@ impl Interpreter {
 
         self.map_prototype = Some(proto);
     }
-
 
     pub(crate) fn setup_set_prototype(&mut self) {
         let proto = self.create_object();
@@ -583,8 +566,8 @@ impl Interpreter {
             "next".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let state = obj.borrow().iterator_state.clone();
                         if let Some(IteratorState::SetIterator {
                             set_id,
@@ -637,7 +620,6 @@ impl Interpreter {
                             );
                         }
                     }
-                }
                 let err =
                     interp.create_type_error("Set Iterator.prototype.next requires a Set Iterator");
                 Completion::Throw(err)
@@ -689,17 +671,15 @@ impl Interpreter {
             "values".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().set_data.is_some() {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                        && obj.borrow().set_data.is_some() {
                             return Completion::Normal(create_set_iterator(
                                 interp,
                                 o.id,
                                 IteratorKind::Value,
                             ));
                         }
-                    }
-                }
                 let err = interp.create_type_error("Set.prototype.values requires a Set");
                 Completion::Throw(err)
             },
@@ -725,17 +705,15 @@ impl Interpreter {
             "entries".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().set_data.is_some() {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                        && obj.borrow().set_data.is_some() {
                             return Completion::Normal(create_set_iterator(
                                 interp,
                                 o.id,
                                 IteratorKind::KeyValue,
                             ));
                         }
-                    }
-                }
                 let err = interp.create_type_error("Set.prototype.entries requires a Set");
                 Completion::Throw(err)
             },
@@ -749,16 +727,15 @@ impl Interpreter {
             "add".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
                         if has_set {
                             let mut value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            if let JsValue::Number(n) = &value {
-                                if *n == 0.0 && n.is_sign_negative() {
+                            if let JsValue::Number(n) = &value
+                                && *n == 0.0 && n.is_sign_negative() {
                                     value = JsValue::Number(0.0);
                                 }
-                            }
                             let mut borrowed = obj.borrow_mut();
                             let entries = borrowed.set_data.as_mut().unwrap();
                             for entry in entries.iter().flatten() {
@@ -770,7 +747,6 @@ impl Interpreter {
                             return Completion::Normal(this.clone());
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.add requires a Set");
                 Completion::Throw(err)
             },
@@ -782,8 +758,8 @@ impl Interpreter {
             "has".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let value = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -795,7 +771,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.has requires a Set");
                 Completion::Throw(err)
             },
@@ -807,8 +782,8 @@ impl Interpreter {
             "delete".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
                         if has_set {
                             let value = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -816,7 +791,7 @@ impl Interpreter {
                             let entries = borrowed.set_data.as_mut().unwrap();
                             for entry in entries.iter_mut() {
                                 let matches =
-                                    entry.as_ref().map_or(false, |e| same_value_zero(e, &value));
+                                    entry.as_ref().is_some_and(|e| same_value_zero(e, &value));
                                 if matches {
                                     *entry = None;
                                     return Completion::Normal(JsValue::Boolean(true));
@@ -825,7 +800,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.delete requires a Set");
                 Completion::Throw(err)
             },
@@ -839,15 +813,14 @@ impl Interpreter {
             "clear".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
                         if has_set {
                             obj.borrow_mut().set_data = Some(Vec::new());
                             return Completion::Normal(JsValue::Undefined);
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.clear requires a Set");
                 Completion::Throw(err)
             },
@@ -861,12 +834,12 @@ impl Interpreter {
             "forEach".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
                         if has_set {
                             let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            if !matches!(&callback, JsValue::Object(co) if interp.get_object(co.id).map_or(false, |o| o.borrow().callable.is_some())) {
+                            if !matches!(&callback, JsValue::Object(co) if interp.get_object(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
                                 let err = interp.create_type_error("Set.prototype.forEach callback is not a function");
                                 return Completion::Throw(err);
                             }
@@ -888,7 +861,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Undefined);
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.forEach requires a Set");
                 Completion::Throw(err)
             },
@@ -902,15 +874,14 @@ impl Interpreter {
             "get size".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let count = entries.iter().filter(|e| e.is_some()).count();
                             return Completion::Normal(JsValue::Number(count as f64));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.size requires a Set");
                 Completion::Throw(err)
             },
@@ -934,8 +905,8 @@ impl Interpreter {
             "union".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let other = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -976,11 +947,10 @@ impl Interpreter {
                                     break;
                                 }
                                 let mut val = value;
-                                if let JsValue::Number(n) = &val {
-                                    if *n == 0.0 && n.is_sign_negative() {
+                                if let JsValue::Number(n) = &val
+                                    && *n == 0.0 && n.is_sign_negative() {
                                         val = JsValue::Number(0.0);
                                     }
-                                }
                                 let exists = new_entries
                                     .iter()
                                     .flatten()
@@ -996,7 +966,6 @@ impl Interpreter {
                             }));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.union requires a Set");
                 Completion::Throw(err)
             },
@@ -1010,8 +979,8 @@ impl Interpreter {
             "intersection".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let other = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1033,11 +1002,10 @@ impl Interpreter {
                                     };
                                     if matches!(has_result, JsValue::Boolean(true)) || (!matches!(has_result, JsValue::Boolean(false)) && !has_result.is_undefined() && !has_result.is_null() && !matches!(has_result, JsValue::Number(n) if n == 0.0)) {
                                         let mut val = entry.clone();
-                                        if let JsValue::Number(n) = &val {
-                                            if *n == 0.0 && n.is_sign_negative() {
+                                        if let JsValue::Number(n) = &val
+                                            && *n == 0.0 && n.is_sign_negative() {
                                                 val = JsValue::Number(0.0);
                                             }
-                                        }
                                         new_entries.push(Some(val));
                                     }
                                 }
@@ -1063,11 +1031,10 @@ impl Interpreter {
                                     let in_this = current.iter().flatten().any(|e| same_value_zero(e, &value));
                                     if in_this {
                                         let mut val = value;
-                                        if let JsValue::Number(n) = &val {
-                                            if *n == 0.0 && n.is_sign_negative() {
+                                        if let JsValue::Number(n) = &val
+                                            && *n == 0.0 && n.is_sign_negative() {
                                                 val = JsValue::Number(0.0);
                                             }
-                                        }
                                         if !new_entries.iter().flatten().any(|e| same_value_zero(e, &val)) {
                                             new_entries.push(Some(val));
                                         }
@@ -1079,7 +1046,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.intersection requires a Set");
                 Completion::Throw(err)
             },
@@ -1093,8 +1059,8 @@ impl Interpreter {
             "difference".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let other = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1155,7 +1121,7 @@ impl Interpreter {
                                     for entry in new_entries.iter_mut() {
                                         let matches = entry
                                             .as_ref()
-                                            .map_or(false, |e| same_value_zero(e, &value));
+                                            .is_some_and(|e| same_value_zero(e, &value));
                                         if matches {
                                             *entry = None;
                                             break;
@@ -1170,7 +1136,6 @@ impl Interpreter {
                             }));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.difference requires a Set");
                 Completion::Throw(err)
             },
@@ -1184,8 +1149,8 @@ impl Interpreter {
             "symmetricDifference".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let other = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1225,11 +1190,10 @@ impl Interpreter {
                                     break;
                                 }
                                 let mut val = value;
-                                if let JsValue::Number(n) = &val {
-                                    if *n == 0.0 && n.is_sign_negative() {
+                                if let JsValue::Number(n) = &val
+                                    && *n == 0.0 && n.is_sign_negative() {
                                         val = JsValue::Number(0.0);
                                     }
-                                }
                                 // Re-read this set data
                                 let current = obj.borrow().set_data.clone().unwrap_or_default();
                                 let in_this =
@@ -1239,7 +1203,7 @@ impl Interpreter {
                                     for entry in new_entries.iter_mut() {
                                         let matches = entry
                                             .as_ref()
-                                            .map_or(false, |e| same_value_zero(e, &val));
+                                            .is_some_and(|e| same_value_zero(e, &val));
                                         if matches {
                                             *entry = None;
                                             break;
@@ -1256,7 +1220,6 @@ impl Interpreter {
                             }));
                         }
                     }
-                }
                 let err =
                     interp.create_type_error("Set.prototype.symmetricDifference requires a Set");
                 Completion::Throw(err)
@@ -1271,8 +1234,8 @@ impl Interpreter {
             "isSubsetOf".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let other = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1301,7 +1264,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(true));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.isSubsetOf requires a Set");
                 Completion::Throw(err)
             },
@@ -1315,8 +1277,8 @@ impl Interpreter {
             "isSupersetOf".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let other = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1362,7 +1324,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(true));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.isSupersetOf requires a Set");
                 Completion::Throw(err)
             },
@@ -1376,8 +1337,8 @@ impl Interpreter {
             "isDisjointFrom".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let other = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1439,7 +1400,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(true));
                         }
                     }
-                }
                 let err = interp.create_type_error("Set.prototype.isDisjointFrom requires a Set");
                 Completion::Throw(err)
             },
@@ -1483,7 +1443,7 @@ impl Interpreter {
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !iterable.is_undefined() && !iterable.is_null() {
                     let adder = obj.borrow().get_property("add");
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).map_or(false, |o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("Set.prototype.add is not a function");
                         return Completion::Throw(err);
                     }
@@ -1534,14 +1494,13 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ctor_obj) = &set_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
+        if let JsValue::Object(ctor_obj) = &set_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id) {
                 obj.borrow_mut().insert_property(
                     "prototype".to_string(),
                     PropertyDescriptor::data(proto_val.clone(), false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(set_ctor.clone(), true, false, true),
@@ -1559,7 +1518,6 @@ impl Interpreter {
         self.create_error("TypeError", msg)
     }
 
-
     pub(crate) fn setup_weakmap_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "WeakMap".to_string();
@@ -1569,13 +1527,14 @@ impl Interpreter {
             "get".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let map_data = obj.borrow().map_data.clone();
                         if let Some(entries) = map_data {
                             let key = args.first().cloned().unwrap_or(JsValue::Undefined);
                             if !matches!(key, JsValue::Object(_)) {
-                                let err = interp.create_type_error("Invalid value used as weak map key");
+                                let err =
+                                    interp.create_type_error("Invalid value used as weak map key");
                                 return Completion::Throw(err);
                             }
                             for entry in entries.iter().flatten() {
@@ -1586,7 +1545,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Undefined);
                         }
                     }
-                }
                 let err = interp.create_type_error("WeakMap.prototype.get requires a WeakMap");
                 Completion::Throw(err)
             },
@@ -1598,13 +1556,14 @@ impl Interpreter {
             "set".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
                         if has_map {
                             let key = args.first().cloned().unwrap_or(JsValue::Undefined);
                             if !matches!(key, JsValue::Object(_)) {
-                                let err = interp.create_type_error("Invalid value used as weak map key");
+                                let err =
+                                    interp.create_type_error("Invalid value used as weak map key");
                                 return Completion::Throw(err);
                             }
                             let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -1620,7 +1579,6 @@ impl Interpreter {
                             return Completion::Normal(this.clone());
                         }
                     }
-                }
                 let err = interp.create_type_error("WeakMap.prototype.set requires a WeakMap");
                 Completion::Throw(err)
             },
@@ -1632,8 +1590,8 @@ impl Interpreter {
             "has".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let map_data = obj.borrow().map_data.clone();
                         if let Some(entries) = map_data {
                             let key = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1648,7 +1606,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                }
                 let err = interp.create_type_error("WeakMap.prototype.has requires a WeakMap");
                 Completion::Throw(err)
             },
@@ -1660,8 +1617,8 @@ impl Interpreter {
             "delete".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_map = obj.borrow().map_data.is_some();
                         if has_map {
                             let key = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1673,7 +1630,7 @@ impl Interpreter {
                             for entry in entries.iter_mut() {
                                 let matches = entry
                                     .as_ref()
-                                    .map_or(false, |e| strict_equality(&e.0, &key));
+                                    .is_some_and(|e| strict_equality(&e.0, &key));
                                 if matches {
                                     *entry = None;
                                     return Completion::Normal(JsValue::Boolean(true));
@@ -1682,7 +1639,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                }
                 let err = interp.create_type_error("WeakMap.prototype.delete requires a WeakMap");
                 Completion::Throw(err)
             },
@@ -1726,7 +1682,7 @@ impl Interpreter {
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !iterable.is_undefined() && !iterable.is_null() {
                     let adder = obj.borrow().get_property("set");
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).map_or(false, |o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("WeakMap.prototype.set is not a function");
                         return Completion::Throw(err);
                     }
@@ -1803,14 +1759,13 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ctor_obj) = &weakmap_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
+        if let JsValue::Object(ctor_obj) = &weakmap_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id) {
                 obj.borrow_mut().insert_property(
                     "prototype".to_string(),
                     PropertyDescriptor::data(proto_val.clone(), false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(weakmap_ctor.clone(), true, false, true),
@@ -1824,7 +1779,6 @@ impl Interpreter {
         self.weakmap_prototype = Some(proto);
     }
 
-
     pub(crate) fn setup_weakset_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "WeakSet".to_string();
@@ -1834,13 +1788,14 @@ impl Interpreter {
             "add".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
                         if has_set {
                             let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                             if !matches!(value, JsValue::Object(_)) {
-                                let err = interp.create_type_error("Invalid value used in weak set");
+                                let err =
+                                    interp.create_type_error("Invalid value used in weak set");
                                 return Completion::Throw(err);
                             }
                             let mut borrowed = obj.borrow_mut();
@@ -1854,7 +1809,6 @@ impl Interpreter {
                             return Completion::Normal(this.clone());
                         }
                     }
-                }
                 let err = interp.create_type_error("WeakSet.prototype.add requires a WeakSet");
                 Completion::Throw(err)
             },
@@ -1866,8 +1820,8 @@ impl Interpreter {
             "has".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let set_data = obj.borrow().set_data.clone();
                         if let Some(entries) = set_data {
                             let value = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1882,7 +1836,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                }
                 let err = interp.create_type_error("WeakSet.prototype.has requires a WeakSet");
                 Completion::Throw(err)
             },
@@ -1894,8 +1847,8 @@ impl Interpreter {
             "delete".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_set = obj.borrow().set_data.is_some();
                         if has_set {
                             let value = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1905,9 +1858,8 @@ impl Interpreter {
                             let mut borrowed = obj.borrow_mut();
                             let entries = borrowed.set_data.as_mut().unwrap();
                             for entry in entries.iter_mut() {
-                                let matches = entry
-                                    .as_ref()
-                                    .map_or(false, |e| strict_equality(e, &value));
+                                let matches =
+                                    entry.as_ref().is_some_and(|e| strict_equality(e, &value));
                                 if matches {
                                     *entry = None;
                                     return Completion::Normal(JsValue::Boolean(true));
@@ -1916,7 +1868,6 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                }
                 let err = interp.create_type_error("WeakSet.prototype.delete requires a WeakSet");
                 Completion::Throw(err)
             },
@@ -1960,7 +1911,7 @@ impl Interpreter {
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !iterable.is_undefined() && !iterable.is_null() {
                     let adder = obj.borrow().get_property("add");
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).map_or(false, |o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("WeakSet.prototype.add is not a function");
                         return Completion::Throw(err);
                     }
@@ -2011,14 +1962,13 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ctor_obj) = &weakset_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
+        if let JsValue::Object(ctor_obj) = &weakset_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id) {
                 obj.borrow_mut().insert_property(
                     "prototype".to_string(),
                     PropertyDescriptor::data(proto_val.clone(), false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(weakset_ctor.clone(), true, false, true),
@@ -2031,5 +1981,4 @@ impl Interpreter {
 
         self.weakset_prototype = Some(proto);
     }
-
 }

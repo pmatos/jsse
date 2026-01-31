@@ -15,10 +15,7 @@ fn build_rust_regex(source: &str, flags: &str) -> Result<regex::Regex, String> {
     regex::Regex::new(&pattern).map_err(|e| e.to_string())
 }
 
-fn extract_source_flags(
-    interp: &Interpreter,
-    this_val: &JsValue,
-) -> Option<(String, String, u64)> {
+fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(String, String, u64)> {
     if let JsValue::Object(o) = this_val
         && let Some(obj) = interp.get_object(o.id)
     {
@@ -117,10 +114,8 @@ fn regexp_exec_raw(
     if let JsValue::Object(ref ro) = result
         && let Some(robj) = interp.get_object(ro.id)
     {
-        robj.borrow_mut().insert_value(
-            "index".to_string(),
-            JsValue::Number(match_start as f64),
-        );
+        robj.borrow_mut()
+            .insert_value("index".to_string(), JsValue::Number(match_start as f64));
         robj.borrow_mut().insert_value(
             "input".to_string(),
             JsValue::String(JsString::from_str(input)),
@@ -328,10 +323,9 @@ impl Interpreter {
             },
         ));
         if let Some(key) = get_symbol_key(self, "match") {
-            regexp_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(match_fn, true, false, true),
-            );
+            regexp_proto
+                .borrow_mut()
+                .insert_property(key, PropertyDescriptor::data(match_fn, true, false, true));
         }
 
         // [@@search] (§22.2.5.9)
@@ -349,9 +343,7 @@ impl Interpreter {
                 let result = regexp_exec_raw(interp, obj_id, &source, &flags, &s);
                 set_last_index(interp, obj_id, prev_last_index);
                 match result {
-                    Completion::Normal(JsValue::Null) => {
-                        Completion::Normal(JsValue::Number(-1.0))
-                    }
+                    Completion::Normal(JsValue::Null) => Completion::Normal(JsValue::Number(-1.0)),
                     Completion::Normal(JsValue::Object(ref o)) => {
                         if let Some(obj) = interp.get_object(o.id) {
                             let idx = obj.borrow().get_property("index");
@@ -365,10 +357,9 @@ impl Interpreter {
             },
         ));
         if let Some(key) = get_symbol_key(self, "search") {
-            regexp_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(search_fn, true, false, true),
-            );
+            regexp_proto
+                .borrow_mut()
+                .insert_property(key, PropertyDescriptor::data(search_fn, true, false, true));
         }
 
         // [@@replace] (§22.2.5.8)
@@ -398,8 +389,7 @@ impl Interpreter {
 
                 let mut results: Vec<(usize, usize, String)> = Vec::new();
                 loop {
-                    let exec_result =
-                        regexp_exec_raw(interp, obj_id, &source, &flags, &s);
+                    let exec_result = regexp_exec_raw(interp, obj_id, &source, &flags, &s);
                     match exec_result {
                         Completion::Normal(JsValue::Null) => break,
                         Completion::Normal(JsValue::Object(ref o)) => {
@@ -475,10 +465,9 @@ impl Interpreter {
             },
         ));
         if let Some(key) = get_symbol_key(self, "replace") {
-            regexp_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(replace_fn, true, false, true),
-            );
+            regexp_proto
+                .borrow_mut()
+                .insert_property(key, PropertyDescriptor::data(replace_fn, true, false, true));
         }
 
         // [@@split] (§22.2.5.11)
@@ -497,9 +486,8 @@ impl Interpreter {
                     Some(v) => v,
                     None => {
                         return Completion::Normal(
-                            interp
-                                .create_array(vec![JsValue::String(JsString::from_str(&s))]),
-                        )
+                            interp.create_array(vec![JsValue::String(JsString::from_str(&s))]),
+                        );
                     }
                 };
                 if lim == 0 {
@@ -512,7 +500,7 @@ impl Interpreter {
                         Err(_) => {
                             return Completion::Normal(
                                 interp.create_array(vec![JsValue::String(JsString::from_str(""))]),
-                            )
+                            );
                         }
                     };
                     if re.is_match("") {
@@ -529,7 +517,7 @@ impl Interpreter {
                     Err(_) => {
                         return Completion::Normal(
                             interp.create_array(vec![JsValue::String(JsString::from_str(&s))]),
-                        )
+                        );
                     }
                 };
 
@@ -550,8 +538,7 @@ impl Interpreter {
                     // Add capture groups
                     for i in 1..caps.len() {
                         match caps.get(i) {
-                            Some(m) => result
-                                .push(JsValue::String(JsString::from_str(m.as_str()))),
+                            Some(m) => result.push(JsValue::String(JsString::from_str(m.as_str()))),
                             None => result.push(JsValue::Undefined),
                         }
                         if result.len() as u32 >= lim {
@@ -565,10 +552,9 @@ impl Interpreter {
             },
         ));
         if let Some(key) = get_symbol_key(self, "split") {
-            regexp_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(split_fn, true, false, true),
-            );
+            regexp_proto
+                .borrow_mut()
+                .insert_property(key, PropertyDescriptor::data(split_fn, true, false, true));
         }
 
         // [@@matchAll] (§22.2.5.7)
@@ -594,15 +580,14 @@ impl Interpreter {
                     iter_obj.borrow_mut().prototype = Some(ip.clone());
                 }
 
-                iter_obj.borrow_mut().iterator_state =
-                    Some(IteratorState::RegExpStringIterator {
-                        source,
-                        flags,
-                        string: s,
-                        global,
-                        last_index: last_index as usize,
-                        done: false,
-                    });
+                iter_obj.borrow_mut().iterator_state = Some(IteratorState::RegExpStringIterator {
+                    source,
+                    flags,
+                    string: s,
+                    global,
+                    last_index: last_index as usize,
+                    done: false,
+                });
 
                 let next_fn = interp.create_function(JsFunction::native(
                     "next".to_string(),
@@ -659,10 +644,7 @@ impl Interpreter {
                                             done: true,
                                         });
                                     return Completion::Normal(
-                                        interp.create_iter_result_object(
-                                            JsValue::Undefined,
-                                            true,
-                                        ),
+                                        interp.create_iter_result_object(JsValue::Undefined, true),
                                     );
                                 }
 

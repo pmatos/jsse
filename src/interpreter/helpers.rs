@@ -90,8 +90,10 @@ pub(crate) fn is_string(val: &JsValue) -> bool {
     matches!(val, JsValue::String(_))
 }
 
-
-pub(crate) fn get_set_record(interp: &mut Interpreter, obj: &JsValue) -> Result<SetRecord, JsValue> {
+pub(crate) fn get_set_record(
+    interp: &mut Interpreter,
+    obj: &JsValue,
+) -> Result<SetRecord, JsValue> {
     if !matches!(obj, JsValue::Object(_)) {
         return Err(interp.create_type_error("GetSetRecord requires an object"));
     }
@@ -130,13 +132,13 @@ pub(crate) fn get_set_record(interp: &mut Interpreter, obj: &JsValue) -> Result<
     }
 
     let has = obj_rc.borrow().get_property("has");
-    if !matches!(&has, JsValue::Object(ho) if interp.get_object(ho.id).map_or(false, |o| o.borrow().callable.is_some()))
+    if !matches!(&has, JsValue::Object(ho) if interp.get_object(ho.id).is_some_and(|o| o.borrow().callable.is_some()))
     {
         return Err(interp.create_type_error("Set-like object must have a callable has method"));
     }
 
     let keys = obj_rc.borrow().get_property("keys");
-    if !matches!(&keys, JsValue::Object(ko) if interp.get_object(ko.id).map_or(false, |o| o.borrow().callable.is_some()))
+    if !matches!(&keys, JsValue::Object(ko) if interp.get_object(ko.id).is_some_and(|o| o.borrow().callable.is_some()))
     {
         return Err(interp.create_type_error("Set-like object must have a callable keys method"));
     }
@@ -145,14 +147,13 @@ pub(crate) fn get_set_record(interp: &mut Interpreter, obj: &JsValue) -> Result<
 }
 
 pub(crate) fn extract_iter_result(interp: &Interpreter, result: &JsValue) -> (bool, JsValue) {
-    if let JsValue::Object(ro) = result {
-        if let Some(result_obj) = interp.get_object(ro.id) {
+    if let JsValue::Object(ro) = result
+        && let Some(result_obj) = interp.get_object(ro.id) {
             let borrowed = result_obj.borrow();
             let done = matches!(borrowed.get_property("done"), JsValue::Boolean(true));
             let value = borrowed.get_property("value");
             return (done, value);
         }
-    }
     (true, JsValue::Undefined)
 }
 
@@ -234,7 +235,10 @@ pub(crate) fn abstract_relational(left: &JsValue, right: &JsValue) -> Option<boo
     number_ops::less_than(ln, rn)
 }
 
-pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &[Option<Rc<RefCell<JsObjectData>>>]) -> &'a str {
+pub(crate) fn typeof_val<'a>(
+    val: &JsValue,
+    objects: &[Option<Rc<RefCell<JsObjectData>>>],
+) -> &'a str {
     match val {
         JsValue::Undefined => "undefined",
         JsValue::Null => "object",
@@ -705,7 +709,7 @@ pub(crate) fn format_iso_string(t: f64) -> String {
     let s = sec_from_time(t) as i32;
     let ms = ms_from_time(t) as i32;
     let yi = y as i64;
-    if yi >= 0 && yi <= 9999 {
+    if (0..=9999).contains(&yi) {
         format!(
             "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
             yi, m, d, h, min, s, ms
@@ -1022,7 +1026,10 @@ fn is_uri_unreserved(c: char) -> bool {
 }
 
 fn is_uri_reserved(c: char) -> bool {
-    matches!(c, ';' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | ',' | '#')
+    matches!(
+        c,
+        ';' | '/' | '?' | ':' | '@' | '&' | '=' | '+' | '$' | ',' | '#'
+    )
 }
 
 fn percent_encode_byte(b: u8, out: &mut String) {
@@ -1030,7 +1037,10 @@ fn percent_encode_byte(b: u8, out: &mut String) {
     write!(out, "%{:02X}", b).unwrap();
 }
 
-pub(crate) fn encode_uri_string(code_units: &[u16], preserve_reserved: bool) -> Result<String, String> {
+pub(crate) fn encode_uri_string(
+    code_units: &[u16],
+    preserve_reserved: bool,
+) -> Result<String, String> {
     let mut result = String::new();
     let mut i = 0;
     while i < code_units.len() {
@@ -1076,14 +1086,18 @@ pub(crate) fn encode_uri_string(code_units: &[u16], preserve_reserved: bool) -> 
     Ok(result)
 }
 
-pub(crate) fn decode_uri_string(code_units: &[u16], preserve_reserved: bool) -> Result<Vec<u16>, String> {
+pub(crate) fn decode_uri_string(
+    code_units: &[u16],
+    preserve_reserved: bool,
+) -> Result<Vec<u16>, String> {
     let mut result: Vec<u16> = Vec::new();
     let len = code_units.len();
     let mut i = 0;
 
     while i < len {
         let cu = code_units[i];
-        if cu != 0x25 { // '%'
+        if cu != 0x25 {
+            // '%'
             result.push(cu);
             i += 1;
             continue;
@@ -1136,7 +1150,10 @@ pub(crate) fn decode_uri_string(code_units: &[u16], preserve_reserved: bool) -> 
         }
 
         let s = std::str::from_utf8(&utf8_bytes).map_err(|_| "URI malformed".to_string())?;
-        let c = s.chars().next().ok_or_else(|| "URI malformed".to_string())?;
+        let c = s
+            .chars()
+            .next()
+            .ok_or_else(|| "URI malformed".to_string())?;
 
         let cp = c as u32;
         if (0xD800..=0xDFFF).contains(&cp) {

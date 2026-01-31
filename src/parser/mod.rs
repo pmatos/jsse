@@ -1,6 +1,5 @@
 use crate::ast::*;
 use crate::lexer::{Keyword, LexError, Lexer, Token};
-use std::collections::HashSet;
 use std::fmt;
 
 mod declarations;
@@ -311,7 +310,7 @@ impl<'a> Parser<'a> {
             Expression::Identifier(name) => name == "arguments",
             Expression::Array(elems) => elems
                 .iter()
-                .any(|e| e.as_ref().is_some_and(|ex| Self::contains_arguments(ex))),
+                .any(|e| e.as_ref().is_some_and(Self::contains_arguments)),
             Expression::Object(props) => props.iter().any(|p: &Property| {
                 Self::contains_arguments(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::contains_arguments(e))
@@ -322,7 +321,7 @@ impl<'a> Parser<'a> {
             }
             Expression::Call(callee, args) | Expression::New(callee, args) => {
                 Self::contains_arguments(callee)
-                    || args.iter().any(|a| Self::contains_arguments(a))
+                    || args.iter().any(Self::contains_arguments)
             }
             Expression::Binary(_, left, right)
             | Expression::Logical(_, left, right)
@@ -338,7 +337,7 @@ impl<'a> Parser<'a> {
                     || Self::contains_arguments(alternate)
             }
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                exprs.iter().any(|e| Self::contains_arguments(e))
+                exprs.iter().any(Self::contains_arguments)
             }
             Expression::Spread(inner)
             | Expression::Await(inner)
@@ -353,11 +352,11 @@ impl<'a> Parser<'a> {
                 ArrowBody::Block(stmts) => Self::stmts_contain_arguments(stmts),
             },
             Expression::Template(tl) => {
-                tl.expressions.iter().any(|e| Self::contains_arguments(e))
+                tl.expressions.iter().any(Self::contains_arguments)
             }
             Expression::TaggedTemplate(tag, tl) => {
                 Self::contains_arguments(tag)
-                    || tl.expressions.iter().any(|e| Self::contains_arguments(e))
+                    || tl.expressions.iter().any(Self::contains_arguments)
             }
             Expression::Typeof(e) | Expression::Void(e) | Expression::Delete(e) => {
                 Self::contains_arguments(e)
@@ -377,7 +376,7 @@ impl<'a> Parser<'a> {
     }
 
     fn stmts_contain_arguments(stmts: &[Statement]) -> bool {
-        stmts.iter().any(|s| Self::stmt_contains_arguments(s))
+        stmts.iter().any(Self::stmt_contains_arguments)
     }
 
     fn stmt_contains_arguments(stmt: &Statement) -> bool {
@@ -390,7 +389,7 @@ impl<'a> Parser<'a> {
             Statement::Variable(decl) => decl
                 .declarations
                 .iter()
-                .any(|d| d.init.as_ref().is_some_and(|e| Self::contains_arguments(e))),
+                .any(|d| d.init.as_ref().is_some_and(Self::contains_arguments)),
             Statement::If(i) => {
                 Self::contains_arguments(&i.test)
                     || Self::stmt_contains_arguments(&i.consequent)
@@ -410,12 +409,12 @@ impl<'a> Parser<'a> {
                     crate::ast::ForInit::Variable(d) => d.declarations.iter().any(|dd| {
                         dd.init
                             .as_ref()
-                            .is_some_and(|e| Self::contains_arguments(e))
+                            .is_some_and(Self::contains_arguments)
                     }),
-                }) || f.test.as_ref().is_some_and(|e| Self::contains_arguments(e))
+                }) || f.test.as_ref().is_some_and(Self::contains_arguments)
                     || f.update
                         .as_ref()
-                        .is_some_and(|e| Self::contains_arguments(e))
+                        .is_some_and(Self::contains_arguments)
                     || Self::stmt_contains_arguments(&f.body)
             }
             Statement::ForIn(f) => {
@@ -436,7 +435,7 @@ impl<'a> Parser<'a> {
             Statement::Switch(s) => {
                 Self::contains_arguments(&s.discriminant)
                     || s.cases.iter().any(|c| {
-                        c.test.as_ref().is_some_and(|e| Self::contains_arguments(e))
+                        c.test.as_ref().is_some_and(Self::contains_arguments)
                             || Self::stmts_contain_arguments(&c.consequent)
                     })
             }

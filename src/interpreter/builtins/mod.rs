@@ -3,6 +3,7 @@ mod collections;
 mod date;
 mod iterators;
 mod number;
+mod promise;
 mod regexp;
 mod string;
 mod typedarray;
@@ -30,6 +31,23 @@ impl Interpreter {
             .borrow_mut()
             .declare("console", BindingKind::Const);
         let _ = self.global_env.borrow_mut().set("console", console_val);
+
+        // print global (needed by test262 async harness doneprintHandle.js)
+        {
+            let print_fn = self.create_function(JsFunction::native(
+                "print".to_string(),
+                1,
+                |_interp, _this, args| {
+                    let parts: Vec<String> = args.iter().map(|v| format!("{v}")).collect();
+                    println!("{}", parts.join(" "));
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ));
+            self.global_env
+                .borrow_mut()
+                .declare("print", BindingKind::Var);
+            let _ = self.global_env.borrow_mut().set("print", print_fn);
+        }
 
         // Error constructor
         {
@@ -348,18 +366,22 @@ impl Interpreter {
                     1,
                     Rc::new(|interp, _this, args| {
                         let Some(JsValue::Symbol(sym)) = args.first() else {
-                            let err = interp.create_type_error("Symbol.keyFor requires a symbol argument");
+                            let err = interp
+                                .create_type_error("Symbol.keyFor requires a symbol argument");
                             return Completion::Throw(err);
                         };
                         for (key, reg_sym) in &interp.global_symbol_registry {
                             if reg_sym.id == sym.id {
-                                return Completion::Normal(JsValue::String(JsString::from_str(key)));
+                                return Completion::Normal(JsValue::String(JsString::from_str(
+                                    key,
+                                )));
                             }
                         }
                         Completion::Normal(JsValue::Undefined)
                     }),
                 ));
-                obj.borrow_mut().insert_builtin("keyFor".to_string(), key_for_fn);
+                obj.borrow_mut()
+                    .insert_builtin("keyFor".to_string(), key_for_fn);
             }
             self.global_env
                 .borrow_mut()
@@ -616,7 +638,9 @@ impl Interpreter {
                     other => JsString::from_str(&to_js_string(other)).code_units,
                 };
                 match encode_uri_string(&code_units, true) {
-                    Ok(encoded) => Completion::Normal(JsValue::String(JsString::from_str(&encoded))),
+                    Ok(encoded) => {
+                        Completion::Normal(JsValue::String(JsString::from_str(&encoded)))
+                    }
                     Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
                 }
             }),
@@ -625,17 +649,23 @@ impl Interpreter {
         self.register_global_fn(
             "encodeURIComponent",
             BindingKind::Var,
-            JsFunction::native("encodeURIComponent".to_string(), 1, |interp, _this, args| {
-                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let code_units = match &val {
-                    JsValue::String(s) => s.code_units.clone(),
-                    other => JsString::from_str(&to_js_string(other)).code_units,
-                };
-                match encode_uri_string(&code_units, false) {
-                    Ok(encoded) => Completion::Normal(JsValue::String(JsString::from_str(&encoded))),
-                    Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
-                }
-            }),
+            JsFunction::native(
+                "encodeURIComponent".to_string(),
+                1,
+                |interp, _this, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let code_units = match &val {
+                        JsValue::String(s) => s.code_units.clone(),
+                        other => JsString::from_str(&to_js_string(other)).code_units,
+                    };
+                    match encode_uri_string(&code_units, false) {
+                        Ok(encoded) => {
+                            Completion::Normal(JsValue::String(JsString::from_str(&encoded)))
+                        }
+                        Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
+                    }
+                },
+            ),
         );
 
         self.register_global_fn(
@@ -648,7 +678,9 @@ impl Interpreter {
                     other => JsString::from_str(&to_js_string(other)).code_units,
                 };
                 match decode_uri_string(&code_units, true) {
-                    Ok(decoded) => Completion::Normal(JsValue::String(JsString { code_units: decoded })),
+                    Ok(decoded) => Completion::Normal(JsValue::String(JsString {
+                        code_units: decoded,
+                    })),
                     Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
                 }
             }),
@@ -657,17 +689,23 @@ impl Interpreter {
         self.register_global_fn(
             "decodeURIComponent",
             BindingKind::Var,
-            JsFunction::native("decodeURIComponent".to_string(), 1, |interp, _this, args| {
-                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let code_units = match &val {
-                    JsValue::String(s) => s.code_units.clone(),
-                    other => JsString::from_str(&to_js_string(other)).code_units,
-                };
-                match decode_uri_string(&code_units, false) {
-                    Ok(decoded) => Completion::Normal(JsValue::String(JsString { code_units: decoded })),
-                    Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
-                }
-            }),
+            JsFunction::native(
+                "decodeURIComponent".to_string(),
+                1,
+                |interp, _this, args| {
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let code_units = match &val {
+                        JsValue::String(s) => s.code_units.clone(),
+                        other => JsString::from_str(&to_js_string(other)).code_units,
+                    };
+                    match decode_uri_string(&code_units, false) {
+                        Ok(decoded) => Completion::Normal(JsValue::String(JsString {
+                            code_units: decoded,
+                        })),
+                        Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
+                    }
+                },
+            ),
         );
 
         // Math object
@@ -1007,7 +1045,7 @@ impl Interpreter {
                     (String::new(), to_js_string(&args[0]))
                 } else {
                     let params: Vec<String> =
-                        args[..args.len() - 1].iter().map(|v| to_js_string(v)).collect();
+                        args[..args.len() - 1].iter().map(to_js_string).collect();
                     (params.join(","), to_js_string(args.last().unwrap()))
                 };
 
@@ -1032,7 +1070,7 @@ impl Interpreter {
                 if let Some(Statement::Expression(Expression::Function(fe))) =
                     program.body.first()
                 {
-                    let is_strict = fe.body.first().map_or(false, |s| {
+                    let is_strict = fe.body.first().is_some_and(|s| {
                         matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
                     });
                     let js_func = JsFunction::User {
@@ -1043,6 +1081,7 @@ impl Interpreter {
                         is_arrow: false,
                         is_strict,
                         is_generator: false,
+                        is_async: false,
                     };
                     Completion::Normal(interp.create_function(js_func))
                 } else {
@@ -1140,6 +1179,9 @@ impl Interpreter {
         // TypedArray, ArrayBuffer, DataView built-ins
         self.setup_typedarray_builtins();
 
+        // Promise built-in
+        self.setup_promise();
+
         // globalThis - create a global object
         let global_obj = self.create_object();
         let global_val = JsValue::Object(crate::types::JsObject {
@@ -1148,15 +1190,19 @@ impl Interpreter {
         self.global_env
             .borrow_mut()
             .declare("globalThis", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("globalThis", global_val.clone());
+        let _ = self
+            .global_env
+            .borrow_mut()
+            .set("globalThis", global_val.clone());
         self.global_env.borrow_mut().bindings.insert(
             "this".to_string(),
-            Binding { value: global_val, kind: BindingKind::Const, initialized: true },
+            Binding {
+                value: global_val,
+                kind: BindingKind::Const,
+                initialized: true,
+            },
         );
     }
-
-
-
 
     fn setup_object_statics(&mut self) {
         // Get the Object function from global env
@@ -1381,8 +1427,8 @@ impl Interpreter {
                     let key = args.get(1).map(to_js_string).unwrap_or_default();
                     if let JsValue::Object(ref o) = target {
                         // Proxy getOwnPropertyDescriptor trap
-                        if let Some(obj) = interp.get_object(o.id) {
-                            if obj.borrow().is_proxy() {
+                        if let Some(obj) = interp.get_object(o.id)
+                            && obj.borrow().is_proxy() {
                                 let target_inner = interp.get_proxy_target_val(o.id);
                                 let key_val = JsValue::String(JsString::from_str(&key));
                                 match interp.invoke_proxy_trap(
@@ -1407,7 +1453,6 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 }
                             }
-                        }
                         if let Some(obj) = interp.get_object(o.id)
                             && let Some(desc) = obj.borrow().get_own_property(&key).cloned()
                         {
@@ -1536,25 +1581,22 @@ impl Interpreter {
                                     if let JsValue::Object(ref t) = target_inner
                                         && let Some(tobj) = interp.get_object(t.id)
                                         && let Some(proto) = &tobj.borrow().prototype
-                                    {
-                                        if let Some(id) = proto.borrow().id {
+                                        && let Some(id) = proto.borrow().id {
                                             return Completion::Normal(JsValue::Object(
                                                 crate::types::JsObject { id },
                                             ));
                                         }
-                                    }
                                     return Completion::Normal(JsValue::Null);
                                 }
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
-                        if let Some(proto) = &obj.borrow().prototype {
-                            if let Some(id) = proto.borrow().id {
+                        if let Some(proto) = &obj.borrow().prototype
+                            && let Some(id) = proto.borrow().id {
                                 return Completion::Normal(JsValue::Object(
                                     crate::types::JsObject { id },
                                 ));
                             }
-                        }
                     }
                     Completion::Normal(JsValue::Null)
                 },
@@ -1585,15 +1627,16 @@ impl Interpreter {
                     let target = JsValue::Object(crate::types::JsObject { id });
 
                     let props_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    if !matches!(props_arg, JsValue::Undefined) {
-                        if let JsValue::Object(ref d) = props_arg
+                    if !matches!(props_arg, JsValue::Undefined)
+                        && let JsValue::Object(ref d) = props_arg
                             && let Some(desc_obj) = interp.get_object(d.id)
                         {
                             let keys: Vec<String> =
                                 desc_obj.borrow().properties.keys().cloned().collect();
                             for key in keys {
                                 let b_desc = desc_obj.borrow();
-                                let is_enum = b_desc.get_property_descriptor(&key)
+                                let is_enum = b_desc
+                                    .get_property_descriptor(&key)
                                     .map(|d| d.enumerable.unwrap_or(true))
                                     .unwrap_or(true);
                                 drop(b_desc);
@@ -1614,27 +1657,37 @@ impl Interpreter {
                                         configurable: None,
                                     };
                                     let v = b.get_property("value");
-                                    if !matches!(v, JsValue::Undefined) || b.has_own_property("value") {
+                                    if !matches!(v, JsValue::Undefined)
+                                        || b.has_own_property("value")
+                                    {
                                         desc.value = Some(v);
                                     }
                                     let w = b.get_property("writable");
-                                    if !matches!(w, JsValue::Undefined) || b.has_own_property("writable") {
+                                    if !matches!(w, JsValue::Undefined)
+                                        || b.has_own_property("writable")
+                                    {
                                         desc.writable = Some(to_boolean(&w));
                                     }
                                     let e = b.get_property("enumerable");
-                                    if !matches!(e, JsValue::Undefined) || b.has_own_property("enumerable") {
+                                    if !matches!(e, JsValue::Undefined)
+                                        || b.has_own_property("enumerable")
+                                    {
                                         desc.enumerable = Some(to_boolean(&e));
                                     }
                                     let c = b.get_property("configurable");
-                                    if !matches!(c, JsValue::Undefined) || b.has_own_property("configurable") {
+                                    if !matches!(c, JsValue::Undefined)
+                                        || b.has_own_property("configurable")
+                                    {
                                         desc.configurable = Some(to_boolean(&c));
                                     }
                                     let g = b.get_property("get");
-                                    if !matches!(g, JsValue::Undefined) || b.has_own_property("get") {
+                                    if !matches!(g, JsValue::Undefined) || b.has_own_property("get")
+                                    {
                                         desc.get = Some(g);
                                     }
                                     let s = b.get_property("set");
-                                    if !matches!(s, JsValue::Undefined) || b.has_own_property("set") {
+                                    if !matches!(s, JsValue::Undefined) || b.has_own_property("set")
+                                    {
                                         desc.set = Some(s);
                                     }
                                     drop(b);
@@ -1644,7 +1697,10 @@ impl Interpreter {
                                     if desc.configurable.is_none() {
                                         desc.configurable = Some(false);
                                     }
-                                    if desc.writable.is_none() && desc.get.is_none() && desc.set.is_none() {
+                                    if desc.writable.is_none()
+                                        && desc.get.is_none()
+                                        && desc.set.is_none()
+                                    {
                                         desc.writable = Some(false);
                                     }
                                     if let Some(target_obj) = interp.get_object(id) {
@@ -1653,7 +1709,6 @@ impl Interpreter {
                                 }
                             }
                         }
-                    }
 
                     Completion::Normal(target)
                 },
@@ -2125,13 +2180,12 @@ impl Interpreter {
                         }
                         // Apply all descriptors
                         for (key, desc) in descriptors {
-                            if let Some(target_obj) = interp.get_object(t.id) {
-                                if !target_obj.borrow_mut().define_own_property(key, desc) {
+                            if let Some(target_obj) = interp.get_object(t.id)
+                                && !target_obj.borrow_mut().define_own_property(key, desc) {
                                     return Completion::Throw(interp.create_type_error(
                                         "Cannot define property, object is not extensible or property is non-configurable",
                                     ));
                                 }
-                            }
                         }
                     }
                     Completion::Normal(target)
@@ -2342,21 +2396,19 @@ impl Interpreter {
     }
 
     fn iterator_complete(&self, result: &JsValue) -> bool {
-        if let JsValue::Object(o) = result {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(o) = result
+            && let Some(obj) = self.get_object(o.id) {
                 let done = obj.borrow().get_property("done");
                 return to_boolean(&done);
             }
-        }
         true
     }
 
     pub(crate) fn iterator_value(&self, result: &JsValue) -> JsValue {
-        if let JsValue::Object(o) = result {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(o) = result
+            && let Some(obj) = self.get_object(o.id) {
                 return obj.borrow().get_property("value");
             }
-        }
         JsValue::Undefined
     }
 
@@ -2444,7 +2496,6 @@ impl Interpreter {
         Ok(values)
     }
 
-
     fn setup_reflect(&mut self) {
         let reflect_obj = self.create_object();
         let reflect_id = reflect_obj.borrow().id.unwrap();
@@ -2489,15 +2540,13 @@ impl Interpreter {
                     );
                 }
                 // Check target is callable
-                if let JsValue::Object(ref to) = target {
-                    if let Some(tobj) = interp.get_object(to.id) {
-                        if tobj.borrow().callable.is_none() {
+                if let JsValue::Object(ref to) = target
+                    && let Some(tobj) = interp.get_object(to.id)
+                        && tobj.borrow().callable.is_none() {
                             return Completion::Throw(
                                 interp.create_type_error("target is not a constructor"),
                             );
                         }
-                    }
-                }
                 let args_list = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let new_target = args.get(2).cloned().unwrap_or(target.clone());
                 // Check newTarget is a constructor (has [[Construct]])
@@ -2688,11 +2737,9 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                     && let Some(proto) = &obj.borrow().prototype
-                {
-                    if let Some(id) = proto.borrow().id {
+                    && let Some(id) = proto.borrow().id {
                         return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                     }
-                }
                 Completion::Normal(JsValue::Null)
             },
         ));
@@ -2890,7 +2937,6 @@ impl Interpreter {
         let _ = self.global_env.borrow_mut().set("Reflect", reflect_val);
     }
 
-
     fn setup_proxy(&mut self) {
         // Proxy constructor
         let proxy_fn = self.create_function(JsFunction::native(
@@ -3018,7 +3064,6 @@ impl Interpreter {
             .declare("Proxy", BindingKind::Var);
         let _ = self.global_env.borrow_mut().set("Proxy", proxy_fn);
     }
-
 
     fn setup_function_prototype(&mut self, obj_proto: &Rc<RefCell<JsObjectData>>) {
         // Add call to Object.prototype (simplified - applies to all functions via prototype chain)

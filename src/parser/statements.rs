@@ -534,5 +534,4 @@ impl<'a> Parser<'a> {
         self.eat_semicolon()?;
         Ok(Statement::Expression(expr))
     }
-
 }

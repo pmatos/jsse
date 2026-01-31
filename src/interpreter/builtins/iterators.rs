@@ -48,22 +48,21 @@ impl Interpreter {
                     // Check if new.target is the Iterator constructor by checking if
                     // looking up "Iterator" from global gives the same object
                     let global_iter = interp.global_env.borrow().get("Iterator");
-                    if let Some(JsValue::Object(gi)) = global_iter {
-                        if gi.id == nt.id {
+                    if let Some(JsValue::Object(gi)) = global_iter
+                        && gi.id == nt.id {
                             let err = interp.create_type_error(
                                 "Abstract class Iterator not directly constructable",
                             );
                             return Completion::Throw(err);
                         }
-                    }
                 }
                 Completion::Normal(this.clone())
             },
         ));
 
         // Set Iterator.prototype
-        if let JsValue::Object(ctor_obj) = &iterator_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
+        if let JsValue::Object(ctor_obj) = &iterator_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id) {
                 obj.borrow_mut().insert_property(
                     "prototype".to_string(),
                     PropertyDescriptor::data(
@@ -76,7 +75,6 @@ impl Interpreter {
                     ),
                 );
             }
-        }
 
         // Set %IteratorPrototype%.constructor = Iterator
         iter_proto.borrow_mut().insert_property(
@@ -355,7 +353,6 @@ impl Interpreter {
         JsValue::Object(crate::types::JsObject { id })
     }
 
-
     fn setup_iterator_helper_methods(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
         // toArray()
         let to_array_fn = self.create_function(JsFunction::native(
@@ -405,16 +402,13 @@ impl Interpreter {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
                             let value = interp.iterator_value(&result);
-                            match interp.call_function(
+                            if let Completion::Throw(e) = interp.call_function(
                                 &callback,
                                 &JsValue::Undefined,
                                 &[value, JsValue::Number(counter)],
                             ) {
-                                Completion::Throw(e) => {
-                                    interp.iterator_close(&iter, JsValue::Undefined);
-                                    return Completion::Throw(e);
-                                }
-                                _ => {}
+                                interp.iterator_close(&iter, JsValue::Undefined);
+                                return Completion::Throw(e);
                             }
                             counter += 1.0;
                         }
@@ -659,7 +653,6 @@ impl Interpreter {
         // Lazy helpers: map, filter, take, drop, flatMap
         self.setup_iterator_lazy_helpers(iter_proto);
     }
-
 
     fn setup_iterator_lazy_helpers(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
         // map(mapper)
@@ -1263,7 +1256,6 @@ impl Interpreter {
             .insert_builtin("flatMap".to_string(), flat_map_fn);
     }
 
-
     fn setup_iterator_static_methods(&mut self, iterator_ctor: &JsValue) {
         // Iterator.from(obj)
         let from_fn = self.create_function(JsFunction::native(
@@ -1276,9 +1268,9 @@ impl Interpreter {
                 let sym_key = interp.get_symbol_iterator_key();
                 let mut iterator = None;
 
-                if let JsValue::Object(o) = &obj {
-                    if let Some(ref key) = sym_key {
-                        if let Some(obj_data) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = &obj
+                    && let Some(ref key) = sym_key
+                        && let Some(obj_data) = interp.get_object(o.id) {
                             let iter_fn = obj_data.borrow().get_property(key);
                             if !matches!(iter_fn, JsValue::Undefined) {
                                 match interp.call_function(&iter_fn, &obj, &[]) {
@@ -1295,8 +1287,6 @@ impl Interpreter {
                                 }
                             }
                         }
-                    }
-                }
 
                 let iter_val = if let Some(it) = iterator {
                     it
@@ -1408,11 +1398,10 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ctor_obj) = iterator_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
+        if let JsValue::Object(ctor_obj) = iterator_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id) {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
-        }
 
         // Iterator.concat(...iterables)
         let concat_fn = self.create_function(JsFunction::native(
@@ -1555,11 +1544,10 @@ impl Interpreter {
                         state_ret.borrow_mut().4 = false;
                         state_ret.borrow_mut().2 = None;
                         state_ret.borrow_mut().3 = None;
-                        if alive {
-                            if let Some(ref ci) = cur_iter {
+                        if alive
+                            && let Some(ref ci) = cur_iter {
                                 interp.iterator_close(ci, JsValue::Undefined);
                             }
-                        }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
@@ -1571,12 +1559,11 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ctor_obj) = iterator_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
+        if let JsValue::Object(ctor_obj) = iterator_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id) {
                 obj.borrow_mut()
                     .insert_builtin("concat".to_string(), concat_fn);
             }
-        }
     }
 
     pub(crate) fn create_array_iterator(&mut self, array_id: u64, kind: IteratorKind) -> JsValue {
@@ -1615,7 +1602,6 @@ impl Interpreter {
         let id = self.allocate_object_slot(obj);
         JsValue::Object(crate::types::JsObject { id })
     }
-
 
     pub(crate) fn setup_generator_prototype(&mut self) {
         let gen_proto = self.create_object();
@@ -1690,5 +1676,4 @@ impl Interpreter {
 
         self.generator_prototype = Some(gen_proto);
     }
-
 }

@@ -59,12 +59,12 @@ impl Interpreter {
             &self.bigint64array_prototype,
             &self.biguint64array_prototype,
             &self.dataview_prototype,
+            &self.promise_prototype,
         ] {
-            if let Some(p) = proto {
-                if let Some(id) = p.borrow().id {
+            if let Some(p) = proto
+                && let Some(id) = p.borrow().id {
                     worklist.push(id);
                 }
-            }
         }
         if let Some(JsValue::Object(o)) = &self.new_target {
             worklist.push(o.id);
@@ -84,11 +84,10 @@ impl Interpreter {
             let obj = obj_rc.borrow();
 
             // Trace prototype
-            if let Some(ref proto) = obj.prototype {
-                if let Some(pid) = proto.borrow().id {
+            if let Some(ref proto) = obj.prototype
+                && let Some(pid) = proto.borrow().id {
                     worklist.push(pid);
                 }
-            }
 
             // Trace properties
             for desc in obj.properties.values() {
@@ -133,11 +132,10 @@ impl Interpreter {
             }
 
             // Trace callable (closure environments)
-            if let Some(ref func) = obj.callable {
-                if let JsFunction::User { closure, .. } = func {
+            if let Some(ref func) = obj.callable
+                && let JsFunction::User { closure, .. } = func {
                     Self::collect_env_roots(closure, &mut worklist);
                 }
-            }
 
             // Trace parameter_map environments
             if let Some(ref map) = obj.parameter_map {
@@ -147,35 +145,31 @@ impl Interpreter {
             }
 
             // Trace map_data (skip WeakMap — handled by ephemeron pass)
-            if obj.class_name != "WeakMap" {
-                if let Some(ref entries) = obj.map_data {
+            if obj.class_name != "WeakMap"
+                && let Some(ref entries) = obj.map_data {
                     for entry in entries.iter().flatten() {
                         Self::collect_value_roots(&entry.0, &mut worklist);
                         Self::collect_value_roots(&entry.1, &mut worklist);
                     }
                 }
-            }
 
             // Trace set_data (skip WeakSet — cleared post-sweep)
-            if obj.class_name != "WeakSet" {
-                if let Some(ref entries) = obj.set_data {
+            if obj.class_name != "WeakSet"
+                && let Some(ref entries) = obj.set_data {
                     for val in entries.iter().flatten() {
                         Self::collect_value_roots(val, &mut worklist);
                     }
                 }
-            }
 
             // Trace proxy target/handler
-            if let Some(ref target) = obj.proxy_target {
-                if let Some(tid) = target.borrow().id {
+            if let Some(ref target) = obj.proxy_target
+                && let Some(tid) = target.borrow().id {
                     worklist.push(tid);
                 }
-            }
-            if let Some(ref handler) = obj.proxy_handler {
-                if let Some(hid) = handler.borrow().id {
+            if let Some(ref handler) = obj.proxy_handler
+                && let Some(hid) = handler.borrow().id {
                     worklist.push(hid);
                 }
-            }
 
             // Trace iterator state
             if let Some(ref state) = obj.iterator_state {
@@ -247,11 +241,10 @@ impl Interpreter {
                     None => continue,
                 };
                 let obj = obj_rc.borrow();
-                if let Some(ref proto) = obj.prototype {
-                    if let Some(pid) = proto.borrow().id {
+                if let Some(ref proto) = obj.prototype
+                    && let Some(pid) = proto.borrow().id {
                         worklist.push(pid);
                     }
-                }
                 for desc in obj.properties.values() {
                     if let Some(ref v) = desc.value {
                         Self::collect_value_roots(v, &mut worklist);
@@ -271,26 +264,23 @@ impl Interpreter {
                 if let Some(ref v) = obj.primitive_value {
                     Self::collect_value_roots(v, &mut worklist);
                 }
-                if let Some(ref func) = obj.callable {
-                    if let JsFunction::User { closure, .. } = func {
+                if let Some(ref func) = obj.callable
+                    && let JsFunction::User { closure, .. } = func {
                         Self::collect_env_roots(closure, &mut worklist);
                     }
-                }
-                if obj.class_name != "WeakMap" {
-                    if let Some(ref entries) = obj.map_data {
+                if obj.class_name != "WeakMap"
+                    && let Some(ref entries) = obj.map_data {
                         for entry in entries.iter().flatten() {
                             Self::collect_value_roots(&entry.0, &mut worklist);
                             Self::collect_value_roots(&entry.1, &mut worklist);
                         }
                     }
-                }
-                if obj.class_name != "WeakSet" {
-                    if let Some(ref entries) = obj.set_data {
+                if obj.class_name != "WeakSet"
+                    && let Some(ref entries) = obj.set_data {
                         for val in entries.iter().flatten() {
                             Self::collect_value_roots(val, &mut worklist);
                         }
                     }
-                }
             }
             if !new_marks {
                 break;
@@ -333,8 +323,8 @@ impl Interpreter {
                         }
                     }
                 }
-            } else if obj.class_name == "WeakSet" {
-                if let Some(ref mut entries) = obj.set_data {
+            } else if obj.class_name == "WeakSet"
+                && let Some(ref mut entries) = obj.set_data {
                     for entry in entries.iter_mut() {
                         let dead = if let Some(ref val) = *entry {
                             if let JsValue::Object(val_obj) = val {
@@ -351,7 +341,6 @@ impl Interpreter {
                         }
                     }
                 }
-            }
         }
     }
 

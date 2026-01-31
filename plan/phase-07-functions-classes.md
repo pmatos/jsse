@@ -40,12 +40,12 @@ Implement all function types (normal, arrow, generator, async, async generator) 
 - [ ] Generator `next()` / `return()` / `throw()`
 - [ ] Suspended execution context
 
-### 7.5 Async Functions (§15.8, §27.7) — **requires Promise**
+### 7.5 Async Functions (§15.8, §27.7) — ✅ Basic support
 - [x] `async function` declaration and expression (parsing)
-- [ ] `await` expression (runtime)
-- [ ] Implicit promise wrapping
-- [ ] Async function start
-- [ ] Await fulfilled/rejected reactions
+- [x] `await` expression (runtime)
+- [x] Implicit promise wrapping
+- [x] Async function start
+- [x] Await fulfilled/rejected reactions (synchronous drain)
 - [ ] Async-from-sync iterator
 
 ### 7.6 Async Generator Functions (§15.6, §27.6) — **requires generators + async**

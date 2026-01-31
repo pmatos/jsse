@@ -10,10 +10,10 @@ pub use types::*;
 
 mod helpers;
 pub(crate) use helpers::*;
-mod gc;
-mod exec;
-mod eval;
 mod builtins;
+mod eval;
+mod exec;
+mod gc;
 
 pub struct Interpreter {
     global_env: EnvRef,
@@ -50,12 +50,14 @@ pub struct Interpreter {
     bigint64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     biguint64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     dataview_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    promise_prototype: Option<Rc<RefCell<JsObjectData>>>,
     global_symbol_registry: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
     free_list: Vec<usize>,
     gc_alloc_count: usize,
     generator_context: Option<GeneratorContext>,
+    microtask_queue: Vec<Box<dyn FnOnce(&mut Interpreter) -> Completion>>,
 }
 
 impl Interpreter {
@@ -115,12 +117,14 @@ impl Interpreter {
             bigint64array_prototype: None,
             biguint64array_prototype: None,
             dataview_prototype: None,
+            promise_prototype: None,
             global_symbol_registry: HashMap::new(),
             next_symbol_id: 1,
             new_target: None,
             free_list: Vec::new(),
             gc_alloc_count: 0,
             generator_context: None,
+            microtask_queue: Vec::new(),
         };
         interp.setup_globals();
         interp
@@ -132,9 +136,10 @@ impl Interpreter {
         let _ = self.global_env.borrow_mut().set(name, val);
     }
 
-
-
-    fn to_property_descriptor(&mut self, val: &JsValue) -> Result<PropertyDescriptor, Option<JsValue>> {
+    fn to_property_descriptor(
+        &mut self,
+        val: &JsValue,
+    ) -> Result<PropertyDescriptor, Option<JsValue>> {
         if let JsValue::Object(d) = val {
             let obj_id = d.id;
             let mut desc = PropertyDescriptor {
@@ -148,10 +153,15 @@ impl Interpreter {
 
             macro_rules! check_field {
                 ($field:expr, $key:expr, $assign:expr) => {
-                    let has = self.get_object(obj_id).map(|o| o.borrow().has_property($key)).unwrap_or(false);
+                    let has = self
+                        .get_object(obj_id)
+                        .map(|o| o.borrow().has_property($key))
+                        .unwrap_or(false);
                     if has {
                         match self.get_object_property(obj_id, $key, val) {
-                            Completion::Normal(v) => { $assign(v); },
+                            Completion::Normal(v) => {
+                                $assign(v);
+                            }
                             Completion::Throw(e) => return Err(Some(e)),
                             _ => {}
                         }
@@ -160,17 +170,21 @@ impl Interpreter {
             }
 
             check_field!(desc, "value", |v: JsValue| desc.value = Some(v));
-            check_field!(desc, "writable", |v: JsValue| desc.writable = Some(to_boolean(&v)));
-            check_field!(desc, "enumerable", |v: JsValue| desc.enumerable = Some(to_boolean(&v)));
-            check_field!(desc, "configurable", |v: JsValue| desc.configurable = Some(to_boolean(&v)));
+            check_field!(desc, "writable", |v: JsValue| desc.writable =
+                Some(to_boolean(&v)));
+            check_field!(desc, "enumerable", |v: JsValue| desc.enumerable =
+                Some(to_boolean(&v)));
+            check_field!(desc, "configurable", |v: JsValue| desc.configurable =
+                Some(to_boolean(&v)));
             check_field!(desc, "get", |v: JsValue| desc.get = Some(v));
             check_field!(desc, "set", |v: JsValue| desc.set = Some(v));
 
             // Validate: get must be callable or undefined
-            if let Some(ref getter) = desc.get {
-                if !matches!(getter, JsValue::Undefined) {
+            if let Some(ref getter) = desc.get
+                && !matches!(getter, JsValue::Undefined) {
                     let is_callable = if let JsValue::Object(o) = getter
-                        && let Some(obj) = self.get_object(o.id) {
+                        && let Some(obj) = self.get_object(o.id)
+                    {
                         obj.borrow().callable.is_some()
                     } else {
                         false
@@ -179,11 +193,11 @@ impl Interpreter {
                         return Err(Some(self.create_type_error("Getter must be a function")));
                     }
                 }
-            }
-            if let Some(ref setter) = desc.set {
-                if !matches!(setter, JsValue::Undefined) {
+            if let Some(ref setter) = desc.set
+                && !matches!(setter, JsValue::Undefined) {
                     let is_callable = if let JsValue::Object(o) = setter
-                        && let Some(obj) = self.get_object(o.id) {
+                        && let Some(obj) = self.get_object(o.id)
+                    {
                         obj.borrow().callable.is_some()
                     } else {
                         false
@@ -192,7 +206,6 @@ impl Interpreter {
                         return Err(Some(self.create_type_error("Setter must be a function")));
                     }
                 }
-            }
 
             // Cannot have both accessor and data descriptor fields
             if desc.is_accessor_descriptor() && desc.is_data_descriptor() {
@@ -413,8 +426,8 @@ impl Interpreter {
         if is_strict {
             // Strict: callee is an accessor that throws TypeError on get/set
             let thrower = self.create_thrower_function();
-            if let JsValue::Object(ref o) = result {
-                if let Some(obj_rc) = self.get_object(o.id) {
+            if let JsValue::Object(ref o) = result
+                && let Some(obj_rc) = self.get_object(o.id) {
                     obj_rc.borrow_mut().define_own_property(
                         "callee".to_string(),
                         PropertyDescriptor {
@@ -427,7 +440,6 @@ impl Interpreter {
                         },
                     );
                 }
-            }
         }
 
         // Add Symbol.iterator (Array.prototype[@@iterator]) to both strict and non-strict
@@ -445,13 +457,12 @@ impl Interpreter {
                     Completion::Throw(err)
                 },
             ));
-            if let JsValue::Object(ref o) = result {
-                if let Some(obj_rc) = self.get_object(o.id) {
+            if let JsValue::Object(ref o) = result
+                && let Some(obj_rc) = self.get_object(o.id) {
                     obj_rc
                         .borrow_mut()
                         .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
                 }
-            }
         }
 
         result
@@ -459,7 +470,16 @@ impl Interpreter {
 
     pub fn run(&mut self, program: &Program) -> Completion {
         self.maybe_gc();
-        self.exec_statements(&program.body, &self.global_env.clone())
+        let result = self.exec_statements(&program.body, &self.global_env.clone());
+        self.drain_microtasks();
+        result
+    }
+
+    pub(crate) fn drain_microtasks(&mut self) {
+        while !self.microtask_queue.is_empty() {
+            let job = self.microtask_queue.remove(0);
+            let _ = job(self);
+        }
     }
 
     pub fn format_value(&self, val: &JsValue) -> String {
@@ -486,6 +506,4 @@ impl Interpreter {
             _ => format!("{val}"),
         }
     }
-
-
 }

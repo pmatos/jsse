@@ -1033,8 +1033,8 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
                 let compare_fn = args.first().cloned();
-                if let Some(ref cf) = compare_fn {
-                    if !matches!(cf, JsValue::Undefined) {
+                if let Some(ref cf) = compare_fn
+                    && !matches!(cf, JsValue::Undefined) {
                         let is_callable = if let JsValue::Object(fo) = cf
                             && let Some(fobj) = interp.get_object(fo.id)
                         {
@@ -1047,13 +1047,11 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     }
-                }
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let elems = obj.borrow().array_elements.clone().unwrap_or_default();
-                    let mut pairs: Vec<(usize, JsValue)> =
-                        elems.into_iter().enumerate().collect();
+                    let mut pairs: Vec<(usize, JsValue)> = elems.into_iter().enumerate().collect();
                     pairs.sort_by(|a, b| {
                         let x = &a.1;
                         let y = &b.1;
@@ -1421,5 +1419,4 @@ impl Interpreter {
         let id = self.allocate_object_slot(obj);
         JsValue::Object(crate::types::JsObject { id })
     }
-
 }

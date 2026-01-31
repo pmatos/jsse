@@ -26,7 +26,9 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    pub(super) fn parse_variable_declaration_list(&mut self) -> Result<Vec<VariableDeclarator>, ParseError> {
+    pub(super) fn parse_variable_declaration_list(
+        &mut self,
+    ) -> Result<Vec<VariableDeclarator>, ParseError> {
         let mut decls = Vec::new();
         loop {
             let pattern = self.parse_binding_pattern()?;
@@ -682,5 +684,4 @@ impl<'a> Parser<'a> {
             self.allow_super_call,
         )
     }
-
 }
