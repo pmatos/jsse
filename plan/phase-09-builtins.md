@@ -68,12 +68,12 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Object/` (3,411), `built-ins/Function/` (509), `built-ins/Boolean/` (51), `built-ins/Symbol/` (94), `built-ins/Error/` (53), `built-ins/NativeErrors/` (92), `built-ins/AggregateError/` (25), `built-ins/SuppressedError/` (22)
 
 ### 9.3 Numbers & Dates (§21)
-- [x] **Number** (§21.1)
+- [x] **Number** (§21.1) — 74% pass rate (248/335 tests)
   - [x] `Number()` constructor
   - [x] `Number.isFinite()`, `.isInteger()`, `.isNaN()`, `.isSafeInteger()`
   - [x] `Number.MAX_SAFE_INTEGER`, `.MIN_SAFE_INTEGER`, `.MAX_VALUE`, `.MIN_VALUE`, `.EPSILON`, `.NaN`, `.POSITIVE_INFINITY`, `.NEGATIVE_INFINITY`
-  - [x] `Number.parseFloat()`, `.parseInt()`
-  - [x] `Number.prototype.toExponential()`, `.toFixed()`, `.toPrecision()`, `.toString()`, `.valueOf()`, `.toLocaleString()`
+  - [x] `Number.parseFloat()`, `.parseInt()` (attached to Number constructor)
+  - [x] `Number.prototype.toExponential()`, `.toFixed()`, `.toPrecision()`, `.toString()`, `.valueOf()`, `.toLocaleString()` (with RangeError validation, spec-compliant formatting)
 - [x] **BigInt** (§21.2)
   - [x] `BigInt()` function (not constructor)
   - [ ] `BigInt.asIntN()`, `BigInt.asUintN()`

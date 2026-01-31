@@ -140,7 +140,7 @@ These are tracked across all phases:
 | M4 | Functions (basic call/return) | ~3,000 | ✅ |
 | M5 | Objects + prototypes | ~6,000 | ✅ |
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
-| M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 In progress |
+| M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~35,000 | ⬜ Partial |
 | M9 | RegExp, Proxy, Reflect, Promise, modules | ~45,000 | ⬜ |
 | M10 | Full spec compliance | ~48,000+ | ⬜ |
