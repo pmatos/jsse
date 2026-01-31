@@ -93,11 +93,11 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Number/` (335), `built-ins/BigInt/` (75), `built-ins/Math/` (327), `built-ins/Date/` (594)
 
 ### 9.4 Text Processing (§22)
-- [x] **String** (§22.1) — 24% pass rate (294/1,215 tests)
-  - [x] `String()` constructor
+- [x] **String** (§22.1) — 38% pass rate (457/1,215 tests)
+  - [x] `String()` constructor (spec-compliant ToString via ToPrimitive, Symbol coercion)
   - [x] `String.fromCharCode()`, `String.fromCodePoint()`, `String.raw()`
-  - [x] `String.prototype` methods: `at`, `charAt`, `charCodeAt`, `codePointAt`, `concat`, `endsWith`, `includes`, `indexOf`, `lastIndexOf`, `match`, `padEnd`, `padStart`, `repeat`, `replace`, `replaceAll`, `search`, `slice`, `split`, `startsWith`, `substring`, `toLowerCase`, `toString`, `toUpperCase`, `trim`, `trimEnd`, `trimStart`, `valueOf`
-  - [ ] `isWellFormed`, `toWellFormed`, `normalize`, `localeCompare`, `matchAll`, `toLocaleLowerCase`, `toLocaleUpperCase`
+  - [x] `String.prototype` methods: `at`, `charAt`, `charCodeAt`, `codePointAt`, `concat`, `endsWith`, `includes`, `indexOf`, `lastIndexOf`, `match`, `matchAll`, `padEnd`, `padStart`, `repeat`, `replace`, `replaceAll`, `search`, `slice`, `split`, `startsWith`, `substring`, `toLowerCase`, `toLocaleLowerCase`, `toLocaleUpperCase`, `toString`, `toUpperCase`, `trim`, `trimEnd`, `trimStart`, `valueOf`, `normalize`, `localeCompare`, `isWellFormed`, `toWellFormed`
+  - [x] RequireObjectCoercible on `this` for all methods, UTF-16 code unit indexing, proper argument coercion via ToPrimitive
   - [ ] `String.prototype[@@iterator]`
   - [ ] String HTML methods (Annex B): `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup`
 - [x] **RegExp** (§22.2) — partial

@@ -180,7 +180,10 @@ impl Interpreter {
                     let key = match prop {
                         MemberProperty::Dot(name) => name.clone(),
                         MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => to_js_string(&v),
+                            Completion::Normal(v) => match self.to_property_key(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            },
                             other => return other,
                         },
                         MemberProperty::Private(_) => {
@@ -411,7 +414,10 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let key = to_js_string(&key_val);
+                        let key = match self.to_property_key(&key_val) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         match &base_val {
                             JsValue::Object(o) => self.get_object_property(o.id, &key, &base_val),
                             _ => Completion::Normal(JsValue::Undefined),
@@ -463,6 +469,52 @@ impl Interpreter {
                 JsValue::Object(crate::types::JsObject { id })
             }
         }
+    }
+
+    // §7.1.14 ToPropertyKey
+    pub(crate) fn to_property_key(&mut self, val: &JsValue) -> Result<String, JsValue> {
+        match val {
+            JsValue::Symbol(s) => {
+                if let Some(desc) = &s.description {
+                    Ok(format!("Symbol({desc})"))
+                } else {
+                    Ok("Symbol()".to_string())
+                }
+            }
+            JsValue::Object(_) => {
+                let prim = self.to_primitive(val, "string");
+                if let JsValue::Symbol(s) = &prim {
+                    if let Some(desc) = &s.description {
+                        return Ok(format!("Symbol({desc})"));
+                    } else {
+                        return Ok("Symbol()".to_string());
+                    }
+                }
+                self.to_string_value(&prim)
+            }
+            _ => self.to_string_value(val),
+        }
+    }
+
+    pub(crate) fn create_regexp(&mut self, pattern: &str, flags: &str) -> JsValue {
+        let mut obj = JsObjectData::new();
+        obj.prototype = self
+            .regexp_prototype
+            .clone()
+            .or(self.object_prototype.clone());
+        obj.class_name = "RegExp".to_string();
+        obj.insert_value("source".to_string(), JsValue::String(JsString::from_str(pattern)));
+        obj.insert_value("flags".to_string(), JsValue::String(JsString::from_str(flags)));
+        obj.insert_value("global".to_string(), JsValue::Boolean(flags.contains('g')));
+        obj.insert_value("ignoreCase".to_string(), JsValue::Boolean(flags.contains('i')));
+        obj.insert_value("multiline".to_string(), JsValue::Boolean(flags.contains('m')));
+        obj.insert_value("dotAll".to_string(), JsValue::Boolean(flags.contains('s')));
+        obj.insert_value("unicode".to_string(), JsValue::Boolean(flags.contains('u')));
+        obj.insert_value("sticky".to_string(), JsValue::Boolean(flags.contains('y')));
+        obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
+        let rc = Rc::new(RefCell::new(obj));
+        let id = self.allocate_object_slot(rc);
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn eval_unary(&self, op: UnaryOp, val: &JsValue) -> JsValue {
@@ -624,6 +676,36 @@ impl Interpreter {
     pub(crate) fn to_number_coerce(&mut self, val: &JsValue) -> f64 {
         let prim = self.to_primitive(val, "number");
         to_number(&prim)
+    }
+
+    // §7.1.17 ToString — calls ToPrimitive for objects
+    pub(crate) fn to_string_value(&mut self, val: &JsValue) -> Result<String, JsValue> {
+        match val {
+            JsValue::Undefined => Ok("undefined".to_string()),
+            JsValue::Null => Ok("null".to_string()),
+            JsValue::Boolean(b) => Ok(if *b { "true" } else { "false" }.to_string()),
+            JsValue::Number(n) => Ok(number_ops::to_string(*n)),
+            JsValue::String(s) => Ok(s.to_rust_string()),
+            JsValue::Symbol(_) => Err(self.create_type_error("Cannot convert a Symbol value to a string")),
+            JsValue::BigInt(n) => Ok(n.value.to_string()),
+            JsValue::Object(_) => {
+                let prim = self.to_primitive(val, "string");
+                self.to_string_value(&prim)
+            }
+        }
+    }
+
+    // §7.1.4 ToNumber — calls ToPrimitive for objects
+    pub(crate) fn to_number_value(&mut self, val: &JsValue) -> Result<f64, JsValue> {
+        match val {
+            JsValue::Object(_) => {
+                let prim = self.to_primitive(val, "number");
+                self.to_number_value(&prim)
+            }
+            JsValue::Symbol(_) => Err(self.create_type_error("Cannot convert a Symbol value to a number")),
+            JsValue::BigInt(_) => Err(self.create_type_error("Cannot convert a BigInt value to a number")),
+            _ => Ok(to_number(val)),
+        }
     }
 
     fn abstract_equality(&mut self, left: &JsValue, right: &JsValue) -> bool {
@@ -995,7 +1077,10 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        to_js_string(&v)
+                        match self.to_property_key(&v) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                     MemberProperty::Private(_) => unreachable!(),
                 };
@@ -1155,7 +1240,10 @@ impl Interpreter {
                                 PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
                                 PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
                                 PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                                    Completion::Normal(v) => to_js_string(&v),
+                                    Completion::Normal(v) => match self.to_property_key(&v) {
+                                        Ok(s) => s,
+                                        Err(e) => return Completion::Throw(e),
+                                    },
                                     other => return other,
                                 },
                                 PropertyKey::Private(_) => {
@@ -1263,7 +1351,10 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        to_js_string(&v)
+                        match self.to_property_key(&v) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                     MemberProperty::Private(name) => {
                         if let JsValue::Object(ref o) = obj_val
@@ -2089,7 +2180,10 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                to_js_string(&v)
+                match self.to_property_key(&v) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                }
             }
             MemberProperty::Private(_) => unreachable!(),
         };
@@ -2295,7 +2389,10 @@ impl Interpreter {
                         PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
                         PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => to_js_string(&v),
+                            Completion::Normal(v) => match self.to_property_key(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            },
                             other => return other,
                         },
                         PropertyKey::Private(name) => {
@@ -2545,7 +2642,10 @@ impl Interpreter {
                             PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
                             PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
                             PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                                Completion::Normal(v) => to_js_string(&v),
+                                Completion::Normal(v) => match self.to_property_key(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            },
                                 other => return other,
                             },
                             PropertyKey::Private(_) => unreachable!(),
@@ -2568,7 +2668,10 @@ impl Interpreter {
                             PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
                             PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
                             PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                                Completion::Normal(v) => to_js_string(&v),
+                                Completion::Normal(v) => match self.to_property_key(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            },
                                 other => return other,
                             },
                             PropertyKey::Private(_) => unreachable!(),
@@ -2618,7 +2721,10 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    to_js_string(&v)
+                    match self.to_property_key(&v) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    }
                 }
                 PropertyKey::Private(_) => {
                     return Completion::Throw(

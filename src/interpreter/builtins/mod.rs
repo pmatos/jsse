@@ -399,11 +399,24 @@ impl Interpreter {
             "String",
             BindingKind::Var,
             JsFunction::native("String".to_string(), 1, |interp, this, args| {
-                let val = args
-                    .first()
-                    .cloned()
-                    .unwrap_or(JsValue::String(JsString::from_str("")));
-                let s = to_js_string(&val);
+                let s = if args.is_empty() {
+                    String::new()
+                } else {
+                    let val = &args[0];
+                    // §22.1.1.1: If value is Symbol, return SymbolDescriptiveString
+                    if let JsValue::Symbol(sym) = val {
+                        if let Some(desc) = &sym.description {
+                            format!("Symbol({desc})")
+                        } else {
+                            "Symbol()".to_string()
+                        }
+                    } else {
+                        match interp.to_string_value(val) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    }
+                };
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
