@@ -94,7 +94,7 @@ Implement runtime evaluation for all expression and statement types.
 - [x] `for` (init/test/update with scoping)
 - [x] `for`-`in` (EnumerateObjectProperties)
 - [x] `for`-`of` (GetIterator, IteratorStep) — partial, needs Iterator built-in
-- [ ] `for await`-`of` (async iteration)
+- [x] `for await`-`of` (async iteration)
 - [x] Loop body scoping: per-iteration environment for `let`/`const`
 - [x] `break` / `continue` (with and without labels)
 - [x] Labelled statements

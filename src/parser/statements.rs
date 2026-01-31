@@ -232,6 +232,15 @@ impl<'a> Parser<'a> {
 
     fn parse_for_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // for
+        let is_await = if self.current == Token::Keyword(Keyword::Await) {
+            if !self.in_async {
+                return Err(self.error("for await...of is only valid in async functions"));
+            }
+            self.advance()?;
+            true
+        } else {
+            false
+        };
         self.eat(&Token::LeftParen)?;
 
         // for (init; test; update)
@@ -243,6 +252,9 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let decls = self.parse_variable_declaration_list()?;
                 if self.current == Token::Keyword(Keyword::In) {
+                    if is_await {
+                        return Err(self.error("for await...in is not valid; use for await...of"));
+                    }
                     self.advance()?;
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
@@ -268,7 +280,7 @@ impl<'a> Parser<'a> {
                         }),
                         right,
                         body,
-                        is_await: false,
+                        is_await,
                     }));
                 }
                 Some(ForInit::Variable(VariableDeclaration {
@@ -285,6 +297,9 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let decls = self.parse_variable_declaration_list()?;
                 if self.current == Token::Keyword(Keyword::In) {
+                    if is_await {
+                        return Err(self.error("for await...in is not valid; use for await...of"));
+                    }
                     self.advance()?;
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
@@ -310,7 +325,7 @@ impl<'a> Parser<'a> {
                         }),
                         right,
                         body,
-                        is_await: false,
+                        is_await,
                     }));
                 }
                 Some(ForInit::Variable(VariableDeclaration {
@@ -321,6 +336,9 @@ impl<'a> Parser<'a> {
             _ => {
                 let expr = self.parse_expression()?;
                 if self.current == Token::Keyword(Keyword::In) {
+                    if is_await {
+                        return Err(self.error("for await...in is not valid; use for await...of"));
+                    }
                     self.advance()?;
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
@@ -340,12 +358,16 @@ impl<'a> Parser<'a> {
                         left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
                         right,
                         body,
-                        is_await: false,
+                        is_await,
                     }));
                 }
                 Some(ForInit::Expression(expr))
             }
         };
+
+        if is_await {
+            return Err(self.error("for await is only valid with for...of loops"));
+        }
 
         self.eat(&Token::Semicolon)?;
         let test = if self.current != Token::Semicolon {

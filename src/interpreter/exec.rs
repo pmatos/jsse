@@ -479,18 +479,39 @@ impl Interpreter {
             other => return other,
         };
 
-        let iterator = match self.get_iterator(&iterable) {
-            Ok(iter) => iter,
-            Err(e) => return Completion::Throw(e),
+        let iterator = if fo.is_await {
+            match self.get_async_iterator(&iterable) {
+                Ok(iter) => iter,
+                Err(e) => return Completion::Throw(e),
+            }
+        } else {
+            match self.get_iterator(&iterable) {
+                Ok(iter) => iter,
+                Err(e) => return Completion::Throw(e),
+            }
         };
 
         loop {
-            let step = match self.iterator_step(&iterator) {
-                Ok(Some(result)) => result,
-                Ok(None) => break,
+            let step_result = match self.iterator_next(&iterator) {
+                Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
-            let val = self.iterator_value(&step);
+            let step_result = if fo.is_await {
+                match self.await_value(&step_result) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        self.iterator_close(&iterator, e.clone());
+                        return Completion::Throw(e);
+                    }
+                    other => return other,
+                }
+            } else {
+                step_result
+            };
+            if self.iterator_complete(&step_result) {
+                break;
+            }
+            let val = self.iterator_value(&step_result);
 
             let for_env = Environment::new(Some(env.clone()));
             match &fo.left {

@@ -325,6 +325,7 @@ impl Interpreter {
                     ("split", "Symbol.split"),
                     ("matchAll", "Symbol.matchAll"),
                     ("unscopables", "Symbol.unscopables"),
+                    ("asyncIterator", "Symbol.asyncIterator"),
                 ];
                 for (name, desc) in well_known {
                     let id = self.next_symbol_id;
@@ -2381,6 +2382,149 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn get_async_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
+        let async_sym_key = self.get_symbol_key("asyncIterator");
+        if let Some(key) = &async_sym_key {
+            let iter_fn = match obj {
+                JsValue::Object(o) => {
+                    if let Some(obj_data) = self.get_object(o.id) {
+                        let val = obj_data.borrow().get_property(key);
+                        if !matches!(val, JsValue::Undefined) {
+                            Some(val)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+            if let Some(iter_fn) = iter_fn {
+                return match self.call_function(&iter_fn, obj, &[]) {
+                    Completion::Normal(v) => {
+                        if matches!(v, JsValue::Object(_)) {
+                            Ok(v)
+                        } else {
+                            Err(self.create_type_error(
+                                "Result of the Symbol.asyncIterator method is not an object",
+                            ))
+                        }
+                    }
+                    Completion::Throw(e) => Err(e),
+                    _ => Err(self.create_type_error("is not async iterable")),
+                };
+            }
+        }
+        // Fallback: wrap sync iterator
+        let sync_iter = self.get_iterator(obj)?;
+        Ok(self.create_async_from_sync_iterator(sync_iter))
+    }
+
+    fn create_async_from_sync_iterator(&mut self, sync_iter: JsValue) -> JsValue {
+        let wrapper = self.create_object();
+        let sync_for_next = sync_iter.clone();
+        let next_fn = self.create_function(JsFunction::native(
+            "next".to_string(),
+            1,
+            move |interp, _this, _args| {
+                let result = match interp.iterator_next(&sync_for_next) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                Completion::Normal(interp.promise_resolve_value(&result))
+            },
+        ));
+        wrapper
+            .borrow_mut()
+            .insert_value("next".to_string(), next_fn);
+
+        let sync_for_return = sync_iter.clone();
+        let return_fn = self.create_function(JsFunction::native(
+            "return".to_string(),
+            1,
+            move |interp, _this, args| {
+                if let JsValue::Object(io) = &sync_for_return {
+                    let ret_fn = interp.get_object(io.id).and_then(|obj| {
+                        let val = obj.borrow().get_property("return");
+                        if matches!(val, JsValue::Object(_)) {
+                            Some(val)
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(ret_fn) = ret_fn {
+                        match interp.call_function(&ret_fn, &sync_for_return, args) {
+                            Completion::Normal(v) => {
+                                Completion::Normal(interp.promise_resolve_value(&v))
+                            }
+                            Completion::Throw(e) => Completion::Throw(e),
+                            _ => {
+                                let result = interp.create_iter_result_object(JsValue::Undefined, true);
+                                Completion::Normal(interp.promise_resolve_value(&result))
+                            }
+                        }
+                    } else {
+                        let result = interp.create_iter_result_object(
+                            args.first().cloned().unwrap_or(JsValue::Undefined),
+                            true,
+                        );
+                        Completion::Normal(interp.promise_resolve_value(&result))
+                    }
+                } else {
+                    let result = interp.create_iter_result_object(JsValue::Undefined, true);
+                    Completion::Normal(interp.promise_resolve_value(&result))
+                }
+            },
+        ));
+        wrapper
+            .borrow_mut()
+            .insert_value("return".to_string(), return_fn);
+
+        let sync_for_throw = sync_iter;
+        let throw_fn = self.create_function(JsFunction::native(
+            "throw".to_string(),
+            1,
+            move |interp, _this, args| {
+                if let JsValue::Object(io) = &sync_for_throw {
+                    let throw_method = interp.get_object(io.id).and_then(|obj| {
+                        let val = obj.borrow().get_property("throw");
+                        if matches!(val, JsValue::Object(_)) {
+                            Some(val)
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(throw_method) = throw_method {
+                        match interp.call_function(&throw_method, &sync_for_throw, args) {
+                            Completion::Normal(v) => {
+                                Completion::Normal(interp.promise_resolve_value(&v))
+                            }
+                            Completion::Throw(e) => Completion::Throw(e),
+                            _ => Completion::Throw(
+                                interp.create_type_error("Iterator throw failed"),
+                            ),
+                        }
+                    } else {
+                        Completion::Throw(
+                            args.first().cloned().unwrap_or(JsValue::Undefined),
+                        )
+                    }
+                } else {
+                    Completion::Throw(
+                        args.first().cloned().unwrap_or(JsValue::Undefined),
+                    )
+                }
+            },
+        ));
+        wrapper
+            .borrow_mut()
+            .insert_value("throw".to_string(), throw_fn);
+
+        let id = wrapper.borrow().id.unwrap();
+        JsValue::Object(crate::types::JsObject { id })
+    }
+
     pub(crate) fn iterator_next(&mut self, iterator: &JsValue) -> Result<JsValue, JsValue> {
         if let JsValue::Object(io) = iterator {
             let next_fn = self.get_object(io.id).and_then(|obj| {
@@ -2408,7 +2552,7 @@ impl Interpreter {
         }
     }
 
-    fn iterator_complete(&self, result: &JsValue) -> bool {
+    pub(crate) fn iterator_complete(&self, result: &JsValue) -> bool {
         if let JsValue::Object(o) = result
             && let Some(obj) = self.get_object(o.id) {
                 let done = obj.borrow().get_property("done");

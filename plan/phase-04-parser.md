@@ -83,7 +83,7 @@ Build a complete recursive descent parser producing an AST from the token stream
   - [x] `for`
   - [x] `for`-`in`
   - [x] `for`-`of`
-  - [ ] `for await`-`of`
+  - [x] `for await`-`of`
 - [x] `continue` (§14.8)
 - [x] `break` (§14.9)
 - [x] `return` (§14.10)

@@ -76,6 +76,7 @@ These features block significant numbers of tests:
 11. ~~**RegExp well-known Symbol methods + lastIndex + String dispatch**~~ — ✅ Done (165 new passes, 38.02% → 38.42%). RegExp.prototype exec/test with lastIndex/global/sticky/captures. @@match, @@search, @@replace, @@split, @@matchAll on RegExp.prototype. String.prototype match/replace/replaceAll/search/split/matchAll dispatch through Symbol methods. RegExpStringIterator for matchAll.
 12. ~~**Class public instance fields, method descriptors, static blocks**~~ — ✅ Done (236 new passes, 39.21% → 39.78%). Public instance fields stored on constructor and initialized at construction time. Class method descriptors set to enumerable:false per spec. Static blocks executed with `this` bound to constructor.
 13. ~~**Array built-in spec compliance**~~ — ✅ Done (926 new passes, 42.63% → 44.58%). All Array.prototype methods rewritten with ToObject(this), LengthOfArrayLike, IsCallable validation, thisArg support, and property-based access for array-like objects. Array: 736/2,989 → 2,050/3,079 (67%).
+14. ~~**`for await...of` and async iteration**~~ — ✅ Done (1,014 new passes, 44.82% → 46.89%). Parse `for await (... of ...)`, Symbol.asyncIterator, async-from-sync iterator wrapper, await in for-of loop body. for-await-of: 567/1,234 (46%). Test harness fix: auto-include doneprintHandle.js for async tests.
 
 ---
 

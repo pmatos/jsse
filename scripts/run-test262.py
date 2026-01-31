@@ -140,6 +140,9 @@ def build_test_source(
         parts.append(read_harness_file(test262_dir, "assert.js"))
         parts.append(read_harness_file(test262_dir, "sta.js"))
 
+        if "async" in flags:
+            parts.append(read_harness_file(test262_dir, "doneprintHandle.js"))
+
         for inc in metadata.get("includes", []):
             parts.append(read_harness_file(test262_dir, inc))
 
