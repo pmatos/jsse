@@ -34,7 +34,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Object | 50% | 1,704/3,411 |
 | Array | 25% | 736/2,989 |
 | String | 24% | 294/1,215 |
-| Function | 19% | 95/509 |
+| Function | 50% | 252/509 |
 | Iterator | 27% | 138/510 |
 | Promise | 0% | 0/281 |
 | Map | 50% | 103/204 |

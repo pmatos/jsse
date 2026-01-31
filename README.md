@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 42,076  | 6,181   | 16,948  | 25,128  | 40.28%    |
+| 48,257      | 42,076  | 6,181   | 19,152  | 22,924  | 45.52%    |
 
 *Skipped: module and async tests (async parsing supported, runtime not yet implemented).*
 
@@ -48,6 +48,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - ToPrimitive with valueOf/toString coercion for objects
   - Wrapper objects (`new Boolean`, `new Number`, `new String`) with primitive value
   - `eval()` support
+  - `Function` constructor (dynamic function creation)
   - `Symbol` with well-known symbols (iterator, hasInstance, toPrimitive, etc.)
   - `delete` operator for object properties
   - Iterator protocol (`Symbol.iterator`, lazy `ArrayIterator`, `StringIterator`)

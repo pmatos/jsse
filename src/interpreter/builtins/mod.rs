@@ -995,6 +995,63 @@ impl Interpreter {
             }),
         );
 
+        // Function constructor
+        self.register_global_fn(
+            "Function",
+            BindingKind::Var,
+            JsFunction::native("Function".to_string(), 1, |interp, _this, args| {
+                let (params_str, body_str) = if args.is_empty() {
+                    (String::new(), String::new())
+                } else if args.len() == 1 {
+                    (String::new(), to_js_string(&args[0]))
+                } else {
+                    let params: Vec<String> =
+                        args[..args.len() - 1].iter().map(|v| to_js_string(v)).collect();
+                    (params.join(","), to_js_string(args.last().unwrap()))
+                };
+
+                let source = format!("(function anonymous({}) {{ {} }})", params_str, body_str);
+                let mut p = match parser::Parser::new(&source) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return Completion::Throw(
+                            interp.create_error("SyntaxError", &format!("{}", e)),
+                        );
+                    }
+                };
+                let program = match p.parse_program() {
+                    Ok(prog) => prog,
+                    Err(e) => {
+                        return Completion::Throw(
+                            interp.create_error("SyntaxError", &format!("{}", e)),
+                        );
+                    }
+                };
+
+                if let Some(Statement::Expression(Expression::Function(fe))) =
+                    program.body.first()
+                {
+                    let is_strict = fe.body.first().map_or(false, |s| {
+                        matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                    });
+                    let js_func = JsFunction::User {
+                        name: Some("anonymous".to_string()),
+                        params: fe.params.clone(),
+                        body: fe.body.clone(),
+                        closure: interp.global_env.clone(),
+                        is_arrow: false,
+                        is_strict,
+                        is_generator: false,
+                    };
+                    Completion::Normal(interp.create_function(js_func))
+                } else {
+                    Completion::Throw(
+                        interp.create_error("SyntaxError", "Failed to parse function"),
+                    )
+                }
+            }),
+        );
+
         // JSON object
         let json_obj = self.create_object();
         let json_stringify = self.create_function(JsFunction::native(
