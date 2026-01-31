@@ -194,7 +194,7 @@ Ordered roughly by dependency and importance.
   - [ ] `Iterator()` constructor
   - [ ] `Iterator.from()`
   - [ ] `Iterator.prototype`: `drop`, `every`, `filter`, `find`, `flatMap`, `forEach`, `map`, `reduce`, `some`, `take`, `toArray`, `[@@iterator]`, `[@@toStringTag]`
-- [ ] **AsyncIteratorPrototype** (§27.1.4)
+- [x] **AsyncIteratorPrototype** (§27.1.4) — ✅ [Symbol.asyncIterator] returns this
 - [x] **Promise** (§27.2) — ✅ 190/639 tests passing (30%)
   - [x] `Promise()` constructor
   - [x] `Promise.all()`, `Promise.allSettled()`, `Promise.any()`, `Promise.race()`
@@ -206,9 +206,9 @@ Ordered roughly by dependency and importance.
   - [x] PromiseCapability Records (via create_resolving_functions)
   - [x] Microtask queue with synchronous drain
 - [ ] **GeneratorFunction** (§27.3) — depends on generator runtime
-- [ ] **AsyncGeneratorFunction** (§27.4) — depends on async + generators
+- [x] **AsyncGeneratorFunction** (§27.4) — ✅ async function* dispatch
 - [ ] **Generator** prototype (§27.5) — depends on generator runtime
-- [ ] **AsyncGenerator** prototype (§27.6) — depends on async + generators
+- [x] **AsyncGenerator** prototype (§27.6) — ✅ next/return/throw returning promises, 58-60% pass rate
 - [x] **AsyncFunction** (§27.7) — ✅ Basic async/await works
 
 **Tests:** `built-ins/Iterator/` (510), `built-ins/AsyncIteratorPrototype/` (13), `built-ins/Promise/` (639), `built-ins/GeneratorFunction/` (23), `built-ins/AsyncGeneratorFunction/` (23), `built-ins/GeneratorPrototype/` (61), `built-ins/AsyncGeneratorPrototype/` (48), `built-ins/AsyncFunction/` (18), `built-ins/AsyncFromSyncIteratorPrototype/` (38)

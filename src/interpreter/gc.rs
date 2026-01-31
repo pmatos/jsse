@@ -42,6 +42,8 @@ impl Interpreter {
             &self.set_iterator_prototype,
             &self.date_prototype,
             &self.generator_prototype,
+            &self.async_iterator_prototype,
+            &self.async_generator_prototype,
             &self.weakmap_prototype,
             &self.weakset_prototype,
             &self.symbol_prototype,

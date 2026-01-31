@@ -77,6 +77,7 @@ These features block significant numbers of tests:
 12. ~~**Class public instance fields, method descriptors, static blocks**~~ — ✅ Done (236 new passes, 39.21% → 39.78%). Public instance fields stored on constructor and initialized at construction time. Class method descriptors set to enumerable:false per spec. Static blocks executed with `this` bound to constructor.
 13. ~~**Array built-in spec compliance**~~ — ✅ Done (926 new passes, 42.63% → 44.58%). All Array.prototype methods rewritten with ToObject(this), LengthOfArrayLike, IsCallable validation, thisArg support, and property-based access for array-like objects. Array: 736/2,989 → 2,050/3,079 (67%).
 14. ~~**`for await...of` and async iteration**~~ — ✅ Done (1,014 new passes, 44.82% → 46.89%). Parse `for await (... of ...)`, Symbol.asyncIterator, async-from-sync iterator wrapper, await in for-of loop body. for-await-of: 567/1,234 (46%). Test harness fix: auto-include doneprintHandle.js for async tests.
+15. ~~**Async generators (`async function*`)**~~ — ✅ Done (2,151 new passes, 46.89% → 51.42%). AsyncGenerator iterator state, %AsyncIteratorPrototype% with [Symbol.asyncIterator], %AsyncGeneratorPrototype% with next/return/throw returning promises, await yielded values. async-generator statements: 176/301 (58%), expressions: 375/623 (60%), for-await-of: 1,064/1,234 (86%).
 
 ---
 

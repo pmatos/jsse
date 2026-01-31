@@ -1676,4 +1676,83 @@ impl Interpreter {
 
         self.generator_prototype = Some(gen_proto);
     }
+
+    pub(crate) fn setup_async_generator_prototype(&mut self) {
+        // %AsyncIteratorPrototype% — has [Symbol.asyncIterator]() returning this
+        let async_iter_proto = self.create_object();
+        async_iter_proto.borrow_mut().class_name = "AsyncIterator".to_string();
+
+        let async_iter_self_fn = self.create_function(JsFunction::native(
+            "[Symbol.asyncIterator]".to_string(),
+            0,
+            |_interp, this, _args| Completion::Normal(this.clone()),
+        ));
+        if let Some(key) = self.get_symbol_key("asyncIterator") {
+            async_iter_proto.borrow_mut().insert_property(
+                key,
+                PropertyDescriptor::data(async_iter_self_fn, true, false, true),
+            );
+        }
+        self.async_iterator_prototype = Some(async_iter_proto.clone());
+
+        // %AsyncGeneratorPrototype%
+        let gen_proto = self.create_object();
+        gen_proto.borrow_mut().prototype = Some(async_iter_proto);
+        gen_proto.borrow_mut().class_name = "AsyncGenerator".to_string();
+
+        // next(value)
+        let next_fn = self.create_function(JsFunction::native(
+            "next".to_string(),
+            1,
+            |interp, this, args| {
+                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.async_generator_next(this, value)
+            },
+        ));
+        gen_proto.borrow_mut().insert_property(
+            "next".to_string(),
+            PropertyDescriptor::data(next_fn, true, false, true),
+        );
+
+        // return(value)
+        let return_fn = self.create_function(JsFunction::native(
+            "return".to_string(),
+            1,
+            |interp, this, args| {
+                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.async_generator_return(this, value)
+            },
+        ));
+        gen_proto.borrow_mut().insert_property(
+            "return".to_string(),
+            PropertyDescriptor::data(return_fn, true, false, true),
+        );
+
+        // throw(exception)
+        let throw_fn = self.create_function(JsFunction::native(
+            "throw".to_string(),
+            1,
+            |interp, this, args| {
+                let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.async_generator_throw(this, exception)
+            },
+        ));
+        gen_proto.borrow_mut().insert_property(
+            "throw".to_string(),
+            PropertyDescriptor::data(throw_fn, true, false, true),
+        );
+
+        // Symbol.toStringTag
+        gen_proto.borrow_mut().insert_property(
+            "Symbol(Symbol.toStringTag)".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("AsyncGenerator")),
+                false,
+                false,
+                true,
+            ),
+        );
+
+        self.async_generator_prototype = Some(gen_proto);
+    }
 }

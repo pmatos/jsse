@@ -293,6 +293,16 @@ pub enum IteratorState {
         target_yield: usize,
         done: bool,
     },
+    AsyncGenerator {
+        body: Vec<Statement>,
+        params: Vec<Pattern>,
+        closure: EnvRef,
+        is_strict: bool,
+        args: Vec<JsValue>,
+        this_val: JsValue,
+        target_yield: usize,
+        done: bool,
+    },
     RegExpStringIterator {
         source: String,
         flags: String,

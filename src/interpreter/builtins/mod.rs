@@ -392,6 +392,7 @@ impl Interpreter {
 
         self.setup_iterator_prototypes();
         self.setup_generator_prototype();
+        self.setup_async_generator_prototype();
         self.setup_array_prototype();
         self.setup_string_prototype();
 

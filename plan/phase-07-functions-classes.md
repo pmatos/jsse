@@ -48,12 +48,12 @@ Implement all function types (normal, arrow, generator, async, async generator) 
 - [x] Await fulfilled/rejected reactions (synchronous drain)
 - [ ] Async-from-sync iterator
 
-### 7.6 Async Generator Functions (§15.6, §27.6) — **requires generators + async**
+### 7.6 Async Generator Functions (§15.6, §27.6) — ✅ Done
 - [x] `async function*` declaration and expression (parsing)
-- [ ] `yield` and `await` in async generators
-- [ ] AsyncGeneratorStart / Resume / Yield / Return
-- [ ] AsyncGeneratorEnqueue / Drain
-- [ ] `next()` / `return()` / `throw()` returning Promises
+- [x] `yield` and `await` in async generators
+- [x] AsyncGenerator iterator state, replay-based execution
+- [x] `next()` / `return()` / `throw()` returning Promises
+- [x] %AsyncIteratorPrototype% and %AsyncGeneratorPrototype% setup
 
 ### 7.7 Class Definitions (§15.7)
 - [x] ClassDefinitionEvaluation
