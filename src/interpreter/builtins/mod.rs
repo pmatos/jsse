@@ -455,9 +455,6 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(result))
                 },
             ));
-            let parse_int = self.global_env.borrow().get("parseInt");
-            let parse_float = self.global_env.borrow().get("parseFloat");
-
             if let Some(num_val) = self.global_env.borrow().get("Number")
                 && let JsValue::Object(o) = &num_val
                 && let Some(num_obj) = self.get_object(o.id)
@@ -487,12 +484,6 @@ impl Interpreter {
                 n.insert_value("isNaN".to_string(), is_nan_fn);
                 n.insert_value("isInteger".to_string(), is_integer_fn);
                 n.insert_value("isSafeInteger".to_string(), is_safe_fn);
-                if let Some(pi) = parse_int {
-                    n.insert_value("parseInt".to_string(), pi);
-                }
-                if let Some(pf) = parse_float {
-                    n.insert_value("parseFloat".to_string(), pf);
-                }
             }
         }
 
@@ -575,6 +566,24 @@ impl Interpreter {
                 }
             }),
         );
+
+        // Attach parseInt/parseFloat to Number constructor (must be after global registration)
+        {
+            let parse_int = self.global_env.borrow().get("parseInt");
+            let parse_float = self.global_env.borrow().get("parseFloat");
+            if let Some(num_val) = self.global_env.borrow().get("Number")
+                && let JsValue::Object(o) = &num_val
+                && let Some(num_obj) = self.get_object(o.id)
+            {
+                let mut n = num_obj.borrow_mut();
+                if let Some(pi) = parse_int {
+                    n.insert_value("parseInt".to_string(), pi);
+                }
+                if let Some(pf) = parse_float {
+                    n.insert_value("parseFloat".to_string(), pf);
+                }
+            }
+        }
 
         self.register_global_fn(
             "isNaN",

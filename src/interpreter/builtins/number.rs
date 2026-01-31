@@ -1,5 +1,124 @@
 use super::super::*;
 
+fn format_number_radix(n: f64, radix: u32) -> String {
+    let negative = n < 0.0;
+    let x = n.abs();
+    let int_part = x.trunc() as i64;
+    let frac_part = x - (int_part as f64);
+
+    let mut result = format_radix(int_part, radix);
+
+    if frac_part != 0.0 {
+        result.push('.');
+        let mut frac = frac_part;
+        // Limit to ~20 digits to avoid infinite loops
+        for _ in 0..20 {
+            frac *= radix as f64;
+            let digit = frac.trunc() as u32;
+            result.push(char::from_digit(digit, radix).unwrap_or('0'));
+            frac -= digit as f64;
+            if frac < 1e-10 {
+                break;
+            }
+        }
+    }
+
+    if negative {
+        format!("-{result}")
+    } else {
+        result
+    }
+}
+
+fn format_exponential(n: f64, fraction_digits: Option<usize>) -> String {
+    let negative = n < 0.0;
+    let x = n.abs();
+    if x == 0.0 {
+        let sign = if negative { "-" } else { "" };
+        return match fraction_digits {
+            Some(f) if f > 0 => format!("{sign}0.{}e+0", "0".repeat(f)),
+            _ => format!("{sign}0e+0"),
+        };
+    }
+
+    let e = x.log10().floor() as i32;
+    let result = match fraction_digits {
+        Some(f) => {
+            let scaled = x / 10f64.powi(e);
+            let formatted = format!("{scaled:.f$}");
+            // If rounding pushed us to 10.xxx, adjust
+            let parsed: f64 = formatted.parse().unwrap_or(scaled);
+            if parsed >= 10.0 {
+                let scaled2 = x / 10f64.powi(e + 1);
+                let formatted2 = format!("{scaled2:.f$}");
+                let exp = e + 1;
+                let exp_sign = if exp >= 0 { "+" } else { "" };
+                format!("{formatted2}e{exp_sign}{exp}")
+            } else {
+                let exp_sign = if e >= 0 { "+" } else { "" };
+                format!("{formatted}e{exp_sign}{e}")
+            }
+        }
+        None => {
+            let scaled = x / 10f64.powi(e);
+            // Use enough precision then strip trailing zeros
+            let formatted = format!("{scaled:.20}");
+            let trimmed = formatted.trim_end_matches('0');
+            let trimmed = trimmed.trim_end_matches('.');
+            let exp_sign = if e >= 0 { "+" } else { "" };
+            format!("{trimmed}e{exp_sign}{e}")
+        }
+    };
+
+    if negative {
+        format!("-{result}")
+    } else {
+        result
+    }
+}
+
+fn format_precision(n: f64, precision: usize) -> String {
+    let negative = n < 0.0;
+    let x = n.abs();
+
+    if x == 0.0 {
+        let sign = if negative { "-" } else { "" };
+        if precision == 1 {
+            return format!("{sign}0");
+        }
+        return format!("{sign}0.{}", "0".repeat(precision - 1));
+    }
+
+    let e = x.log10().floor() as i32;
+
+    if e < -6 || e >= precision as i32 {
+        // Exponential notation
+        let frac_digits = precision - 1;
+        let scaled = x / 10f64.powi(e);
+        let formatted = format!("{scaled:.frac_digits$}");
+        let parsed: f64 = formatted.parse().unwrap_or(scaled);
+        let (formatted, exp) = if parsed >= 10.0 {
+            let scaled2 = x / 10f64.powi(e + 1);
+            (format!("{scaled2:.frac_digits$}"), e + 1)
+        } else {
+            (formatted, e)
+        };
+        // Strip trailing zeros after decimal if needed - actually spec says keep them
+        let exp_sign = if exp >= 0 { "+" } else { "" };
+        let result = format!("{formatted}e{exp_sign}{exp}");
+        if negative { format!("-{result}") } else { result }
+    } else {
+        // Fixed notation
+        let frac_digits = if precision as i32 > e + 1 {
+            (precision as i32 - e - 1) as usize
+        } else {
+            0
+        };
+        let formatted = format!("{x:.frac_digits$}");
+        if negative { format!("-{formatted}") } else { formatted }
+    }
+}
+
 impl Interpreter {
     pub(crate) fn setup_symbol_prototype(&mut self) {
         let proto = self.create_object();
@@ -199,8 +318,14 @@ impl Interpreter {
                         Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(
                             &JsValue::Number(n),
                         ))))
+                    } else if n.is_nan() {
+                        Completion::Normal(JsValue::String(JsString::from_str("NaN")))
+                    } else if n.is_infinite() {
+                        Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })))
+                    } else if n == 0.0 {
+                        Completion::Normal(JsValue::String(JsString::from_str("0")))
                     } else {
-                        let s = format_radix(n as i64, radix);
+                        let s = format_number_radix(n, radix);
                         Completion::Normal(JsValue::String(JsString::from_str(&s)))
                     }
                 }),
@@ -226,7 +351,19 @@ impl Interpreter {
                             interp.create_type_error("Number.prototype.toFixed requires a Number");
                         return Completion::Throw(err);
                     };
-                    let digits = args.first().map(|v| to_number(v) as usize).unwrap_or(0);
+                    let f_raw = args.first().map(|v| to_number(v)).unwrap_or(0.0);
+                    let f = to_integer_or_infinity(f_raw);
+                    if f < 0.0 || f > 100.0 {
+                        let err = interp.create_error("RangeError", "toFixed() digits argument must be between 0 and 100");
+                        return Completion::Throw(err);
+                    }
+                    let digits = f as usize;
+                    if n.is_nan() {
+                        return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
+                    }
+                    if n.is_infinite() {
+                        return Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })));
+                    }
                     Completion::Normal(JsValue::String(JsString::from_str(&format!(
                         "{n:.digits$}"
                     ))))
@@ -243,12 +380,30 @@ impl Interpreter {
                     };
                     let has_arg = args.first().is_some_and(|v| !v.is_undefined());
                     if has_arg {
-                        let digits = to_number(args.first().unwrap()) as usize;
-                        Completion::Normal(JsValue::String(JsString::from_str(&format!(
-                            "{n:.digits$e}"
-                        ))))
+                        let f_raw = to_number(args.first().unwrap());
+                        let f = to_integer_or_infinity(f_raw);
+                        if n.is_nan() {
+                            return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
+                        }
+                        if n.is_infinite() {
+                            return Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })));
+                        }
+                        if f < 0.0 || f > 100.0 {
+                            let err = interp.create_error("RangeError", "toExponential() argument must be between 0 and 100");
+                            return Completion::Throw(err);
+                        }
+                        let digits = f as usize;
+                        let result = format_exponential(n, Some(digits));
+                        Completion::Normal(JsValue::String(JsString::from_str(&result)))
                     } else {
-                        Completion::Normal(JsValue::String(JsString::from_str(&format!("{n:e}"))))
+                        if n.is_nan() {
+                            return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
+                        }
+                        if n.is_infinite() {
+                            return Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })));
+                        }
+                        let result = format_exponential(n, None);
+                        Completion::Normal(JsValue::String(JsString::from_str(&result)))
                     }
                 }),
             ),
@@ -262,17 +417,26 @@ impl Interpreter {
                         return Completion::Throw(err);
                     };
                     let has_arg = args.first().is_some_and(|v| !v.is_undefined());
-                    if has_arg {
-                        let precision = to_number(args.first().unwrap()) as usize;
-                        Completion::Normal(JsValue::String(JsString::from_str(&format!(
-                            "{n:.prec$}",
-                            prec = precision.saturating_sub(1)
-                        ))))
-                    } else {
-                        Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(
+                    if !has_arg {
+                        return Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(
                             &JsValue::Number(n),
-                        ))))
+                        ))));
                     }
+                    let p_raw = to_number(args.first().unwrap());
+                    let p = to_integer_or_infinity(p_raw);
+                    if n.is_nan() {
+                        return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
+                    }
+                    if n.is_infinite() {
+                        return Completion::Normal(JsValue::String(JsString::from_str(if n > 0.0 { "Infinity" } else { "-Infinity" })));
+                    }
+                    if p < 1.0 || p > 100.0 {
+                        let err = interp.create_error("RangeError", "toPrecision() argument must be between 1 and 100");
+                        return Completion::Throw(err);
+                    }
+                    let precision = p as usize;
+                    let result = format_precision(n, precision);
+                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
                 }),
             ),
             (

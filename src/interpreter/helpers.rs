@@ -1,5 +1,15 @@
 use super::*;
 
+pub(crate) fn to_integer_or_infinity(n: f64) -> f64 {
+    if n.is_nan() || n == 0.0 {
+        0.0
+    } else if n.is_infinite() {
+        n
+    } else {
+        n.trunc()
+    }
+}
+
 pub(crate) fn format_radix(mut n: i64, radix: u32) -> String {
     if !(2..=36).contains(&radix) {
         return n.to_string();
