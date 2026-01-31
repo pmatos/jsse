@@ -32,7 +32,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
 | Object | 50% | 1,704/3,411 |
-| Array | 25% | 736/2,989 |
+| Array | 67% | 2,050/3,079 |
 | String | 24% | 294/1,215 |
 | Function | 50% | 252/509 |
 | Iterator | 27% | 138/510 |
@@ -75,6 +75,7 @@ These features block significant numbers of tests:
 10. ~~**Symbol built-in**~~ — ✅ Done (26/94, 28%, 43 new passes overall). Symbol.prototype (toString, valueOf, description, @@toPrimitive, @@toStringTag), Symbol.for/keyFor registry, new Symbol() TypeError, symbol equality, primitive property access.
 11. ~~**RegExp well-known Symbol methods + lastIndex + String dispatch**~~ — ✅ Done (165 new passes, 38.02% → 38.42%). RegExp.prototype exec/test with lastIndex/global/sticky/captures. @@match, @@search, @@replace, @@split, @@matchAll on RegExp.prototype. String.prototype match/replace/replaceAll/search/split/matchAll dispatch through Symbol methods. RegExpStringIterator for matchAll.
 12. ~~**Class public instance fields, method descriptors, static blocks**~~ — ✅ Done (236 new passes, 39.21% → 39.78%). Public instance fields stored on constructor and initialized at construction time. Class method descriptors set to enumerable:false per spec. Static blocks executed with `this` bound to constructor.
+13. ~~**Array built-in spec compliance**~~ — ✅ Done (926 new passes, 42.63% → 44.58%). All Array.prototype methods rewritten with ToObject(this), LengthOfArrayLike, IsCallable validation, thisArg support, and property-based access for array-like objects. Array: 736/2,989 → 2,050/3,079 (67%).
 
 ---
 

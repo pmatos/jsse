@@ -120,13 +120,13 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/String/` (1,215), `built-ins/RegExp/` (1,879), `built-ins/StringIteratorPrototype/` (7), `built-ins/RegExpStringIteratorPrototype/` (17)
 
 ### 9.5 Indexed Collections (§23)
-- [x] **Array** (§23.1) — 25% pass rate (736/2,989 tests)
+- [x] **Array** (§23.1) — 67% pass rate (2,050/3,079 tests)
   - [x] `Array()` constructor
   - [x] `Array.from()`, `Array.isArray()`, `Array.of()`
-  - [x] `Array.prototype` methods: `at`, `concat`, `every`, `fill`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `flat`, `flatMap`, `forEach`, `includes`, `indexOf`, `join`, `lastIndexOf`, `map`, `pop`, `push`, `reduce`, `reduceRight`, `reverse`, `shift`, `slice`, `some`, `sort`, `splice`, `toString`, `unshift`
-  - [ ] `copyWithin`, `entries`, `keys`, `values`, `toLocaleString`, `toReversed`, `toSorted`, `toSpliced`, `with`
-  - [ ] `Array.prototype[@@iterator]`, `[@@unscopables]`
-  - [x] Array length semantics
+  - [x] `Array.prototype` methods: `at`, `concat`, `copyWithin`, `entries`, `every`, `fill`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `flat`, `flatMap`, `forEach`, `includes`, `indexOf`, `join`, `keys`, `lastIndexOf`, `map`, `pop`, `push`, `reduce`, `reduceRight`, `reverse`, `shift`, `slice`, `some`, `sort`, `splice`, `toReversed`, `toSorted`, `toSpliced`, `toString`, `unshift`, `values`, `with`
+  - [x] `Array.prototype[@@iterator]`
+  - [x] Spec-compliant: ToObject(this), LengthOfArrayLike, IsCallable validation, thisArg support, property-based access for array-like objects
+  - [ ] `toLocaleString`, `[@@unscopables]`
   - [ ] Array species (`@@species`)
   - [ ] Array groupBy
 - [x] **TypedArray** (§23.2) — **IMPLEMENTED** (340/1,438 = 23.6%, 323/736 constructors = 43.9%)
