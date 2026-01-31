@@ -300,6 +300,68 @@ pub enum IteratorState {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TypedArrayKind {
+    Int8,
+    Uint8,
+    Uint8Clamped,
+    Int16,
+    Uint16,
+    Int32,
+    Uint32,
+    Float32,
+    Float64,
+    BigInt64,
+    BigUint64,
+}
+
+impl TypedArrayKind {
+    pub fn bytes_per_element(&self) -> usize {
+        match self {
+            TypedArrayKind::Int8 | TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => 1,
+            TypedArrayKind::Int16 | TypedArrayKind::Uint16 => 2,
+            TypedArrayKind::Int32 | TypedArrayKind::Uint32 | TypedArrayKind::Float32 => 4,
+            TypedArrayKind::Float64 | TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => 8,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            TypedArrayKind::Int8 => "Int8Array",
+            TypedArrayKind::Uint8 => "Uint8Array",
+            TypedArrayKind::Uint8Clamped => "Uint8ClampedArray",
+            TypedArrayKind::Int16 => "Int16Array",
+            TypedArrayKind::Uint16 => "Uint16Array",
+            TypedArrayKind::Int32 => "Int32Array",
+            TypedArrayKind::Uint32 => "Uint32Array",
+            TypedArrayKind::Float32 => "Float32Array",
+            TypedArrayKind::Float64 => "Float64Array",
+            TypedArrayKind::BigInt64 => "BigInt64Array",
+            TypedArrayKind::BigUint64 => "BigUint64Array",
+        }
+    }
+
+    pub fn is_bigint(&self) -> bool {
+        matches!(self, TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedArrayInfo {
+    pub kind: TypedArrayKind,
+    pub buffer: Rc<RefCell<Vec<u8>>>,
+    pub byte_offset: usize,
+    pub byte_length: usize,
+    pub array_length: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct DataViewInfo {
+    pub buffer: Rc<RefCell<Vec<u8>>>,
+    pub byte_offset: usize,
+    pub byte_length: usize,
+}
+
 pub struct JsObjectData {
     pub id: Option<u64>,
     pub properties: HashMap<String, PropertyDescriptor>,
@@ -320,6 +382,9 @@ pub struct JsObjectData {
     pub proxy_target: Option<Rc<RefCell<JsObjectData>>>,
     pub proxy_handler: Option<Rc<RefCell<JsObjectData>>>,
     pub proxy_revoked: bool,
+    pub arraybuffer_data: Option<Rc<RefCell<Vec<u8>>>>,
+    pub typed_array_info: Option<TypedArrayInfo>,
+    pub data_view_info: Option<DataViewInfo>,
 }
 
 impl JsObjectData {
@@ -344,6 +409,9 @@ impl JsObjectData {
             proxy_target: None,
             proxy_handler: None,
             proxy_revoked: false,
+            arraybuffer_data: None,
+            typed_array_info: None,
+            data_view_info: None,
         }
     }
 
@@ -370,6 +438,14 @@ impl JsObjectData {
             && idx < elems.len()
         {
             return elems[idx].clone();
+        }
+        if let Some(ref ta) = self.typed_array_info {
+            if let Ok(idx) = key.parse::<usize>() {
+                if idx < ta.array_length {
+                    return typed_array_get_index(ta, idx);
+                }
+                return JsValue::Undefined;
+            }
         }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property(key);
@@ -401,6 +477,21 @@ impl JsObjectData {
                 get: None,
                 set: None,
             });
+        }
+        if let Some(ref ta) = self.typed_array_info {
+            if let Ok(idx) = key.parse::<usize>() {
+                if idx < ta.array_length {
+                    return Some(PropertyDescriptor {
+                        value: Some(typed_array_get_index(ta, idx)),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        get: None,
+                        set: None,
+                    });
+                }
+                return None;
+            }
         }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property_descriptor(key);
@@ -614,6 +705,12 @@ impl JsObjectData {
     }
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
+        if let Some(ref ta) = self.typed_array_info {
+            if let Ok(idx) = key.parse::<usize>() {
+                let ta_clone = ta.clone();
+                return typed_array_set_index(&ta_clone, idx, &value);
+            }
+        }
         if let Some(ref map) = self.parameter_map {
             if let Some((env_ref, param_name)) = map.get(key) {
                 let _ = env_ref.borrow_mut().set(param_name, value.clone());
@@ -660,6 +757,162 @@ impl JsObjectData {
 
     pub fn get_property_value(&self, key: &str) -> Option<JsValue> {
         self.properties.get(key).and_then(|d| d.value.clone())
+    }
+}
+
+pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {
+    let buf = ta.buffer.borrow();
+    let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
+    match ta.kind {
+        TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
+        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => JsValue::Number(buf[offset] as f64),
+        TypedArrayKind::Int16 => {
+            let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Uint16 => {
+            let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Int32 => {
+            let v = i32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Uint32 => {
+            let v = u32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Float32 => {
+            let v = f32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Float64 => {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
+            JsValue::Number(f64::from_ne_bytes(bytes))
+        }
+        TypedArrayKind::BigInt64 => {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
+            JsValue::BigInt(crate::types::JsBigInt { value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)) })
+        }
+        TypedArrayKind::BigUint64 => {
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
+            JsValue::BigInt(crate::types::JsBigInt { value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)) })
+        }
+    }
+}
+
+pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsValue) -> bool {
+    if idx >= ta.array_length {
+        return false;
+    }
+    let mut buf = ta.buffer.borrow_mut();
+    let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
+    match ta.kind {
+        TypedArrayKind::Int8 => {
+            let v = to_int8(value);
+            buf[offset] = v as u8;
+        }
+        TypedArrayKind::Uint8 => {
+            let v = to_uint8(value);
+            buf[offset] = v;
+        }
+        TypedArrayKind::Uint8Clamped => {
+            let v = to_uint8_clamped(value);
+            buf[offset] = v;
+        }
+        TypedArrayKind::Int16 => {
+            let v = to_int16(value);
+            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+        }
+        TypedArrayKind::Uint16 => {
+            let v = to_uint16(value);
+            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+        }
+        TypedArrayKind::Int32 => {
+            let v = to_int32(value);
+            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
+        }
+        TypedArrayKind::Uint32 => {
+            let v = to_uint32(value);
+            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
+        }
+        TypedArrayKind::Float32 => {
+            let n = to_number(value);
+            buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
+        }
+        TypedArrayKind::Float64 => {
+            let n = to_number(value);
+            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
+        }
+        TypedArrayKind::BigInt64 => {
+            let v = to_bigint64(value);
+            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
+        }
+        TypedArrayKind::BigUint64 => {
+            let v = to_biguint64(value);
+            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
+        }
+    }
+    true
+}
+
+fn to_number(v: &JsValue) -> f64 {
+    match v {
+        JsValue::Number(n) => *n,
+        JsValue::Boolean(true) => 1.0,
+        JsValue::Boolean(false) | JsValue::Null => 0.0,
+        JsValue::Undefined => f64::NAN,
+        JsValue::String(s) => s.to_string().parse::<f64>().unwrap_or(f64::NAN),
+        _ => f64::NAN,
+    }
+}
+
+fn to_int8(v: &JsValue) -> i8 { to_number(v) as i32 as i8 }
+fn to_uint8(v: &JsValue) -> u8 { to_number(v) as i32 as u8 }
+fn to_uint8_clamped(v: &JsValue) -> u8 {
+    let n = to_number(v);
+    if n.is_nan() { 0 }
+    else if n <= 0.0 { 0 }
+    else if n >= 255.0 { 255 }
+    else { (n + 0.5).floor() as u8 }
+}
+fn to_int16(v: &JsValue) -> i16 { to_number(v) as i32 as i16 }
+fn to_uint16(v: &JsValue) -> u16 { to_number(v) as i32 as u16 }
+fn to_int32(v: &JsValue) -> i32 { to_number(v) as i32 }
+fn to_uint32(v: &JsValue) -> u32 { to_number(v) as u32 }
+fn to_bigint64(v: &JsValue) -> i64 {
+    match v {
+        JsValue::BigInt(b) => {
+            i64::try_from(&b.value).unwrap_or_else(|_| {
+                // Truncate to 64 bits
+                let bytes = b.value.to_signed_bytes_le();
+                let mut result = [0u8; 8];
+                let len = bytes.len().min(8);
+                result[..len].copy_from_slice(&bytes[..len]);
+                if bytes.len() < 8 && !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80) != 0 {
+                    for byte in result.iter_mut().skip(len) { *byte = 0xFF; }
+                }
+                i64::from_le_bytes(result)
+            })
+        }
+        _ => 0,
+    }
+}
+fn to_biguint64(v: &JsValue) -> u64 {
+    match v {
+        JsValue::BigInt(b) => {
+            u64::try_from(&b.value).unwrap_or_else(|_| {
+                let bytes = b.value.to_signed_bytes_le();
+                let mut result = [0u8; 8];
+                let len = bytes.len().min(8);
+                result[..len].copy_from_slice(&bytes[..len]);
+                u64::from_le_bytes(result)
+            })
+        }
+        _ => 0,
     }
 }
 

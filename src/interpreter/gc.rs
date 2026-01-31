@@ -45,6 +45,20 @@ impl Interpreter {
             &self.weakmap_prototype,
             &self.weakset_prototype,
             &self.symbol_prototype,
+            &self.arraybuffer_prototype,
+            &self.typed_array_prototype,
+            &self.int8array_prototype,
+            &self.uint8array_prototype,
+            &self.uint8clampedarray_prototype,
+            &self.int16array_prototype,
+            &self.uint16array_prototype,
+            &self.int32array_prototype,
+            &self.uint32array_prototype,
+            &self.float32array_prototype,
+            &self.float64array_prototype,
+            &self.bigint64array_prototype,
+            &self.biguint64array_prototype,
+            &self.dataview_prototype,
         ] {
             if let Some(p) = proto {
                 if let Some(id) = p.borrow().id {

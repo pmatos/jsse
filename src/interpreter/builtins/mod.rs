@@ -5,6 +5,7 @@ mod iterators;
 mod number;
 mod regexp;
 mod string;
+mod typedarray;
 
 use super::*;
 
@@ -1135,6 +1136,9 @@ impl Interpreter {
         // Reflect and Proxy built-ins
         self.setup_reflect();
         self.setup_proxy();
+
+        // TypedArray, ArrayBuffer, DataView built-ins
+        self.setup_typedarray_builtins();
 
         // globalThis - create a global object
         let global_obj = self.create_object();

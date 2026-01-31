@@ -129,13 +129,14 @@ Ordered roughly by dependency and importance.
   - [x] Array length semantics
   - [ ] Array species (`@@species`)
   - [ ] Array groupBy
-- [ ] **TypedArray** (§23.2) — **NOT IMPLEMENTED**
-  - [ ] `%TypedArray%` intrinsic (abstract base)
-  - [ ] All concrete constructors: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float16Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`
-  - [ ] `TypedArray.from()`, `TypedArray.of()`
-  - [ ] All prototype methods (similar to Array but with typed semantics)
-  - [ ] Buffer, byteOffset, byteLength, length
+- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (340/1,438 = 23.6%, 323/736 constructors = 43.9%)
+  - [x] `%TypedArray%` intrinsic (abstract base) with shared prototype methods
+  - [x] All concrete constructors: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`
+  - [x] `TypedArray.from()`, `TypedArray.of()`
+  - [x] Prototype methods: `at`, `set`, `subarray`, `slice`, `copyWithin`, `fill`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `every`, `some`, `reverse`, `sort`, `join`, `toString`, `toReversed`, `toSorted`, `entries`, `keys`, `values`
+  - [x] Buffer, byteOffset, byteLength, length getters
   - [ ] `Uint8Array.fromBase64()`, `Uint8Array.fromHex()`, `.toBase64()`, `.toHex()`, `.setFromBase64()`, `.setFromHex()`
+  - [ ] `Float16Array` (not yet implemented)
 
 **Tests:** `built-ins/Array/` (3,079), `built-ins/ArrayIteratorPrototype/` (27), `built-ins/TypedArray/` (1,438), `built-ins/TypedArrayConstructors/` (736), `built-ins/Uint8Array/` (68)
 
@@ -157,16 +158,17 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Map/` (204), `built-ins/MapIteratorPrototype/` (11), `built-ins/Set/` (383), `built-ins/SetIteratorPrototype/` (11), `built-ins/WeakMap/` (141), `built-ins/WeakSet/` (85)
 
 ### 9.7 Structured Data (§25)
-- [ ] **ArrayBuffer** (§25.1)
-  - [ ] `ArrayBuffer()` constructor
-  - [ ] `ArrayBuffer.isView()`
-  - [ ] `ArrayBuffer.prototype`: `byteLength`, `detached`, `maxByteLength`, `resizable`, `resize`, `slice`, `transfer`, `transferToFixedLength`
+- [x] **ArrayBuffer** (§25.1) — **IMPLEMENTED** (34/196 = 17.4%)
+  - [x] `ArrayBuffer()` constructor
+  - [x] `ArrayBuffer.isView()`
+  - [x] `ArrayBuffer.prototype`: `byteLength`, `slice`
+  - [ ] `ArrayBuffer.prototype`: `detached`, `maxByteLength`, `resizable`, `resize`, `transfer`, `transferToFixedLength`
 - [ ] **SharedArrayBuffer** (§25.2)
   - [ ] `SharedArrayBuffer()` constructor
   - [ ] `grow`, `growable`, `byteLength`, `maxByteLength`, `slice`
-- [ ] **DataView** (§25.3)
-  - [ ] `DataView()` constructor
-  - [ ] All get/set methods for each numeric type
+- [x] **DataView** (§25.3) — **IMPLEMENTED** (126/561 = 22.5%)
+  - [x] `DataView()` constructor
+  - [x] All get/set methods for each numeric type (Int8 through BigUint64, with endianness)
 - [ ] **Atomics** (§25.4)
   - [ ] `add`, `and`, `compareExchange`, `exchange`, `isLockFree`, `load`, `or`, `pause`, `store`, `sub`, `wait`, `waitAsync`, `notify`, `xor`
 - [x] **JSON** (§25.5)
