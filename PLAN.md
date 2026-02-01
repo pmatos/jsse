@@ -128,7 +128,7 @@ These are tracked across all phases:
 | `built-ins/Object` | 3,411 | |
 | `built-ins/Array` | 3,079 | |
 | `built-ins/RegExp` | 1,879 | |
-| `built-ins/TypedArray` | 1,438 | 340 |
+| `built-ins/TypedArray` | 1,438 | 669 |
 | `built-ins/String` | 1,215 | |
 | `built-ins/` (rest) | ~8,000+ | All other built-ins |
 | `annexB` | 1,086 | Legacy web compat |

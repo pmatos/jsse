@@ -1612,6 +1612,20 @@ impl Interpreter {
                 let map_fn = args.get(1).cloned();
                 let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
 
+                // Step 3: If mapfn is provided and not undefined, check callable
+                if let Some(ref mf) = map_fn {
+                    if !matches!(mf, JsValue::Undefined) {
+                        let is_callable = matches!(mf, JsValue::Object(o) if {
+                            interp.get_object(o.id).map_or(false, |obj| obj.borrow().callable.is_some())
+                        });
+                        if !is_callable {
+                            return Completion::Throw(
+                                interp.create_type_error("mapfn is not a function"),
+                            );
+                        }
+                    }
+                }
+
                 // Get array-like or iterable
                 let values = interp.collect_iterable_or_arraylike(&source);
                 let values = match values {
@@ -1657,6 +1671,52 @@ impl Interpreter {
         {
             obj.borrow_mut().insert_builtin("of".to_string(), ta_of_fn);
         }
+
+        // Set %TypedArray%.prototype → %TypedArray.prototype%
+        if let JsValue::Object(o) = &ta_ctor
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let proto_id = ta_proto.borrow().id.unwrap();
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(JsObject { id: proto_id }),
+                    false,
+                    false,
+                    false,
+                ),
+            );
+        }
+
+        // Set %TypedArray.prototype%.constructor → %TypedArray%
+        ta_proto.borrow_mut().insert_property(
+            "constructor".to_string(),
+            PropertyDescriptor::data(ta_ctor.clone(), true, false, true),
+        );
+
+        // Add @@species getter on %TypedArray%
+        let species_getter = self.create_function(JsFunction::native(
+            "get [Symbol.species]".to_string(),
+            0,
+            |_interp, this_val, _args| Completion::Normal(this_val.clone()),
+        ));
+        if let JsValue::Object(o) = &ta_ctor
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_property(
+                "Symbol(Symbol.species)".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(species_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
+        }
+
+        self.typed_array_constructor = Some(ta_ctor.clone());
 
         for kind in kinds {
             let name = kind.name().to_string();
@@ -1821,22 +1881,11 @@ impl Interpreter {
                         false,
                     ),
                 );
-                // Inherit from/of from %TypedArray%
+                // Set __proto__ to %TypedArray% so from/of are inherited
                 if let JsValue::Object(ta_o) = &ta_ctor_clone
                     && let Some(ta_obj) = self.get_object(ta_o.id)
                 {
-                    let ta_ref = ta_obj.borrow();
-                    if let Some(from_desc) = ta_ref.get_own_property("from")
-                        && let Some(ref v) = from_desc.value
-                    {
-                        obj.borrow_mut()
-                            .insert_builtin("from".to_string(), v.clone());
-                    }
-                    if let Some(of_desc) = ta_ref.get_own_property("of")
-                        && let Some(ref v) = of_desc.value
-                    {
-                        obj.borrow_mut().insert_builtin("of".to_string(), v.clone());
-                    }
+                    obj.borrow_mut().prototype = Some(ta_obj.clone());
                 }
             }
 
