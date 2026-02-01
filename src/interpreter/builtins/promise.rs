@@ -103,7 +103,7 @@ impl Interpreter {
 
         // Promise constructor
         let _promise_proto = self.promise_prototype.clone();
-        let ctor = self.create_function(JsFunction::native(
+        let ctor = self.create_function(JsFunction::constructor(
             "Promise".to_string(),
             1,
             move |interp, _this, args| {

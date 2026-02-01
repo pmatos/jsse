@@ -190,7 +190,7 @@ impl Interpreter {
         ];
 
         for (name, arity, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
@@ -209,6 +209,7 @@ impl Interpreter {
                     None => Completion::Normal(JsValue::Undefined),
                 }
             }),
+            false,
         ));
         proto.borrow_mut().insert_property(
             "description".to_string(),
@@ -234,6 +235,7 @@ impl Interpreter {
                 };
                 Completion::Normal(JsValue::Symbol(sym))
             }),
+            false,
         ));
         // Get the @@toPrimitive well-known symbol key
         if let Some(sym_val) = self.global_env.borrow().get("Symbol")
@@ -513,7 +515,7 @@ impl Interpreter {
         ];
 
         for (name, arity, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
@@ -590,7 +592,7 @@ impl Interpreter {
         ];
 
         for (name, arity, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 

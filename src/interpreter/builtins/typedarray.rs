@@ -102,7 +102,7 @@ impl Interpreter {
 
         // ArrayBuffer constructor
         let ab_proto_clone = ab_proto.clone();
-        let ctor = self.create_function(JsFunction::native(
+        let ctor = self.create_function(JsFunction::constructor(
             "ArrayBuffer".to_string(),
             1,
             move |interp, _this, args| {
@@ -1592,7 +1592,7 @@ impl Interpreter {
 
         // %TypedArray% constructor (not directly constructible, but holds from/of)
         let ta_proto = self.typed_array_prototype.clone().unwrap();
-        let ta_ctor = self.create_function(JsFunction::native(
+        let ta_ctor = self.create_function(JsFunction::constructor(
             "TypedArray".to_string(),
             0,
             |interp, _this, _args| {
@@ -1677,7 +1677,7 @@ impl Interpreter {
             }
 
             let type_proto_clone = type_proto.clone();
-            let ctor = self.create_function(JsFunction::native(
+            let ctor = self.create_function(JsFunction::constructor(
                 name.clone(), 3,
                 move |interp, _this, args| {
                     if args.is_empty() {
@@ -1971,7 +1971,7 @@ impl Interpreter {
                 let obj_ref = obj.borrow();
                 if let Some(ref func) = obj_ref.callable {
                     match func {
-                        JsFunction::Native(n, _, _) => Some(n.clone()),
+                        JsFunction::Native(n, _, _, _) => Some(n.clone()),
                         JsFunction::User { name, .. } => name.clone(),
                     }
                 } else {
@@ -2428,7 +2428,7 @@ impl Interpreter {
 
         // DataView constructor
         let dv_proto_clone = dv_proto.clone();
-        let ctor = self.create_function(JsFunction::native(
+        let ctor = self.create_function(JsFunction::constructor(
             "DataView".to_string(),
             1,
             move |interp, _this, args| {

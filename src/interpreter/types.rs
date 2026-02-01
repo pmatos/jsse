@@ -191,6 +191,7 @@ pub enum JsFunction {
         String,
         usize,
         Rc<dyn Fn(&mut super::Interpreter, &JsValue, &[JsValue]) -> Completion>,
+        bool, // is_constructor
     ),
 }
 
@@ -200,7 +201,15 @@ impl JsFunction {
         arity: usize,
         f: impl Fn(&mut super::Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
     ) -> Self {
-        JsFunction::Native(name, arity, Rc::new(f))
+        JsFunction::Native(name, arity, Rc::new(f), false)
+    }
+
+    pub fn constructor(
+        name: String,
+        arity: usize,
+        f: impl Fn(&mut super::Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
+    ) -> Self {
+        JsFunction::Native(name, arity, Rc::new(f), true)
     }
 }
 
@@ -226,8 +235,8 @@ impl Clone for JsFunction {
                 is_generator: *is_generator,
                 is_async: *is_async,
             },
-            JsFunction::Native(name, arity, f) => {
-                JsFunction::Native(name.clone(), *arity, f.clone())
+            JsFunction::Native(name, arity, f, is_ctor) => {
+                JsFunction::Native(name.clone(), *arity, f.clone(), *is_ctor)
             }
         }
     }
@@ -237,8 +246,8 @@ impl std::fmt::Debug for JsFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             JsFunction::User { name, .. } => write!(f, "JsFunction::User({name:?})"),
-            JsFunction::Native(name, arity, _) => {
-                write!(f, "JsFunction::Native({name:?}, {arity})")
+            JsFunction::Native(name, arity, _, is_ctor) => {
+                write!(f, "JsFunction::Native({name:?}, {arity}, ctor={is_ctor})")
             }
         }
     }

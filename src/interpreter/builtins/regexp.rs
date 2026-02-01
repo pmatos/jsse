@@ -773,7 +773,7 @@ impl Interpreter {
         let regexp_proto_rc = regexp_proto.clone();
 
         // RegExp constructor
-        let regexp_ctor = self.create_function(JsFunction::native(
+        let regexp_ctor = self.create_function(JsFunction::constructor(
             "RegExp".to_string(),
             2,
             move |interp, _this, args| {

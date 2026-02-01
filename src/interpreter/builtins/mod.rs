@@ -55,7 +55,7 @@ impl Interpreter {
             self.register_global_fn(
                 "Error",
                 BindingKind::Var,
-                JsFunction::native(error_name.clone(), 0, move |interp, this, args| {
+                JsFunction::constructor(error_name.clone(), 0, move |interp, this, args| {
                     let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = this {
                         if let Some(obj) = interp.get_object(o.id) {
@@ -151,7 +151,7 @@ impl Interpreter {
             self.register_global_fn(
                 "Test262Error",
                 BindingKind::Var,
-                JsFunction::native("Test262Error".to_string(), 1, move |interp, this, args| {
+                JsFunction::constructor("Test262Error".to_string(), 1, move |interp, this, args| {
                     let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = this {
                         if let Some(obj) = interp.get_object(o.id) {
@@ -205,7 +205,7 @@ impl Interpreter {
             self.register_global_fn(
                 name,
                 BindingKind::Var,
-                JsFunction::native(error_name.clone(), 0, move |interp, this, args| {
+                JsFunction::constructor(error_name.clone(), 0, move |interp, this, args| {
                     let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = this {
                         if let Some(obj) = interp.get_object(o.id) {
@@ -249,7 +249,7 @@ impl Interpreter {
         self.register_global_fn(
             "Object",
             BindingKind::Var,
-            JsFunction::native("Object".to_string(), 1, |interp, _this, args| {
+            JsFunction::constructor("Object".to_string(), 1, |interp, _this, args| {
                 match args.first() {
                     Some(val) if matches!(val, JsValue::Object(_)) => {
                         Completion::Normal(val.clone())
@@ -272,7 +272,7 @@ impl Interpreter {
         self.register_global_fn(
             "Array",
             BindingKind::Var,
-            JsFunction::native("Array".to_string(), 1, |interp, _this, args| {
+            JsFunction::constructor("Array".to_string(), 1, |interp, _this, args| {
                 if args.len() == 1
                     && let JsValue::Number(n) = &args[0]
                 {
@@ -358,6 +358,7 @@ impl Interpreter {
                         interp.global_symbol_registry.insert(key, sym.clone());
                         Completion::Normal(JsValue::Symbol(sym))
                     }),
+                    false,
                 ));
                 obj.borrow_mut().insert_builtin("for".to_string(), for_fn);
 
@@ -380,6 +381,7 @@ impl Interpreter {
                         }
                         Completion::Normal(JsValue::Undefined)
                     }),
+                    false,
                 ));
                 obj.borrow_mut()
                     .insert_builtin("keyFor".to_string(), key_for_fn);
@@ -400,7 +402,7 @@ impl Interpreter {
         self.register_global_fn(
             "String",
             BindingKind::Var,
-            JsFunction::native("String".to_string(), 1, |interp, this, args| {
+            JsFunction::constructor("String".to_string(), 1, |interp, this, args| {
                 let s = if args.is_empty() {
                     String::new()
                 } else {
@@ -434,7 +436,7 @@ impl Interpreter {
         self.register_global_fn(
             "Number",
             BindingKind::Var,
-            JsFunction::native("Number".to_string(), 1, |interp, this, args| {
+            JsFunction::constructor("Number".to_string(), 1, |interp, this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Number(0.0));
                 let n = to_number(&val);
                 if let JsValue::Object(o) = this
@@ -529,7 +531,7 @@ impl Interpreter {
         self.register_global_fn(
             "Boolean",
             BindingKind::Var,
-            JsFunction::native("Boolean".to_string(), 1, |interp, this, args| {
+            JsFunction::constructor("Boolean".to_string(), 1, |interp, this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let b = to_boolean(&val);
                 if let JsValue::Object(o) = this
@@ -1053,7 +1055,7 @@ impl Interpreter {
         self.register_global_fn(
             "Function",
             BindingKind::Var,
-            JsFunction::native("Function".to_string(), 1, |interp, _this, args| {
+            JsFunction::constructor("Function".to_string(), 1, |interp, _this, args| {
                 let (params_str, body_str) = if args.is_empty() {
                     (String::new(), String::new())
                 } else if args.len() == 1 {
@@ -2712,7 +2714,7 @@ impl Interpreter {
                         let b = ntobj.borrow();
                         let is_ctor = match &b.callable {
                             Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
-                            Some(JsFunction::Native(..)) => b.has_own_property("prototype"),
+                            Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
                             None => false,
                         };
                         if !is_ctor {
@@ -3097,7 +3099,7 @@ impl Interpreter {
 
     fn setup_proxy(&mut self) {
         // Proxy constructor
-        let proxy_fn = self.create_function(JsFunction::native(
+        let proxy_fn = self.create_function(JsFunction::constructor(
             "Proxy".to_string(),
             2,
             |interp, _this, args| {

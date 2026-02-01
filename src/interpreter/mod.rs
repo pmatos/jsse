@@ -291,7 +291,6 @@ impl Interpreter {
     }
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
-        let is_arrow = matches!(&func, JsFunction::User { is_arrow: true, .. });
         let is_gen = matches!(
             &func,
             JsFunction::User {
@@ -316,7 +315,7 @@ impl Interpreter {
                     .count();
                 (n, len)
             }
-            JsFunction::Native(name, arity, _) => (name.clone(), *arity),
+            JsFunction::Native(name, arity, _, _) => (name.clone(), *arity),
         };
         let mut obj_data = JsObjectData::new();
         obj_data.prototype = if is_async_gen {
@@ -347,8 +346,12 @@ impl Interpreter {
                 true,
             ),
         );
-        // Non-arrow functions get a prototype property
-        if !is_arrow {
+        let is_constructable = match &obj_data.callable {
+            Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
+            Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
+            None => false,
+        };
+        if is_constructable {
             let proto = self.create_object();
             if is_async_gen {
                 proto.borrow_mut().prototype = self.async_generator_prototype.clone();
@@ -363,7 +366,7 @@ impl Interpreter {
         let func_id = self.allocate_object_slot(obj.clone());
         let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
         // Set prototype.constructor = func (not for generators)
-        if !is_arrow
+        if is_constructable
             && !is_gen
             && let Some(JsValue::Object(proto_ref)) = obj.borrow().get_property_value("prototype")
             && let Some(proto_obj) = self.get_object(proto_ref.id)

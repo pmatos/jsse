@@ -772,7 +772,7 @@ impl Interpreter {
         ];
 
         for (name, arity, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func));
+            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
@@ -832,7 +832,7 @@ impl Interpreter {
 
         // Date constructor
         let date_proto_clone = proto.clone();
-        let date_ctor = self.create_function(JsFunction::native(
+        let date_ctor = self.create_function(JsFunction::constructor(
             "Date".to_string(),
             7,
             move |interp, this, args| {

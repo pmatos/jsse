@@ -431,7 +431,7 @@ impl Interpreter {
 
         // Map constructor
         let map_proto_clone = proto.clone();
-        let map_ctor = self.create_function(JsFunction::native(
+        let map_ctor = self.create_function(JsFunction::constructor(
             "Map".to_string(),
             0,
             move |interp, _this, args| {
@@ -1467,7 +1467,7 @@ impl Interpreter {
 
         // Set constructor
         let set_proto_clone = proto.clone();
-        let set_ctor = self.create_function(JsFunction::native(
+        let set_ctor = self.create_function(JsFunction::constructor(
             "Set".to_string(),
             0,
             move |interp, _this, args| {
@@ -1710,7 +1710,7 @@ impl Interpreter {
 
         // WeakMap constructor
         let weakmap_proto_clone = proto.clone();
-        let weakmap_ctor = self.create_function(JsFunction::native(
+        let weakmap_ctor = self.create_function(JsFunction::constructor(
             "WeakMap".to_string(),
             0,
             move |interp, _this, args| {
@@ -1942,7 +1942,7 @@ impl Interpreter {
 
         // WeakSet constructor
         let weakset_proto_clone = proto.clone();
-        let weakset_ctor = self.create_function(JsFunction::native(
+        let weakset_ctor = self.create_function(JsFunction::constructor(
             "WeakSet".to_string(),
             0,
             move |interp, _this, args| {

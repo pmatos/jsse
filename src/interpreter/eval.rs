@@ -2078,7 +2078,7 @@ impl Interpreter {
             let callable = obj.borrow().callable.clone();
             if let Some(func) = callable {
                 return match func {
-                    JsFunction::Native(_, _, f) => f(self, _this_val, args),
+                    JsFunction::Native(_, _, f, _) => f(self, _this_val, args),
                     JsFunction::User {
                         params,
                         body,
@@ -2279,6 +2279,41 @@ impl Interpreter {
             Ok(args) => args,
             Err(e) => return Completion::Throw(e),
         };
+        // Check if callee is a constructor
+        if let JsValue::Object(ref co) = callee_val {
+            let is_proxy = self.get_proxy_info(co.id).is_some();
+            if !is_proxy {
+                if let Some(func_obj) = self.get_object(co.id) {
+                    let b = func_obj.borrow();
+                    let is_ctor = match &b.callable {
+                        Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
+                        Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
+                        None => false,
+                    };
+                    if !is_ctor {
+                        let name = match &b.callable {
+                            Some(JsFunction::Native(n, _, _, _)) => n.clone(),
+                            Some(JsFunction::User { name, .. }) => {
+                                name.clone().unwrap_or_default()
+                            }
+                            None => String::new(),
+                        };
+                        drop(b);
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "{} is not a constructor",
+                            name
+                        )));
+                    }
+                }
+            }
+        } else {
+            return Completion::Throw(
+                self.create_type_error(&format!(
+                    "{:?} is not a constructor",
+                    callee_val
+                )),
+            );
+        }
         // Proxy construct trap
         if let JsValue::Object(ref co) = callee_val
             && self.get_proxy_info(co.id).is_some()
