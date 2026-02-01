@@ -725,6 +725,90 @@ impl Interpreter {
             ),
         );
 
+        // Annex B: escape()
+        self.register_global_fn(
+            "escape",
+            BindingKind::Var,
+            JsFunction::native("escape".to_string(), 1, |_interp, _this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = to_js_string(&val);
+                let units: Vec<u16> = s.encode_utf16().collect();
+                let mut result = String::new();
+                for &cu in &units {
+                    match cu {
+                        // A-Z a-z 0-9 @ * _ + - . /
+                        b if (b'A' as u16..=b'Z' as u16).contains(&b)
+                            || (b'a' as u16..=b'z' as u16).contains(&b)
+                            || (b'0' as u16..=b'9' as u16).contains(&b)
+                            || b == b'@' as u16
+                            || b == b'*' as u16
+                            || b == b'_' as u16
+                            || b == b'+' as u16
+                            || b == b'-' as u16
+                            || b == b'.' as u16
+                            || b == b'/' as u16 =>
+                        {
+                            result.push(cu as u8 as char);
+                        }
+                        b if b <= 0xFF => {
+                            result.push_str(&format!("%{:02X}", b));
+                        }
+                        _ => {
+                            result.push_str(&format!("%u{:04X}", cu));
+                        }
+                    }
+                }
+                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+            }),
+        );
+
+        // Annex B: unescape()
+        self.register_global_fn(
+            "unescape",
+            BindingKind::Var,
+            JsFunction::native("unescape".to_string(), 1, |_interp, _this, args| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = to_js_string(&val);
+                let chars: Vec<char> = s.chars().collect();
+                let mut result: Vec<u16> = Vec::new();
+                let mut i = 0;
+                while i < chars.len() {
+                    if chars[i] == '%' {
+                        if i + 5 < chars.len()
+                            && chars[i + 1] == 'u'
+                            && chars[i + 2..i + 6].iter().all(|c| c.is_ascii_hexdigit())
+                        {
+                            let hex: String = chars[i + 2..i + 6].iter().collect();
+                            if let Ok(code) = u16::from_str_radix(&hex, 16) {
+                                result.push(code);
+                                i += 6;
+                                continue;
+                            }
+                        }
+                        if i + 2 < chars.len()
+                            && chars[i + 1..i + 3].iter().all(|c| c.is_ascii_hexdigit())
+                        {
+                            let hex: String = chars[i + 1..i + 3].iter().collect();
+                            if let Ok(code) = u8::from_str_radix(&hex, 16) {
+                                result.push(code as u16);
+                                i += 3;
+                                continue;
+                            }
+                        }
+                    }
+                    let ch = chars[i];
+                    let mut buf = [0u16; 2];
+                    for u in ch.encode_utf16(&mut buf) {
+                        result.push(*u);
+                    }
+                    i += 1;
+                }
+                Completion::Normal(JsValue::String(JsString {
+                    code_units: result,
+                }))
+            }),
+        );
+
         // Math object
         let math_obj = self.create_object();
         let math_id = math_obj.borrow().id.unwrap();

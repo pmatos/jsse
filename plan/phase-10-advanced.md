@@ -29,12 +29,12 @@ Implement error handling extensions, the memory model for shared memory, and all
   - [ ] B.1.2 Regular expression patterns (legacy quantifier, octal escapes, identity escapes)
   - [ ] B.1.3 Legacy octal and octal-like numeric literals
   - [ ] B.1.4 Legacy string escape sequences
-- [ ] **B.2 Additional Built-in Properties**
-  - [ ] `escape()` and `unescape()` global functions
+- [x] **B.2 Additional Built-in Properties (partial)**
+  - [x] `escape()` and `unescape()` global functions
   - [ ] `Object.prototype.__proto__`
   - [ ] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__`
-  - [ ] `String.prototype` HTML methods
-  - [ ] `Date.prototype.getYear()`, `.setYear()`, `.toGMTString()`
+  - [x] `String.prototype` HTML methods + `substr()`
+  - [x] `Date.prototype.getYear()`, `.setYear()`, `.toGMTString()`
   - [ ] `RegExp` legacy static properties (`RegExp.$1`–`$9`, `RegExp.input`, `RegExp.lastMatch`, etc.)
 - [ ] **B.3 Other Additional Features**
   - [ ] B.3.2 Block-level function declarations in sloppy mode

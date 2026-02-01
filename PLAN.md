@@ -96,7 +96,7 @@ These are tracked across all phases:
 - [ ] **Spec compliance annotations** — link code to spec section IDs
 - [x] **Garbage collection** — mark-and-sweep GC with ephemeron support for WeakMap/WeakSet
 - [ ] **Performance** — profile and optimize hot paths after correctness
-- [ ] **Annex B** — web legacy compat (1,086 tests in `test262/test/annexB/`)
+- [x] **Annex B (partial)** — String HTML methods, substr, escape/unescape, Date getYear/setYear/toGMTString (+117 passes)
 
 ---
 

@@ -427,7 +427,11 @@ impl Interpreter {
                         Some(v) => match to_num(interp, v) {
                             Ok(n) => {
                                 let i = to_integer_or_infinity(n);
-                                if n.is_nan() { 0.0 } else { i }
+                                if n.is_nan() {
+                                    0.0
+                                } else {
+                                    i
+                                }
                             }
                             Err(c) => return c,
                         },
@@ -437,7 +441,11 @@ impl Interpreter {
                         Some(v) if !matches!(v, JsValue::Undefined) => match to_num(interp, v) {
                             Ok(n) => {
                                 let i = to_integer_or_infinity(n);
-                                if n.is_nan() { 0.0 } else { i }
+                                if n.is_nan() {
+                                    0.0
+                                } else {
+                                    i
+                                }
                             }
                             Err(c) => return c,
                         },
@@ -1353,8 +1361,122 @@ impl Interpreter {
         ];
 
         for (name, arity, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
+            let fn_val =
+                self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        // Annex B: HTML methods
+        let html_no_arg: Vec<(&str, &str, &str)> = vec![
+            ("big", "big", "big"),
+            ("blink", "blink", "blink"),
+            ("bold", "b", "b"),
+            ("fixed", "tt", "tt"),
+            ("italics", "i", "i"),
+            ("small", "small", "small"),
+            ("strike", "strike", "strike"),
+            ("sub", "sub", "sub"),
+            ("sup", "sup", "sup"),
+        ];
+        for (name, tag_open, tag_close) in html_no_arg {
+            let tag_o = tag_open.to_string();
+            let tag_c = tag_close.to_string();
+            let fn_val = self.create_function(JsFunction::Native(
+                name.to_string(),
+                0,
+                Rc::new(move |interp, this, _args| {
+                    let s = match this_string_value(interp, this) {
+                        Ok(s) => s,
+                        Err(c) => return c,
+                    };
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                        "<{tag_o}>{s}</{tag_c}>"
+                    ))))
+                }),
+                false,
+            ));
+            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        let html_one_arg: Vec<(&str, &str, &str, &str)> = vec![
+            ("anchor", "a", "name", "a"),
+            ("fontcolor", "font", "color", "font"),
+            ("fontsize", "font", "size", "font"),
+            ("link", "a", "href", "a"),
+        ];
+        for (name, tag_open, attr, tag_close) in html_one_arg {
+            let tag_o = tag_open.to_string();
+            let attr_name = attr.to_string();
+            let tag_c = tag_close.to_string();
+            let fn_val = self.create_function(JsFunction::Native(
+                name.to_string(),
+                1,
+                Rc::new(move |interp, this, args| {
+                    let s = match this_string_value(interp, this) {
+                        Ok(s) => s,
+                        Err(c) => return c,
+                    };
+                    let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let attr_val = match interp.to_string_value(&arg) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let escaped = attr_val.replace('"', "&quot;");
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                        "<{tag_o} {attr_name}=\"{escaped}\">{s}</{tag_c}>"
+                    ))))
+                }),
+                false,
+            ));
+            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        // Annex B: substr(start, length)
+        {
+            let fn_val = self.create_function(JsFunction::Native(
+                "substr".to_string(),
+                2,
+                Rc::new(|interp, this, args| {
+                    let s = match this_string_value(interp, this) {
+                        Ok(s) => s,
+                        Err(c) => return c,
+                    };
+                    let units = utf16_units(&s);
+                    let len = units.len() as f64;
+                    let int_start = match args.first() {
+                        Some(v) => match to_num(interp, v) {
+                            Ok(n) => n,
+                            Err(c) => return c,
+                        },
+                        None => 0.0,
+                    };
+                    let int_start = int_start as i64;
+                    let start = if int_start < 0 {
+                        (len as i64 + int_start).max(0) as usize
+                    } else {
+                        (int_start as usize).min(units.len())
+                    };
+                    let result_len = match args.get(1) {
+                        Some(v) if !matches!(v, JsValue::Undefined) => {
+                            let l = match to_num(interp, v) {
+                                Ok(n) => n,
+                                Err(c) => return c,
+                            };
+                            let l = l as i64;
+                            l.max(0) as usize
+                        }
+                        _ => units.len(),
+                    };
+                    let end = (start + result_len).min(units.len());
+                    Completion::Normal(JsValue::String(JsString::from_str(&utf16_substring(
+                        &units, start, end,
+                    ))))
+                }),
+                false,
+            ));
+            proto
+                .borrow_mut()
+                .insert_builtin("substr".to_string(), fn_val);
         }
 
         // Aliases
@@ -1404,10 +1526,9 @@ impl Interpreter {
                     str_obj
                         .borrow_mut()
                         .insert_value("prototype".to_string(), proto_val.clone());
-                    proto.borrow_mut().insert_builtin(
-                        "constructor".to_string(),
-                        str_val.clone(),
-                    );
+                    proto
+                        .borrow_mut()
+                        .insert_builtin("constructor".to_string(), str_val.clone());
                 }
             }
         }

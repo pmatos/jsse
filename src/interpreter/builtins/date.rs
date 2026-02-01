@@ -975,6 +975,73 @@ impl Interpreter {
             .borrow_mut()
             .declare("Date", BindingKind::Var);
         let _ = self.global_env.borrow_mut().set("Date", date_ctor);
+        // Annex B: getYear()
+        let get_year_fn = self.create_function(JsFunction::Native(
+            "getYear".to_string(),
+            0,
+            Rc::new(|interp, this, _args| match this_time_value(interp, this) {
+                Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
+                Some(t) => {
+                    let y = year_from_time(local_time(t));
+                    Completion::Normal(JsValue::Number(y - 1900.0))
+                }
+                None => {
+                    let e = interp.create_type_error("this is not a Date object");
+                    Completion::Throw(e)
+                }
+            }),
+            false,
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("getYear".to_string(), get_year_fn);
+
+        // Annex B: setYear(year)
+        let set_year_fn = self.create_function(JsFunction::Native(
+            "setYear".to_string(),
+            1,
+            Rc::new(|interp, this, args| {
+                let Some(t) = this_time_value(interp, this) else {
+                    let e = interp.create_type_error("this is not a Date object");
+                    return Completion::Throw(e);
+                };
+                let y = args.first().map(to_number).unwrap_or(f64::NAN);
+                if y.is_nan() {
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().primitive_value = Some(JsValue::Number(f64::NAN));
+                    }
+                    return Completion::Normal(JsValue::Number(f64::NAN));
+                }
+                let yi = y as i64;
+                let yr = if (0..=99).contains(&yi) {
+                    1900.0 + yi as f64
+                } else {
+                    y
+                };
+                let t = if t.is_nan() { 0.0 } else { local_time(t) };
+                let new_date = make_day(yr, month_from_time(t), date_from_time(t));
+                let v = time_clip(utc_time(make_date(new_date, time_within_day(t))));
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                }
+                Completion::Normal(JsValue::Number(v))
+            }),
+            false,
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("setYear".to_string(), set_year_fn);
+
+        // Annex B: toGMTString() — alias for toUTCString()
+        let to_gmt = proto.borrow().get_property("toUTCString");
+        proto
+            .borrow_mut()
+            .insert_builtin("toGMTString".to_string(), to_gmt);
+
         self.date_prototype = Some(proto);
     }
 
