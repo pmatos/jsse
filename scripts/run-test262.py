@@ -86,8 +86,8 @@ def parse_args():
         "-j",
         "--jobs",
         type=int,
-        default=os.cpu_count() or 1,
-        help="Number of parallel jobs (default: nproc)",
+        default=max((os.cpu_count() or 2) // 2, 1),
+        help="Number of parallel jobs (default: half of nproc)",
     )
     parser.add_argument(
         "--timeout",

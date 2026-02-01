@@ -105,16 +105,18 @@ Ordered roughly by dependency and importance.
   - [x] `RegExp.prototype.exec()`
   - [x] `RegExp.prototype.test()`
   - [x] `RegExp.prototype.toString()`
-  - [ ] `RegExp.prototype[@@match]`, `[@@matchAll]`, `[@@replace]`, `[@@search]`, `[@@split]`
-  - [x] Basic flags: `g`, `i`, `m`, `y`
-  - [ ] Advanced flags: `d`, `s`, `u`, `v`
-  - [x] Flag properties: `global`, `ignoreCase`, `multiline`, `source`, `flags`, `sticky`
-  - [ ] `dotAll`, `hasIndices`, `unicode`, `unicodeSets`
+  - [x] `RegExp.prototype[@@match]`, `[@@matchAll]`, `[@@replace]`, `[@@search]`, `[@@split]`
+  - [x] Basic flags: `g`, `i`, `m`, `s`, `y`
+  - [ ] Advanced flags: `u`, `v`
+  - [x] Flag properties: `global`, `ignoreCase`, `multiline`, `source`, `flags`, `sticky`, `dotAll`, `hasIndices`
+  - [ ] `unicode`, `unicodeSets`
+  - [x] `RegExp.prototype.flags` getter (spec-compliant accessor)
+  - [x] ToString coercion for Symbol method arguments
+  - [x] `lastIndex` handling
   - [ ] Named capture groups
   - [ ] Lookbehind assertions
   - [ ] Unicode property escapes
   - [ ] Set notation (`v` flag)
-  - [ ] `lastIndex` handling
   - [ ] `RegExp.$1`–`$9` and legacy features (Annex B)
 
 **Tests:** `built-ins/String/` (1,215), `built-ins/RegExp/` (1,879), `built-ins/StringIteratorPrototype/` (7), `built-ins/RegExpStringIteratorPrototype/` (17)

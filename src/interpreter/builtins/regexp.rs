@@ -215,7 +215,11 @@ impl Interpreter {
             "exec".to_string(),
             1,
             |interp, this_val, args| {
-                let input = args.first().map(to_js_string).unwrap_or_default();
+                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let input = match interp.to_string_value(&arg) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 if let Some((source, flags, obj_id)) = extract_source_flags(interp, this_val) {
                     return regexp_exec_raw(interp, obj_id, &source, &flags, &input);
                 }
@@ -231,7 +235,11 @@ impl Interpreter {
             "test".to_string(),
             1,
             |interp, this_val, args| {
-                let input = args.first().map(to_js_string).unwrap_or_default();
+                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let input = match interp.to_string_value(&arg) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 if let Some((source, flags, obj_id)) = extract_source_flags(interp, this_val) {
                     let result = regexp_exec_raw(interp, obj_id, &source, &flags, &input);
                     return match result {
@@ -283,7 +291,11 @@ impl Interpreter {
             "[Symbol.match]".to_string(),
             1,
             |interp, this_val, args| {
-                let s = args.first().map(to_js_string).unwrap_or_default();
+                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&arg) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let (source, flags, obj_id) = match extract_source_flags(interp, this_val) {
                     Some(v) => v,
                     None => return Completion::Normal(JsValue::Null),
@@ -333,7 +345,11 @@ impl Interpreter {
             "[Symbol.search]".to_string(),
             1,
             |interp, this_val, args| {
-                let s = args.first().map(to_js_string).unwrap_or_default();
+                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&arg) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let (source, flags, obj_id) = match extract_source_flags(interp, this_val) {
                     Some(v) => v,
                     None => return Completion::Normal(JsValue::Number(-1.0)),
@@ -367,7 +383,11 @@ impl Interpreter {
             "[Symbol.replace]".to_string(),
             2,
             |interp, this_val, args| {
-                let s = args.first().map(to_js_string).unwrap_or_default();
+                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&arg) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let replace_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let (source, flags, obj_id) = match extract_source_flags(interp, this_val) {
                     Some(v) => v,
@@ -425,7 +445,10 @@ impl Interpreter {
                                         other => return other,
                                     }
                                 } else {
-                                    let template = to_js_string(&replace_value);
+                                    let template = match interp.to_string_value(&replace_value) {
+                                        Ok(s) => s,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
                                     apply_replacement_pattern(
                                         &template, &matched, &captures, position, &s,
                                     )
@@ -475,7 +498,11 @@ impl Interpreter {
             "[Symbol.split]".to_string(),
             2,
             |interp, this_val, args| {
-                let s = args.first().map(to_js_string).unwrap_or_default();
+                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&arg) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let lim = if matches!(limit, JsValue::Undefined) {
                     u32::MAX
@@ -562,7 +589,11 @@ impl Interpreter {
             "[Symbol.matchAll]".to_string(),
             1,
             |interp, this_val, args| {
-                let s = args.first().map(to_js_string).unwrap_or_default();
+                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&arg) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let (source, flags, obj_id) = match extract_source_flags(interp, this_val) {
                     Some(v) => v,
                     None => {
@@ -770,6 +801,57 @@ impl Interpreter {
             );
         }
 
+        // RegExp.prototype.flags getter (§22.2.5.3)
+        let flags_getter = self.create_function(JsFunction::native(
+            "get flags".to_string(),
+            0,
+            |interp, this_val, _args| {
+                let obj_ref = match this_val {
+                    JsValue::Object(o) => o,
+                    _ => {
+                        let err = interp.create_type_error("RegExp.prototype.flags requires that 'this' be an Object");
+                        return Completion::Throw(err);
+                    }
+                };
+                let obj = match interp.get_object(obj_ref.id) {
+                    Some(o) => o,
+                    None => {
+                        let err = interp.create_type_error("RegExp.prototype.flags requires that 'this' be an Object");
+                        return Completion::Throw(err);
+                    }
+                };
+                let mut result = String::new();
+                let flags_to_check: &[(&str, char)] = &[
+                    ("hasIndices", 'd'),
+                    ("global", 'g'),
+                    ("ignoreCase", 'i'),
+                    ("multiline", 'm'),
+                    ("dotAll", 's'),
+                    ("unicode", 'u'),
+                    ("unicodeSets", 'v'),
+                    ("sticky", 'y'),
+                ];
+                for (prop, ch) in flags_to_check {
+                    let val = obj.borrow().get_property(prop);
+                    if to_boolean(&val) {
+                        result.push(*ch);
+                    }
+                }
+                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+            },
+        ));
+        regexp_proto.borrow_mut().insert_property(
+            "flags".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(flags_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
         let regexp_proto_rc = regexp_proto.clone();
 
         // RegExp constructor
@@ -789,6 +871,10 @@ impl Interpreter {
                 obj.insert_value(
                     "flags".to_string(),
                     JsValue::String(JsString::from_str(&flags_str)),
+                );
+                obj.insert_value(
+                    "hasIndices".to_string(),
+                    JsValue::Boolean(flags_str.contains('d')),
                 );
                 obj.insert_value(
                     "global".to_string(),
