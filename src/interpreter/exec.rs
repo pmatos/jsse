@@ -142,7 +142,48 @@ impl Interpreter {
                     _ => comp,
                 }
             }
-            Statement::With(_, _) => Completion::Normal(JsValue::Undefined), // TODO
+            Statement::With(expr, body) => {
+                let val = match self.eval_expr(expr, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                let obj_val = match self.to_object(&val) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if let JsValue::Object(obj_ref) = &obj_val {
+                    if let Some(obj_data) = self.get_object(obj_ref.id) {
+                        let unscopables = {
+                            let obj = obj_data.borrow();
+                            let v = obj.get_property("Symbol(Symbol.unscopables)");
+                            if matches!(v, JsValue::Undefined) {
+                                obj.get_property("[Symbol.unscopables]")
+                            } else {
+                                v
+                            }
+                        };
+                        let unscopables_data = if let JsValue::Object(u) = &unscopables {
+                            self.get_object(u.id)
+                        } else {
+                            None
+                        };
+                        let with_env = Rc::new(RefCell::new(Environment {
+                            bindings: HashMap::new(),
+                            parent: Some(env.clone()),
+                            strict: env.borrow().strict,
+                            with_object: Some(WithObject {
+                                object: obj_data,
+                                unscopables: unscopables_data,
+                            }),
+                        }));
+                        self.exec_statement(body, &with_env)
+                    } else {
+                        Completion::Normal(JsValue::Undefined)
+                    }
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
             Statement::Debugger => Completion::Normal(JsValue::Undefined),
             Statement::FunctionDeclaration(_) => Completion::Normal(JsValue::Undefined), // hoisted
             Statement::ClassDeclaration(cd) => {

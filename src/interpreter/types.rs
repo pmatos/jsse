@@ -30,11 +30,26 @@ pub(crate) struct GeneratorContext {
 
 pub type EnvRef = Rc<RefCell<Environment>>;
 
-#[derive(Debug)]
 pub struct Environment {
     pub(crate) bindings: HashMap<String, Binding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
+    pub(crate) with_object: Option<WithObject>,
+}
+
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Environment")
+            .field("bindings", &self.bindings)
+            .field("strict", &self.strict)
+            .field("has_with_object", &self.with_object.is_some())
+            .finish()
+    }
+}
+
+pub(crate) struct WithObject {
+    pub(crate) object: Rc<RefCell<JsObjectData>>,
+    pub(crate) unscopables: Option<Rc<RefCell<JsObjectData>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +73,7 @@ impl Environment {
             bindings: HashMap::new(),
             parent,
             strict,
+            with_object: None,
         }))
     }
 
@@ -73,6 +89,14 @@ impl Environment {
     }
 
     pub fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
+        if let Some(ref with_obj) = self.with_object {
+            let obj = with_obj.object.borrow();
+            if obj.has_property(name) && !Self::is_unscopable(with_obj, name) {
+                drop(obj);
+                with_obj.object.borrow_mut().set_property_value(name, value);
+                return Ok(());
+            }
+        }
         if let Some(binding) = self.bindings.get_mut(name) {
             if binding.kind == BindingKind::Const && binding.initialized {
                 return Err(JsValue::String(JsString::from_str(
@@ -98,7 +122,31 @@ impl Environment {
         }
     }
 
+    fn is_unscopable(with: &WithObject, name: &str) -> bool {
+        if let Some(ref unscopables) = with.unscopables {
+            let u = unscopables.borrow();
+            if let Some(desc) = u.properties.get(name) {
+                if let Some(ref val) = desc.value {
+                    return match val {
+                        JsValue::Undefined | JsValue::Null => false,
+                        JsValue::Boolean(b) => *b,
+                        JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
+                        JsValue::String(s) => !s.is_empty(),
+                        _ => true,
+                    };
+                }
+            }
+        }
+        false
+    }
+
     pub fn get(&self, name: &str) -> Option<JsValue> {
+        if let Some(ref with) = self.with_object {
+            let obj = with.object.borrow();
+            if obj.has_property(name) && !Self::is_unscopable(with, name) {
+                return Some(obj.get_property(name));
+            }
+        }
         if let Some(binding) = self.bindings.get(name) {
             if !binding.initialized {
                 return None; // TDZ
@@ -112,6 +160,12 @@ impl Environment {
     }
 
     pub fn has(&self, name: &str) -> bool {
+        if let Some(ref with) = self.with_object {
+            let obj = with.object.borrow();
+            if obj.has_property(name) && !Self::is_unscopable(with, name) {
+                return true;
+            }
+        }
         if self.bindings.contains_key(name) {
             true
         } else if let Some(parent) = &self.parent {
