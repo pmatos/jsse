@@ -32,12 +32,13 @@ impl Interpreter {
             }
             Expression::Binary(op, left, right) => {
                 if *op == BinaryOp::In
-                    && let Expression::PrivateIdentifier(name) = left.as_ref() {
-                        let rval = match self.eval_expr(right, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        return match &rval {
+                    && let Expression::PrivateIdentifier(name) = left.as_ref()
+                {
+                    let rval = match self.eval_expr(right, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    return match &rval {
                             JsValue::Object(o) => {
                                 if let Some(obj) = self.get_object(o.id) {
                                     Completion::Normal(JsValue::Boolean(
@@ -51,7 +52,7 @@ impl Interpreter {
                                 "Cannot use 'in' operator to search for a private field without an object",
                             )),
                         };
-                    }
+                }
                 let lval = match self.eval_expr(left, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -63,32 +64,29 @@ impl Interpreter {
                 // Proxy has trap for `in` operator
                 if *op == BinaryOp::In
                     && let JsValue::Object(ref o) = rval
-                        && self.get_proxy_info(o.id).is_some() {
-                            let key = to_js_string(&lval);
-                            let target_val = self.get_proxy_target_val(o.id);
-                            let key_val = JsValue::String(JsString::from_str(&key));
-                            match self.invoke_proxy_trap(
-                                o.id,
-                                "has",
-                                vec![target_val.clone(), key_val],
-                            ) {
-                                Ok(Some(v)) => {
-                                    return Completion::Normal(JsValue::Boolean(to_boolean(&v)));
-                                }
-                                Ok(None) => {
-                                    // No trap, fall through to target
-                                    if let JsValue::Object(ref t) = target_val
-                                        && let Some(tobj) = self.get_object(t.id)
-                                    {
-                                        return Completion::Normal(JsValue::Boolean(
-                                            tobj.borrow().has_property(&key),
-                                        ));
-                                    }
-                                    return Completion::Normal(JsValue::Boolean(false));
-                                }
-                                Err(e) => return Completion::Throw(e),
-                            }
+                    && self.get_proxy_info(o.id).is_some()
+                {
+                    let key = to_js_string(&lval);
+                    let target_val = self.get_proxy_target_val(o.id);
+                    let key_val = JsValue::String(JsString::from_str(&key));
+                    match self.invoke_proxy_trap(o.id, "has", vec![target_val.clone(), key_val]) {
+                        Ok(Some(v)) => {
+                            return Completion::Normal(JsValue::Boolean(to_boolean(&v)));
                         }
+                        Ok(None) => {
+                            // No trap, fall through to target
+                            if let JsValue::Object(ref t) = target_val
+                                && let Some(tobj) = self.get_object(t.id)
+                            {
+                                return Completion::Normal(JsValue::Boolean(
+                                    tobj.borrow().has_property(&key),
+                                ));
+                            }
+                            return Completion::Normal(JsValue::Boolean(false));
+                        }
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
                 Completion::Normal(self.eval_binary(*op, &lval, &rval))
             }
             Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
@@ -263,14 +261,35 @@ impl Interpreter {
                     } else {
                         JsValue::Undefined
                     };
-                    let iterator = match self.get_iterator(&iterable) {
-                        Ok(it) => it,
-                        Err(e) => return Completion::Throw(e),
+                    let is_async_gen = self
+                        .generator_context
+                        .as_ref()
+                        .map(|c| c.is_async)
+                        .unwrap_or(false);
+                    let iterator = if is_async_gen {
+                        match self.get_async_iterator(&iterable) {
+                            Ok(it) => it,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        match self.get_iterator(&iterable) {
+                            Ok(it) => it,
+                            Err(e) => return Completion::Throw(e),
+                        }
                     };
                     loop {
                         let next_result = match self.iterator_next(&iterator) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
+                        };
+                        let next_result = if is_async_gen {
+                            match self.await_value(&next_result) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            }
+                        } else {
+                            next_result
                         };
                         let (done_val, value) = if let JsValue::Object(ref ro) = next_result {
                             if let Some(robj) = self.get_object(ro.id) {
@@ -299,12 +318,7 @@ impl Interpreter {
                         return Completion::Yield(value);
                     }
                 } else {
-                    if let Some(ref mut ctx) = self.generator_context {
-                        let current = ctx.current_yield;
-                        ctx.current_yield += 1;
-                        if current < ctx.target_yield {
-                            return Completion::Normal(ctx.sent_value.clone());
-                        }
+                    if self.generator_context.is_some() {
                         let value = if let Some(e) = expr {
                             match self.eval_expr(e, env) {
                                 Completion::Normal(v) => v,
@@ -313,6 +327,12 @@ impl Interpreter {
                         } else {
                             JsValue::Undefined
                         };
+                        let ctx = self.generator_context.as_mut().unwrap();
+                        let current = ctx.current_yield;
+                        ctx.current_yield += 1;
+                        if current < ctx.target_yield {
+                            return Completion::Normal(ctx.sent_value.clone());
+                        }
                         return Completion::Yield(value);
                     }
                     if let Some(e) = expr {
@@ -367,29 +387,31 @@ impl Interpreter {
                     },
                     Expression::Call(callee, args) => {
                         if let Expression::Identifier(method_name) = callee.as_ref()
-                            && method_name.is_empty() {
-                                let mut evaluated_args = Vec::new();
-                                for arg in args {
-                                    let val = match self.eval_expr(arg, env) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
-                                    };
-                                    evaluated_args.push(val);
-                                }
-                                return self.call_function(
-                                    &base_val,
-                                    &JsValue::Undefined,
-                                    &evaluated_args,
-                                );
+                            && method_name.is_empty()
+                        {
+                            let mut evaluated_args = Vec::new();
+                            for arg in args {
+                                let val = match self.eval_expr(arg, env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                                evaluated_args.push(val);
                             }
+                            return self.call_function(
+                                &base_val,
+                                &JsValue::Undefined,
+                                &evaluated_args,
+                            );
+                        }
                         Completion::Normal(JsValue::Undefined)
                     }
                     Expression::Member(_, mp) => {
                         if let MemberProperty::Private(name) = mp
                             && let JsValue::Object(o) = &base_val
-                                && let Some(obj) = self.get_object(o.id) {
-                                    let elem = obj.borrow().private_fields.get(name).cloned();
-                                    return match elem {
+                            && let Some(obj) = self.get_object(o.id)
+                        {
+                            let elem = obj.borrow().private_fields.get(name).cloned();
+                            return match elem {
                                         Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
                                             Completion::Normal(v)
                                         }
@@ -406,7 +428,7 @@ impl Interpreter {
                                             "Cannot read private member #{name} from an object whose class did not declare it"
                                         ))),
                                     };
-                                }
+                        }
                         Completion::Normal(JsValue::Undefined)
                     }
                     other => {
@@ -503,11 +525,23 @@ impl Interpreter {
             .clone()
             .or(self.object_prototype.clone());
         obj.class_name = "RegExp".to_string();
-        obj.insert_value("source".to_string(), JsValue::String(JsString::from_str(pattern)));
-        obj.insert_value("flags".to_string(), JsValue::String(JsString::from_str(flags)));
+        obj.insert_value(
+            "source".to_string(),
+            JsValue::String(JsString::from_str(pattern)),
+        );
+        obj.insert_value(
+            "flags".to_string(),
+            JsValue::String(JsString::from_str(flags)),
+        );
         obj.insert_value("global".to_string(), JsValue::Boolean(flags.contains('g')));
-        obj.insert_value("ignoreCase".to_string(), JsValue::Boolean(flags.contains('i')));
-        obj.insert_value("multiline".to_string(), JsValue::Boolean(flags.contains('m')));
+        obj.insert_value(
+            "ignoreCase".to_string(),
+            JsValue::Boolean(flags.contains('i')),
+        );
+        obj.insert_value(
+            "multiline".to_string(),
+            JsValue::Boolean(flags.contains('m')),
+        );
         obj.insert_value("dotAll".to_string(), JsValue::Boolean(flags.contains('s')));
         obj.insert_value("unicode".to_string(), JsValue::Boolean(flags.contains('u')));
         obj.insert_value("sticky".to_string(), JsValue::Boolean(flags.contains('y')));
@@ -686,7 +720,9 @@ impl Interpreter {
             JsValue::Boolean(b) => Ok(if *b { "true" } else { "false" }.to_string()),
             JsValue::Number(n) => Ok(number_ops::to_string(*n)),
             JsValue::String(s) => Ok(s.to_rust_string()),
-            JsValue::Symbol(_) => Err(self.create_type_error("Cannot convert a Symbol value to a string")),
+            JsValue::Symbol(_) => {
+                Err(self.create_type_error("Cannot convert a Symbol value to a string"))
+            }
             JsValue::BigInt(n) => Ok(n.value.to_string()),
             JsValue::Object(_) => {
                 let prim = self.to_primitive(val, "string");
@@ -702,8 +738,12 @@ impl Interpreter {
                 let prim = self.to_primitive(val, "number");
                 self.to_number_value(&prim)
             }
-            JsValue::Symbol(_) => Err(self.create_type_error("Cannot convert a Symbol value to a number")),
-            JsValue::BigInt(_) => Err(self.create_type_error("Cannot convert a BigInt value to a number")),
+            JsValue::Symbol(_) => {
+                Err(self.create_type_error("Cannot convert a Symbol value to a number"))
+            }
+            JsValue::BigInt(_) => {
+                Err(self.create_type_error("Cannot convert a BigInt value to a number"))
+            }
             _ => Ok(to_number(val)),
         }
     }
@@ -1358,49 +1398,50 @@ impl Interpreter {
                     }
                     MemberProperty::Private(name) => {
                         if let JsValue::Object(ref o) = obj_val
-                            && let Some(obj) = self.get_object(o.id) {
-                                let elem = obj.borrow().private_fields.get(name).cloned();
-                                let func_val = match elem {
-                                    Some(PrivateElement::Field(v))
-                                    | Some(PrivateElement::Method(v)) => v,
-                                    Some(PrivateElement::Accessor { get, .. }) => {
-                                        if let Some(getter) = get {
-                                            match self.call_function(&getter, &obj_val, &[]) {
-                                                Completion::Normal(v) => v,
-                                                other => return other,
-                                            }
-                                        } else {
-                                            return Completion::Throw(self.create_type_error(&format!(
+                            && let Some(obj) = self.get_object(o.id)
+                        {
+                            let elem = obj.borrow().private_fields.get(name).cloned();
+                            let func_val = match elem {
+                                Some(PrivateElement::Field(v))
+                                | Some(PrivateElement::Method(v)) => v,
+                                Some(PrivateElement::Accessor { get, .. }) => {
+                                    if let Some(getter) = get {
+                                        match self.call_function(&getter, &obj_val, &[]) {
+                                            Completion::Normal(v) => v,
+                                            other => return other,
+                                        }
+                                    } else {
+                                        return Completion::Throw(self.create_type_error(&format!(
                                                 "Cannot read private member #{name} which has no getter"
                                             )));
-                                        }
-                                    }
-                                    None => {
-                                        return Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot read private member #{name} from an object whose class did not declare it"
-                                        )));
-                                    }
-                                };
-                                let mut evaluated_args = Vec::new();
-                                for arg in args {
-                                    match arg {
-                                        Expression::Spread(inner) => {
-                                            let spread_val = match self.eval_expr(inner, env) {
-                                                Completion::Normal(v) => v,
-                                                other => return other,
-                                            };
-                                            if let Ok(items) = self.iterate_to_vec(&spread_val) {
-                                                evaluated_args.extend(items);
-                                            }
-                                        }
-                                        _ => match self.eval_expr(arg, env) {
-                                            Completion::Normal(v) => evaluated_args.push(v),
-                                            other => return other,
-                                        },
                                     }
                                 }
-                                return self.call_function(&func_val, &obj_val, &evaluated_args);
+                                None => {
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot read private member #{name} from an object whose class did not declare it"
+                                        )));
+                                }
+                            };
+                            let mut evaluated_args = Vec::new();
+                            for arg in args {
+                                match arg {
+                                    Expression::Spread(inner) => {
+                                        let spread_val = match self.eval_expr(inner, env) {
+                                            Completion::Normal(v) => v,
+                                            other => return other,
+                                        };
+                                        if let Ok(items) = self.iterate_to_vec(&spread_val) {
+                                            evaluated_args.extend(items);
+                                        }
+                                    }
+                                    _ => match self.eval_expr(arg, env) {
+                                        Completion::Normal(v) => evaluated_args.push(v),
+                                        other => return other,
+                                    },
+                                }
                             }
+                            return self.call_function(&func_val, &obj_val, &evaluated_args);
+                        }
                         return Completion::Throw(self.create_type_error(&format!(
                             "Cannot read private member #{name} from a non-object"
                         )));
@@ -1571,6 +1612,7 @@ impl Interpreter {
             target_yield,
             current_yield: 0,
             sent_value,
+            is_async: false,
         });
 
         let result = self.exec_statements(&body, &func_env);
@@ -1696,20 +1738,32 @@ impl Interpreter {
         Completion::Throw(exception)
     }
 
+    fn reject_with_type_error(&mut self, msg: &str) -> Completion {
+        let promise = self.create_promise_object();
+        let promise_id = if let JsValue::Object(ref po) = promise {
+            po.id
+        } else {
+            0
+        };
+        let (_resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+        let err = self.create_type_error(msg);
+        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+        self.drain_microtasks();
+        Completion::Normal(promise)
+    }
+
     pub(crate) fn async_generator_next(
         &mut self,
         this: &JsValue,
         sent_value: JsValue,
     ) -> Completion {
         let JsValue::Object(o) = this else {
-            let err =
-                self.create_type_error("AsyncGenerator.prototype.next called on non-object");
-            return Completion::Throw(err);
+            return self
+                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
         };
         let Some(obj_rc) = self.get_object(o.id) else {
-            let err =
-                self.create_type_error("AsyncGenerator.prototype.next called on non-object");
-            return Completion::Throw(err);
+            return self
+                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
         };
 
         let state = obj_rc.borrow().iterator_state.clone();
@@ -1724,12 +1778,15 @@ impl Interpreter {
             done,
         }) = state
         else {
-            let err = self.create_type_error("not an async generator object");
-            return Completion::Throw(err);
+            return self.reject_with_type_error("not an async generator object");
         };
 
         let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise { po.id } else { 0 };
+        let promise_id = if let JsValue::Object(ref po) = promise {
+            po.id
+        } else {
+            0
+        };
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
 
         if done {
@@ -1767,6 +1824,7 @@ impl Interpreter {
             target_yield,
             current_yield: 0,
             sent_value,
+            is_async: true,
         });
 
         let result = self.exec_statements(&body, &func_env);
@@ -1777,21 +1835,35 @@ impl Interpreter {
                 let awaited = match self.await_value(&v) {
                     Completion::Normal(av) => av,
                     Completion::Throw(e) => {
-                        obj_rc.borrow_mut().iterator_state =
-                            Some(IteratorState::AsyncGenerator {
-                                body, params, closure, is_strict, args, this_val,
-                                target_yield, done: true,
-                            });
+                        obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
+                            body,
+                            params,
+                            closure,
+                            is_strict,
+                            args,
+                            this_val,
+                            target_yield,
+                            done: true,
+                        });
                         let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                         self.drain_microtasks();
                         return Completion::Normal(promise);
                     }
                     other => {
-                        if let Completion::Yield(yv) = other { yv } else { JsValue::Undefined }
+                        if let Completion::Yield(yv) = other {
+                            yv
+                        } else {
+                            JsValue::Undefined
+                        }
                     }
                 };
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
-                    body, params, closure, is_strict, args, this_val,
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
                     target_yield: target_yield + 1,
                     done: false,
                 });
@@ -1802,38 +1874,65 @@ impl Interpreter {
                 let awaited = match self.await_value(&v) {
                     Completion::Normal(av) => av,
                     Completion::Throw(e) => {
-                        obj_rc.borrow_mut().iterator_state =
-                            Some(IteratorState::AsyncGenerator {
-                                body, params, closure, is_strict, args, this_val,
-                                target_yield, done: true,
-                            });
+                        obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
+                            body,
+                            params,
+                            closure,
+                            is_strict,
+                            args,
+                            this_val,
+                            target_yield,
+                            done: true,
+                        });
                         let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                         self.drain_microtasks();
                         return Completion::Normal(promise);
                     }
                     other => {
-                        if let Completion::Yield(yv) = other { yv } else { JsValue::Undefined }
+                        if let Completion::Yield(yv) = other {
+                            yv
+                        } else {
+                            JsValue::Undefined
+                        }
                     }
                 };
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
-                    body, params, closure, is_strict, args, this_val,
-                    target_yield, done: true,
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
+                    target_yield,
+                    done: true,
                 });
                 let iter_result = self.create_iter_result_object(awaited, true);
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
             }
             Completion::Normal(_) => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
-                    body, params, closure, is_strict, args, this_val,
-                    target_yield, done: true,
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
+                    target_yield,
+                    done: true,
                 });
                 let iter_result = self.create_iter_result_object(JsValue::Undefined, true);
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
             }
             Completion::Throw(e) => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
-                    body, params, closure, is_strict, args, this_val,
-                    target_yield, done: true,
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
+                    target_yield,
+                    done: true,
                 });
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
             }
@@ -1843,30 +1942,49 @@ impl Interpreter {
         Completion::Normal(promise)
     }
 
-    pub(crate) fn async_generator_return(
-        &mut self,
-        this: &JsValue,
-        value: JsValue,
-    ) -> Completion {
+    pub(crate) fn async_generator_return(&mut self, this: &JsValue, value: JsValue) -> Completion {
         let JsValue::Object(o) = this else {
-            let err =
-                self.create_type_error("AsyncGenerator.prototype.return called on non-object");
-            return Completion::Throw(err);
+            return self
+                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
+        };
+
+        let Some(obj_rc) = self.get_object(o.id) else {
+            return self
+                .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
+        };
+        let state = obj_rc.borrow().iterator_state.clone();
+        let Some(IteratorState::AsyncGenerator {
+            body,
+            params,
+            closure,
+            is_strict,
+            args,
+            this_val,
+            target_yield,
+            ..
+        }) = state
+        else {
+            return self.reject_with_type_error("not an async generator object");
         };
 
         let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise { po.id } else { 0 };
+        let promise_id = if let JsValue::Object(ref po) = promise {
+            po.id
+        } else {
+            0
+        };
         let (resolve_fn, _reject_fn) = self.create_resolving_functions(promise_id);
 
-        if let Some(obj_rc) = self.get_object(o.id)
-            && let Some(IteratorState::AsyncGenerator {
-                body, params, closure, is_strict, args, this_val, target_yield, ..
-            }) = obj_rc.borrow().iterator_state.clone()
-        {
-            obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
-                body, params, closure, is_strict, args, this_val, target_yield, done: true,
-            });
-        }
+        obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
+            body,
+            params,
+            closure,
+            is_strict,
+            args,
+            this_val,
+            target_yield,
+            done: true,
+        });
 
         let iter_result = self.create_iter_result_object(value, true);
         let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
@@ -1880,25 +1998,52 @@ impl Interpreter {
         exception: JsValue,
     ) -> Completion {
         let JsValue::Object(o) = this else {
-            let err =
-                self.create_type_error("AsyncGenerator.prototype.throw called on non-object");
-            return Completion::Throw(err);
+            return self
+                .reject_with_type_error("AsyncGenerator.prototype.throw called on non-object");
+        };
+
+        let Some(obj_rc) = self.get_object(o.id) else {
+            return self
+                .reject_with_type_error("AsyncGenerator.prototype.throw called on non-object");
+        };
+        let state = obj_rc.borrow().iterator_state.clone();
+        let Some(IteratorState::AsyncGenerator {
+            body,
+            params,
+            closure,
+            is_strict,
+            args,
+            this_val,
+            target_yield,
+            done,
+        }) = state
+        else {
+            return self.reject_with_type_error("not an async generator object");
         };
 
         let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise { po.id } else { 0 };
+        let promise_id = if let JsValue::Object(ref po) = promise {
+            po.id
+        } else {
+            0
+        };
         let (_resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
 
-        if let Some(obj_rc) = self.get_object(o.id)
-            && let Some(IteratorState::AsyncGenerator {
-                body, params, closure, is_strict, args, this_val, target_yield, ..
-            }) = obj_rc.borrow().iterator_state.clone()
-        {
-            obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
-                body, params, closure, is_strict, args, this_val, target_yield, done: true,
-            });
+        if done {
+            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exception]);
+            self.drain_microtasks();
+            return Completion::Normal(promise);
         }
-
+        obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
+            body,
+            params,
+            closure,
+            is_strict,
+            args,
+            this_val,
+            target_yield,
+            done: true,
+        });
         let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exception]);
         self.drain_microtasks();
         Completion::Normal(promise)
@@ -1958,8 +2103,22 @@ impl Interpreter {
                         }
                         if is_async && is_generator {
                             let gen_obj = self.create_object();
-                            gen_obj.borrow_mut().prototype =
-                                self.async_generator_prototype.clone();
+                            // Set prototype from function's .prototype property, fall back to intrinsic
+                            let mut proto_set = false;
+                            if let Some(func_obj_rc) = self.get_object(o.id) {
+                                let proto_val =
+                                    func_obj_rc.borrow().get_property_value("prototype");
+                                if let Some(JsValue::Object(ref p)) = proto_val
+                                    && let Some(proto_rc) = self.get_object(p.id)
+                                {
+                                    gen_obj.borrow_mut().prototype = Some(proto_rc);
+                                    proto_set = true;
+                                }
+                            }
+                            if !proto_set {
+                                gen_obj.borrow_mut().prototype =
+                                    self.async_generator_prototype.clone();
+                            }
                             gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
                             gen_obj.borrow_mut().iterator_state =
                                 Some(IteratorState::AsyncGenerator {
@@ -1973,9 +2132,9 @@ impl Interpreter {
                                     done: false,
                                 });
                             let gen_id = gen_obj.borrow().id.unwrap();
-                            return Completion::Normal(JsValue::Object(
-                                crate::types::JsObject { id: gen_id },
-                            ));
+                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                id: gen_id,
+                            }));
                         }
                         if is_generator {
                             // Create a generator object instead of executing
@@ -1985,9 +2144,10 @@ impl Interpreter {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
                                 if let Some(JsValue::Object(ref p)) = proto_val
-                                    && let Some(proto_rc) = self.get_object(p.id) {
-                                        gen_obj.borrow_mut().prototype = Some(proto_rc);
-                                    }
+                                    && let Some(proto_rc) = self.get_object(p.id)
+                                {
+                                    gen_obj.borrow_mut().prototype = Some(proto_rc);
+                                }
                             }
                             gen_obj.borrow_mut().class_name = "Generator".to_string();
                             gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {
@@ -2319,9 +2479,10 @@ impl Interpreter {
         if let Some(obj) = self.get_object(proxy_id) {
             let b = obj.borrow();
             if let Some(ref target) = b.proxy_target
-                && let Some(tid) = target.borrow().id {
-                    return JsValue::Object(crate::types::JsObject { id: tid });
-                }
+                && let Some(tid) = target.borrow().id
+            {
+                return JsValue::Object(crate::types::JsObject { id: tid });
+            }
         }
         JsValue::Undefined
     }
@@ -2639,85 +2800,80 @@ impl Interpreter {
 
                             if m.is_static {
                                 if let JsValue::Object(ref o) = ctor_val
-                                    && let Some(func_obj) = self.get_object(o.id) {
-                                        match m.kind {
-                                            ClassMethodKind::Get => {
-                                                let existing = func_obj
-                                                    .borrow()
-                                                    .private_fields
-                                                    .get(name)
-                                                    .cloned();
-                                                let elem = if let Some(PrivateElement::Accessor {
-                                                    get: _,
+                                    && let Some(func_obj) = self.get_object(o.id)
+                                {
+                                    match m.kind {
+                                        ClassMethodKind::Get => {
+                                            let existing =
+                                                func_obj.borrow().private_fields.get(name).cloned();
+                                            let elem = if let Some(PrivateElement::Accessor {
+                                                get: _,
+                                                set,
+                                            }) = existing
+                                            {
+                                                PrivateElement::Accessor {
+                                                    get: Some(method_val),
                                                     set,
-                                                }) = existing
-                                                {
-                                                    PrivateElement::Accessor {
-                                                        get: Some(method_val),
-                                                        set,
-                                                    }
-                                                } else {
-                                                    PrivateElement::Accessor {
-                                                        get: Some(method_val),
-                                                        set: None,
-                                                    }
-                                                };
-                                                func_obj
-                                                    .borrow_mut()
-                                                    .private_fields
-                                                    .insert(name.clone(), elem);
-                                            }
-                                            ClassMethodKind::Set => {
-                                                let existing = func_obj
-                                                    .borrow()
-                                                    .private_fields
-                                                    .get(name)
-                                                    .cloned();
-                                                let elem = if let Some(PrivateElement::Accessor {
+                                                }
+                                            } else {
+                                                PrivateElement::Accessor {
+                                                    get: Some(method_val),
+                                                    set: None,
+                                                }
+                                            };
+                                            func_obj
+                                                .borrow_mut()
+                                                .private_fields
+                                                .insert(name.clone(), elem);
+                                        }
+                                        ClassMethodKind::Set => {
+                                            let existing =
+                                                func_obj.borrow().private_fields.get(name).cloned();
+                                            let elem = if let Some(PrivateElement::Accessor {
+                                                get,
+                                                set: _,
+                                            }) = existing
+                                            {
+                                                PrivateElement::Accessor {
                                                     get,
-                                                    set: _,
-                                                }) = existing
-                                                {
-                                                    PrivateElement::Accessor {
-                                                        get,
-                                                        set: Some(method_val),
-                                                    }
-                                                } else {
-                                                    PrivateElement::Accessor {
-                                                        get: None,
-                                                        set: Some(method_val),
-                                                    }
-                                                };
-                                                func_obj
-                                                    .borrow_mut()
-                                                    .private_fields
-                                                    .insert(name.clone(), elem);
-                                            }
-                                            _ => {
-                                                func_obj.borrow_mut().private_fields.insert(
-                                                    name.clone(),
-                                                    PrivateElement::Method(method_val),
-                                                );
-                                            }
+                                                    set: Some(method_val),
+                                                }
+                                            } else {
+                                                PrivateElement::Accessor {
+                                                    get: None,
+                                                    set: Some(method_val),
+                                                }
+                                            };
+                                            func_obj
+                                                .borrow_mut()
+                                                .private_fields
+                                                .insert(name.clone(), elem);
+                                        }
+                                        _ => {
+                                            func_obj.borrow_mut().private_fields.insert(
+                                                name.clone(),
+                                                PrivateElement::Method(method_val),
+                                            );
                                         }
                                     }
+                                }
                             } else if let JsValue::Object(ref o) = ctor_val
-                            && let Some(func_obj) = self.get_object(o.id) {
+                                && let Some(func_obj) = self.get_object(o.id)
+                            {
                                 match m.kind {
                                     ClassMethodKind::Get => {
                                         let mut b = func_obj.borrow_mut();
                                         let mut found = false;
                                         for def in b.class_private_field_defs.iter_mut() {
                                             if let PrivateFieldDef::Accessor {
-                                                name: n,
-                                                get: g,
-                                                ..
+                                                name: n, get: g, ..
                                             } = def
-                                                && n == name {
-                                                    *g = Some(method_val.clone());
-                                                    found = true;
-                                                    break;
-                                                }
+                                                && n == name
+                                            {
+                                                *g = Some(method_val.clone());
+                                                found = true;
+                                                break;
+                                            }
                                         }
                                         if !found {
                                             b.class_private_field_defs.push(
@@ -2734,15 +2890,14 @@ impl Interpreter {
                                         let mut found = false;
                                         for def in b.class_private_field_defs.iter_mut() {
                                             if let PrivateFieldDef::Accessor {
-                                                name: n,
-                                                set: s,
-                                                ..
+                                                name: n, set: s, ..
                                             } = def
-                                                && n == name {
-                                                    *s = Some(method_val.clone());
-                                                    found = true;
-                                                    break;
-                                                }
+                                                && n == name
+                                            {
+                                                *s = Some(method_val.clone());
+                                                found = true;
+                                                break;
+                                            }
                                         }
                                         if !found {
                                             b.class_private_field_defs.push(
@@ -2755,13 +2910,12 @@ impl Interpreter {
                                         }
                                     }
                                     _ => {
-                                        func_obj
-                                            .borrow_mut()
-                                            .class_private_field_defs
-                                            .push(PrivateFieldDef::Method {
+                                        func_obj.borrow_mut().class_private_field_defs.push(
+                                            PrivateFieldDef::Method {
                                                 name: name.clone(),
                                                 value: method_val,
-                                            });
+                                            },
+                                        );
                                     }
                                 }
                             }
@@ -2872,9 +3026,9 @@ impl Interpreter {
                             PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
                             PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
                                 Completion::Normal(v) => match self.to_property_key(&v) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            },
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                },
                                 other => return other,
                             },
                             PropertyKey::Private(_) => unreachable!(),
@@ -2898,9 +3052,9 @@ impl Interpreter {
                             PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
                             PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
                                 Completion::Normal(v) => match self.to_property_key(&v) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            },
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                },
                                 other => return other,
                             },
                             PropertyKey::Private(_) => unreachable!(),

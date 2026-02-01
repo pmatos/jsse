@@ -133,18 +133,19 @@ impl Interpreter {
 
         // Set Promise.prototype on constructor
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id) {
-                let proto_id = proto.borrow().id.unwrap();
-                func_obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::Object(crate::types::JsObject { id: proto_id }),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
-            }
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            let proto_id = proto.borrow().id.unwrap();
+            func_obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(crate::types::JsObject { id: proto_id }),
+                    false,
+                    false,
+                    false,
+                ),
+            );
+        }
 
         // Set constructor on prototype
         proto.borrow_mut().insert_property(
@@ -162,11 +163,12 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id) {
-                func_obj
-                    .borrow_mut()
-                    .insert_builtin("resolve".to_string(), resolve_fn);
-            }
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("resolve".to_string(), resolve_fn);
+        }
 
         // Promise.reject
         let reject_fn = self.create_function(JsFunction::native(
@@ -185,11 +187,12 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id) {
-                func_obj
-                    .borrow_mut()
-                    .insert_builtin("reject".to_string(), reject_fn);
-            }
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("reject".to_string(), reject_fn);
+        }
 
         // Promise.all
         let all_fn = self.create_function(JsFunction::native(
@@ -201,11 +204,12 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id) {
-                func_obj
-                    .borrow_mut()
-                    .insert_builtin("all".to_string(), all_fn);
-            }
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("all".to_string(), all_fn);
+        }
 
         // Promise.allSettled
         let all_settled_fn = self.create_function(JsFunction::native(
@@ -217,11 +221,12 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id) {
-                func_obj
-                    .borrow_mut()
-                    .insert_builtin("allSettled".to_string(), all_settled_fn);
-            }
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("allSettled".to_string(), all_settled_fn);
+        }
 
         // Promise.race
         let race_fn = self.create_function(JsFunction::native(
@@ -233,11 +238,12 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id) {
-                func_obj
-                    .borrow_mut()
-                    .insert_builtin("race".to_string(), race_fn);
-            }
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("race".to_string(), race_fn);
+        }
 
         // Promise.any
         let any_fn = self.create_function(JsFunction::native(
@@ -249,11 +255,12 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id) {
-                func_obj
-                    .borrow_mut()
-                    .insert_builtin("any".to_string(), any_fn);
-            }
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("any".to_string(), any_fn);
+        }
 
         // Register Promise as global
         self.global_env
@@ -287,21 +294,22 @@ impl Interpreter {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // If resolving with self, reject with TypeError
                 if let JsValue::Object(ref o) = value
-                    && o.id == promise_id {
-                        let err =
-                            interp.create_type_error("A promise cannot be resolved with itself.");
-                        interp.reject_promise(promise_id, err);
-                        return Completion::Normal(JsValue::Undefined);
-                    }
+                    && o.id == promise_id
+                {
+                    let err = interp.create_type_error("A promise cannot be resolved with itself.");
+                    interp.reject_promise(promise_id, err);
+                    return Completion::Normal(JsValue::Undefined);
+                }
                 // Check if value is a thenable
                 if let JsValue::Object(ref o) = value
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let then_val = obj.borrow().get_property("then");
-                        if interp.is_callable(&then_val) {
-                            interp.promise_resolve_thenable(promise_id, value.clone(), then_val);
-                            return Completion::Normal(JsValue::Undefined);
-                        }
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let then_val = obj.borrow().get_property("then");
+                    if interp.is_callable(&then_val) {
+                        interp.promise_resolve_thenable(promise_id, value.clone(), then_val);
+                        return Completion::Normal(JsValue::Undefined);
                     }
+                }
                 interp.fulfill_promise(promise_id, value);
                 Completion::Normal(JsValue::Undefined)
             },
@@ -519,9 +527,10 @@ impl Interpreter {
         // If already a promise, return it
         if let JsValue::Object(o) = value
             && let Some(obj) = self.get_object(o.id)
-                && obj.borrow().promise_data.is_some() {
-                    return value.clone();
-                }
+            && obj.borrow().promise_data.is_some()
+        {
+            return value.clone();
+        }
         let promise = self.create_promise_object();
         let promise_id = if let JsValue::Object(ref o) = promise {
             o.id
@@ -530,13 +539,14 @@ impl Interpreter {
         };
         // Check if value is a thenable
         if let JsValue::Object(o) = value
-            && let Some(obj) = self.get_object(o.id) {
-                let then_val = obj.borrow().get_property("then");
-                if self.is_callable(&then_val) {
-                    self.promise_resolve_thenable(promise_id, value.clone(), then_val);
-                    return promise;
-                }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let then_val = obj.borrow().get_property("then");
+            if self.is_callable(&then_val) {
+                self.promise_resolve_thenable(promise_id, value.clone(), then_val);
+                return promise;
             }
+        }
         self.fulfill_promise(promise_id, value.clone());
         promise
     }
@@ -844,25 +854,28 @@ impl Interpreter {
 
     pub(crate) fn is_callable(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id) {
-                return obj.borrow().callable.is_some();
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            return obj.borrow().callable.is_some();
+        }
         false
     }
 
     pub(crate) fn is_promise(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id) {
-                return obj.borrow().promise_data.is_some();
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            return obj.borrow().promise_data.is_some();
+        }
         false
     }
 
     pub(crate) fn get_promise_state(&self, promise_id: u64) -> Option<PromiseState> {
         if let Some(obj) = self.get_object(promise_id)
-            && let Some(ref pd) = obj.borrow().promise_data {
-                return Some(pd.state.clone());
-            }
+            && let Some(ref pd) = obj.borrow().promise_data
+        {
+            return Some(pd.state.clone());
+        }
         None
     }
 }

@@ -54,6 +54,10 @@ Implement all function types (normal, arrow, generator, async, async generator) 
 - [x] AsyncGenerator iterator state, replay-based execution
 - [x] `next()` / `return()` / `throw()` returning Promises
 - [x] %AsyncIteratorPrototype% and %AsyncGeneratorPrototype% setup
+- [x] %AsyncGeneratorFunction.prototype% with proper prototype chain
+- [x] `yield*` delegation with async iterator protocol
+- [x] Rejected promises for type errors in next/return/throw
+- [x] Nested yield expression evaluation fix
 
 ### 7.7 Class Definitions (§15.7)
 - [x] ClassDefinitionEvaluation

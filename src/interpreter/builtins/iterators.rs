@@ -49,12 +49,13 @@ impl Interpreter {
                     // looking up "Iterator" from global gives the same object
                     let global_iter = interp.global_env.borrow().get("Iterator");
                     if let Some(JsValue::Object(gi)) = global_iter
-                        && gi.id == nt.id {
-                            let err = interp.create_type_error(
-                                "Abstract class Iterator not directly constructable",
-                            );
-                            return Completion::Throw(err);
-                        }
+                        && gi.id == nt.id
+                    {
+                        let err = interp.create_type_error(
+                            "Abstract class Iterator not directly constructable",
+                        );
+                        return Completion::Throw(err);
+                    }
                 }
                 Completion::Normal(this.clone())
             },
@@ -62,19 +63,20 @@ impl Interpreter {
 
         // Set Iterator.prototype
         if let JsValue::Object(ctor_obj) = &iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::Object(crate::types::JsObject {
-                            id: iter_proto.borrow().id.unwrap(),
-                        }),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
-            }
+            && let Some(obj) = self.get_object(ctor_obj.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(crate::types::JsObject {
+                        id: iter_proto.borrow().id.unwrap(),
+                    }),
+                    false,
+                    false,
+                    false,
+                ),
+            );
+        }
 
         // Set %IteratorPrototype%.constructor = Iterator
         iter_proto.borrow_mut().insert_property(
@@ -1270,23 +1272,24 @@ impl Interpreter {
 
                 if let JsValue::Object(o) = &obj
                     && let Some(ref key) = sym_key
-                        && let Some(obj_data) = interp.get_object(o.id) {
-                            let iter_fn = obj_data.borrow().get_property(key);
-                            if !matches!(iter_fn, JsValue::Undefined) {
-                                match interp.call_function(&iter_fn, &obj, &[]) {
-                                    Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
-                                        iterator = Some(v);
-                                    }
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => {
-                                        let err = interp.create_type_error(
-                                            "Result of the Symbol.iterator method is not an object",
-                                        );
-                                        return Completion::Throw(err);
-                                    }
-                                }
+                    && let Some(obj_data) = interp.get_object(o.id)
+                {
+                    let iter_fn = obj_data.borrow().get_property(key);
+                    if !matches!(iter_fn, JsValue::Undefined) {
+                        match interp.call_function(&iter_fn, &obj, &[]) {
+                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
+                                iterator = Some(v);
+                            }
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => {
+                                let err = interp.create_type_error(
+                                    "Result of the Symbol.iterator method is not an object",
+                                );
+                                return Completion::Throw(err);
                             }
                         }
+                    }
+                }
 
                 let iter_val = if let Some(it) = iterator {
                     it
@@ -1399,9 +1402,10 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id) {
-                obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
-            }
+            && let Some(obj) = self.get_object(ctor_obj.id)
+        {
+            obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
+        }
 
         // Iterator.concat(...iterables)
         let concat_fn = self.create_function(JsFunction::native(
@@ -1544,10 +1548,9 @@ impl Interpreter {
                         state_ret.borrow_mut().4 = false;
                         state_ret.borrow_mut().2 = None;
                         state_ret.borrow_mut().3 = None;
-                        if alive
-                            && let Some(ref ci) = cur_iter {
-                                interp.iterator_close(ci, JsValue::Undefined);
-                            }
+                        if alive && let Some(ref ci) = cur_iter {
+                            interp.iterator_close(ci, JsValue::Undefined);
+                        }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
@@ -1560,10 +1563,11 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id) {
-                obj.borrow_mut()
-                    .insert_builtin("concat".to_string(), concat_fn);
-            }
+            && let Some(obj) = self.get_object(ctor_obj.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("concat".to_string(), concat_fn);
+        }
     }
 
     pub(crate) fn create_array_iterator(&mut self, array_id: u64, kind: IteratorKind) -> JsValue {
@@ -1753,6 +1757,43 @@ impl Interpreter {
             ),
         );
 
-        self.async_generator_prototype = Some(gen_proto);
+        self.async_generator_prototype = Some(gen_proto.clone());
+
+        // %AsyncGeneratorFunction.prototype%
+        let agf_proto = self.create_object();
+        agf_proto.borrow_mut().class_name = "AsyncGeneratorFunction".to_string();
+        // prototype property points to AsyncGenerator.prototype
+        let gen_proto_id = gen_proto.borrow().id.unwrap();
+        agf_proto.borrow_mut().insert_property(
+            "prototype".to_string(),
+            PropertyDescriptor::data(
+                JsValue::Object(crate::types::JsObject { id: gen_proto_id }),
+                false,
+                false,
+                true,
+            ),
+        );
+        // Symbol.toStringTag
+        agf_proto.borrow_mut().insert_property(
+            "Symbol(Symbol.toStringTag)".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("AsyncGeneratorFunction")),
+                false,
+                false,
+                true,
+            ),
+        );
+        // Set constructor on AsyncGenerator.prototype pointing back to AsyncGeneratorFunction.prototype
+        let agf_proto_id = agf_proto.borrow().id.unwrap();
+        gen_proto.borrow_mut().insert_property(
+            "constructor".to_string(),
+            PropertyDescriptor::data(
+                JsValue::Object(crate::types::JsObject { id: agf_proto_id }),
+                false,
+                false,
+                true,
+            ),
+        );
+        self.async_generator_function_prototype = Some(agf_proto);
     }
 }

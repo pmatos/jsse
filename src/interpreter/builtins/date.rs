@@ -12,9 +12,10 @@ impl Interpreter {
             {
                 let b = obj.borrow();
                 if b.class_name == "Date"
-                    && let Some(JsValue::Number(t)) = &b.primitive_value {
-                        return Some(*t);
-                    }
+                    && let Some(JsValue::Number(t)) = &b.primitive_value
+                {
+                    return Some(*t);
+                }
             }
             None
         }

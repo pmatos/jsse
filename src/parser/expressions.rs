@@ -627,11 +627,15 @@ impl<'a> Parser<'a> {
                 let name = name.clone();
                 // Escaped reserved words are still reserved
                 if Self::is_reserved_identifier(&name, self.strict) {
-                    return Err(self.error("Keyword must not contain escaped characters".to_string()));
+                    return Err(
+                        self.error("Keyword must not contain escaped characters".to_string())
+                    );
                 }
                 // Escaped "await" and "yield" cannot be used as identifiers
                 if name == "await" || name == "yield" {
-                    return Err(self.error("Keyword must not contain escaped characters".to_string()));
+                    return Err(
+                        self.error("Keyword must not contain escaped characters".to_string())
+                    );
                 }
                 self.check_strict_identifier(&name)?;
                 self.advance()?;

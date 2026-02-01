@@ -135,20 +135,22 @@ impl Interpreter {
             |interp, _this, args| {
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &arg
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let obj_ref = obj.borrow();
-                        if obj_ref.typed_array_info.is_some() || obj_ref.data_view_info.is_some() {
-                            return Completion::Normal(JsValue::Boolean(true));
-                        }
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if obj_ref.typed_array_info.is_some() || obj_ref.data_view_info.is_some() {
+                        return Completion::Normal(JsValue::Boolean(true));
                     }
+                }
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
         if let JsValue::Object(o) = &ctor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("isView".to_string(), is_view_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("isView".to_string(), is_view_fn);
+        }
 
         self.global_env
             .borrow_mut()
@@ -295,43 +297,42 @@ impl Interpreter {
                     };
 
                     if let JsValue::Object(src_o) = &source
-                        && let Some(src_obj) = interp.get_object(src_o.id) {
-                            let src_ref = src_obj.borrow();
-                            if let Some(ref src_ta) = src_ref.typed_array_info {
-                                let src_len = src_ta.array_length;
-                                if offset + src_len > ta.array_length {
-                                    return Completion::Throw(
-                                        interp.create_type_error("offset is out of bounds"),
-                                    );
-                                }
-                                for i in 0..src_len {
-                                    let val = typed_array_get_index(src_ta, i);
-                                    typed_array_set_index(&ta, offset + i, &val);
-                                }
-                                return Completion::Normal(JsValue::Undefined);
-                            }
-                            // Array-like source
-                            let len_val = src_ref.get_property("length");
-                            drop(src_ref);
-                            let src_len = to_number(&len_val) as usize;
+                        && let Some(src_obj) = interp.get_object(src_o.id)
+                    {
+                        let src_ref = src_obj.borrow();
+                        if let Some(ref src_ta) = src_ref.typed_array_info {
+                            let src_len = src_ta.array_length;
                             if offset + src_len > ta.array_length {
                                 return Completion::Throw(
                                     interp.create_type_error("offset is out of bounds"),
                                 );
                             }
                             for i in 0..src_len {
-                                let val = match interp.get_object_property(
-                                    src_o.id,
-                                    &i.to_string(),
-                                    &source,
-                                ) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
+                                let val = typed_array_get_index(src_ta, i);
                                 typed_array_set_index(&ta, offset + i, &val);
                             }
                             return Completion::Normal(JsValue::Undefined);
                         }
+                        // Array-like source
+                        let len_val = src_ref.get_property("length");
+                        drop(src_ref);
+                        let src_len = to_number(&len_val) as usize;
+                        if offset + src_len > ta.array_length {
+                            return Completion::Throw(
+                                interp.create_type_error("offset is out of bounds"),
+                            );
+                        }
+                        for i in 0..src_len {
+                            let val =
+                                match interp.get_object_property(src_o.id, &i.to_string(), &source)
+                                {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                            typed_array_set_index(&ta, offset + i, &val);
+                        }
+                        return Completion::Normal(JsValue::Undefined);
+                    }
                     Completion::Throw(interp.create_type_error("argument is not an object"))
                 } else {
                     Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -771,29 +772,30 @@ impl Interpreter {
                             return std::cmp::Ordering::Equal;
                         }
                         if let Some(ref cmp) = comparefn
-                            && !matches!(cmp, JsValue::Undefined) {
-                                match interp.call_function(
-                                    cmp,
-                                    &JsValue::Undefined,
-                                    &[a.clone(), b.clone()],
-                                ) {
-                                    Completion::Normal(v) => {
-                                        let n = to_number(&v);
-                                        if n < 0.0 {
-                                            return std::cmp::Ordering::Less;
-                                        }
-                                        if n > 0.0 {
-                                            return std::cmp::Ordering::Greater;
-                                        }
-                                        return std::cmp::Ordering::Equal;
+                            && !matches!(cmp, JsValue::Undefined)
+                        {
+                            match interp.call_function(
+                                cmp,
+                                &JsValue::Undefined,
+                                &[a.clone(), b.clone()],
+                            ) {
+                                Completion::Normal(v) => {
+                                    let n = to_number(&v);
+                                    if n < 0.0 {
+                                        return std::cmp::Ordering::Less;
                                     }
-                                    Completion::Throw(e) => {
-                                        error = Some(e);
-                                        return std::cmp::Ordering::Equal;
+                                    if n > 0.0 {
+                                        return std::cmp::Ordering::Greater;
                                     }
-                                    _ => return std::cmp::Ordering::Equal,
+                                    return std::cmp::Ordering::Equal;
                                 }
+                                Completion::Throw(e) => {
+                                    error = Some(e);
+                                    return std::cmp::Ordering::Equal;
+                                }
+                                _ => return std::cmp::Ordering::Equal,
                             }
+                        }
                         // Default numeric sort
                         let na = to_number(a);
                         let nb = to_number(b);
@@ -954,29 +956,30 @@ impl Interpreter {
                             return std::cmp::Ordering::Equal;
                         }
                         if let Some(ref cmp) = comparefn
-                            && !matches!(cmp, JsValue::Undefined) {
-                                match interp.call_function(
-                                    cmp,
-                                    &JsValue::Undefined,
-                                    &[a.clone(), b.clone()],
-                                ) {
-                                    Completion::Normal(v) => {
-                                        let n = to_number(&v);
-                                        if n < 0.0 {
-                                            return std::cmp::Ordering::Less;
-                                        }
-                                        if n > 0.0 {
-                                            return std::cmp::Ordering::Greater;
-                                        }
-                                        return std::cmp::Ordering::Equal;
+                            && !matches!(cmp, JsValue::Undefined)
+                        {
+                            match interp.call_function(
+                                cmp,
+                                &JsValue::Undefined,
+                                &[a.clone(), b.clone()],
+                            ) {
+                                Completion::Normal(v) => {
+                                    let n = to_number(&v);
+                                    if n < 0.0 {
+                                        return std::cmp::Ordering::Less;
                                     }
-                                    Completion::Throw(e) => {
-                                        error = Some(e);
-                                        return std::cmp::Ordering::Equal;
+                                    if n > 0.0 {
+                                        return std::cmp::Ordering::Greater;
                                     }
-                                    _ => return std::cmp::Ordering::Equal,
+                                    return std::cmp::Ordering::Equal;
                                 }
+                                Completion::Throw(e) => {
+                                    error = Some(e);
+                                    return std::cmp::Ordering::Equal;
+                                }
+                                _ => return std::cmp::Ordering::Equal,
                             }
+                        }
                         let na = to_number(a);
                         let nb = to_number(b);
                         na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
@@ -1638,10 +1641,11 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("from".to_string(), ta_from_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("from".to_string(), ta_from_fn);
+        }
         // TypedArray.of
         let ta_of_fn = self.create_function(JsFunction::native(
             "of".to_string(),
@@ -1649,9 +1653,10 @@ impl Interpreter {
             |interp, this_val, args| interp.construct_typed_array_from_this(this_val, args),
         ));
         if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut().insert_builtin("of".to_string(), ta_of_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_builtin("of".to_string(), ta_of_fn);
+        }
 
         for kind in kinds {
             let name = kind.name().to_string();
@@ -1799,37 +1804,41 @@ impl Interpreter {
 
             // Set BYTES_PER_ELEMENT on constructor
             if let JsValue::Object(o) = &ctor
-                && let Some(obj) = self.get_object(o.id) {
-                    obj.borrow_mut().insert_property(
-                        "BYTES_PER_ELEMENT".to_string(),
-                        PropertyDescriptor::data(JsValue::Number(bpe as f64), false, false, false),
-                    );
-                    // Set prototype property
-                    let proto_id = type_proto.borrow().id.unwrap();
-                    obj.borrow_mut().insert_property(
-                        "prototype".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::Object(JsObject { id: proto_id }),
-                            false,
-                            false,
-                            false,
-                        ),
-                    );
-                    // Inherit from/of from %TypedArray%
-                    if let JsValue::Object(ta_o) = &ta_ctor_clone
-                        && let Some(ta_obj) = self.get_object(ta_o.id) {
-                            let ta_ref = ta_obj.borrow();
-                            if let Some(from_desc) = ta_ref.get_own_property("from")
-                                && let Some(ref v) = from_desc.value {
-                                    obj.borrow_mut()
-                                        .insert_builtin("from".to_string(), v.clone());
-                                }
-                            if let Some(of_desc) = ta_ref.get_own_property("of")
-                                && let Some(ref v) = of_desc.value {
-                                    obj.borrow_mut().insert_builtin("of".to_string(), v.clone());
-                                }
-                        }
+                && let Some(obj) = self.get_object(o.id)
+            {
+                obj.borrow_mut().insert_property(
+                    "BYTES_PER_ELEMENT".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(bpe as f64), false, false, false),
+                );
+                // Set prototype property
+                let proto_id = type_proto.borrow().id.unwrap();
+                obj.borrow_mut().insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Object(JsObject { id: proto_id }),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
+                // Inherit from/of from %TypedArray%
+                if let JsValue::Object(ta_o) = &ta_ctor_clone
+                    && let Some(ta_obj) = self.get_object(ta_o.id)
+                {
+                    let ta_ref = ta_obj.borrow();
+                    if let Some(from_desc) = ta_ref.get_own_property("from")
+                        && let Some(ref v) = from_desc.value
+                    {
+                        obj.borrow_mut()
+                            .insert_builtin("from".to_string(), v.clone());
+                    }
+                    if let Some(of_desc) = ta_ref.get_own_property("of")
+                        && let Some(ref v) = of_desc.value
+                    {
+                        obj.borrow_mut().insert_builtin("of".to_string(), v.clone());
+                    }
                 }
+            }
 
             // Set constructor on prototype
             type_proto.borrow_mut().insert_property(
@@ -1956,74 +1965,75 @@ impl Interpreter {
     ) -> Completion {
         // Determine which TypedArray constructor `this` is
         if let JsValue::Object(o) = this_val
-            && let Some(obj) = self.get_object(o.id) {
-                let name = {
-                    let obj_ref = obj.borrow();
-                    if let Some(ref func) = obj_ref.callable {
-                        match func {
-                            JsFunction::Native(n, _, _) => Some(n.clone()),
-                            JsFunction::User { name, .. } => name.clone(),
-                        }
-                    } else {
-                        None
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let name = {
+                let obj_ref = obj.borrow();
+                if let Some(ref func) = obj_ref.callable {
+                    match func {
+                        JsFunction::Native(n, _, _) => Some(n.clone()),
+                        JsFunction::User { name, .. } => name.clone(),
                     }
+                } else {
+                    None
+                }
+            };
+            if let Some(name) = name {
+                let kind = match name.as_str() {
+                    "Int8Array" => Some(TypedArrayKind::Int8),
+                    "Uint8Array" => Some(TypedArrayKind::Uint8),
+                    "Uint8ClampedArray" => Some(TypedArrayKind::Uint8Clamped),
+                    "Int16Array" => Some(TypedArrayKind::Int16),
+                    "Uint16Array" => Some(TypedArrayKind::Uint16),
+                    "Int32Array" => Some(TypedArrayKind::Int32),
+                    "Uint32Array" => Some(TypedArrayKind::Uint32),
+                    "Float32Array" => Some(TypedArrayKind::Float32),
+                    "Float64Array" => Some(TypedArrayKind::Float64),
+                    "BigInt64Array" => Some(TypedArrayKind::BigInt64),
+                    "BigUint64Array" => Some(TypedArrayKind::BigUint64),
+                    _ => None,
                 };
-                if let Some(name) = name {
-                    let kind = match name.as_str() {
-                        "Int8Array" => Some(TypedArrayKind::Int8),
-                        "Uint8Array" => Some(TypedArrayKind::Uint8),
-                        "Uint8ClampedArray" => Some(TypedArrayKind::Uint8Clamped),
-                        "Int16Array" => Some(TypedArrayKind::Int16),
-                        "Uint16Array" => Some(TypedArrayKind::Uint16),
-                        "Int32Array" => Some(TypedArrayKind::Int32),
-                        "Uint32Array" => Some(TypedArrayKind::Uint32),
-                        "Float32Array" => Some(TypedArrayKind::Float32),
-                        "Float64Array" => Some(TypedArrayKind::Float64),
-                        "BigInt64Array" => Some(TypedArrayKind::BigInt64),
-                        "BigUint64Array" => Some(TypedArrayKind::BigUint64),
-                        _ => None,
+                if let Some(kind) = kind {
+                    let proto = self.get_typed_array_prototype(kind);
+                    let bpe = kind.bytes_per_element();
+                    let len = values.len();
+                    let new_buf = vec![0u8; len * bpe];
+                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                    let ta = TypedArrayInfo {
+                        kind,
+                        buffer: new_buf_rc.clone(),
+                        byte_offset: 0,
+                        byte_length: len * bpe,
+                        array_length: len,
                     };
-                    if let Some(kind) = kind {
-                        let proto = self.get_typed_array_prototype(kind);
-                        let bpe = kind.bytes_per_element();
-                        let len = values.len();
-                        let new_buf = vec![0u8; len * bpe];
-                        let new_buf_rc = Rc::new(RefCell::new(new_buf));
-                        let ta = TypedArrayInfo {
-                            kind,
-                            buffer: new_buf_rc.clone(),
-                            byte_offset: 0,
-                            byte_length: len * bpe,
-                            array_length: len,
-                        };
-                        for (i, val) in values.iter().enumerate() {
-                            typed_array_set_index(&ta, i, val);
-                        }
-                        let ab_obj = self.create_object();
-                        {
-                            let mut ab = ab_obj.borrow_mut();
-                            ab.class_name = "ArrayBuffer".to_string();
-                            ab.prototype = self.arraybuffer_prototype.clone();
-                            ab.arraybuffer_data = Some(new_buf_rc);
-                        }
-                        let ab_id = ab_obj.borrow().id.unwrap();
-                        let buf_val = JsValue::Object(JsObject { id: ab_id });
-                        let result = self.create_object();
-                        {
-                            let mut r = result.borrow_mut();
-                            r.class_name = kind.name().to_string();
-                            r.prototype = proto;
-                            r.insert_property(
-                                "__buffer__".to_string(),
-                                PropertyDescriptor::data(buf_val, false, false, false),
-                            );
-                            r.typed_array_info = Some(ta);
-                        }
-                        let id = result.borrow().id.unwrap();
-                        return Completion::Normal(JsValue::Object(JsObject { id }));
+                    for (i, val) in values.iter().enumerate() {
+                        typed_array_set_index(&ta, i, val);
                     }
+                    let ab_obj = self.create_object();
+                    {
+                        let mut ab = ab_obj.borrow_mut();
+                        ab.class_name = "ArrayBuffer".to_string();
+                        ab.prototype = self.arraybuffer_prototype.clone();
+                        ab.arraybuffer_data = Some(new_buf_rc);
+                    }
+                    let ab_id = ab_obj.borrow().id.unwrap();
+                    let buf_val = JsValue::Object(JsObject { id: ab_id });
+                    let result = self.create_object();
+                    {
+                        let mut r = result.borrow_mut();
+                        r.class_name = kind.name().to_string();
+                        r.prototype = proto;
+                        r.insert_property(
+                            "__buffer__".to_string(),
+                            PropertyDescriptor::data(buf_val, false, false, false),
+                        );
+                        r.typed_array_info = Some(ta);
+                    }
+                    let id = result.borrow().id.unwrap();
+                    return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
             }
+        }
         Completion::Throw(self.create_type_error("not a TypedArray constructor"))
     }
 
@@ -2032,84 +2042,82 @@ impl Interpreter {
         val: &JsValue,
     ) -> Result<Vec<JsValue>, Completion> {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id) {
-                let obj_ref = obj.borrow();
-                // Check for Symbol.iterator
-                let has_iterator = obj_ref.has_property("Symbol(Symbol.iterator)");
-                // Check for array_elements
-                if let Some(ref elems) = obj_ref.array_elements {
-                    return Ok(elems.clone());
-                }
-                drop(obj_ref);
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let obj_ref = obj.borrow();
+            // Check for Symbol.iterator
+            let has_iterator = obj_ref.has_property("Symbol(Symbol.iterator)");
+            // Check for array_elements
+            if let Some(ref elems) = obj_ref.array_elements {
+                return Ok(elems.clone());
+            }
+            drop(obj_ref);
 
-                if has_iterator {
-                    // Use iterator protocol
-                    let iter_fn =
-                        match self.get_object_property(o.id, "Symbol(Symbol.iterator)", val) {
+            if has_iterator {
+                // Use iterator protocol
+                let iter_fn = match self.get_object_property(o.id, "Symbol(Symbol.iterator)", val) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(Completion::Throw(e)),
+                    _ => {
+                        return Err(Completion::Throw(self.create_type_error("bad iterator")));
+                    }
+                };
+                let iter = match self.call_function(&iter_fn, val, &[]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(Completion::Throw(e)),
+                    _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
+                };
+                let mut values = Vec::new();
+                loop {
+                    let next_fn = if let JsValue::Object(io) = &iter {
+                        match self.get_object_property(io.id, "next", &iter) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Err(Completion::Throw(e)),
-                            _ => {
-                                return Err(Completion::Throw(
-                                    self.create_type_error("bad iterator"),
-                                ));
-                            }
-                        };
-                    let iter = match self.call_function(&iter_fn, val, &[]) {
+                            _ => break,
+                        }
+                    } else {
+                        break;
+                    };
+                    let result = match self.call_function(&next_fn, &iter, &[]) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Err(Completion::Throw(e)),
-                        _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
+                        _ => break,
                     };
-                    let mut values = Vec::new();
-                    loop {
-                        let next_fn = if let JsValue::Object(io) = &iter {
-                            match self.get_object_property(io.id, "next", &iter) {
-                                Completion::Normal(v) => v,
-                                _ => break,
-                            }
-                        } else {
-                            break;
+                    if let JsValue::Object(ro) = &result {
+                        let done = match self.get_object_property(ro.id, "done", &result) {
+                            Completion::Normal(v) => to_boolean(&v),
+                            _ => true,
                         };
-                        let result = match self.call_function(&next_fn, &iter, &[]) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Err(Completion::Throw(e)),
-                            _ => break,
-                        };
-                        if let JsValue::Object(ro) = &result {
-                            let done = match self.get_object_property(ro.id, "done", &result) {
-                                Completion::Normal(v) => to_boolean(&v),
-                                _ => true,
-                            };
-                            if done {
-                                break;
-                            }
-                            let value = match self.get_object_property(ro.id, "value", &result) {
-                                Completion::Normal(v) => v,
-                                _ => JsValue::Undefined,
-                            };
-                            values.push(value);
-                        } else {
+                        if done {
                             break;
                         }
+                        let value = match self.get_object_property(ro.id, "value", &result) {
+                            Completion::Normal(v) => v,
+                            _ => JsValue::Undefined,
+                        };
+                        values.push(value);
+                    } else {
+                        break;
                     }
-                    return Ok(values);
-                }
-
-                // Array-like
-                let len_val = match self.get_object_property(o.id, "length", val) {
-                    Completion::Normal(v) => v,
-                    _ => return Ok(Vec::new()),
-                };
-                let len = to_number(&len_val) as usize;
-                let mut values = Vec::new();
-                for i in 0..len {
-                    let v = match self.get_object_property(o.id, &i.to_string(), val) {
-                        Completion::Normal(v) => v,
-                        _ => JsValue::Undefined,
-                    };
-                    values.push(v);
                 }
                 return Ok(values);
             }
+
+            // Array-like
+            let len_val = match self.get_object_property(o.id, "length", val) {
+                Completion::Normal(v) => v,
+                _ => return Ok(Vec::new()),
+            };
+            let len = to_number(&len_val) as usize;
+            let mut values = Vec::new();
+            for i in 0..len {
+                let v = match self.get_object_property(o.id, &i.to_string(), val) {
+                    Completion::Normal(v) => v,
+                    _ => JsValue::Undefined,
+                };
+                values.push(v);
+            }
+            return Ok(values);
+        }
         Ok(Vec::new())
     }
 
@@ -2426,53 +2434,53 @@ impl Interpreter {
             move |interp, _this, args| {
                 let buf_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &buf_arg
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let buf_rc = {
-                            let obj_ref = obj.borrow();
-                            if let Some(ref buf) = obj_ref.arraybuffer_data {
-                                buf.clone()
-                            } else {
-                                return Completion::Throw(interp.create_type_error(
-                                    "First argument to DataView constructor must be an ArrayBuffer",
-                                ));
-                            }
-                        };
-                        let buf_len = buf_rc.borrow().len();
-                        let byte_offset = if args.len() > 1 {
-                            to_number(&args[1]) as usize
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let buf_rc = {
+                        let obj_ref = obj.borrow();
+                        if let Some(ref buf) = obj_ref.arraybuffer_data {
+                            buf.clone()
                         } else {
-                            0
-                        };
-                        let byte_length =
-                            if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                                to_number(&args[2]) as usize
-                            } else {
-                                buf_len - byte_offset
-                            };
-                        if byte_offset + byte_length > buf_len {
-                            return Completion::Throw(
-                                interp.create_type_error("invalid DataView length"),
-                            );
+                            return Completion::Throw(interp.create_type_error(
+                                "First argument to DataView constructor must be an ArrayBuffer",
+                            ));
                         }
-                        let dv_info = DataViewInfo {
-                            buffer: buf_rc,
-                            byte_offset,
-                            byte_length,
-                        };
-                        let result = interp.create_object();
-                        {
-                            let mut r = result.borrow_mut();
-                            r.class_name = "DataView".to_string();
-                            r.prototype = Some(dv_proto_clone.clone());
-                            r.insert_property(
-                                "__buffer__".to_string(),
-                                PropertyDescriptor::data(buf_arg.clone(), false, false, false),
-                            );
-                            r.data_view_info = Some(dv_info);
-                        }
-                        let id = result.borrow().id.unwrap();
-                        return Completion::Normal(JsValue::Object(JsObject { id }));
+                    };
+                    let buf_len = buf_rc.borrow().len();
+                    let byte_offset = if args.len() > 1 {
+                        to_number(&args[1]) as usize
+                    } else {
+                        0
+                    };
+                    let byte_length = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
+                        to_number(&args[2]) as usize
+                    } else {
+                        buf_len - byte_offset
+                    };
+                    if byte_offset + byte_length > buf_len {
+                        return Completion::Throw(
+                            interp.create_type_error("invalid DataView length"),
+                        );
                     }
+                    let dv_info = DataViewInfo {
+                        buffer: buf_rc,
+                        byte_offset,
+                        byte_length,
+                    };
+                    let result = interp.create_object();
+                    {
+                        let mut r = result.borrow_mut();
+                        r.class_name = "DataView".to_string();
+                        r.prototype = Some(dv_proto_clone.clone());
+                        r.insert_property(
+                            "__buffer__".to_string(),
+                            PropertyDescriptor::data(buf_arg.clone(), false, false, false),
+                        );
+                        r.data_view_info = Some(dv_info);
+                    }
+                    let id = result.borrow().id.unwrap();
+                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                }
                 Completion::Throw(interp.create_type_error(
                     "First argument to DataView constructor must be an ArrayBuffer",
                 ))
@@ -2492,25 +2500,26 @@ fn extract_ta_and_callback(
     args: &[JsValue],
 ) -> Result<(TypedArrayInfo, JsValue), Completion> {
     if let JsValue::Object(o) = this_val
-        && let Some(obj) = interp.get_object(o.id) {
-            let ta = {
-                let obj_ref = obj.borrow();
-                if let Some(ref ta) = obj_ref.typed_array_info {
-                    ta.clone()
-                } else {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("not a TypedArray"),
-                    ));
-                }
-            };
-            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-            if matches!(callback, JsValue::Undefined) {
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let ta = {
+            let obj_ref = obj.borrow();
+            if let Some(ref ta) = obj_ref.typed_array_info {
+                ta.clone()
+            } else {
                 return Err(Completion::Throw(
-                    interp.create_type_error("callback is not a function"),
+                    interp.create_type_error("not a TypedArray"),
                 ));
             }
-            return Ok((ta, callback));
+        };
+        let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+        if matches!(callback, JsValue::Undefined) {
+            return Err(Completion::Throw(
+                interp.create_type_error("callback is not a function"),
+            ));
         }
+        return Ok((ta, callback));
+    }
     Err(Completion::Throw(
         interp.create_type_error("not a TypedArray"),
     ))

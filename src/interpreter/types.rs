@@ -25,6 +25,7 @@ pub(crate) struct GeneratorContext {
     pub(crate) target_yield: usize,
     pub(crate) current_yield: usize,
     pub(crate) sent_value: JsValue,
+    pub(crate) is_async: bool,
 }
 
 pub type EnvRef = Rc<RefCell<Environment>>;
@@ -437,9 +438,10 @@ impl JsObjectData {
     pub fn get_property(&self, key: &str) -> JsValue {
         if let Some(ref map) = self.parameter_map
             && let Some((env_ref, param_name)) = map.get(key)
-                && let Some(val) = env_ref.borrow().get(param_name) {
-                    return val;
-                }
+            && let Some(val) = env_ref.borrow().get(param_name)
+        {
+            return val;
+        }
         if let Some(desc) = self.properties.get(key) {
             if let Some(ref val) = desc.value {
                 return val.clone();
@@ -453,12 +455,13 @@ impl JsObjectData {
             return elems[idx].clone();
         }
         if let Some(ref ta) = self.typed_array_info
-            && let Ok(idx) = key.parse::<usize>() {
-                if idx < ta.array_length {
-                    return typed_array_get_index(ta, idx);
-                }
-                return JsValue::Undefined;
+            && let Ok(idx) = key.parse::<usize>()
+        {
+            if idx < ta.array_length {
+                return typed_array_get_index(ta, idx);
             }
+            return JsValue::Undefined;
+        }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property(key);
         }
@@ -470,9 +473,10 @@ impl JsObjectData {
             let mut d = desc.clone();
             if let Some(ref map) = self.parameter_map
                 && let Some((env_ref, param_name)) = map.get(key)
-                    && let Some(val) = env_ref.borrow().get(param_name) {
-                        d.value = Some(val);
-                    }
+                && let Some(val) = env_ref.borrow().get(param_name)
+            {
+                d.value = Some(val);
+            }
             return Some(d);
         }
         if let Some(ref elems) = self.array_elements
@@ -489,19 +493,20 @@ impl JsObjectData {
             });
         }
         if let Some(ref ta) = self.typed_array_info
-            && let Ok(idx) = key.parse::<usize>() {
-                if idx < ta.array_length {
-                    return Some(PropertyDescriptor {
-                        value: Some(typed_array_get_index(ta, idx)),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    });
-                }
-                return None;
+            && let Ok(idx) = key.parse::<usize>()
+        {
+            if idx < ta.array_length {
+                return Some(PropertyDescriptor {
+                    value: Some(typed_array_get_index(ta, idx)),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                });
             }
+            return None;
+        }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property_descriptor(key);
         }
@@ -625,21 +630,24 @@ impl JsObjectData {
 
             // Handle parameter map before consuming desc
             if let Some(ref mut map) = self.parameter_map
-                && map.contains_key(&key) {
-                    if let Some(ref val) = desc.value
-                        && let Some((env_ref, param_name)) = map.get(&key) {
-                            let _ = env_ref.borrow_mut().set(param_name, val.clone());
-                        }
-                    if desc_has_get || desc_has_set {
-                        map.remove(&key);
-                    } else if desc_writable == Some(false) {
-                        if let Some(ref val) = desc.value
-                            && let Some((env_ref, param_name)) = map.get(&key) {
-                                let _ = env_ref.borrow_mut().set(param_name, val.clone());
-                            }
-                        map.remove(&key);
-                    }
+                && map.contains_key(&key)
+            {
+                if let Some(ref val) = desc.value
+                    && let Some((env_ref, param_name)) = map.get(&key)
+                {
+                    let _ = env_ref.borrow_mut().set(param_name, val.clone());
                 }
+                if desc_has_get || desc_has_set {
+                    map.remove(&key);
+                } else if desc_writable == Some(false) {
+                    if let Some(ref val) = desc.value
+                        && let Some((env_ref, param_name)) = map.get(&key)
+                    {
+                        let _ = env_ref.borrow_mut().set(param_name, val.clone());
+                    }
+                    map.remove(&key);
+                }
+            }
 
             let current_is_data = current.is_data_descriptor();
             let current_is_accessor = current.is_accessor_descriptor();
@@ -689,10 +697,11 @@ impl JsObjectData {
             // Handle parameter map for new properties
             if let Some(ref mut map) = self.parameter_map
                 && map.contains_key(&key)
-                    && let Some(ref val) = desc.value
-                        && let Some((env_ref, param_name)) = map.get(&key) {
-                            let _ = env_ref.borrow_mut().set(param_name, val.clone());
-                        }
+                && let Some(ref val) = desc.value
+                && let Some((env_ref, param_name)) = map.get(&key)
+            {
+                let _ = env_ref.borrow_mut().set(param_name, val.clone());
+            }
             self.property_order.push(key.clone());
             // For new property, fill in defaults per spec
             let is_accessor = desc.is_accessor_descriptor();
@@ -717,14 +726,16 @@ impl JsObjectData {
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
         if let Some(ref ta) = self.typed_array_info
-            && let Ok(idx) = key.parse::<usize>() {
-                let ta_clone = ta.clone();
-                return typed_array_set_index(&ta_clone, idx, &value);
-            }
+            && let Ok(idx) = key.parse::<usize>()
+        {
+            let ta_clone = ta.clone();
+            return typed_array_set_index(&ta_clone, idx, &value);
+        }
         if let Some(ref map) = self.parameter_map
-            && let Some((env_ref, param_name)) = map.get(key) {
-                let _ = env_ref.borrow_mut().set(param_name, value.clone());
-            }
+            && let Some((env_ref, param_name)) = map.get(key)
+        {
+            let _ = env_ref.borrow_mut().set(param_name, value.clone());
+        }
         if let Some(desc) = self.properties.get_mut(key) {
             if desc.writable == Some(false) {
                 return false;

@@ -37,6 +37,7 @@ pub struct Interpreter {
     generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    async_generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
     symbol_prototype: Option<Rc<RefCell<JsObjectData>>>,
     arraybuffer_prototype: Option<Rc<RefCell<JsObjectData>>>,
     typed_array_prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -106,6 +107,7 @@ impl Interpreter {
             generator_prototype: None,
             async_iterator_prototype: None,
             async_generator_prototype: None,
+            async_generator_function_prototype: None,
             symbol_prototype: None,
             arraybuffer_prototype: None,
             typed_array_prototype: None,
@@ -185,31 +187,33 @@ impl Interpreter {
 
             // Validate: get must be callable or undefined
             if let Some(ref getter) = desc.get
-                && !matches!(getter, JsValue::Undefined) {
-                    let is_callable = if let JsValue::Object(o) = getter
-                        && let Some(obj) = self.get_object(o.id)
-                    {
-                        obj.borrow().callable.is_some()
-                    } else {
-                        false
-                    };
-                    if !is_callable {
-                        return Err(Some(self.create_type_error("Getter must be a function")));
-                    }
+                && !matches!(getter, JsValue::Undefined)
+            {
+                let is_callable = if let JsValue::Object(o) = getter
+                    && let Some(obj) = self.get_object(o.id)
+                {
+                    obj.borrow().callable.is_some()
+                } else {
+                    false
+                };
+                if !is_callable {
+                    return Err(Some(self.create_type_error("Getter must be a function")));
                 }
+            }
             if let Some(ref setter) = desc.set
-                && !matches!(setter, JsValue::Undefined) {
-                    let is_callable = if let JsValue::Object(o) = setter
-                        && let Some(obj) = self.get_object(o.id)
-                    {
-                        obj.borrow().callable.is_some()
-                    } else {
-                        false
-                    };
-                    if !is_callable {
-                        return Err(Some(self.create_type_error("Setter must be a function")));
-                    }
+                && !matches!(setter, JsValue::Undefined)
+            {
+                let is_callable = if let JsValue::Object(o) = setter
+                    && let Some(obj) = self.get_object(o.id)
+                {
+                    obj.borrow().callable.is_some()
+                } else {
+                    false
+                };
+                if !is_callable {
+                    return Err(Some(self.create_type_error("Setter must be a function")));
                 }
+            }
 
             // Cannot have both accessor and data descriptor fields
             if desc.is_accessor_descriptor() && desc.is_data_descriptor() {
@@ -295,6 +299,14 @@ impl Interpreter {
                 ..
             }
         );
+        let is_async_gen = matches!(
+            &func,
+            JsFunction::User {
+                is_generator: true,
+                is_async: true,
+                ..
+            }
+        );
         let (fn_name, fn_length) = match &func {
             JsFunction::User { name, params, .. } => {
                 let n = name.clone().unwrap_or_default();
@@ -307,9 +319,17 @@ impl Interpreter {
             JsFunction::Native(name, arity, _) => (name.clone(), *arity),
         };
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.object_prototype.clone();
+        obj_data.prototype = if is_async_gen {
+            self.async_generator_function_prototype
+                .clone()
+                .or(self.object_prototype.clone())
+        } else {
+            self.object_prototype.clone()
+        };
         obj_data.callable = Some(func);
-        obj_data.class_name = if is_gen {
+        obj_data.class_name = if is_async_gen {
+            "AsyncGeneratorFunction".to_string()
+        } else if is_gen {
             "GeneratorFunction".to_string()
         } else {
             "Function".to_string()
@@ -330,7 +350,9 @@ impl Interpreter {
         // Non-arrow functions get a prototype property
         if !is_arrow {
             let proto = self.create_object();
-            if is_gen {
+            if is_async_gen {
+                proto.borrow_mut().prototype = self.async_generator_prototype.clone();
+            } else if is_gen {
                 proto.borrow_mut().prototype = self.generator_prototype.clone();
             }
             let proto_id = proto.borrow().id.unwrap();
@@ -431,19 +453,20 @@ impl Interpreter {
             // Strict: callee is an accessor that throws TypeError on get/set
             let thrower = self.create_thrower_function();
             if let JsValue::Object(ref o) = result
-                && let Some(obj_rc) = self.get_object(o.id) {
-                    obj_rc.borrow_mut().define_own_property(
-                        "callee".to_string(),
-                        PropertyDescriptor {
-                            value: None,
-                            writable: None,
-                            get: Some(thrower.clone()),
-                            set: Some(thrower),
-                            enumerable: Some(false),
-                            configurable: Some(false),
-                        },
-                    );
-                }
+                && let Some(obj_rc) = self.get_object(o.id)
+            {
+                obj_rc.borrow_mut().define_own_property(
+                    "callee".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(thrower.clone()),
+                        set: Some(thrower),
+                        enumerable: Some(false),
+                        configurable: Some(false),
+                    },
+                );
+            }
         }
 
         // Add Symbol.iterator (Array.prototype[@@iterator]) to both strict and non-strict
@@ -462,11 +485,12 @@ impl Interpreter {
                 },
             ));
             if let JsValue::Object(ref o) = result
-                && let Some(obj_rc) = self.get_object(o.id) {
-                    obj_rc
-                        .borrow_mut()
-                        .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
-                }
+                && let Some(obj_rc) = self.get_object(o.id)
+            {
+                obj_rc
+                    .borrow_mut()
+                    .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
+            }
         }
 
         result

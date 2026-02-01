@@ -148,12 +148,13 @@ pub(crate) fn get_set_record(
 
 pub(crate) fn extract_iter_result(interp: &Interpreter, result: &JsValue) -> (bool, JsValue) {
     if let JsValue::Object(ro) = result
-        && let Some(result_obj) = interp.get_object(ro.id) {
-            let borrowed = result_obj.borrow();
-            let done = matches!(borrowed.get_property("done"), JsValue::Boolean(true));
-            let value = borrowed.get_property("value");
-            return (done, value);
-        }
+        && let Some(result_obj) = interp.get_object(ro.id)
+    {
+        let borrowed = result_obj.borrow();
+        let done = matches!(borrowed.get_property("done"), JsValue::Boolean(true));
+        let value = borrowed.get_property("value");
+        return (done, value);
+    }
     (true, JsValue::Undefined)
 }
 

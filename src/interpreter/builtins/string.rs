@@ -427,11 +427,7 @@ impl Interpreter {
                         Some(v) => match to_num(interp, v) {
                             Ok(n) => {
                                 let i = to_integer_or_infinity(n);
-                                if n.is_nan() {
-                                    0.0
-                                } else {
-                                    i
-                                }
+                                if n.is_nan() { 0.0 } else { i }
                             }
                             Err(c) => return c,
                         },
@@ -441,11 +437,7 @@ impl Interpreter {
                         Some(v) if !matches!(v, JsValue::Undefined) => match to_num(interp, v) {
                             Ok(n) => {
                                 let i = to_integer_or_infinity(n);
-                                if n.is_nan() {
-                                    0.0
-                                } else {
-                                    i
-                                }
+                                if n.is_nan() { 0.0 } else { i }
                             }
                             Err(c) => return c,
                         },

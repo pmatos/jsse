@@ -141,9 +141,10 @@ impl Interpreter {
                 JsValue::Object(o) => interp.get_object(o.id).and_then(|obj| {
                     let b = obj.borrow();
                     if b.class_name == "Symbol"
-                        && let Some(JsValue::Symbol(s)) = &b.primitive_value {
-                            return Some(s.clone());
-                        }
+                        && let Some(JsValue::Symbol(s)) = &b.primitive_value
+                    {
+                        return Some(s.clone());
+                    }
                     None
                 }),
                 _ => None,

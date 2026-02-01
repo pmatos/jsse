@@ -406,15 +406,12 @@ impl<'a> Parser<'a> {
             Statement::For(f) => {
                 f.init.as_ref().is_some_and(|i| match i {
                     crate::ast::ForInit::Expression(e) => Self::contains_arguments(e),
-                    crate::ast::ForInit::Variable(d) => d.declarations.iter().any(|dd| {
-                        dd.init
-                            .as_ref()
-                            .is_some_and(Self::contains_arguments)
-                    }),
+                    crate::ast::ForInit::Variable(d) => d
+                        .declarations
+                        .iter()
+                        .any(|dd| dd.init.as_ref().is_some_and(Self::contains_arguments)),
                 }) || f.test.as_ref().is_some_and(Self::contains_arguments)
-                    || f.update
-                        .as_ref()
-                        .is_some_and(Self::contains_arguments)
+                    || f.update.as_ref().is_some_and(Self::contains_arguments)
                     || Self::stmt_contains_arguments(&f.body)
             }
             Statement::ForIn(f) => {
