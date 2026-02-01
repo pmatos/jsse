@@ -33,7 +33,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 |----------|-----------|-------|
 | Object | 50% | 1,704/3,411 |
 | Array | 67% | 2,050/3,079 |
-| String | 38% | 457/1,215 |
+| String | 71% | 863/1,215 |
 | Function | 50% | 252/509 |
 | Iterator | 27% | 138/510 |
 | Promise | 30% | 190/639 |
@@ -80,6 +80,7 @@ These features block significant numbers of tests:
 15. ~~**Async generators (`async function*`)**~~ — ✅ Done (2,332 new passes, 46.89% → 51.80%). AsyncGenerator iterator state, %AsyncIteratorPrototype% with [Symbol.asyncIterator], %AsyncGeneratorPrototype% with next/return/throw returning promises, await yielded values, AsyncGeneratorFunction.prototype chain, yield* with async iterators, rejected promises for type errors, nested yield expression fix. async-generator statements: 188/301 (62%), expressions: 399/623 (64%), for-await-of: 1,064/1,234 (86%), AsyncGeneratorPrototype: 29/48 (60%).
 16. ~~**`with` statement**~~ — ✅ Done (19 new passes, 51.80% → 51.84%). Object environment records with `with_object` field on Environment. Property lookup/assignment through with-scope object. `@@unscopables` support (eagerly resolved). Known limitations: Proxy `has` trap not invoked in with-scope, lazy @@unscopables getter evaluation not supported. with statements: 41/181 (23%).
 17. ~~**not-a-constructor enforcement**~~ — ✅ Done (290 new passes, 51.84% → 52.45%). Added `is_constructor` flag to `JsFunction::Native`, only constructors get `.prototype` property. `eval_new()` throws TypeError for non-constructors. Built-in constructors (Object, Array, Error variants, String, Number, Boolean, Function, RegExp, Date, Map, Set, WeakMap, WeakSet, Promise, Proxy, ArrayBuffer, DataView, TypedArrays) marked as constructors; all other native functions default to non-constructor.
+18. ~~**String.prototype wiring fix**~~ — ✅ Done (445 new passes, 5 regressions, 52.45% → 53.38%). Reordered String constructor registration before `setup_string_prototype()` so prototype methods are wired correctly. String: 462/1,215 (38%) → 863/1,215 (71%).
 
 ---
 

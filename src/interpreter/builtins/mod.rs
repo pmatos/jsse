@@ -396,9 +396,7 @@ impl Interpreter {
         self.setup_generator_prototype();
         self.setup_async_generator_prototype();
         self.setup_array_prototype();
-        self.setup_string_prototype();
-
-        // String constructor/converter
+        // String constructor/converter — must be before setup_string_prototype
         self.register_global_fn(
             "String",
             BindingKind::Var,
@@ -431,6 +429,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&s)))
             }),
         );
+        self.setup_string_prototype();
 
         // Number constructor/converter
         self.register_global_fn(

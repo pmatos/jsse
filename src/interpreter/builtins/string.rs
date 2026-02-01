@@ -1394,7 +1394,7 @@ impl Interpreter {
             );
         }
 
-        // Set String.prototype on the String constructor
+        // Set String.prototype on the String constructor and wire constructor back
         if let Some(str_val) = self.global_env.borrow().get("String") {
             if let JsValue::Object(o) = &str_val {
                 if let Some(str_obj) = self.get_object(o.id) {
@@ -1403,7 +1403,11 @@ impl Interpreter {
                     });
                     str_obj
                         .borrow_mut()
-                        .insert_value("prototype".to_string(), proto_val);
+                        .insert_value("prototype".to_string(), proto_val.clone());
+                    proto.borrow_mut().insert_builtin(
+                        "constructor".to_string(),
+                        str_val.clone(),
+                    );
                 }
             }
         }
