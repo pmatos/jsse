@@ -35,7 +35,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Array | 67% | 2,050/3,079 |
 | String | 71% | 863/1,215 |
 | Function | 50% | 252/509 |
-| Iterator | 27% | 138/510 |
+| Iterator | 57% | 290/510 |
 | Promise | 30% | 190/639 |
 | Map | 50% | 103/204 |
 | Set | 68% | 261/383 |
@@ -81,6 +81,7 @@ These features block significant numbers of tests:
 16. ~~**`with` statement**~~ — ✅ Done (19 new passes, 51.80% → 51.84%). Object environment records with `with_object` field on Environment. Property lookup/assignment through with-scope object. `@@unscopables` support (eagerly resolved). Known limitations: Proxy `has` trap not invoked in with-scope, lazy @@unscopables getter evaluation not supported. with statements: 41/181 (23%).
 17. ~~**not-a-constructor enforcement**~~ — ✅ Done (290 new passes, 51.84% → 52.45%). Added `is_constructor` flag to `JsFunction::Native`, only constructors get `.prototype` property. `eval_new()` throws TypeError for non-constructors. Built-in constructors (Object, Array, Error variants, String, Number, Boolean, Function, RegExp, Date, Map, Set, WeakMap, WeakSet, Promise, Proxy, ArrayBuffer, DataView, TypedArrays) marked as constructors; all other native functions default to non-constructor.
 18. ~~**String.prototype wiring fix**~~ — ✅ Done (445 new passes, 5 regressions, 52.45% → 53.38%). Reordered String constructor registration before `setup_string_prototype()` so prototype methods are wired correctly. String: 462/1,215 (38%) → 863/1,215 (71%).
+19. ~~**Iterator protocol completion**~~ — ✅ Done (70 new passes, 53.38% → 53.53%). Symbol.dispose on %IteratorPrototype%, Iterator.zip and Iterator.zipKeyed with shortest/longest/strict modes, argument validation closes iterator on failure, take/drop edge case fixes, generator return/throw borrow fix. Iterator: 138/510 (27%) → 290/510 (57%).
 
 ---
 

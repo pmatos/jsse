@@ -190,10 +190,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/WeakRef/` (29), `built-ins/FinalizationRegistry/` (47)
 
 ### 9.9 Control Abstraction Objects (§27)
-- [ ] **Iterator** (§27.1) — **BLOCKER: 2% pass rate (8/510 tests)**
-  - [ ] `Iterator()` constructor
-  - [ ] `Iterator.from()`
-  - [ ] `Iterator.prototype`: `drop`, `every`, `filter`, `find`, `flatMap`, `forEach`, `map`, `reduce`, `some`, `take`, `toArray`, `[@@iterator]`, `[@@toStringTag]`
+- [x] **Iterator** (§27.1) — ✅ 290/510 (57%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose.
 - [x] **AsyncIteratorPrototype** (§27.1.4) — ✅ [Symbol.asyncIterator] returns this
 - [x] **Promise** (§27.2) — ✅ 190/639 tests passing (30%)
   - [x] `Promise()` constructor

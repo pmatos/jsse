@@ -326,6 +326,7 @@ impl Interpreter {
                     ("matchAll", "Symbol.matchAll"),
                     ("unscopables", "Symbol.unscopables"),
                     ("asyncIterator", "Symbol.asyncIterator"),
+                    ("dispose", "Symbol.dispose"),
                 ];
                 for (name, desc) in well_known {
                     let id = self.next_symbol_id;

@@ -1681,8 +1681,9 @@ impl Interpreter {
             let err = self.create_type_error("Generator.prototype.return called on non-object");
             return Completion::Throw(err);
         };
-        if let Some(obj_rc) = self.get_object(o.id)
-            && let Some(IteratorState::Generator {
+        if let Some(obj_rc) = self.get_object(o.id) {
+            let state = obj_rc.borrow().iterator_state.clone();
+            if let Some(IteratorState::Generator {
                 body,
                 params,
                 closure,
@@ -1691,18 +1692,19 @@ impl Interpreter {
                 this_val,
                 target_yield,
                 ..
-            }) = obj_rc.borrow().iterator_state.clone()
-        {
-            obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
-                body,
-                params,
-                closure,
-                is_strict,
-                args,
-                this_val,
-                target_yield,
-                done: true,
-            });
+            }) = state
+            {
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
+                    target_yield,
+                    done: true,
+                });
+            }
         }
         Completion::Normal(self.create_iter_result_object(value, true))
     }
@@ -1712,8 +1714,9 @@ impl Interpreter {
             let err = self.create_type_error("Generator.prototype.throw called on non-object");
             return Completion::Throw(err);
         };
-        if let Some(obj_rc) = self.get_object(o.id)
-            && let Some(IteratorState::Generator {
+        if let Some(obj_rc) = self.get_object(o.id) {
+            let state = obj_rc.borrow().iterator_state.clone();
+            if let Some(IteratorState::Generator {
                 body,
                 params,
                 closure,
@@ -1722,18 +1725,19 @@ impl Interpreter {
                 this_val,
                 target_yield,
                 ..
-            }) = obj_rc.borrow().iterator_state.clone()
-        {
-            obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
-                body,
-                params,
-                closure,
-                is_strict,
-                args,
-                this_val,
-                target_yield,
-                done: true,
-            });
+            }) = state
+            {
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                    body,
+                    params,
+                    closure,
+                    is_strict,
+                    args,
+                    this_val,
+                    target_yield,
+                    done: true,
+                });
+            }
         }
         Completion::Throw(exception)
     }
