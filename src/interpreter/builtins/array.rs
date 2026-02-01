@@ -47,8 +47,8 @@ fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> JsValue {
 fn obj_set(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
     if let Some(obj) = get_obj(interp, o) {
         let mut borrow = obj.borrow_mut();
-        if let Some(ref mut elems) = borrow.array_elements {
-            if let Ok(idx) = key.parse::<usize>() {
+        if let Some(ref mut elems) = borrow.array_elements
+            && let Ok(idx) = key.parse::<usize>() {
                 if idx < elems.len() {
                     elems[idx] = value.clone();
                 } else {
@@ -58,7 +58,6 @@ fn obj_set(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
                     elems.push(value.clone());
                 }
             }
-        }
         borrow.set_property_value(key, value);
     }
 }
@@ -69,11 +68,10 @@ fn obj_has(interp: &mut Interpreter, o: &JsValue, key: &str) -> bool {
         if borrow.has_property(key) {
             return true;
         }
-        if let Some(ref elems) = borrow.array_elements {
-            if let Ok(idx) = key.parse::<usize>() {
+        if let Some(ref elems) = borrow.array_elements
+            && let Ok(idx) = key.parse::<usize>() {
                 return idx < elems.len();
             }
-        }
         false
     } else {
         false
@@ -85,13 +83,11 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
         let mut borrow = obj.borrow_mut();
         borrow.properties.remove(key);
         borrow.property_order.retain(|k| k != key);
-        if let Some(ref mut elems) = borrow.array_elements {
-            if let Ok(idx) = key.parse::<usize>() {
-                if idx < elems.len() {
+        if let Some(ref mut elems) = borrow.array_elements
+            && let Ok(idx) = key.parse::<usize>()
+                && idx < elems.len() {
                     elems[idx] = JsValue::Undefined;
                 }
-            }
-        }
     }
 }
 
@@ -1312,13 +1308,12 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let compare_fn = args.first().cloned();
-                if let Some(ref cf) = compare_fn {
-                    if !matches!(cf, JsValue::Undefined) && !interp.is_callable(cf) {
+                if let Some(ref cf) = compare_fn
+                    && !matches!(cf, JsValue::Undefined) && !interp.is_callable(cf) {
                         return Completion::Throw(
                             interp.create_type_error("compareFn is not a function"),
                         );
                     }
-                }
                 let len = match length_of_array_like(interp, &o) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -1341,8 +1336,8 @@ impl Interpreter {
                     if matches!(y, JsValue::Undefined) {
                         return std::cmp::Ordering::Less;
                     }
-                    if let Some(ref cf) = cmp_fn {
-                        if !matches!(cf, JsValue::Undefined) && interp.is_callable(cf) {
+                    if let Some(ref cf) = cmp_fn
+                        && !matches!(cf, JsValue::Undefined) && interp.is_callable(cf) {
                             let result = interp.call_function(
                                 cf,
                                 &JsValue::Undefined,
@@ -1359,7 +1354,6 @@ impl Interpreter {
                                 return std::cmp::Ordering::Equal;
                             }
                         }
-                    }
                     let xs = to_js_string(x);
                     let ys = to_js_string(y);
                     xs.cmp(&ys)
@@ -1388,13 +1382,12 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let compare_fn = args.first().cloned();
-                if let Some(ref cf) = compare_fn {
-                    if !matches!(cf, JsValue::Undefined) && !interp.is_callable(cf) {
+                if let Some(ref cf) = compare_fn
+                    && !matches!(cf, JsValue::Undefined) && !interp.is_callable(cf) {
                         return Completion::Throw(
                             interp.create_type_error("compareFn is not a function"),
                         );
                     }
-                }
                 let len = match length_of_array_like(interp, &o) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -1414,8 +1407,8 @@ impl Interpreter {
                     if matches!(y, JsValue::Undefined) {
                         return std::cmp::Ordering::Less;
                     }
-                    if let Some(ref cf) = cmp_fn {
-                        if !matches!(cf, JsValue::Undefined) && interp.is_callable(cf) {
+                    if let Some(ref cf) = cmp_fn
+                        && !matches!(cf, JsValue::Undefined) && interp.is_callable(cf) {
                             let result = interp.call_function(
                                 cf,
                                 &JsValue::Undefined,
@@ -1432,7 +1425,6 @@ impl Interpreter {
                                 return std::cmp::Ordering::Equal;
                             }
                         }
-                    }
                     let xs = to_js_string(x);
                     let ys = to_js_string(y);
                     xs.cmp(&ys)
@@ -1530,9 +1522,9 @@ impl Interpreter {
                         );
                         match mapped {
                             Completion::Normal(v) => {
-                                if let JsValue::Object(mo) = &v {
-                                    if let Some(mobj) = interp.get_object(mo.id) {
-                                        if mobj.borrow().array_elements.is_some() {
+                                if let JsValue::Object(mo) = &v
+                                    && let Some(mobj) = interp.get_object(mo.id)
+                                        && mobj.borrow().array_elements.is_some() {
                                             let mlen =
                                                 length_of_array_like(interp, &v).unwrap_or(0);
                                             for j in 0..mlen {
@@ -1543,8 +1535,6 @@ impl Interpreter {
                                             }
                                             continue;
                                         }
-                                    }
-                                }
                                 result.push(v);
                             }
                             other => return other,
@@ -1732,20 +1722,19 @@ impl Interpreter {
                 let source = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let map_fn = args.get(1).cloned();
                 let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                if let Some(ref mf) = map_fn {
-                    if !matches!(mf, JsValue::Undefined) && !interp.is_callable(mf) {
+                if let Some(ref mf) = map_fn
+                    && !matches!(mf, JsValue::Undefined) && !interp.is_callable(mf) {
                         return Completion::Throw(
                             interp.create_type_error("Array.from mapFn is not a function"),
                         );
                     }
-                }
                 let mut values = Vec::new();
                 match &source {
                     JsValue::String(s) => {
                         for ch in s.to_rust_string().chars() {
                             let v = JsValue::String(JsString::from_str(&ch.to_string()));
-                            if let Some(ref mf) = map_fn {
-                                if !matches!(mf, JsValue::Undefined) {
+                            if let Some(ref mf) = map_fn
+                                && !matches!(mf, JsValue::Undefined) {
                                     match interp.call_function(
                                         mf,
                                         &this_arg,
@@ -1756,7 +1745,6 @@ impl Interpreter {
                                     }
                                     continue;
                                 }
-                            }
                             values.push(v);
                         }
                     }
@@ -1802,8 +1790,8 @@ impl Interpreter {
                                         if done {
                                             break;
                                         }
-                                        if let Some(ref mf) = map_fn {
-                                            if !matches!(mf, JsValue::Undefined) {
+                                        if let Some(ref mf) = map_fn
+                                            && !matches!(mf, JsValue::Undefined) {
                                                 match interp.call_function(
                                                     mf,
                                                     &this_arg,
@@ -1816,7 +1804,6 @@ impl Interpreter {
                                                 }
                                                 continue;
                                             }
-                                        }
                                         values.push(value);
                                     }
                                 }
@@ -1827,8 +1814,8 @@ impl Interpreter {
                                     to_integer_or_infinity(to_number(&len_val)).max(0.0) as usize;
                                 for i in 0..len {
                                     let v = obj.borrow().get_property(&i.to_string());
-                                    if let Some(ref mf) = map_fn {
-                                        if !matches!(mf, JsValue::Undefined) {
+                                    if let Some(ref mf) = map_fn
+                                        && !matches!(mf, JsValue::Undefined) {
                                             match interp.call_function(
                                                 mf,
                                                 &this_arg,
@@ -1839,7 +1826,6 @@ impl Interpreter {
                                             }
                                             continue;
                                         }
-                                    }
                                     values.push(v);
                                 }
                             }

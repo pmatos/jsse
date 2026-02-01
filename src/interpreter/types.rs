@@ -125,8 +125,8 @@ impl Environment {
     fn is_unscopable(with: &WithObject, name: &str) -> bool {
         if let Some(ref unscopables) = with.unscopables {
             let u = unscopables.borrow();
-            if let Some(desc) = u.properties.get(name) {
-                if let Some(ref val) = desc.value {
+            if let Some(desc) = u.properties.get(name)
+                && let Some(ref val) = desc.value {
                     return match val {
                         JsValue::Undefined | JsValue::Null => false,
                         JsValue::Boolean(b) => *b,
@@ -135,7 +135,6 @@ impl Environment {
                         _ => true,
                     };
                 }
-            }
         }
         false
     }

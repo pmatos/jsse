@@ -1206,21 +1206,19 @@ impl Interpreter {
                 // Process space argument
                 let mut space_val = space_arg;
                 // Unwrap wrapper objects
-                if let JsValue::Object(o) = &space_val {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = &space_val
+                    && let Some(obj) = interp.get_object(o.id) {
                         let cn = obj.borrow().class_name.clone();
                         let pv = obj.borrow().primitive_value.clone();
                         if cn == "Number" {
                             if let Some(p) = pv {
                                 space_val = JsValue::Number(to_number(&p));
                             }
-                        } else if cn == "String" {
-                            if let Some(p) = pv {
+                        } else if cn == "String"
+                            && let Some(p) = pv {
                                 space_val = p;
                             }
-                        }
                     }
-                }
                 let gap = match &space_val {
                     JsValue::Number(n) => {
                         let count = (*n as i64).clamp(0, 10) as usize;
@@ -1255,9 +1253,9 @@ impl Interpreter {
                 let result = json_parse_value(interp, &s);
                 match result {
                     Completion::Normal(parsed) => {
-                        if let Some(JsValue::Object(rev_obj)) = &reviver {
-                            if let Some(obj) = interp.get_object(rev_obj.id) {
-                                if obj.borrow().callable.is_some() {
+                        if let Some(JsValue::Object(rev_obj)) = &reviver
+                            && let Some(obj) = interp.get_object(rev_obj.id)
+                                && obj.borrow().callable.is_some() {
                                     let wrapper = interp.create_object();
                                     wrapper.borrow_mut().insert_value("".to_string(), parsed);
                                     let wrapper_val = JsValue::Object(crate::types::JsObject {
@@ -1265,8 +1263,6 @@ impl Interpreter {
                                     });
                                     return json_internalize(interp, &wrapper_val, "", reviver.as_ref().unwrap());
                                 }
-                            }
-                        }
                         Completion::Normal(parsed)
                     }
                     other => other,
@@ -1295,10 +1291,7 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 // Validate it's valid JSON
-                match json_parse_value(interp, &text) {
-                    Completion::Throw(e) => return Completion::Throw(e),
-                    _ => {}
-                }
+                if let Completion::Throw(e) = json_parse_value(interp, &text) { return Completion::Throw(e) }
                 let obj = interp.create_object();
                 obj.borrow_mut().prototype = None;
                 obj.borrow_mut().insert_value("rawJSON".to_string(), JsValue::String(JsString::from_str(&text)));
@@ -1321,11 +1314,10 @@ impl Interpreter {
             1,
             |interp, _this, args: &[JsValue]| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(o) = &val {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = &val
+                    && let Some(obj) = interp.get_object(o.id) {
                         return Completion::Normal(JsValue::Boolean(obj.borrow().is_raw_json));
                     }
-                }
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));

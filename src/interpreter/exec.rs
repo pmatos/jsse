@@ -325,10 +325,7 @@ impl Interpreter {
                                     crate::interpreter::to_js_string(&JsValue::Number(*n))
                                 }
                                 PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                                    Completion::Normal(v) => match self.to_property_key(&v) {
-                                        Ok(s) => s,
-                                        Err(e) => return Err(e),
-                                    },
+                                    Completion::Normal(v) => self.to_property_key(&v)?,
                                     Completion::Throw(e) => return Err(e),
                                     _ => String::new(),
                                 },

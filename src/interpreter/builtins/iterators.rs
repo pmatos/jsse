@@ -34,15 +34,14 @@ impl Interpreter {
             "[Symbol.dispose]".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let return_method = obj.borrow().get_property("return");
                         if matches!(&return_method, JsValue::Object(ro) if interp.get_object(ro.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                         {
                             return interp.call_function(&return_method, this, &[]);
                         }
                     }
-                }
                 Completion::Normal(JsValue::Undefined)
             },
         ));

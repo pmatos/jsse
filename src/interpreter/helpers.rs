@@ -283,10 +283,7 @@ fn json_quote(s: &str) -> String {
 
 pub(crate) fn json_stringify_value(interp: &mut Interpreter, val: &JsValue) -> Option<String> {
     let mut stack = Vec::new();
-    match json_stringify_internal(interp, None, "", val, &mut stack, &None, &None, "", "") {
-        Ok(r) => r,
-        Err(_) => None,
-    }
+    json_stringify_internal(interp, None, "", val, &mut stack, &None, &None, "", "").unwrap_or_default()
 }
 
 pub(crate) fn json_stringify_full(
@@ -300,46 +297,42 @@ pub(crate) fn json_stringify_full(
     let mut replacer_fn: Option<JsValue> = None;
 
     if let Some(rep) = replacer {
-        match rep {
-            JsValue::Object(o) => {
-                if let Some(obj) = interp.get_object(o.id) {
-                    if obj.borrow().callable.is_some() {
-                        replacer_fn = Some(rep.clone());
-                    } else if obj.borrow().class_name == "Array" {
-                        let mut keys = Vec::new();
-                        let len = obj.borrow().get_property_value("length")
-                            .and_then(|v| if let JsValue::Number(n) = v { Some(n as usize) } else { None })
-                            .unwrap_or(0);
-                        for i in 0..len {
-                            let item = obj.borrow().get_property(&i.to_string());
-                            let key_str = match &item {
-                                JsValue::String(s) => Some(s.to_rust_string()),
-                                JsValue::Number(n) => Some(number_ops::to_string(*n)),
-                                JsValue::Object(oo) => {
-                                    if let Some(inner) = interp.get_object(oo.id) {
-                                        let cn = inner.borrow().class_name.clone();
-                                        if cn == "String" || cn == "Number" {
-                                            inner.borrow().primitive_value.as_ref().map(|pv| to_js_string(pv))
-                                        } else {
-                                            None
-                                        }
+        if let JsValue::Object(o) = rep {
+            if let Some(obj) = interp.get_object(o.id) {
+                if obj.borrow().callable.is_some() {
+                    replacer_fn = Some(rep.clone());
+                } else if obj.borrow().class_name == "Array" {
+                    let mut keys = Vec::new();
+                    let len = obj.borrow().get_property_value("length")
+                        .and_then(|v| if let JsValue::Number(n) = v { Some(n as usize) } else { None })
+                        .unwrap_or(0);
+                    for i in 0..len {
+                        let item = obj.borrow().get_property(&i.to_string());
+                        let key_str = match &item {
+                            JsValue::String(s) => Some(s.to_rust_string()),
+                            JsValue::Number(n) => Some(number_ops::to_string(*n)),
+                            JsValue::Object(oo) => {
+                                if let Some(inner) = interp.get_object(oo.id) {
+                                    let cn = inner.borrow().class_name.clone();
+                                    if cn == "String" || cn == "Number" {
+                                        inner.borrow().primitive_value.as_ref().map(to_js_string)
                                     } else {
                                         None
                                     }
-                                }
-                                _ => None,
-                            };
-                            if let Some(k) = key_str {
-                                if !keys.contains(&k) {
-                                    keys.push(k);
+                                } else {
+                                    None
                                 }
                             }
-                        }
-                        property_list = Some(keys);
+                            _ => None,
+                        };
+                        if let Some(k) = key_str
+                            && !keys.contains(&k) {
+                                keys.push(k);
+                            }
                     }
+                    property_list = Some(keys);
                 }
             }
-            _ => {}
         }
     }
 
@@ -372,12 +365,12 @@ fn json_stringify_internal(
     let mut value = val.clone();
 
     // If value is object, check for toJSON
-    if let JsValue::Object(o) = &value {
-        if let Some(obj) = interp.get_object(o.id) {
+    if let JsValue::Object(o) = &value
+        && let Some(obj) = interp.get_object(o.id) {
             let to_json = obj.borrow().get_property("toJSON");
-            if let JsValue::Object(fobj) = &to_json {
-                if let Some(fdata) = interp.get_object(fobj.id) {
-                    if fdata.borrow().callable.is_some() {
+            if let JsValue::Object(fobj) = &to_json
+                && let Some(fdata) = interp.get_object(fobj.id)
+                    && fdata.borrow().callable.is_some() {
                         let key_val = JsValue::String(JsString::from_str(key));
                         match interp.call_function(&to_json, &value, &[key_val]) {
                             Completion::Normal(v) => value = v,
@@ -385,14 +378,11 @@ fn json_stringify_internal(
                             _ => {}
                         }
                     }
-                }
-            }
         }
-    }
 
     // Apply replacer function
-    if let Some(rep) = replacer_fn {
-        if let Some(hid) = holder_id {
+    if let Some(rep) = replacer_fn
+        && let Some(hid) = holder_id {
             let holder_val = JsValue::Object(crate::types::JsObject { id: hid });
             let key_val = JsValue::String(JsString::from_str(key));
             match interp.call_function(rep, &holder_val, &[key_val, value.clone()]) {
@@ -401,11 +391,10 @@ fn json_stringify_internal(
                 _ => {}
             }
         }
-    }
 
     // Unwrap wrapper objects (Number, String, Boolean, BigInt)
-    if let JsValue::Object(o) = &value {
-        if let Some(obj) = interp.get_object(o.id) {
+    if let JsValue::Object(o) = &value
+        && let Some(obj) = interp.get_object(o.id) {
             let class = obj.borrow().class_name.clone();
             let pv = obj.borrow().primitive_value.clone();
             match class.as_str() {
@@ -435,7 +424,6 @@ fn json_stringify_internal(
                 _ => {}
             }
         }
-    }
 
     // Type dispatch
     match &value {
@@ -455,11 +443,10 @@ fn json_stringify_internal(
         JsValue::Object(o) => {
             if let Some(obj) = interp.get_object(o.id) {
                 // Check for rawJSON
-                if obj.borrow().is_raw_json {
-                    if let Some(raw) = obj.borrow().get_property_value("rawJSON") {
+                if obj.borrow().is_raw_json
+                    && let Some(raw) = obj.borrow().get_property_value("rawJSON") {
                         return Ok(Some(to_js_string(&raw)));
                     }
-                }
 
                 // Skip functions and symbols
                 if obj.borrow().callable.is_some() {
@@ -627,7 +614,7 @@ pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion 
                 let key =
                     if key_str.starts_with('"') && key_str.ends_with('"') && key_str.len() >= 2 {
                         let inner = &key_str[1..key_str.len() - 1];
-                        if let Err(_) = json_validate_string(inner) {
+                        if json_validate_string(inner).is_err() {
                             let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                             return Completion::Throw(err);
                         }
@@ -691,11 +678,10 @@ fn json_unescape_string(s: &str) -> String {
                 Some('t') => result.push('\t'),
                 Some('u') => {
                     let hex: String = chars.by_ref().take(4).collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                        if let Some(c) = char::from_u32(code) {
+                    if let Ok(code) = u32::from_str_radix(&hex, 16)
+                        && let Some(c) = char::from_u32(code) {
                             result.push(c);
                         }
-                    }
                 }
                 Some(c) => {
                     result.push('\\');

@@ -2286,8 +2286,8 @@ impl Interpreter {
         // Check if callee is a constructor
         if let JsValue::Object(ref co) = callee_val {
             let is_proxy = self.get_proxy_info(co.id).is_some();
-            if !is_proxy {
-                if let Some(func_obj) = self.get_object(co.id) {
+            if !is_proxy
+                && let Some(func_obj) = self.get_object(co.id) {
                     let b = func_obj.borrow();
                     let is_ctor = match &b.callable {
                         Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
@@ -2309,7 +2309,6 @@ impl Interpreter {
                         )));
                     }
                 }
-            }
         } else {
             return Completion::Throw(
                 self.create_type_error(&format!(
