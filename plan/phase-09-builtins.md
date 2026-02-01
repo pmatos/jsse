@@ -174,8 +174,8 @@ Ordered roughly by dependency and importance.
 - [x] **JSON** (§25.5)
   - [x] `JSON.parse()` (with reviver)
   - [x] `JSON.stringify()` (with replacer, space)
-  - [ ] `JSON.isRawJSON()`, `JSON.rawJSON()`
-  - [ ] `JSON[@@toStringTag]`
+  - [x] `JSON.isRawJSON()`, `JSON.rawJSON()`
+  - [x] `JSON[@@toStringTag]`
 
 **Tests:** `built-ins/ArrayBuffer/` (196), `built-ins/SharedArrayBuffer/` (104), `built-ins/DataView/` (561), `built-ins/Atomics/` (382), `built-ins/JSON/` (165)
 

@@ -1116,10 +1116,49 @@ impl Interpreter {
             3,
             |interp, _this, args: &[JsValue]| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let result = json_stringify_value(interp, &val);
-                match result {
-                    Some(s) => Completion::Normal(JsValue::String(JsString::from_str(&s))),
-                    None => Completion::Normal(JsValue::Undefined),
+                let replacer_arg = args.get(1).cloned();
+                let space_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+
+                // Process space argument
+                let mut space_val = space_arg;
+                // Unwrap wrapper objects
+                if let JsValue::Object(o) = &space_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let cn = obj.borrow().class_name.clone();
+                        let pv = obj.borrow().primitive_value.clone();
+                        if cn == "Number" {
+                            if let Some(p) = pv {
+                                space_val = JsValue::Number(to_number(&p));
+                            }
+                        } else if cn == "String" {
+                            if let Some(p) = pv {
+                                space_val = p;
+                            }
+                        }
+                    }
+                }
+                let gap = match &space_val {
+                    JsValue::Number(n) => {
+                        let count = (*n as i64).clamp(0, 10) as usize;
+                        " ".repeat(count)
+                    }
+                    JsValue::String(s) => {
+                        let rs = s.to_rust_string();
+                        if rs.len() > 10 { rs[..10].to_string() } else { rs }
+                    }
+                    _ => String::new(),
+                };
+
+                let replacer = if matches!(&replacer_arg, Some(JsValue::Undefined) | None) {
+                    None
+                } else {
+                    replacer_arg
+                };
+
+                match json_stringify_full(interp, &val, &replacer, &gap) {
+                    Ok(Some(s)) => Completion::Normal(JsValue::String(JsString::from_str(&s))),
+                    Ok(None) => Completion::Normal(JsValue::Undefined),
+                    Err(e) => Completion::Throw(e),
                 }
             },
         ));
@@ -1128,7 +1167,82 @@ impl Interpreter {
             2,
             |interp, _this, args: &[JsValue]| {
                 let s = args.first().map(to_js_string).unwrap_or_default();
-                json_parse_value(interp, &s)
+                let reviver = args.get(1).cloned();
+                let result = json_parse_value(interp, &s);
+                match result {
+                    Completion::Normal(parsed) => {
+                        if let Some(JsValue::Object(rev_obj)) = &reviver {
+                            if let Some(obj) = interp.get_object(rev_obj.id) {
+                                if obj.borrow().callable.is_some() {
+                                    let wrapper = interp.create_object();
+                                    wrapper.borrow_mut().insert_value("".to_string(), parsed);
+                                    let wrapper_val = JsValue::Object(crate::types::JsObject {
+                                        id: wrapper.borrow().id.unwrap(),
+                                    });
+                                    return json_internalize(interp, &wrapper_val, "", reviver.as_ref().unwrap());
+                                }
+                            }
+                        }
+                        Completion::Normal(parsed)
+                    }
+                    other => other,
+                }
+            },
+        ));
+        let json_raw_json = self.create_function(JsFunction::native(
+            "rawJSON".to_string(),
+            1,
+            |interp, _this, args: &[JsValue]| {
+                let text = args.first().map(to_js_string).unwrap_or_default();
+                // Reject empty, leading/trailing whitespace
+                if text.is_empty() {
+                    let err = interp.create_error("SyntaxError", "JSON.rawJSON cannot be called with an empty string");
+                    return Completion::Throw(err);
+                }
+                let first = text.as_bytes()[0];
+                let last = text.as_bytes()[text.len() - 1];
+                if matches!(first, b'\t' | b'\n' | b'\r' | b' ') || matches!(last, b'\t' | b'\n' | b'\r' | b' ') {
+                    let err = interp.create_error("SyntaxError", "JSON.rawJSON text must not start or end with whitespace");
+                    return Completion::Throw(err);
+                }
+                // Must be a valid JSON primitive (not object/array)
+                if text.starts_with('{') || text.starts_with('[') {
+                    let err = interp.create_error("SyntaxError", "JSON.rawJSON only accepts JSON primitives");
+                    return Completion::Throw(err);
+                }
+                // Validate it's valid JSON
+                match json_parse_value(interp, &text) {
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => {}
+                }
+                let obj = interp.create_object();
+                obj.borrow_mut().prototype = None;
+                obj.borrow_mut().insert_value("rawJSON".to_string(), JsValue::String(JsString::from_str(&text)));
+                obj.borrow_mut().extensible = false;
+                obj.borrow_mut().is_raw_json = true;
+                // Freeze: make all properties non-writable, non-configurable
+                let keys: Vec<String> = obj.borrow().property_order.clone();
+                for k in keys {
+                    if let Some(desc) = obj.borrow_mut().properties.get_mut(&k) {
+                        desc.writable = Some(false);
+                        desc.configurable = Some(false);
+                    }
+                }
+                let id = obj.borrow().id.unwrap();
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+            },
+        ));
+        let json_is_raw_json = self.create_function(JsFunction::native(
+            "isRawJSON".to_string(),
+            1,
+            |interp, _this, args: &[JsValue]| {
+                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(o) = &val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        return Completion::Normal(JsValue::Boolean(obj.borrow().is_raw_json));
+                    }
+                }
+                Completion::Normal(JsValue::Boolean(false))
             },
         ));
         json_obj
@@ -1137,6 +1251,26 @@ impl Interpreter {
         json_obj
             .borrow_mut()
             .insert_builtin("parse".to_string(), json_parse);
+        json_obj
+            .borrow_mut()
+            .insert_builtin("rawJSON".to_string(), json_raw_json);
+        json_obj
+            .borrow_mut()
+            .insert_builtin("isRawJSON".to_string(), json_is_raw_json);
+        // @@toStringTag
+        {
+            let desc = PropertyDescriptor {
+                value: Some(JsValue::String(JsString::from_str("JSON"))),
+                writable: Some(false),
+                enumerable: Some(false),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            };
+            let key = "Symbol(Symbol.toStringTag)".to_string();
+            json_obj.borrow_mut().property_order.push(key.clone());
+            json_obj.borrow_mut().properties.insert(key, desc);
+        }
         let json_val = JsValue::Object(crate::types::JsObject {
             id: json_obj.borrow().id.unwrap(),
         });

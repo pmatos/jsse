@@ -463,6 +463,7 @@ pub struct JsObjectData {
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
     pub promise_data: Option<PromiseData>,
+    pub is_raw_json: bool,
 }
 
 impl JsObjectData {
@@ -491,6 +492,7 @@ impl JsObjectData {
             typed_array_info: None,
             data_view_info: None,
             promise_data: None,
+            is_raw_json: false,
         }
     }
 
@@ -808,6 +810,9 @@ impl JsObjectData {
         } else {
             if !self.extensible {
                 return false;
+            }
+            if !key.starts_with("Symbol(") {
+                self.property_order.push(key.to_string());
             }
             self.properties
                 .insert(key.to_string(), PropertyDescriptor::data_default(value));

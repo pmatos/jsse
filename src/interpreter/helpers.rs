@@ -259,79 +259,326 @@ pub(crate) fn typeof_val<'a>(
     }
 }
 
+fn json_quote(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 2);
+    result.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => result.push_str("\\\""),
+            '\\' => result.push_str("\\\\"),
+            '\u{0008}' => result.push_str("\\b"),
+            '\u{000C}' => result.push_str("\\f"),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            c if c < '\u{0020}' => {
+                result.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => result.push(c),
+        }
+    }
+    result.push('"');
+    result
+}
+
 pub(crate) fn json_stringify_value(interp: &mut Interpreter, val: &JsValue) -> Option<String> {
-    match val {
-        JsValue::Null => Some("null".to_string()),
-        JsValue::Boolean(b) => Some(b.to_string()),
-        JsValue::Number(n) => {
-            if n.is_nan() || n.is_infinite() {
-                Some("null".to_string())
-            } else {
-                Some(number_ops::to_string(*n))
+    let mut stack = Vec::new();
+    match json_stringify_internal(interp, None, "", val, &mut stack, &None, &None, "", "") {
+        Ok(r) => r,
+        Err(_) => None,
+    }
+}
+
+pub(crate) fn json_stringify_full(
+    interp: &mut Interpreter,
+    val: &JsValue,
+    replacer: &Option<JsValue>,
+    space: &str,
+) -> Result<Option<String>, JsValue> {
+    let mut stack = Vec::new();
+    let mut property_list: Option<Vec<String>> = None;
+    let mut replacer_fn: Option<JsValue> = None;
+
+    if let Some(rep) = replacer {
+        match rep {
+            JsValue::Object(o) => {
+                if let Some(obj) = interp.get_object(o.id) {
+                    if obj.borrow().callable.is_some() {
+                        replacer_fn = Some(rep.clone());
+                    } else if obj.borrow().class_name == "Array" {
+                        let mut keys = Vec::new();
+                        let len = obj.borrow().get_property_value("length")
+                            .and_then(|v| if let JsValue::Number(n) = v { Some(n as usize) } else { None })
+                            .unwrap_or(0);
+                        for i in 0..len {
+                            let item = obj.borrow().get_property(&i.to_string());
+                            let key_str = match &item {
+                                JsValue::String(s) => Some(s.to_rust_string()),
+                                JsValue::Number(n) => Some(number_ops::to_string(*n)),
+                                JsValue::Object(oo) => {
+                                    if let Some(inner) = interp.get_object(oo.id) {
+                                        let cn = inner.borrow().class_name.clone();
+                                        if cn == "String" || cn == "Number" {
+                                            inner.borrow().primitive_value.as_ref().map(|pv| to_js_string(pv))
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            };
+                            if let Some(k) = key_str {
+                                if !keys.contains(&k) {
+                                    keys.push(k);
+                                }
+                            }
+                        }
+                        property_list = Some(keys);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Wrap root value in {"": val} for replacer function calls
+    let holder_id = if replacer_fn.is_some() {
+        let wrapper = interp.create_object();
+        wrapper.borrow_mut().insert_value("".to_string(), val.clone());
+        Some(wrapper.borrow().id.unwrap())
+    } else {
+        None
+    };
+
+    json_stringify_internal(
+        interp, holder_id, "", val, &mut stack,
+        &replacer_fn, &property_list, space, "",
+    )
+}
+
+fn json_stringify_internal(
+    interp: &mut Interpreter,
+    holder_id: Option<u64>,
+    key: &str,
+    val: &JsValue,
+    stack: &mut Vec<u64>,
+    replacer_fn: &Option<JsValue>,
+    property_list: &Option<Vec<String>>,
+    gap: &str,
+    indent: &str,
+) -> Result<Option<String>, JsValue> {
+    let mut value = val.clone();
+
+    // If value is object, check for toJSON
+    if let JsValue::Object(o) = &value {
+        if let Some(obj) = interp.get_object(o.id) {
+            let to_json = obj.borrow().get_property("toJSON");
+            if let JsValue::Object(fobj) = &to_json {
+                if let Some(fdata) = interp.get_object(fobj.id) {
+                    if fdata.borrow().callable.is_some() {
+                        let key_val = JsValue::String(JsString::from_str(key));
+                        match interp.call_function(&to_json, &value, &[key_val]) {
+                            Completion::Normal(v) => value = v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => {}
+                        }
+                    }
+                }
             }
         }
-        JsValue::String(s) => {
-            let escaped = s
-                .to_rust_string()
-                .replace('\\', "\\\\")
-                .replace('"', "\\\"")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
-            Some(format!("\"{}\"", escaped))
+    }
+
+    // Apply replacer function
+    if let Some(rep) = replacer_fn {
+        if let Some(hid) = holder_id {
+            let holder_val = JsValue::Object(crate::types::JsObject { id: hid });
+            let key_val = JsValue::String(JsString::from_str(key));
+            match interp.call_function(rep, &holder_val, &[key_val, value.clone()]) {
+                Completion::Normal(v) => value = v,
+                Completion::Throw(e) => return Err(e),
+                _ => {}
+            }
+        }
+    }
+
+    // Unwrap wrapper objects (Number, String, Boolean, BigInt)
+    if let JsValue::Object(o) = &value {
+        if let Some(obj) = interp.get_object(o.id) {
+            let class = obj.borrow().class_name.clone();
+            let pv = obj.borrow().primitive_value.clone();
+            match class.as_str() {
+                "Number" => {
+                    if let Some(pv) = pv {
+                        value = JsValue::Number(to_number(&pv));
+                    }
+                }
+                "String" => {
+                    if let Some(pv) = pv {
+                        value = JsValue::String(match pv {
+                            JsValue::String(s) => s,
+                            other => JsString::from_str(&to_js_string(&other)),
+                        });
+                    }
+                }
+                "Boolean" => {
+                    if let Some(pv) = pv {
+                        value = pv;
+                    }
+                }
+                "BigInt" => {
+                    if let Some(pv) = pv {
+                        value = pv;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Type dispatch
+    match &value {
+        JsValue::Null => Ok(Some("null".to_string())),
+        JsValue::Boolean(b) => Ok(Some(b.to_string())),
+        JsValue::Number(n) => {
+            if n.is_nan() || n.is_infinite() {
+                Ok(Some("null".to_string()))
+            } else {
+                Ok(Some(number_ops::to_string(*n)))
+            }
+        }
+        JsValue::String(s) => Ok(Some(json_quote(&s.to_rust_string()))),
+        JsValue::BigInt(_) => {
+            Err(interp.create_error("TypeError", "Do not know how to serialize a BigInt"))
         }
         JsValue::Object(o) => {
             if let Some(obj) = interp.get_object(o.id) {
+                // Check for rawJSON
+                if obj.borrow().is_raw_json {
+                    if let Some(raw) = obj.borrow().get_property_value("rawJSON") {
+                        return Ok(Some(to_js_string(&raw)));
+                    }
+                }
+
+                // Skip functions and symbols
+                if obj.borrow().callable.is_some() {
+                    return Ok(None);
+                }
+
+                let obj_id = obj.borrow().id.unwrap();
+
+                // Circular reference check
+                if stack.contains(&obj_id) {
+                    return Err(interp.create_error(
+                        "TypeError",
+                        "Converting circular structure to JSON",
+                    ));
+                }
+                stack.push(obj_id);
+
                 let is_array = obj.borrow().class_name == "Array";
-                if is_array {
-                    let len = if let Some(JsValue::Number(n)) =
-                        obj.borrow().get_property_value("length")
-                    {
-                        n as usize
-                    } else {
-                        0
-                    };
+                let new_indent = format!("{}{}", indent, gap);
+
+                let result = if is_array {
+                    let len = obj.borrow().get_property_value("length")
+                        .and_then(|v| if let JsValue::Number(n) = v { Some(n as usize) } else { None })
+                        .unwrap_or(0);
                     let mut items = Vec::new();
+                    // Create a holder for this array for replacer calls
+                    let arr_holder_id = Some(obj_id);
                     for i in 0..len {
                         let v = obj.borrow().get_property(&i.to_string());
-                        match json_stringify_value(interp, &v) {
+                        match json_stringify_internal(
+                            interp, arr_holder_id, &i.to_string(), &v, stack,
+                            replacer_fn, property_list, gap, &new_indent,
+                        )? {
                             Some(s) => items.push(s),
                             None => items.push("null".to_string()),
                         }
                     }
-                    Some(format!("[{}]", items.join(",")))
-                } else {
-                    if obj.borrow().callable.is_some() {
-                        return None;
+                    if items.is_empty() {
+                        Ok(Some("[]".to_string()))
+                    } else if gap.is_empty() {
+                        Ok(Some(format!("[{}]", items.join(","))))
+                    } else {
+                        let sep = format!(",\n{}", new_indent);
+                        Ok(Some(format!("[\n{}{}\n{}]", new_indent, items.join(&sep), indent)))
                     }
-                    let keys: Vec<String> = obj.borrow().properties.keys().cloned().collect();
+                } else {
+                    // Object
+                    let keys: Vec<String> = if let Some(pl) = property_list {
+                        pl.clone()
+                    } else {
+                        obj.borrow().property_order.clone()
+                    };
+
                     let mut entries = Vec::new();
+                    let obj_holder_id = Some(obj_id);
                     for k in &keys {
                         let desc = obj.borrow().properties.get(k).cloned();
                         if let Some(d) = desc {
-                            if d.enumerable != Some(true) {
+                            if d.enumerable != Some(true) && property_list.is_none() {
                                 continue;
                             }
                             let v = d.value.clone().unwrap_or(JsValue::Undefined);
-                            if let Some(sv) = json_stringify_value(interp, &v) {
-                                let key_escaped = k.replace('\\', "\\\\").replace('"', "\\\"");
-                                entries.push(format!("\"{}\":{}", key_escaped, sv));
+                            match json_stringify_internal(
+                                interp, obj_holder_id, k, &v, stack,
+                                replacer_fn, property_list, gap, &new_indent,
+                            )? {
+                                Some(sv) => {
+                                    let quoted_key = json_quote(k);
+                                    if gap.is_empty() {
+                                        entries.push(format!("{}:{}", quoted_key, sv));
+                                    } else {
+                                        entries.push(format!("{}: {}", quoted_key, sv));
+                                    }
+                                }
+                                None => {} // omit undefined/function/symbol
                             }
                         }
                     }
-                    Some(format!("{{{}}}", entries.join(",")))
-                }
+                    if entries.is_empty() {
+                        Ok(Some("{}".to_string()))
+                    } else if gap.is_empty() {
+                        Ok(Some(format!("{{{}}}", entries.join(","))))
+                    } else {
+                        let sep = format!(",\n{}", new_indent);
+                        Ok(Some(format!("{{\n{}{}\n{}}}", new_indent, entries.join(&sep), indent)))
+                    }
+                };
+
+                stack.pop();
+                result
             } else {
-                Some("null".to_string())
+                Ok(Some("null".to_string()))
             }
         }
-        JsValue::Undefined => None,
-        _ => None,
+        JsValue::Undefined | JsValue::Symbol(_) => Ok(None),
     }
 }
 
+fn json_trim(s: &str) -> &str {
+    let bytes = s.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() {
+        match bytes[start] {
+            b' ' | b'\t' | b'\n' | b'\r' => start += 1,
+            _ => break,
+        }
+    }
+    let mut end = bytes.len();
+    while end > start {
+        match bytes[end - 1] {
+            b' ' | b'\t' | b'\n' | b'\r' => end -= 1,
+            _ => break,
+        }
+    }
+    &s[start..end]
+}
+
 pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion {
-    let s = s.trim();
+    let s = json_trim(s);
     if s == "null" {
         return Completion::Normal(JsValue::Null);
     }
@@ -343,12 +590,11 @@ pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion 
     }
     if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
         let inner = &s[1..s.len() - 1];
-        let unescaped = inner
-            .replace("\\\"", "\"")
-            .replace("\\\\", "\\")
-            .replace("\\n", "\n")
-            .replace("\\r", "\r")
-            .replace("\\t", "\t");
+        if let Err(msg) = json_validate_string(inner) {
+            let err = interp.create_error("SyntaxError", &msg);
+            return Completion::Throw(err);
+        }
+        let unescaped = json_unescape_string(inner);
         return Completion::Normal(JsValue::String(JsString::from_str(&unescaped)));
     }
     if let Ok(n) = s.parse::<f64>() {
@@ -380,9 +626,15 @@ pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion 
                 let val_str = pair[colon_pos + 1..].trim();
                 let key =
                     if key_str.starts_with('"') && key_str.ends_with('"') && key_str.len() >= 2 {
-                        key_str[1..key_str.len() - 1].to_string()
+                        let inner = &key_str[1..key_str.len() - 1];
+                        if let Err(_) = json_validate_string(inner) {
+                            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
+                            return Completion::Throw(err);
+                        }
+                        json_unescape_string(inner)
                     } else {
-                        key_str.to_string()
+                        let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
+                        return Completion::Throw(err);
                     };
                 match json_parse_value(interp, val_str) {
                     Completion::Normal(v) => {
@@ -397,6 +649,137 @@ pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion 
     }
     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
     Completion::Throw(err)
+}
+
+fn json_validate_string(s: &str) -> Result<(), String> {
+    let mut chars = s.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch < '\u{0020}' {
+            return Err("Unexpected token in JSON".to_string());
+        }
+        if ch == '\\' {
+            match chars.next() {
+                Some('"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't') => {}
+                Some('u') => {
+                    for _ in 0..4 {
+                        match chars.next() {
+                            Some(c) if c.is_ascii_hexdigit() => {}
+                            _ => return Err("Unexpected token in JSON".to_string()),
+                        }
+                    }
+                }
+                _ => return Err("Unexpected token in JSON".to_string()),
+            }
+        }
+    }
+    Ok(())
+}
+
+fn json_unescape_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('"') => result.push('"'),
+                Some('\\') => result.push('\\'),
+                Some('/') => result.push('/'),
+                Some('b') => result.push('\u{0008}'),
+                Some('f') => result.push('\u{000C}'),
+                Some('n') => result.push('\n'),
+                Some('r') => result.push('\r'),
+                Some('t') => result.push('\t'),
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
+                        if let Some(c) = char::from_u32(code) {
+                            result.push(c);
+                        }
+                    }
+                }
+                Some(c) => {
+                    result.push('\\');
+                    result.push(c);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+fn json_internalize_apply(interp: &mut Interpreter, obj_id: u64, key: &str, new_val: JsValue) {
+    if let Some(obj) = interp.get_object(obj_id) {
+        let configurable = obj.borrow().properties.get(key)
+            .and_then(|d| d.configurable)
+            .unwrap_or(true);
+        if !configurable {
+            return;
+        }
+        if let JsValue::Undefined = &new_val {
+            obj.borrow_mut().properties.remove(key);
+            obj.borrow_mut().property_order.retain(|k| k != key);
+        } else {
+            obj.borrow_mut().insert_value(key.to_string(), new_val);
+        }
+    }
+}
+
+pub(crate) fn json_internalize(
+    interp: &mut Interpreter,
+    holder: &JsValue,
+    name: &str,
+    reviver: &JsValue,
+) -> Completion {
+    let val = if let JsValue::Object(o) = holder {
+        if let Some(obj) = interp.get_object(o.id) {
+            obj.borrow().get_property(name)
+        } else {
+            JsValue::Undefined
+        }
+    } else {
+        JsValue::Undefined
+    };
+
+    let walked = if let JsValue::Object(o) = &val {
+        if let Some(obj) = interp.get_object(o.id) {
+            let is_array = obj.borrow().class_name == "Array";
+            if is_array {
+                let len = obj.borrow().get_property_value("length")
+                    .and_then(|v| if let JsValue::Number(n) = v { Some(n as usize) } else { None })
+                    .unwrap_or(0);
+                for i in 0..len {
+                    let key = i.to_string();
+                    match json_internalize(interp, &val, &key, reviver) {
+                        Completion::Normal(new_val) => {
+                            json_internalize_apply(interp, o.id, &key, new_val);
+                        }
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => {}
+                    }
+                }
+            } else {
+                let keys: Vec<String> = obj.borrow().property_order.clone();
+                for key in keys {
+                    match json_internalize(interp, &val, &key, reviver) {
+                        Completion::Normal(new_val) => {
+                            json_internalize_apply(interp, o.id, &key, new_val);
+                        }
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        val.clone()
+    } else {
+        val.clone()
+    };
+
+    let key_val = JsValue::String(JsString::from_str(name));
+    interp.call_function(reviver, holder, &[key_val, walked])
 }
 
 pub(crate) fn json_split_items(s: &str) -> Vec<String> {

@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 47,458  | 799     | 25,404  | 22,054  | 53.53%    |
+| 48,257      | 47,458  | 799     | 25,502  | 21,956  | 53.74%    |
 
 *Skipped: module tests (modules not yet implemented). Async tests now run with Promise/async-await support.*
 
@@ -62,7 +62,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - `Array.isArray`, `Array.from`, `Array.of`
   - String prototype methods (`charAt`, `charCodeAt`, `indexOf`, `lastIndexOf`, `includes`, `startsWith`, `endsWith`, `slice`, `substring`, `toLowerCase`, `toUpperCase`, `trim`, `trimStart`, `trimEnd`, `repeat`, `padStart`, `padEnd`, `concat`, `split`, `replace`, `replaceAll`, `at`, `search`, `match`)
   - Proper Error objects (`TypeError`, `ReferenceError`, `SyntaxError`, `RangeError`) with prototype chains and `instanceof` support
-  - `JSON.stringify`, `JSON.parse`
+  - `JSON.stringify` (replacer function/array, space/indent, toJSON, circular detection, BigInt TypeError, wrapper unwrapping), `JSON.parse` (reviver), `JSON.rawJSON`, `JSON.isRawJSON`
   - `String.fromCharCode`
   - `Map` built-in (constructor, `get`, `set`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`)
   - `Set` built-in (constructor, `add`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`, ES2025 set methods: `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`)
