@@ -72,7 +72,8 @@ impl Interpreter {
                             if let JsValue::Object(opts) = &options {
                                 if let Some(opts_obj) = interp.get_object(opts.id) {
                                     if opts_obj.borrow().has_property("cause") {
-                                        let cause = interp.get_object_property(opts.id, "cause", &options);
+                                        let cause =
+                                            interp.get_object_property(opts.id, "cause", &options);
                                         match cause {
                                             Completion::Normal(v) => {
                                                 $o.insert_builtin("cause".to_string(), v);
@@ -183,22 +184,24 @@ impl Interpreter {
                 |interp, _this, args| {
                     let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &arg
-                        && let Some(obj) = interp.get_object(o.id) {
-                            let cn = &obj.borrow().class_name;
-                            if cn.contains("Error") {
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        let cn = &obj.borrow().class_name;
+                        if cn.contains("Error") {
+                            return Completion::Normal(JsValue::Boolean(true));
                         }
+                    }
                     Completion::Normal(JsValue::Boolean(false))
                 },
             ));
             let env = self.global_env.borrow();
             if let Some(error_ctor) = env.get("Error")
                 && let JsValue::Object(o) = &error_ctor
-                    && let Some(obj) = self.get_object(o.id) {
-                        obj.borrow_mut()
-                            .insert_builtin("isError".to_string(), is_error_fn);
-                    }
+                && let Some(obj) = self.get_object(o.id)
+            {
+                obj.borrow_mut()
+                    .insert_builtin("isError".to_string(), is_error_fn);
+            }
         }
 
         // Test262Error
@@ -299,7 +302,8 @@ impl Interpreter {
                             if let JsValue::Object(opts) = &options {
                                 if let Some(opts_obj) = interp.get_object(opts.id) {
                                     if opts_obj.borrow().has_property("cause") {
-                                        let cause = interp.get_object_property(opts.id, "cause", &options);
+                                        let cause =
+                                            interp.get_object_property(opts.id, "cause", &options);
                                         match cause {
                                             Completion::Normal(v) => {
                                                 $o.insert_builtin("cause".to_string(), v);
@@ -343,13 +347,14 @@ impl Interpreter {
                 let env = self.global_env.borrow();
                 if let Some(ctor_val) = env.get(name)
                     && let JsValue::Object(o) = &ctor_val
-                        && let Some(ctor_obj) = self.get_object(o.id) {
-                            let proto_id = native_proto.borrow().id.unwrap();
-                            ctor_obj.borrow_mut().insert_builtin(
-                                "prototype".to_string(),
-                                JsValue::Object(crate::types::JsObject { id: proto_id }),
-                            );
-                        }
+                    && let Some(ctor_obj) = self.get_object(o.id)
+                {
+                    let proto_id = native_proto.borrow().id.unwrap();
+                    ctor_obj.borrow_mut().insert_builtin(
+                        "prototype".to_string(),
+                        JsValue::Object(crate::types::JsObject { id: proto_id }),
+                    );
+                }
             }
         }
 

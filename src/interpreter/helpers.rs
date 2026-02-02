@@ -299,50 +299,51 @@ pub(crate) fn json_stringify_full(
 
     if let Some(rep) = replacer
         && let JsValue::Object(o) = rep
-            && let Some(obj) = interp.get_object(o.id) {
-                if obj.borrow().callable.is_some() {
-                    replacer_fn = Some(rep.clone());
-                } else if obj.borrow().class_name == "Array" {
-                    let mut keys = Vec::new();
-                    let len = obj
-                        .borrow()
-                        .get_property_value("length")
-                        .and_then(|v| {
-                            if let JsValue::Number(n) = v {
-                                Some(n as usize)
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        if obj.borrow().callable.is_some() {
+            replacer_fn = Some(rep.clone());
+        } else if obj.borrow().class_name == "Array" {
+            let mut keys = Vec::new();
+            let len = obj
+                .borrow()
+                .get_property_value("length")
+                .and_then(|v| {
+                    if let JsValue::Number(n) = v {
+                        Some(n as usize)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            for i in 0..len {
+                let item = obj.borrow().get_property(&i.to_string());
+                let key_str = match &item {
+                    JsValue::String(s) => Some(s.to_rust_string()),
+                    JsValue::Number(n) => Some(number_ops::to_string(*n)),
+                    JsValue::Object(oo) => {
+                        if let Some(inner) = interp.get_object(oo.id) {
+                            let cn = inner.borrow().class_name.clone();
+                            if cn == "String" || cn == "Number" {
+                                inner.borrow().primitive_value.as_ref().map(to_js_string)
                             } else {
                                 None
                             }
-                        })
-                        .unwrap_or(0);
-                    for i in 0..len {
-                        let item = obj.borrow().get_property(&i.to_string());
-                        let key_str = match &item {
-                            JsValue::String(s) => Some(s.to_rust_string()),
-                            JsValue::Number(n) => Some(number_ops::to_string(*n)),
-                            JsValue::Object(oo) => {
-                                if let Some(inner) = interp.get_object(oo.id) {
-                                    let cn = inner.borrow().class_name.clone();
-                                    if cn == "String" || cn == "Number" {
-                                        inner.borrow().primitive_value.as_ref().map(to_js_string)
-                                    } else {
-                                        None
-                                    }
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => None,
-                        };
-                        if let Some(k) = key_str
-                            && !keys.contains(&k)
-                        {
-                            keys.push(k);
+                        } else {
+                            None
                         }
                     }
-                    property_list = Some(keys);
+                    _ => None,
+                };
+                if let Some(k) = key_str
+                    && !keys.contains(&k)
+                {
+                    keys.push(k);
                 }
             }
+            property_list = Some(keys);
+        }
+    }
 
     // Wrap root value in {"": val} for replacer function calls
     let holder_id = if replacer_fn.is_some() {

@@ -2497,7 +2497,10 @@ impl Interpreter {
             JsValue::Object(o) => o.clone(),
             _ => unreachable!(),
         };
-        let sym_key = self.cached_has_instance_key.clone().or_else(|| self.get_symbol_key("hasInstance"));
+        let sym_key = self
+            .cached_has_instance_key
+            .clone()
+            .or_else(|| self.get_symbol_key("hasInstance"));
         if let Some(sym_key) = sym_key {
             let method = match self.get_object_property(rhs_obj.id, &sym_key, right) {
                 Completion::Normal(v) => v,
@@ -2511,9 +2514,7 @@ impl Interpreter {
                 }
                 let result = self.call_function(&method, right, &[left.clone()]);
                 return match result {
-                    Completion::Normal(v) => {
-                        Completion::Normal(JsValue::Boolean(to_boolean(&v)))
-                    }
+                    Completion::Normal(v) => Completion::Normal(JsValue::Boolean(to_boolean(&v))),
                     other => other,
                 };
             }
