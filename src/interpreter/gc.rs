@@ -73,6 +73,9 @@ impl Interpreter {
         if let Some(JsValue::Object(o)) = &self.new_target {
             worklist.push(o.id);
         }
+        for &obj_id in self.template_cache.values() {
+            worklist.push(obj_id);
+        }
 
         // Mark phase (BFS)
         while let Some(id) = worklist.pop() {

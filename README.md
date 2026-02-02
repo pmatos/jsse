@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 47,458  | 799     | 26,833  | 20,625  | 56.54%    |
+| 48,257      | 47,458  | 799     | 26,894  | 20,564  | 56.67%    |
 
 *Skipped: module tests (modules not yet implemented). Async tests now run with Promise/async-await support.*
 
@@ -33,7 +33,8 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Classes (declarations, expressions, inheritance, `super`, static methods/properties, private fields, private methods, private accessors, `#x in obj` brand checks)
   - Operators (arithmetic, comparison, bitwise, logical, assignment, update, typeof, void)
   - Objects and arrays (literals, member access, computed properties)
-  - Template literals
+  - Template literals (including tagged templates)
+  - `String.raw`
   - `new` operator with prototype chain setup
   - `new.target` meta-property
   - `this` binding (method calls, constructors, arrow lexical scoping)

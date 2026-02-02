@@ -431,7 +431,7 @@ impl<'a> Parser<'a> {
                     expr = Expression::Call(Box::new(expr), args);
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
-                    let tmpl = self.parse_template_literal_expr()?;
+                    let tmpl = self.parse_template_literal_expr(true)?;
                     expr = Expression::TaggedTemplate(Box::new(expr), tmpl);
                 }
                 Token::OptionalChain => {
@@ -803,7 +803,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Function) => self.parse_function_expression(),
             Token::Keyword(Keyword::Class) => self.parse_class_expression(),
             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
-                let tmpl = self.parse_template_literal_expr()?;
+                let tmpl = self.parse_template_literal_expr(false)?;
                 Ok(Expression::Template(tmpl))
             }
             _ => Err(self.error(format!("Unexpected token: {:?}", self.current))),
@@ -1273,43 +1273,58 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_template_literal_expr(&mut self) -> Result<TemplateLiteral, ParseError> {
+    fn parse_template_literal_expr(&mut self, tagged: bool) -> Result<TemplateLiteral, ParseError> {
         match &self.current {
-            Token::NoSubstitutionTemplate(cooked, _raw) => {
+            Token::NoSubstitutionTemplate(cooked, raw) => {
                 let cooked = cooked.clone();
-                // Non-tagged templates require valid cooked values
-                let s = cooked
-                    .ok_or_else(|| self.error("Invalid escape sequence in template literal"))?;
+                let raw = raw.clone();
+                if !tagged {
+                    cooked
+                        .as_ref()
+                        .ok_or_else(|| self.error("Invalid escape sequence in template literal"))?;
+                }
                 self.advance()?;
                 Ok(TemplateLiteral {
-                    quasis: vec![s],
+                    quasis: vec![cooked],
+                    raw_quasis: vec![raw],
                     expressions: Vec::new(),
                 })
             }
-            Token::TemplateHead(cooked, _raw) => {
+            Token::TemplateHead(cooked, raw) => {
                 let cooked = cooked.clone();
-                let s = cooked
-                    .ok_or_else(|| self.error("Invalid escape sequence in template literal"))?;
-                let mut quasis = vec![s];
+                let raw = raw.clone();
+                if !tagged {
+                    cooked
+                        .as_ref()
+                        .ok_or_else(|| self.error("Invalid escape sequence in template literal"))?;
+                }
+                let mut quasis = vec![cooked];
+                let mut raw_quasis = vec![raw];
                 let mut expressions = Vec::new();
                 self.advance()?;
                 loop {
                     expressions.push(self.parse_expression()?);
                     let tok = self.lexer.read_template_continuation()?;
                     match tok {
-                        Token::TemplateTail(cooked, _raw) => {
-                            let s = cooked.ok_or_else(|| {
-                                self.error("Invalid escape sequence in template literal")
-                            })?;
-                            quasis.push(s);
+                        Token::TemplateTail(cooked, raw) => {
+                            if !tagged {
+                                cooked.as_ref().ok_or_else(|| {
+                                    self.error("Invalid escape sequence in template literal")
+                                })?;
+                            }
+                            quasis.push(cooked);
+                            raw_quasis.push(raw);
                             self.advance()?;
                             break;
                         }
-                        Token::TemplateMiddle(cooked, _raw) => {
-                            let s = cooked.ok_or_else(|| {
-                                self.error("Invalid escape sequence in template literal")
-                            })?;
-                            quasis.push(s);
+                        Token::TemplateMiddle(cooked, raw) => {
+                            if !tagged {
+                                cooked.as_ref().ok_or_else(|| {
+                                    self.error("Invalid escape sequence in template literal")
+                                })?;
+                            }
+                            quasis.push(cooked);
+                            raw_quasis.push(raw);
                             self.advance()?;
                         }
                         _ => return Err(self.error("Expected template continuation")),
@@ -1317,6 +1332,7 @@ impl<'a> Parser<'a> {
                 }
                 Ok(TemplateLiteral {
                     quasis,
+                    raw_quasis,
                     expressions,
                 })
             }

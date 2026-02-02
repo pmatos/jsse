@@ -375,6 +375,7 @@ pub struct ClassProperty {
 
 #[derive(Clone, Debug)]
 pub struct TemplateLiteral {
-    pub quasis: Vec<String>,
+    pub quasis: Vec<Option<String>>,
+    pub raw_quasis: Vec<String>,
     pub expressions: Vec<Expression>,
 }

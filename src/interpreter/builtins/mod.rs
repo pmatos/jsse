@@ -545,6 +545,86 @@ impl Interpreter {
         );
         self.setup_string_prototype();
 
+        // String.raw
+        {
+            let raw_fn = self.create_function(JsFunction::native(
+                "raw".to_string(),
+                1,
+                |interp, _this, args| {
+                    let template = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let template_obj = match interp.to_object(&template) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let raw_val = if let JsValue::Object(o) = &template_obj {
+                        match interp.get_object_property(o.id, "raw", &template_obj) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    let raw_obj = match interp.to_object(&raw_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let len = if let JsValue::Object(o) = &raw_obj {
+                        let length_val = match interp.get_object_property(o.id, "length", &raw_obj)
+                        {
+                            Completion::Normal(v) => v,
+                            _ => JsValue::Number(0.0),
+                        };
+                        let n = match interp.to_number_value(&length_val) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if n.is_nan() || n < 0.0 {
+                            0usize
+                        } else {
+                            n as usize
+                        }
+                    } else {
+                        0
+                    };
+                    if len == 0 {
+                        return Completion::Normal(JsValue::String(JsString::from_str("")));
+                    }
+                    let subs = &args[1..];
+                    let mut result = String::new();
+                    for i in 0..len {
+                        let next_seg = if let JsValue::Object(o) = &raw_obj {
+                            match interp.get_object_property(o.id, &i.to_string(), &raw_obj) {
+                                Completion::Normal(v) => v,
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        let seg_str = match interp.to_string_value(&next_seg) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        result.push_str(&seg_str);
+                        if i + 1 < len && i < subs.len() {
+                            let sub_str = match interp.to_string_value(&subs[i]) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            result.push_str(&sub_str);
+                        }
+                    }
+                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                },
+            ));
+            let env = self.global_env.borrow();
+            if let Some(string_ctor) = env.get("String")
+                && let JsValue::Object(o) = &string_ctor
+                && let Some(obj) = self.get_object(o.id)
+            {
+                obj.borrow_mut().insert_builtin("raw".to_string(), raw_fn);
+            }
+        }
+
         // Number constructor/converter
         self.register_global_fn(
             "Number",

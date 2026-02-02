@@ -63,6 +63,7 @@ pub struct Interpreter {
     generator_context: Option<GeneratorContext>,
     microtask_queue: Vec<Box<dyn FnOnce(&mut Interpreter) -> Completion>>,
     cached_has_instance_key: Option<String>,
+    template_cache: HashMap<usize, u64>,
 }
 
 impl Interpreter {
@@ -135,6 +136,7 @@ impl Interpreter {
             generator_context: None,
             microtask_queue: Vec::new(),
             cached_has_instance_key: None,
+            template_cache: HashMap::new(),
         };
         interp.setup_globals();
         interp

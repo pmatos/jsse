@@ -355,7 +355,7 @@ impl Interpreter {
             Expression::Template(tmpl) => {
                 let mut s = String::new();
                 for (i, quasi) in tmpl.quasis.iter().enumerate() {
-                    s.push_str(quasi);
+                    s.push_str(quasi.as_deref().unwrap_or(""));
                     if i < tmpl.expressions.len() {
                         let val = match self.eval_expr(&tmpl.expressions[i], env) {
                             Completion::Normal(v) => v,
@@ -450,8 +450,130 @@ impl Interpreter {
                     }
                 }
             }
+            Expression::TaggedTemplate(tag_expr, tmpl) => {
+                let (func_val, this_val) = match tag_expr.as_ref() {
+                    Expression::Member(obj_expr, prop) => {
+                        let obj_val = match self.eval_expr(obj_expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let key = match prop {
+                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Computed(expr) => {
+                                let v = match self.eval_expr(expr, env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                                match self.to_property_key(&v) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                            MemberProperty::Private(_) => {
+                                return Completion::Throw(
+                                    self.create_type_error("Private member in tagged template"),
+                                );
+                            }
+                        };
+                        let func = match &obj_val {
+                            JsValue::Object(o) => self.get_object_property(o.id, &key, &obj_val),
+                            _ => Completion::Normal(JsValue::Undefined),
+                        };
+                        let func = match func {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        (func, obj_val)
+                    }
+                    _ => {
+                        let func = match self.eval_expr(tag_expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        (func, JsValue::Undefined)
+                    }
+                };
+
+                let template_obj = self.get_template_object(tmpl);
+
+                let mut call_args = vec![template_obj];
+                for sub_expr in &tmpl.expressions {
+                    match self.eval_expr(sub_expr, env) {
+                        Completion::Normal(v) => call_args.push(v),
+                        other => return other,
+                    }
+                }
+
+                self.call_function(&func_val, &this_val, &call_args)
+            }
             _ => Completion::Normal(JsValue::Undefined),
         }
+    }
+
+    fn get_template_object(&mut self, tmpl: &TemplateLiteral) -> JsValue {
+        let cache_key = tmpl as *const TemplateLiteral as usize;
+        if let Some(&obj_id) = self.template_cache.get(&cache_key) {
+            if self.get_object(obj_id).is_some() {
+                return JsValue::Object(crate::types::JsObject { id: obj_id });
+            }
+        }
+
+        let cooked_vals: Vec<JsValue> = tmpl
+            .quasis
+            .iter()
+            .map(|q| match q {
+                Some(s) => JsValue::String(JsString::from_str(s)),
+                None => JsValue::Undefined,
+            })
+            .collect();
+        let raw_vals: Vec<JsValue> = tmpl
+            .raw_quasis
+            .iter()
+            .map(|s| JsValue::String(JsString::from_str(s)))
+            .collect();
+
+        let raw_arr = self.create_frozen_template_array(raw_vals);
+        let template_arr = self.create_frozen_template_array(cooked_vals);
+
+        if let JsValue::Object(o) = &template_arr {
+            if let Some(obj) = self.get_object(o.id) {
+                obj.borrow_mut().insert_property(
+                    "raw".to_string(),
+                    PropertyDescriptor::data(raw_arr, false, false, false),
+                );
+            }
+        }
+
+        if let JsValue::Object(o) = &template_arr {
+            self.template_cache.insert(cache_key, o.id);
+        }
+
+        template_arr
+    }
+
+    fn create_frozen_template_array(&mut self, values: Vec<JsValue>) -> JsValue {
+        let len = values.len();
+        let mut obj_data = JsObjectData::new();
+        obj_data.prototype = self
+            .array_prototype
+            .clone()
+            .or(self.object_prototype.clone());
+        obj_data.class_name = "Array".to_string();
+        for (i, v) in values.iter().enumerate() {
+            obj_data.insert_property(
+                i.to_string(),
+                PropertyDescriptor::data(v.clone(), false, true, false),
+            );
+        }
+        obj_data.insert_property(
+            "length".to_string(),
+            PropertyDescriptor::data(JsValue::Number(len as f64), false, false, false),
+        );
+        obj_data.array_elements = Some(values);
+        obj_data.extensible = false;
+        let obj = Rc::new(RefCell::new(obj_data));
+        let id = self.allocate_object_slot(obj);
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn eval_literal(&mut self, lit: &Literal) -> JsValue {
