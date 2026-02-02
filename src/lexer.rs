@@ -811,6 +811,26 @@ impl<'a> Lexer<'a> {
                     };
                     return Ok(Token::PrivateName(name_str));
                 }
+                if self.peek_next() == Some('\\') {
+                    self.advance(); // consume '#'
+                    self.advance(); // consume '\'
+                    if self.peek() != Some('u') {
+                        return Err(self.error("Invalid Unicode escape sequence"));
+                    }
+                    self.advance(); // consume 'u'
+                    let esc = self.read_unicode_escape()?;
+                    let first = esc.chars().next().unwrap();
+                    if !Self::is_identifier_start(first) {
+                        return Err(self.error("Invalid Unicode escape in private name"));
+                    }
+                    let tok = self.read_identifier_with_escape(first);
+                    let name_str = match tok {
+                        Token::Identifier(s) => s,
+                        Token::Keyword(kw) => kw.to_string(),
+                        _ => return Err(self.error("Invalid private name")),
+                    };
+                    return Ok(Token::PrivateName(name_str));
+                }
                 return Err(self.error("Invalid or unexpected '#'"));
             }
 

@@ -807,11 +807,23 @@ impl<'a> Parser<'a> {
                     }
                     // Just a parenthesized expression
                     if exprs.len() == 1 {
-                        return Ok(exprs.into_iter().next().unwrap());
+                        let e = exprs.into_iter().next().unwrap();
+                        if Self::has_cover_initialized_name(&e) {
+                            return Err(self.error("Invalid shorthand property initializer"));
+                        }
+                        return Ok(e);
+                    }
+                    for e in &exprs {
+                        if Self::has_cover_initialized_name(e) {
+                            return Err(self.error("Invalid shorthand property initializer"));
+                        }
                     }
                     return Ok(Expression::Sequence(exprs));
                 }
                 self.eat(&Token::RightParen)?;
+                if Self::has_cover_initialized_name(&expr) {
+                    return Err(self.error("Invalid shorthand property initializer"));
+                }
                 Ok(expr)
             }
             Token::LeftBracket => self.parse_array_literal(),
@@ -848,6 +860,20 @@ impl<'a> Parser<'a> {
         }
         self.eat(&Token::RightBracket)?;
         Ok(Expression::Array(elements))
+    }
+
+    fn has_cover_initialized_name(expr: &Expression) -> bool {
+        if let Expression::Object(props) = expr {
+            props.iter().any(|p| {
+                p.shorthand
+                    && matches!(
+                        &p.value,
+                        Expression::Assign(AssignOp::Assign, left, _) if matches!(&**left, Expression::Identifier(_))
+                    )
+            })
+        } else {
+            false
+        }
     }
 
     fn parse_object_literal(&mut self) -> Result<Expression, ParseError> {
@@ -1052,6 +1078,30 @@ impl<'a> Parser<'a> {
             return Ok(Property {
                 value: Expression::Identifier(name.clone()),
                 key,
+                kind: PropertyKind::Init,
+                computed: false,
+                shorthand: true,
+            });
+        }
+
+        // CoverInitializedName: { x = defaultValue } (destructuring default)
+        if !computed
+            && let PropertyKey::Identifier(ref name) = key
+            && self.current == Token::Assign
+        {
+            let ident = name.clone();
+            if self.strict && (ident == "eval" || ident == "arguments") {
+                return Err(self.error("Invalid destructuring assignment target"));
+            }
+            self.advance()?; // consume '='
+            let default_value = self.parse_assignment_expression()?;
+            return Ok(Property {
+                key,
+                value: Expression::Assign(
+                    AssignOp::Assign,
+                    Box::new(Expression::Identifier(ident)),
+                    Box::new(default_value),
+                ),
                 kind: PropertyKind::Init,
                 computed: false,
                 shorthand: true,
