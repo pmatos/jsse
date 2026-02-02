@@ -95,7 +95,9 @@ impl<'a> Parser<'a> {
             // Not a label — push back current and restore identifier
             let after_tok = std::mem::replace(&mut self.current, orig_token);
             let after_lt = std::mem::replace(&mut self.prev_line_terminator, ident_lt);
-            self.pushback = Some((after_tok, after_lt));
+            let after_ts = self.current_token_start;
+            let after_te = self.current_token_end;
+            self.pushback = Some((after_tok, after_lt, after_ts, after_te));
         }
         self.parse_expression_statement()
     }

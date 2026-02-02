@@ -170,6 +170,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_function_declaration(&mut self) -> Result<Statement, ParseError> {
+        let source_start = self.current_token_start;
         let is_async = self.current == Token::Keyword(Keyword::Async);
         if is_async {
             self.advance()?;
@@ -209,16 +210,19 @@ impl<'a> Parser<'a> {
         {
             self.check_duplicate_params_strict(&params)?;
         }
+        let source_text = Some(self.source_since(source_start));
         Ok(Statement::FunctionDeclaration(FunctionDecl {
             name,
             params,
             body,
             is_async,
             is_generator,
+            source_text,
         }))
     }
 
     pub(super) fn parse_class_declaration(&mut self) -> Result<Statement, ParseError> {
+        let source_start = self.current_token_start;
         self.advance()?; // class
         let name = match self.current_identifier_name() {
             Some(n) => {
@@ -234,10 +238,12 @@ impl<'a> Parser<'a> {
             None
         };
         let body = self.parse_class_body()?;
+        let source_text = Some(self.source_since(source_start));
         Ok(Statement::ClassDeclaration(ClassDecl {
             name,
             super_class,
             body,
+            source_text,
         }))
     }
 
@@ -335,6 +341,8 @@ impl<'a> Parser<'a> {
             }
         }
 
+        let method_source_start = self.current_token_start;
+
         // Check for async method
         let is_async_method = matches!(&self.current, Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
@@ -343,7 +351,8 @@ impl<'a> Parser<'a> {
             if self.current == Token::LeftParen {
                 // method named 'async': class { async() {} }
                 let key = PropertyKey::Identifier("async".to_string());
-                let func = self.parse_class_method_function(false, false, false)?;
+                let func =
+                    self.parse_class_method_function(false, false, false, method_source_start)?;
                 return Ok(ClassElement::Method(ClassMethod {
                     key,
                     kind: ClassMethodKind::Method,
@@ -387,7 +396,12 @@ impl<'a> Parser<'a> {
                 return Err(self.error("Classes may not have a static property named 'prototype'"));
             }
             if self.current == Token::LeftParen {
-                let func = self.parse_class_method_function(true, is_generator, false)?;
+                let func = self.parse_class_method_function(
+                    true,
+                    is_generator,
+                    false,
+                    method_source_start,
+                )?;
                 return Ok(ClassElement::Method(ClassMethod {
                     key,
                     kind: ClassMethodKind::Method,
@@ -416,7 +430,8 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 if self.current == Token::LeftParen {
                     let key = PropertyKey::Identifier("get".to_string());
-                    let func = self.parse_class_method_function(false, false, false)?;
+                    let func =
+                        self.parse_class_method_function(false, false, false, method_source_start)?;
                     return Ok(ClassElement::Method(ClassMethod {
                         key,
                         kind: ClassMethodKind::Method,
@@ -431,7 +446,8 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 if self.current == Token::LeftParen {
                     let key = PropertyKey::Identifier("set".to_string());
-                    let func = self.parse_class_method_function(false, false, false)?;
+                    let func =
+                        self.parse_class_method_function(false, false, false, method_source_start)?;
                     return Ok(ClassElement::Method(ClassMethod {
                         key,
                         kind: ClassMethodKind::Method,
@@ -462,7 +478,12 @@ impl<'a> Parser<'a> {
         }
 
         if self.current == Token::LeftParen {
-            let func = self.parse_class_method_function(false, is_generator, is_constructor)?;
+            let func = self.parse_class_method_function(
+                false,
+                is_generator,
+                is_constructor,
+                method_source_start,
+            )?;
             let method_kind = if is_constructor {
                 ClassMethodKind::Constructor
             } else {
@@ -537,6 +558,7 @@ impl<'a> Parser<'a> {
         is_async: bool,
         is_generator: bool,
         is_constructor: bool,
+        method_source_start: usize,
     ) -> Result<FunctionExpr, ParseError> {
         let prev_generator = self.in_generator;
         let prev_async = self.in_async;
@@ -564,12 +586,14 @@ impl<'a> Parser<'a> {
         {
             self.check_duplicate_params_strict(&params)?;
         }
+        let source_text = Some(self.source_since(method_source_start));
         Ok(FunctionExpr {
             name: None,
             params,
             body,
             is_async,
             is_generator,
+            source_text,
         })
     }
 

@@ -17,6 +17,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 4. When implementing a feature, identify relevant test262 tests to validate against.
 5. After running test262, update `README.md` with pass count and percentage.
 6. The spec is the ultimate source of truth with respect to JavaScript. Use it to determine the syntax and semantics of operations.
+7. For debugging and comparison, `node` is available as a reference engine. Authority order: (1) ECMAScript spec, (2) test262, (3) node.
 
 ## Source Layout
 - `src/main.rs` — CLI entry point (`jsse <file>` or `jsse -e "code"`)

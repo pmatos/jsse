@@ -41,10 +41,10 @@ Ordered roughly by dependency and importance.
   - [x] `Object.prototype.toLocaleString()`, `Object.prototype.toString()`, `Object.prototype.valueOf()`
   - [ ] `Object.prototype.__proto__` (Annex B)
   - [x] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__` (Annex B)
-- [x] **Function** (§20.2) — 55% pass rate (279/509 tests)
+- [x] **Function** (§20.2) — 65% pass rate (332/509 tests)
   - [x] `Function()` constructor (dynamic function creation)
   - [x] `Function.prototype.apply()`, `.bind()`, `.call()`
-  - [ ] `Function.prototype.toString()`
+  - [x] `Function.prototype.toString()`
   - [x] `Function.prototype[@@hasInstance]`
   - [x] `Function.prototype.constructor`
   - [x] `name`, `length` properties

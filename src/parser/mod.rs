@@ -31,10 +31,14 @@ impl From<LexError> for ParseError {
 }
 
 pub struct Parser<'a> {
+    source: &'a str,
     lexer: Lexer<'a>,
     current: Token,
+    current_token_start: usize,
+    current_token_end: usize,
+    prev_token_end: usize,
     prev_line_terminator: bool,
-    pushback: Option<(Token, bool)>, // (token, had_line_terminator_before)
+    pushback: Option<(Token, bool, usize, usize)>, // (token, had_line_terminator_before, token_start, token_end)
     strict: bool,
     in_function: u32,
     in_generator: bool,
@@ -59,9 +63,15 @@ impl<'a> Parser<'a> {
             }
             break tok;
         };
+        let token_start = lexer.token_start();
+        let token_end = lexer.offset();
         Ok(Self {
+            source,
             lexer,
             current,
+            current_token_start: token_start,
+            current_token_end: token_end,
+            prev_token_end: 0,
             prev_line_terminator: had_lt,
             pushback: None,
             strict: false,
@@ -78,10 +88,13 @@ impl<'a> Parser<'a> {
     }
 
     fn advance(&mut self) -> Result<Token, ParseError> {
+        self.prev_token_end = self.current_token_end;
         let old = std::mem::replace(&mut self.current, Token::Eof);
-        if let Some((tok, lt)) = self.pushback.take() {
+        if let Some((tok, lt, ts, te)) = self.pushback.take() {
             self.current = tok;
             self.prev_line_terminator = lt;
+            self.current_token_start = ts;
+            self.current_token_end = te;
         } else {
             self.prev_line_terminator = false;
             loop {
@@ -90,6 +103,8 @@ impl<'a> Parser<'a> {
                     self.prev_line_terminator = true;
                     continue;
                 }
+                self.current_token_start = self.lexer.token_start();
+                self.current_token_end = self.lexer.offset();
                 self.current = tok;
                 break;
             }
@@ -100,7 +115,9 @@ impl<'a> Parser<'a> {
     fn push_back(&mut self, token: Token, had_lt: bool) {
         let old_current = std::mem::replace(&mut self.current, token);
         let old_lt = std::mem::replace(&mut self.prev_line_terminator, had_lt);
-        self.pushback = Some((old_current, old_lt));
+        let old_ts = self.current_token_start;
+        let old_te = self.current_token_end;
+        self.pushback = Some((old_current, old_lt, old_ts, old_te));
     }
 
     fn peek(&self) -> &Token {
@@ -135,6 +152,10 @@ impl<'a> Parser<'a> {
         ParseError {
             message: msg.into(),
         }
+    }
+
+    fn source_since(&self, start: usize) -> String {
+        self.source[start..self.prev_token_end].to_string()
     }
 
     fn set_strict(&mut self, strict: bool) {

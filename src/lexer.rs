@@ -255,6 +255,7 @@ pub struct Lexer<'a> {
     chars: Chars<'a>,
     current: Option<char>,
     offset: usize,
+    token_start: usize,
     line: u32,
     column: u32,
     pub strict: bool,
@@ -269,6 +270,7 @@ impl<'a> Lexer<'a> {
             chars,
             current,
             offset: 0,
+            token_start: 0,
             line: 1,
             column: 0,
             strict: false,
@@ -745,9 +747,18 @@ impl<'a> Lexer<'a> {
         Ok(Token::RegExpLiteral { pattern, flags })
     }
 
+    pub fn token_start(&self) -> usize {
+        self.token_start
+    }
+
+    pub fn offset(&self) -> usize {
+        self.offset
+    }
+
     pub fn next_token(&mut self) -> Result<Token, LexError> {
         loop {
             self.skip_whitespace();
+            self.token_start = self.offset;
 
             let ch = match self.peek() {
                 None => return Ok(Token::Eof),

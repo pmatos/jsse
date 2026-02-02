@@ -1338,6 +1338,7 @@ impl Interpreter {
                     (params.join(","), to_js_string(args.last().unwrap()))
                 };
 
+                let fn_source_text = format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
                 let source = format!("(function anonymous({}) {{ {} }})", params_str, body_str);
                 let mut p = match parser::Parser::new(&source) {
                     Ok(p) => p,
@@ -1371,6 +1372,7 @@ impl Interpreter {
                         is_strict,
                         is_generator: false,
                         is_async: false,
+                        source_text: Some(fn_source_text),
                     };
                     Completion::Normal(interp.create_function(js_func))
                 } else {
@@ -4116,10 +4118,39 @@ impl Interpreter {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().callable.is_some() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            "function() { [native code] }",
-                        )));
+                    if let Some(ref func) = obj.borrow().callable {
+                        let s = match func {
+                            JsFunction::User {
+                                source_text: Some(text),
+                                ..
+                            } => text.clone(),
+                            JsFunction::User {
+                                name,
+                                is_arrow,
+                                is_async,
+                                is_generator,
+                                ..
+                            } => {
+                                let n = name.clone().unwrap_or_default();
+                                if *is_arrow {
+                                    "() => { [native code] }".to_string()
+                                } else {
+                                    let mut prefix = String::new();
+                                    if *is_async {
+                                        prefix.push_str("async ");
+                                    }
+                                    if *is_generator {
+                                        format!("{prefix}function* {n}() {{ [native code] }}")
+                                    } else {
+                                        format!("{prefix}function {n}() {{ [native code] }}")
+                                    }
+                                }
+                            }
+                            JsFunction::Native(name, _, _, _) => {
+                                format!("function {}() {{ [native code] }}", name)
+                            }
+                        };
+                        return Completion::Normal(JsValue::String(JsString::from_str(&s)));
                     }
                     let cn = obj.borrow().class_name.clone();
                     return Completion::Normal(JsValue::String(JsString::from_str(&format!(

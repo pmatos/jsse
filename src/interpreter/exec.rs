@@ -24,6 +24,7 @@ impl Interpreter {
                         is_strict: Self::is_strict_mode_body(&f.body),
                         is_generator: f.is_generator,
                         is_async: f.is_async,
+                        source_text: f.source_text.clone(),
                     };
                     let val = self.create_function(func);
                     let _ = env.borrow_mut().set(&f.name, val);
@@ -187,7 +188,13 @@ impl Interpreter {
             Statement::Debugger => Completion::Normal(JsValue::Undefined),
             Statement::FunctionDeclaration(_) => Completion::Normal(JsValue::Undefined), // hoisted
             Statement::ClassDeclaration(cd) => {
-                let class_val = self.eval_class(&cd.name, &cd.super_class, &cd.body, env);
+                let class_val = self.eval_class(
+                    &cd.name,
+                    &cd.super_class,
+                    &cd.body,
+                    env,
+                    cd.source_text.clone(),
+                );
                 match class_val {
                     Completion::Normal(val) => {
                         env.borrow_mut().declare(&cd.name, BindingKind::Let);

@@ -562,9 +562,10 @@ impl<'a> Parser<'a> {
                 Ok(Expression::Identifier("await".to_string()))
             }
             Token::Keyword(Keyword::Async) => {
+                let source_start = self.current_token_start;
                 self.advance()?;
                 if self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator {
-                    return self.parse_async_function_expression();
+                    return self.parse_async_function_expression(source_start);
                 }
                 if !self.prev_line_terminator {
                     if let Some(name) = self.current_identifier_name() {
@@ -581,10 +582,12 @@ impl<'a> Parser<'a> {
                                 ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                             };
                             self.in_async = prev_async;
+                            let source_text = Some(self.source_since(source_start));
                             return Ok(Expression::ArrowFunction(ArrowFunction {
                                 params: vec![Pattern::Identifier(name)],
                                 body,
                                 is_async: true,
+                                source_text,
                             }));
                         }
                         // Not an arrow — push back and return "async" as identifier
@@ -594,13 +597,14 @@ impl<'a> Parser<'a> {
                         return Ok(Expression::Identifier("async".to_string()));
                     }
                     if self.current == Token::LeftParen {
-                        return self.parse_async_arrow_params();
+                        return self.parse_async_arrow_params(source_start);
                     }
                 }
                 Ok(Expression::Identifier("async".to_string()))
             }
             Token::Identifier(name) => {
                 let name = name.clone();
+                let ident_start = self.current_token_start;
                 if Self::is_reserved_identifier(&name, self.strict) {
                     return Err(self.error(format!("Unexpected reserved word '{name}'")));
                 }
@@ -615,16 +619,19 @@ impl<'a> Parser<'a> {
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                     };
+                    let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params: vec![Pattern::Identifier(name)],
                         body,
                         is_async: false,
+                        source_text,
                     }));
                 }
                 Ok(Expression::Identifier(name))
             }
             Token::IdentifierWithEscape(name) => {
                 let name = name.clone();
+                let ident_start = self.current_token_start;
                 // Escaped reserved words are still reserved
                 if Self::is_reserved_identifier(&name, self.strict) {
                     return Err(
@@ -648,10 +655,12 @@ impl<'a> Parser<'a> {
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                     };
+                    let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params: vec![Pattern::Identifier(name)],
                         body,
                         is_async: false,
+                        source_text,
                     }));
                 }
                 Ok(Expression::Identifier(name))
@@ -716,6 +725,7 @@ impl<'a> Parser<'a> {
                 }
             }
             Token::LeftParen => {
+                let paren_start = self.current_token_start;
                 self.advance()?;
                 // Could be: parenthesized expression, arrow params, or empty arrow ()=>
                 if self.current == Token::RightParen {
@@ -728,10 +738,12 @@ impl<'a> Parser<'a> {
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
+                        let source_text = Some(self.source_since(paren_start));
                         return Ok(Expression::ArrowFunction(ArrowFunction {
                             params: Vec::new(),
                             body,
                             is_async: false,
+                            source_text,
                         }));
                     }
                     return Err(self.error("Unexpected token )"));
@@ -749,10 +761,12 @@ impl<'a> Parser<'a> {
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                     };
+                    let source_text = Some(self.source_since(paren_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params,
                         body,
                         is_async: false,
+                        source_text,
                     }));
                 }
                 let expr = self.parse_assignment_expression()?;
@@ -783,10 +797,12 @@ impl<'a> Parser<'a> {
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
+                        let source_text = Some(self.source_since(paren_start));
                         return Ok(Expression::ArrowFunction(ArrowFunction {
                             params,
                             body,
                             is_async: false,
+                            source_text,
                         }));
                     }
                     // Just a parenthesized expression
@@ -882,6 +898,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_object_property(&mut self) -> Result<Property, ParseError> {
+        let method_source_start = self.current_token_start;
         // Check for async method: { async method() {} } or { async *method() {} }
         let is_async_prop = matches!(&self.current, Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
@@ -914,6 +931,7 @@ impl<'a> Parser<'a> {
                     let (body, _) =
                         self.parse_function_body_inner(is_generator, true, true, false)?;
                     self.check_duplicate_params_strict(&params)?;
+                    let source_text = Some(self.source_since(method_source_start));
                     return Ok(Property {
                         key,
                         value: Expression::Function(FunctionExpr {
@@ -922,6 +940,7 @@ impl<'a> Parser<'a> {
                             body,
                             is_async: true,
                             is_generator,
+                            source_text,
                         }),
                         kind: PropertyKind::Init,
                         computed,
@@ -945,6 +964,7 @@ impl<'a> Parser<'a> {
             self.in_generator = prev_generator;
             let (body, _) = self.parse_function_body_inner(true, false, true, false)?;
             self.check_duplicate_params_strict(&params)?;
+            let source_text = Some(self.source_since(method_source_start));
             return Ok(Property {
                 key,
                 value: Expression::Function(FunctionExpr {
@@ -953,6 +973,7 @@ impl<'a> Parser<'a> {
                     body,
                     is_async: false,
                     is_generator: true,
+                    source_text,
                 }),
                 kind: PropertyKind::Init,
                 computed,
@@ -1006,6 +1027,7 @@ impl<'a> Parser<'a> {
                         body,
                         is_async: false,
                         is_generator: false,
+                        source_text: Some(self.source_since(method_source_start)),
                     }),
                     kind: saved_kind,
                     computed,
@@ -1056,6 +1078,7 @@ impl<'a> Parser<'a> {
                     body,
                     is_async: false,
                     is_generator: false,
+                    source_text: Some(self.source_since(method_source_start)),
                 }),
                 kind: PropertyKind::Init,
                 computed,
@@ -1076,6 +1099,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function_expression(&mut self) -> Result<Expression, ParseError> {
+        let source_start = self.current_token_start;
         self.advance()?;
         let is_generator = self.eat_star()?;
         let name = if let Some(n) = self.current_identifier_name() {
@@ -1100,16 +1124,21 @@ impl<'a> Parser<'a> {
         if body_strict || self.strict || is_generator || !Self::is_simple_parameter_list(&params) {
             self.check_duplicate_params_strict(&params)?;
         }
+        let source_text = Some(self.source_since(source_start));
         Ok(Expression::Function(FunctionExpr {
             name,
             params,
             body,
             is_async: false,
             is_generator,
+            source_text,
         }))
     }
 
-    fn parse_async_function_expression(&mut self) -> Result<Expression, ParseError> {
+    fn parse_async_function_expression(
+        &mut self,
+        source_start: usize,
+    ) -> Result<Expression, ParseError> {
         self.advance()?; // consume 'function'
         let is_generator = self.eat_star()?;
         let name = if matches!(&self.current, Token::Keyword(Keyword::Await)) {
@@ -1137,16 +1166,18 @@ impl<'a> Parser<'a> {
             ));
         }
         self.check_duplicate_params_strict(&params)?;
+        let source_text = Some(self.source_since(source_start));
         Ok(Expression::Function(FunctionExpr {
             name,
             params,
             body,
             is_async: true,
             is_generator,
+            source_text,
         }))
     }
 
-    fn parse_async_arrow_params(&mut self) -> Result<Expression, ParseError> {
+    fn parse_async_arrow_params(&mut self, source_start: usize) -> Result<Expression, ParseError> {
         // Current token is '(' — parse params, check for '=>'
         self.advance()?; // consume '('
         if self.current == Token::RightParen {
@@ -1161,10 +1192,12 @@ impl<'a> Parser<'a> {
                     ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                 };
                 self.in_async = prev_async;
+                let source_text = Some(self.source_since(source_start));
                 return Ok(Expression::ArrowFunction(ArrowFunction {
                     params: Vec::new(),
                     body,
                     is_async: true,
+                    source_text,
                 }));
             }
             // async() — function call on 'async' identifier
@@ -1188,10 +1221,12 @@ impl<'a> Parser<'a> {
                 ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
             };
             self.in_async = prev_async;
+            let source_text = Some(self.source_since(source_start));
             return Ok(Expression::ArrowFunction(ArrowFunction {
                 params,
                 body,
                 is_async: true,
+                source_text,
             }));
         }
         let expr = self.parse_assignment_expression()?;
@@ -1225,10 +1260,12 @@ impl<'a> Parser<'a> {
                     ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                 };
                 self.in_async = prev_async;
+                let source_text = Some(self.source_since(source_start));
                 return Ok(Expression::ArrowFunction(ArrowFunction {
                     params,
                     body,
                     is_async: true,
+                    source_text,
                 }));
             }
             // Not an arrow — it's async(args) function call
@@ -1246,6 +1283,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_class_expression(&mut self) -> Result<Expression, ParseError> {
+        let source_start = self.current_token_start;
         self.advance()?; // class
         let name = if self.current != Token::Keyword(Keyword::Extends)
             && self.current != Token::LeftBrace
@@ -1266,10 +1304,12 @@ impl<'a> Parser<'a> {
             None
         };
         let body = self.parse_class_body()?;
+        let source_text = Some(self.source_since(source_start));
         Ok(Expression::Class(ClassExpr {
             name,
             super_class,
             body,
+            source_text,
         }))
     }
 

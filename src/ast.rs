@@ -303,6 +303,7 @@ pub struct FunctionDecl {
     pub body: Vec<Statement>,
     pub is_async: bool,
     pub is_generator: bool,
+    pub source_text: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -312,6 +313,7 @@ pub struct FunctionExpr {
     pub body: Vec<Statement>,
     pub is_async: bool,
     pub is_generator: bool,
+    pub source_text: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -319,6 +321,7 @@ pub struct ArrowFunction {
     pub params: Vec<Pattern>,
     pub body: ArrowBody,
     pub is_async: bool,
+    pub source_text: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -332,6 +335,7 @@ pub struct ClassDecl {
     pub name: String,
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<ClassElement>,
+    pub source_text: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -339,6 +343,7 @@ pub struct ClassExpr {
     pub name: Option<String>,
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<ClassElement>,
+    pub source_text: Option<String>,
 }
 
 #[derive(Clone, Debug)]

@@ -121,6 +121,7 @@ impl Interpreter {
                     is_strict: Self::is_strict_mode_body(&f.body),
                     is_generator: f.is_generator,
                     is_async: f.is_async,
+                    source_text: f.source_text.clone(),
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -140,12 +141,19 @@ impl Interpreter {
                     is_strict: Self::is_strict_mode_body(&body_stmts),
                     is_generator: false,
                     is_async: af.is_async,
+                    source_text: af.source_text.clone(),
                 };
                 Completion::Normal(self.create_function(func))
             }
             Expression::Class(ce) => {
                 let name = ce.name.clone().unwrap_or_default();
-                self.eval_class(&name, &ce.super_class, &ce.body, env)
+                self.eval_class(
+                    &name,
+                    &ce.super_class,
+                    &ce.body,
+                    env,
+                    ce.source_text.clone(),
+                )
             }
             Expression::Typeof(operand) => {
                 // typeof on unresolvable reference returns "undefined"
@@ -1277,9 +1285,9 @@ impl Interpreter {
                         .unwrap_or(false)
                     {
                         if env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(
-                                &format!("Cannot set property '{key}' which has only a getter"),
-                            ));
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot set property '{key}' which has only a getter"
+                            )));
                         }
                         return Completion::Normal(final_val);
                     }
@@ -2883,6 +2891,7 @@ impl Interpreter {
         super_class: &Option<Box<Expression>>,
         body: &[ClassElement],
         env: &EnvRef,
+        class_source_text: Option<String>,
     ) -> Completion {
         // Find constructor method
         let ctor_method = body.iter().find_map(|elem| {
@@ -2924,6 +2933,7 @@ impl Interpreter {
                 is_strict: true,
                 is_generator: false,
                 is_async: false,
+                source_text: class_source_text.clone(),
             }
         } else if super_val.is_some() {
             JsFunction::User {
@@ -2935,6 +2945,7 @@ impl Interpreter {
                 is_strict: true,
                 is_generator: false,
                 is_async: false,
+                source_text: class_source_text.clone(),
             }
         } else {
             JsFunction::User {
@@ -2946,6 +2957,7 @@ impl Interpreter {
                 is_strict: true,
                 is_generator: false,
                 is_async: false,
+                source_text: class_source_text.clone(),
             }
         };
 
@@ -3008,6 +3020,7 @@ impl Interpreter {
                                 is_strict: true,
                                 is_generator: m.value.is_generator,
                                 is_async: m.value.is_async,
+                                source_text: m.value.source_text.clone(),
                             };
                             let method_val = self.create_function(method_func);
 
@@ -3144,6 +3157,7 @@ impl Interpreter {
                         is_strict: true,
                         is_generator: m.value.is_generator,
                         is_async: m.value.is_async,
+                        source_text: m.value.source_text.clone(),
                     };
                     let method_val = self.create_function(method_func);
 
