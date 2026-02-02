@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 28,614 / 47,458 run (60.29%)
+**Current pass rate:** 29,156 / 47,458 run (61.44%)
 *Skipped: 799 module tests*
 
 ---
@@ -43,6 +43,9 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Reflect | 81% | 124/153 |
 | Proxy | 53% | 163/310 |
 | Symbol | 28% | 26/94 |
+| Math | 92% | 300/327 |
+| WeakRef | 76% | 22/29 |
+| FinalizationRegistry | 72% | 34/47 |
 
 ---
 
@@ -87,6 +90,10 @@ These features block significant numbers of tests:
 21. ~~**`instanceof` and `Function.prototype[@@hasInstance]`**~~ — ✅ Done (7 new passes, 54.95%). Spec-compliant `instanceof` (§13.10.2): checks `Symbol.hasInstance` before prototype chain walk, throws TypeError for non-objects. `OrdinaryHasInstance` extracted as reusable helper. `Function.prototype[@@hasInstance]` added (non-writable, non-enumerable, non-configurable). instanceof: 25/43 → 28/43 (65%), Function.prototype[Symbol.hasInstance]: 1/11 → 5/11 (45%).
 22. ~~**Function name inference (SetFunctionName)**~~ — ✅ Done (628 new passes, 54.95% → 56.25%). Anonymous functions get `.name` set from binding context: variable declarations, assignments, object literal properties, destructuring defaults, get/set accessors (prefixed with "get "/"set ").
 23. ~~**Generator method syntax in object literals**~~ — ✅ Done (160 new passes, 56.25% → 56.54%). Parse `{ *method() { yield ... } }` in object literals. Unblocks gen-meth-* destructuring tests and generator method-definition tests.
+25. ~~**Object destructuring RequireObjectCoercible + ToObject + getter invocation**~~ — ✅ Done (141 new passes, 60.83% → 61.06%). Object destructuring now calls `to_object()` (throws TypeError for null/undefined, wraps primitives). Property access during destructuring uses `get_object_property()` to invoke getters and Proxy traps.
+26. ~~**Update expressions for member expressions + ToNumeric**~~ — ✅ Done (50 new passes). `obj.x++`, `obj[i]++`, `--obj.prop` now work. Update expressions use `to_primitive(number)` for valueOf coercion on objects.
+27. ~~**Math[@@toStringTag] + prop-desc fixes**~~ — ✅ Done (25 new passes). Math methods now non-enumerable. Math: 275/327 (84%) → 300/327 (92%).
+28. ~~**WeakRef + FinalizationRegistry**~~ — ✅ Done (56 new passes). WeakRef constructor + deref(). FinalizationRegistry constructor + register/unregister. WeakRef: 22/29 (76%), FinalizationRegistry: 34/47 (72%).
 24. ~~**AggregateError + Promise.try/withResolvers + Proxy invariants**~~ — ✅ Done (75 new passes, 58.30% → 58.46%). AggregateError constructor with proper prototype chain. Promise.try and Promise.withResolvers static methods. Proxy invariant enforcement for get/set/has/deleteProperty/defineProperty/getOwnPropertyDescriptor/ownKeys/getPrototypeOf/setPrototypeOf/isExtensible/preventExtensions traps. Proxy trap delegation added to Reflect methods. AggregateError: 14/25 (56%), Proxy: 163/310 (53%), Reflect: 124/153 (81%).
 
 ---

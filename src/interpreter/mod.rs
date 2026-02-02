@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::parser;
-use crate::types::{JsString, JsValue, number_ops};
+use crate::types::{JsBigInt, JsString, JsValue, bigint_ops, number_ops};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -33,11 +33,14 @@ pub struct Interpreter {
     set_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     weakmap_prototype: Option<Rc<RefCell<JsObjectData>>>,
     weakset_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    weakref_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    finalization_registry_prototype: Option<Rc<RefCell<JsObjectData>>>,
     date_prototype: Option<Rc<RefCell<JsObjectData>>>,
     generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    bigint_prototype: Option<Rc<RefCell<JsObjectData>>>,
     symbol_prototype: Option<Rc<RefCell<JsObjectData>>>,
     arraybuffer_prototype: Option<Rc<RefCell<JsObjectData>>>,
     typed_array_prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -107,11 +110,14 @@ impl Interpreter {
             set_iterator_prototype: None,
             weakmap_prototype: None,
             weakset_prototype: None,
+            weakref_prototype: None,
+            finalization_registry_prototype: None,
             date_prototype: None,
             generator_prototype: None,
             async_iterator_prototype: None,
             async_generator_prototype: None,
             async_generator_function_prototype: None,
+            bigint_prototype: None,
             symbol_prototype: None,
             arraybuffer_prototype: None,
             typed_array_prototype: None,

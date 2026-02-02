@@ -40,7 +40,7 @@ pub(crate) fn to_boolean(val: &JsValue) -> bool {
         JsValue::Boolean(b) => *b,
         JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
         JsValue::String(s) => !s.is_empty(),
-        JsValue::BigInt(_) => true,
+        JsValue::BigInt(b) => b.value != num_bigint::BigInt::from(0),
         JsValue::Symbol(_) | JsValue::Object(_) => true,
     }
 }
@@ -194,6 +194,7 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
         (JsValue::Number(a), JsValue::Number(b)) => number_ops::equal(*a, *b),
         (JsValue::String(a), JsValue::String(b)) => a == b,
         (JsValue::Symbol(a), JsValue::Symbol(b)) => a.id == b.id,
+        (JsValue::BigInt(a), JsValue::BigInt(b)) => bigint_ops::equal(&a.value, &b.value),
         (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
         _ => false,
     }

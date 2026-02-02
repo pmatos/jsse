@@ -324,16 +324,22 @@ impl Interpreter {
                 Ok(())
             }
             Pattern::Object(props) => {
+                // RequireObjectCoercible + ToObject for primitives
+                let obj_val = match self.to_object(&val) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => unreachable!(),
+                };
                 let mut excluded_keys = Vec::new();
                 for prop in props {
                     match prop {
                         ObjectPatternProperty::Shorthand(name) => {
                             excluded_keys.push(name.clone());
-                            let v = if let JsValue::Object(o) = &val {
-                                if let Some(obj) = self.get_object(o.id) {
-                                    obj.borrow().get_property(name)
-                                } else {
-                                    JsValue::Undefined
+                            let v = if let JsValue::Object(o) = &obj_val {
+                                match self.get_object_property(o.id, name, &obj_val) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Err(e),
+                                    _ => JsValue::Undefined,
                                 }
                             } else {
                                 JsValue::Undefined
@@ -362,11 +368,11 @@ impl Interpreter {
                                 }
                             };
                             excluded_keys.push(key_str.clone());
-                            let v = if let JsValue::Object(o) = &val {
-                                if let Some(obj) = self.get_object(o.id) {
-                                    obj.borrow().get_property(&key_str)
-                                } else {
-                                    JsValue::Undefined
+                            let v = if let JsValue::Object(o) = &obj_val {
+                                match self.get_object_property(o.id, &key_str, &obj_val) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Err(e),
+                                    _ => JsValue::Undefined,
                                 }
                             } else {
                                 JsValue::Undefined
@@ -375,7 +381,7 @@ impl Interpreter {
                         }
                         ObjectPatternProperty::Rest(pat) => {
                             let rest_obj = self.create_object();
-                            if let JsValue::Object(o) = &val
+                            if let JsValue::Object(o) = &obj_val
                                 && let Some(src) = self.get_object(o.id)
                             {
                                 let src = src.borrow();

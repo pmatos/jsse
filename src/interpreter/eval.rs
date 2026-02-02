@@ -28,7 +28,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                Completion::Normal(self.eval_unary(*op, &val))
+                self.eval_unary(*op, &val)
             }
             Expression::Binary(op, left, right) => {
                 if *op == BinaryOp::In
@@ -111,7 +111,7 @@ impl Interpreter {
                 if *op == BinaryOp::Instanceof {
                     return self.eval_instanceof(&lval, &rval);
                 }
-                Completion::Normal(self.eval_binary(*op, &lval, &rval))
+                self.eval_binary(*op, &lval, &rval)
             }
             Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
             Expression::Update(op, prefix, arg) => self.eval_update(*op, *prefix, arg, env),
@@ -632,7 +632,20 @@ impl Interpreter {
             Literal::Boolean(b) => JsValue::Boolean(*b),
             Literal::Number(n) => JsValue::Number(*n),
             Literal::String(s) => JsValue::String(JsString::from_str(s)),
-            Literal::BigInt(_) => JsValue::Undefined, // TODO
+            Literal::BigInt(s) => {
+                use num_bigint::BigInt;
+                let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
+                {
+                    BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_default()
+                } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+                    BigInt::parse_bytes(oct.as_bytes(), 8).unwrap_or_default()
+                } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+                    BigInt::parse_bytes(bin.as_bytes(), 2).unwrap_or_default()
+                } else {
+                    s.parse::<BigInt>().unwrap_or_default()
+                };
+                JsValue::BigInt(JsBigInt { value })
+            }
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();
                 obj.prototype = self
@@ -725,12 +738,27 @@ impl Interpreter {
         JsValue::Object(crate::types::JsObject { id })
     }
 
-    fn eval_unary(&self, op: UnaryOp, val: &JsValue) -> JsValue {
+    fn eval_unary(&mut self, op: UnaryOp, val: &JsValue) -> Completion {
         match op {
-            UnaryOp::Minus => JsValue::Number(number_ops::unary_minus(to_number(val))),
-            UnaryOp::Plus => JsValue::Number(to_number(val)),
-            UnaryOp::Not => JsValue::Boolean(!to_boolean(val)),
-            UnaryOp::BitNot => JsValue::Number(number_ops::bitwise_not(to_number(val))),
+            UnaryOp::Minus => match val {
+                JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
+                    value: bigint_ops::unary_minus(&b.value),
+                })),
+                _ => Completion::Normal(JsValue::Number(number_ops::unary_minus(to_number(val)))),
+            },
+            UnaryOp::Plus => match val {
+                JsValue::BigInt(_) => Completion::Throw(
+                    self.create_type_error("Cannot convert a BigInt value to a number"),
+                ),
+                _ => Completion::Normal(JsValue::Number(to_number(val))),
+            },
+            UnaryOp::Not => Completion::Normal(JsValue::Boolean(!to_boolean(val))),
+            UnaryOp::BitNot => match val {
+                JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
+                    value: bigint_ops::bitwise_not(&b.value),
+                })),
+                _ => Completion::Normal(JsValue::Number(number_ops::bitwise_not(to_number(val)))),
+            },
         }
     }
 
@@ -824,7 +852,12 @@ impl Interpreter {
                             obj_data.prototype = Some(sp.clone());
                         }
                     }
-                    JsValue::BigInt(_) => obj_data.class_name = "BigInt".to_string(),
+                    JsValue::BigInt(_) => {
+                        obj_data.class_name = "BigInt".to_string();
+                        if let Some(ref bp) = self.bigint_prototype {
+                            obj_data.prototype = Some(bp.clone());
+                        }
+                    }
                     _ => unreachable!(),
                 }
                 if obj_data.prototype.is_none() {
@@ -838,7 +871,7 @@ impl Interpreter {
         }
     }
 
-    fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> JsValue {
+    pub(crate) fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> JsValue {
         match val {
             JsValue::Object(o) => {
                 let methods = if preferred_type == "string" {
@@ -941,15 +974,42 @@ impl Interpreter {
         if right.is_boolean() {
             return self.abstract_equality(left, &JsValue::Number(to_number(right)));
         }
-        // Object vs primitive
+        // BigInt == Number
+        if let (JsValue::BigInt(b), JsValue::Number(n)) | (JsValue::Number(n), JsValue::BigInt(b)) =
+            (left, right)
+        {
+            if n.is_nan() || n.is_infinite() {
+                return false;
+            }
+            if *n != n.trunc() {
+                return false;
+            }
+            use num_bigint::BigInt;
+            let n_as_bigint = BigInt::from(*n as i64);
+            return bigint_ops::equal(&b.value, &n_as_bigint);
+        }
+        // BigInt == String
+        if let (JsValue::BigInt(b), JsValue::String(s)) = (left, right) {
+            if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
+                return bigint_ops::equal(&b.value, &parsed);
+            }
+            return false;
+        }
+        if let (JsValue::String(s), JsValue::BigInt(b)) = (left, right) {
+            if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
+                return bigint_ops::equal(&parsed, &b.value);
+            }
+            return false;
+        }
+        // Object vs primitive (including BigInt)
         if matches!(left, JsValue::Object(_))
-            && (right.is_string() || right.is_number() || right.is_symbol())
+            && (right.is_string() || right.is_number() || right.is_symbol() || right.is_bigint())
         {
             let lprim = self.to_primitive(left, "default");
             return self.abstract_equality(&lprim, right);
         }
         if matches!(right, JsValue::Object(_))
-            && (left.is_string() || left.is_number() || left.is_symbol())
+            && (left.is_string() || left.is_number() || left.is_symbol() || left.is_bigint())
         {
             let rprim = self.to_primitive(right, "default");
             return self.abstract_equality(left, &rprim);
@@ -965,12 +1025,72 @@ impl Interpreter {
             let rs = to_js_string(&rprim);
             return Some(ls < rs);
         }
+        // BigInt comparisons
+        if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+            return bigint_ops::less_than(&a.value, &b.value);
+        }
+        if let (JsValue::BigInt(b), JsValue::Number(n)) = (&lprim, &rprim) {
+            if n.is_nan() {
+                return None;
+            }
+            if *n == f64::INFINITY {
+                return Some(true);
+            }
+            if *n == f64::NEG_INFINITY {
+                return Some(false);
+            }
+            use num_bigint::BigInt;
+            let n_floor = BigInt::from(*n as i64);
+            if b.value < n_floor {
+                return Some(true);
+            }
+            if b.value > n_floor {
+                return Some(false);
+            }
+            // b.value == n_floor, check fractional part
+            return Some((*n as i64 as f64) < *n);
+        }
+        if let (JsValue::Number(n), JsValue::BigInt(b)) = (&lprim, &rprim) {
+            if n.is_nan() {
+                return None;
+            }
+            if *n == f64::NEG_INFINITY {
+                return Some(true);
+            }
+            if *n == f64::INFINITY {
+                return Some(false);
+            }
+            use num_bigint::BigInt;
+            let n_floor = BigInt::from(*n as i64);
+            if n_floor < b.value {
+                return Some(true);
+            }
+            if n_floor > b.value {
+                return Some(false);
+            }
+            return Some(*n < (*n as i64 as f64));
+        }
+        // BigInt vs String: try parsing
+        if let (JsValue::BigInt(_), JsValue::String(s)) = (&lprim, &rprim) {
+            if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
+                return self
+                    .abstract_relational(&lprim, &JsValue::BigInt(JsBigInt { value: parsed }));
+            }
+            return None;
+        }
+        if let (JsValue::String(s), JsValue::BigInt(_)) = (&lprim, &rprim) {
+            if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
+                return self
+                    .abstract_relational(&JsValue::BigInt(JsBigInt { value: parsed }), &rprim);
+            }
+            return None;
+        }
         let ln = to_number(&lprim);
         let rn = to_number(&rprim);
         number_ops::less_than(ln, rn)
     }
 
-    fn eval_binary(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> JsValue {
+    fn eval_binary(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
         match op {
             BinaryOp::Add => {
                 let lprim = self.to_primitive(left, "default");
@@ -978,78 +1098,167 @@ impl Interpreter {
                 if is_string(&lprim) || is_string(&rprim) {
                     let ls = to_js_string(&lprim);
                     let rs = to_js_string(&rprim);
-                    JsValue::String(JsString::from_str(&format!("{ls}{rs}")))
+                    Completion::Normal(JsValue::String(JsString::from_str(&format!("{ls}{rs}"))))
+                } else if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+                    Completion::Normal(JsValue::BigInt(JsBigInt {
+                        value: bigint_ops::add(&a.value, &b.value),
+                    }))
+                } else if lprim.is_bigint() || rprim.is_bigint() {
+                    Completion::Throw(self.create_type_error(
+                        "Cannot mix BigInt and other types, use explicit conversions",
+                    ))
                 } else {
-                    JsValue::Number(number_ops::add(to_number(&lprim), to_number(&rprim)))
+                    Completion::Normal(JsValue::Number(number_ops::add(
+                        to_number(&lprim),
+                        to_number(&rprim),
+                    )))
                 }
             }
-            BinaryOp::Sub => JsValue::Number(number_ops::subtract(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
-            )),
-            BinaryOp::Mul => JsValue::Number(number_ops::multiply(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
-            )),
-            BinaryOp::Div => JsValue::Number(number_ops::divide(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
-            )),
-            BinaryOp::Mod => JsValue::Number(number_ops::remainder(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
-            )),
-            BinaryOp::Exp => JsValue::Number(number_ops::exponentiate(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
-            )),
-            BinaryOp::Eq => JsValue::Boolean(self.abstract_equality(left, right)),
-            BinaryOp::NotEq => JsValue::Boolean(!self.abstract_equality(left, right)),
-            BinaryOp::StrictEq => JsValue::Boolean(strict_equality(left, right)),
-            BinaryOp::StrictNotEq => JsValue::Boolean(!strict_equality(left, right)),
-            BinaryOp::Lt => JsValue::Boolean(self.abstract_relational(left, right) == Some(true)),
-            BinaryOp::Gt => JsValue::Boolean(self.abstract_relational(right, left) == Some(true)),
-            BinaryOp::LtEq => {
-                JsValue::Boolean(self.abstract_relational(right, left) == Some(false))
+            BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Exp => {
+                let lprim = self.to_primitive(left, "number");
+                let rprim = self.to_primitive(right, "number");
+                if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+                    match op {
+                        BinaryOp::Sub => Completion::Normal(JsValue::BigInt(JsBigInt {
+                            value: bigint_ops::subtract(&a.value, &b.value),
+                        })),
+                        BinaryOp::Mul => Completion::Normal(JsValue::BigInt(JsBigInt {
+                            value: bigint_ops::multiply(&a.value, &b.value),
+                        })),
+                        BinaryOp::Div => match bigint_ops::divide(&a.value, &b.value) {
+                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Err(_) => Completion::Throw(
+                                self.create_error("RangeError", "Division by zero"),
+                            ),
+                        },
+                        BinaryOp::Mod => match bigint_ops::remainder(&a.value, &b.value) {
+                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Err(_) => Completion::Throw(
+                                self.create_error("RangeError", "Division by zero"),
+                            ),
+                        },
+                        BinaryOp::Exp => match bigint_ops::exponentiate(&a.value, &b.value) {
+                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Err(_) => Completion::Throw(
+                                self.create_error("RangeError", "Exponent must be positive"),
+                            ),
+                        },
+                        _ => unreachable!(),
+                    }
+                } else if lprim.is_bigint() || rprim.is_bigint() {
+                    Completion::Throw(self.create_type_error(
+                        "Cannot mix BigInt and other types, use explicit conversions",
+                    ))
+                } else {
+                    let ln = to_number(&lprim);
+                    let rn = to_number(&rprim);
+                    Completion::Normal(JsValue::Number(match op {
+                        BinaryOp::Sub => number_ops::subtract(ln, rn),
+                        BinaryOp::Mul => number_ops::multiply(ln, rn),
+                        BinaryOp::Div => number_ops::divide(ln, rn),
+                        BinaryOp::Mod => number_ops::remainder(ln, rn),
+                        BinaryOp::Exp => number_ops::exponentiate(ln, rn),
+                        _ => unreachable!(),
+                    }))
+                }
             }
-            BinaryOp::GtEq => {
-                JsValue::Boolean(self.abstract_relational(left, right) == Some(false))
+            BinaryOp::Eq => {
+                Completion::Normal(JsValue::Boolean(self.abstract_equality(left, right)))
             }
-            BinaryOp::LShift => JsValue::Number(number_ops::left_shift(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
+            BinaryOp::NotEq => {
+                Completion::Normal(JsValue::Boolean(!self.abstract_equality(left, right)))
+            }
+            BinaryOp::StrictEq => {
+                Completion::Normal(JsValue::Boolean(strict_equality(left, right)))
+            }
+            BinaryOp::StrictNotEq => {
+                Completion::Normal(JsValue::Boolean(!strict_equality(left, right)))
+            }
+            BinaryOp::Lt => Completion::Normal(JsValue::Boolean(
+                self.abstract_relational(left, right) == Some(true),
             )),
-            BinaryOp::RShift => JsValue::Number(number_ops::signed_right_shift(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
+            BinaryOp::Gt => Completion::Normal(JsValue::Boolean(
+                self.abstract_relational(right, left) == Some(true),
             )),
-            BinaryOp::URShift => JsValue::Number(number_ops::unsigned_right_shift(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
+            BinaryOp::LtEq => Completion::Normal(JsValue::Boolean(
+                self.abstract_relational(right, left) == Some(false),
             )),
-            BinaryOp::BitAnd => JsValue::Number(number_ops::bitwise_and(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
+            BinaryOp::GtEq => Completion::Normal(JsValue::Boolean(
+                self.abstract_relational(left, right) == Some(false),
             )),
-            BinaryOp::BitOr => JsValue::Number(number_ops::bitwise_or(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
-            )),
-            BinaryOp::BitXor => JsValue::Number(number_ops::bitwise_xor(
-                self.to_number_coerce(left),
-                self.to_number_coerce(right),
-            )),
+            BinaryOp::LShift | BinaryOp::RShift | BinaryOp::URShift => {
+                let lprim = self.to_primitive(left, "number");
+                let rprim = self.to_primitive(right, "number");
+                if lprim.is_bigint() || rprim.is_bigint() {
+                    if op == BinaryOp::URShift {
+                        return Completion::Throw(self.create_type_error(
+                            "Cannot mix BigInt and other types, use explicit conversions",
+                        ));
+                    }
+                    if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+                        Completion::Normal(JsValue::BigInt(JsBigInt {
+                            value: match op {
+                                BinaryOp::LShift => bigint_ops::left_shift(&a.value, &b.value),
+                                BinaryOp::RShift => {
+                                    bigint_ops::signed_right_shift(&a.value, &b.value)
+                                }
+                                _ => unreachable!(),
+                            },
+                        }))
+                    } else {
+                        Completion::Throw(self.create_type_error(
+                            "Cannot mix BigInt and other types, use explicit conversions",
+                        ))
+                    }
+                } else {
+                    let ln = to_number(&lprim);
+                    let rn = to_number(&rprim);
+                    Completion::Normal(JsValue::Number(match op {
+                        BinaryOp::LShift => number_ops::left_shift(ln, rn),
+                        BinaryOp::RShift => number_ops::signed_right_shift(ln, rn),
+                        BinaryOp::URShift => number_ops::unsigned_right_shift(ln, rn),
+                        _ => unreachable!(),
+                    }))
+                }
+            }
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                let lprim = self.to_primitive(left, "number");
+                let rprim = self.to_primitive(right, "number");
+                if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+                    Completion::Normal(JsValue::BigInt(JsBigInt {
+                        value: match op {
+                            BinaryOp::BitAnd => bigint_ops::bitwise_and(&a.value, &b.value),
+                            BinaryOp::BitOr => bigint_ops::bitwise_or(&a.value, &b.value),
+                            BinaryOp::BitXor => bigint_ops::bitwise_xor(&a.value, &b.value),
+                            _ => unreachable!(),
+                        },
+                    }))
+                } else if lprim.is_bigint() || rprim.is_bigint() {
+                    Completion::Throw(self.create_type_error(
+                        "Cannot mix BigInt and other types, use explicit conversions",
+                    ))
+                } else {
+                    let ln = to_number(&lprim);
+                    let rn = to_number(&rprim);
+                    Completion::Normal(JsValue::Number(match op {
+                        BinaryOp::BitAnd => number_ops::bitwise_and(ln, rn),
+                        BinaryOp::BitOr => number_ops::bitwise_or(ln, rn),
+                        BinaryOp::BitXor => number_ops::bitwise_xor(ln, rn),
+                        _ => unreachable!(),
+                    }))
+                }
+            }
             BinaryOp::In => {
                 if let JsValue::Object(o) = &right {
                     if let Some(obj) = self.get_object(o.id) {
                         let key = to_js_string(left);
                         let obj_ref = obj.borrow();
-                        JsValue::Boolean(obj_ref.has_property(&key))
+                        Completion::Normal(JsValue::Boolean(obj_ref.has_property(&key)))
                     } else {
-                        JsValue::Boolean(false)
+                        Completion::Normal(JsValue::Boolean(false))
                     }
                 } else {
-                    JsValue::Boolean(false)
+                    Completion::Normal(JsValue::Boolean(false))
                 }
             }
             BinaryOp::Instanceof => {
@@ -1094,6 +1303,39 @@ impl Interpreter {
         }
     }
 
+    fn apply_update_numeric(
+        &mut self,
+        raw_val: &JsValue,
+        op: UpdateOp,
+    ) -> Result<(JsValue, JsValue), JsValue> {
+        // ToNumeric: ToPrimitive(number) then check for BigInt
+        let numeric = if matches!(raw_val, JsValue::Object(_)) {
+            self.to_primitive(raw_val, "number")
+        } else {
+            raw_val.clone()
+        };
+        if let JsValue::BigInt(ref b) = numeric {
+            use num_bigint::BigInt;
+            let one = BigInt::from(1);
+            let new_bigint = match op {
+                UpdateOp::Increment => &b.value + &one,
+                UpdateOp::Decrement => &b.value - &one,
+            };
+            let old_val = JsValue::BigInt(b.clone());
+            let new_val = JsValue::BigInt(JsBigInt { value: new_bigint });
+            Ok((old_val, new_val))
+        } else if let JsValue::Symbol(_) = numeric {
+            Err(self.create_type_error("Cannot convert a Symbol value to a number"))
+        } else {
+            let old_num = to_number(&numeric);
+            let new_num = match op {
+                UpdateOp::Increment => old_num + 1.0,
+                UpdateOp::Decrement => old_num - 1.0,
+            };
+            Ok((JsValue::Number(old_num), JsValue::Number(new_num)))
+        }
+    }
+
     fn eval_update(
         &mut self,
         op: UpdateOp,
@@ -1102,23 +1344,117 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         if let Expression::Identifier(name) = arg {
-            let old_val = match env.borrow().get(name) {
-                Some(v) => to_number(&v),
+            let raw_val = match env.borrow().get(name) {
+                Some(v) => v,
                 None => {
                     let err = self.create_reference_error(&format!("{name} is not defined"));
                     return Completion::Throw(err);
                 }
             };
-            let new_val = match op {
-                UpdateOp::Increment => old_val + 1.0,
-                UpdateOp::Decrement => old_val - 1.0,
+            let (old_val, new_val) = match self.apply_update_numeric(&raw_val, op) {
+                Ok(pair) => pair,
+                Err(e) => return Completion::Throw(e),
             };
-            if let Err(e) = env.borrow_mut().set(name, JsValue::Number(new_val)) {
+            if let Err(e) = env.borrow_mut().set(name, new_val.clone()) {
                 return Completion::Throw(e);
             }
-            Completion::Normal(JsValue::Number(if prefix { new_val } else { old_val }))
+            Completion::Normal(if prefix { new_val } else { old_val })
+        } else if let Expression::Member(obj_expr, prop) = arg {
+            let obj_val = match self.eval_expr(obj_expr, env) {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
+            if let MemberProperty::Private(name) = prop {
+                return match &obj_val {
+                    JsValue::Object(o) => {
+                        if let Some(obj) = self.get_object(o.id) {
+                            let elem = obj.borrow().private_fields.get(name).cloned();
+                            match elem {
+                                Some(PrivateElement::Field(cur)) => {
+                                    let (old_val, new_val) =
+                                        match self.apply_update_numeric(&cur, op) {
+                                            Ok(pair) => pair,
+                                            Err(e) => return Completion::Throw(e),
+                                        };
+                                    obj.borrow_mut().private_fields.insert(
+                                        name.clone(),
+                                        PrivateElement::Field(new_val.clone()),
+                                    );
+                                    Completion::Normal(if prefix { new_val } else { old_val })
+                                }
+                                _ => Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot update private member #{name}"
+                                ))),
+                            }
+                        } else {
+                            Completion::Normal(JsValue::Number(f64::NAN))
+                        }
+                    }
+                    _ => Completion::Throw(
+                        self.create_type_error("Cannot read private member from a non-object"),
+                    ),
+                };
+            }
+            let key = match prop {
+                MemberProperty::Dot(name) => name.clone(),
+                MemberProperty::Computed(expr) => {
+                    let v = match self.eval_expr(expr, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    match self.to_property_key(&v) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+                MemberProperty::Private(_) => unreachable!(),
+            };
+            // Get current value
+            let cur_val = match &obj_val {
+                JsValue::Object(o) => match self.get_object_property(o.id, &key, &obj_val) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                },
+                _ => {
+                    // Primitive member access — use eval_member logic indirectly
+                    match self.eval_expr(arg, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
+                }
+            };
+            let (old_val, new_val) = match self.apply_update_numeric(&cur_val, op) {
+                Ok(pair) => pair,
+                Err(e) => return Completion::Throw(e),
+            };
+            // Set value back
+            if let JsValue::Object(ref o) = obj_val {
+                if let Some(obj) = self.get_object(o.id) {
+                    if obj.borrow().is_proxy() {
+                        let target_val = self.get_proxy_target_val(o.id);
+                        let key_val = JsValue::String(JsString::from_str(&key));
+                        let receiver = obj_val.clone();
+                        match self.invoke_proxy_trap(
+                            o.id,
+                            "set",
+                            vec![target_val, key_val, new_val.clone(), receiver],
+                        ) {
+                            Ok(Some(_)) => {}
+                            Ok(None) => {
+                                if let Some(obj) = self.get_object(o.id) {
+                                    let _ =
+                                        obj.borrow_mut().set_property_value(&key, new_val.clone());
+                                }
+                            }
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        let _ = obj.borrow_mut().set_property_value(&key, new_val.clone());
+                    }
+                }
+            }
+            Completion::Normal(if prefix { new_val } else { old_val })
         } else {
-            // TODO: member expression update
             Completion::Normal(JsValue::Number(f64::NAN))
         }
     }
@@ -1170,7 +1506,10 @@ impl Interpreter {
                     rval
                 } else {
                     let lval = env.borrow().get(name).unwrap_or(JsValue::Undefined);
-                    self.apply_compound_assign(op, &lval, &rval)
+                    match self.apply_compound_assign(op, &lval, &rval) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
                 };
                 if !env.borrow().has(name) {
                     env.borrow_mut().declare(name, BindingKind::Var);
@@ -1200,7 +1539,10 @@ impl Interpreter {
                                             } else {
                                                 JsValue::Undefined
                                             };
-                                            self.apply_compound_assign(op, &lval, &rval)
+                                            match self.apply_compound_assign(op, &lval, &rval) {
+                                                Completion::Normal(v) => v,
+                                                other => return other,
+                                            }
                                         };
                                         obj.borrow_mut()
                                             .private_fields
@@ -1225,7 +1567,10 @@ impl Interpreter {
                                                 } else {
                                                     JsValue::Undefined
                                                 };
-                                                self.apply_compound_assign(op, &lval, &rval)
+                                                match self.apply_compound_assign(op, &lval, &rval) {
+                                                    Completion::Normal(v) => v,
+                                                    other => return other,
+                                                }
                                             };
                                             let setter = setter.clone();
                                             self.call_function(&setter, &obj_val, &[final_val.clone()]);
@@ -1272,7 +1617,10 @@ impl Interpreter {
                         rval
                     } else {
                         let lval = obj.borrow().get_property(&key);
-                        self.apply_compound_assign(op, &lval, &rval)
+                        match self.apply_compound_assign(op, &lval, &rval) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
                     };
                     // Proxy set trap
                     if obj.borrow().is_proxy() {
@@ -1533,7 +1881,12 @@ impl Interpreter {
         }
     }
 
-    fn apply_compound_assign(&mut self, op: AssignOp, lval: &JsValue, rval: &JsValue) -> JsValue {
+    fn apply_compound_assign(
+        &mut self,
+        op: AssignOp,
+        lval: &JsValue,
+        rval: &JsValue,
+    ) -> Completion {
         match op {
             AssignOp::AddAssign => self.eval_binary(BinaryOp::Add, lval, rval),
             AssignOp::SubAssign => self.eval_binary(BinaryOp::Sub, lval, rval),
@@ -1547,7 +1900,7 @@ impl Interpreter {
             AssignOp::BitAndAssign => self.eval_binary(BinaryOp::BitAnd, lval, rval),
             AssignOp::BitOrAssign => self.eval_binary(BinaryOp::BitOr, lval, rval),
             AssignOp::BitXorAssign => self.eval_binary(BinaryOp::BitXor, lval, rval),
-            _ => rval.clone(),
+            _ => Completion::Normal(rval.clone()),
         }
     }
 
@@ -1710,6 +2063,17 @@ impl Interpreter {
                             Some(ref d) => d.value.clone().unwrap_or(JsValue::Undefined),
                             None => JsValue::Undefined,
                         };
+                        (method, obj_val)
+                    } else {
+                        (JsValue::Undefined, obj_val)
+                    }
+                } else if matches!(&obj_val, JsValue::BigInt(_)) {
+                    let proto = self
+                        .bigint_prototype
+                        .clone()
+                        .or(self.object_prototype.clone());
+                    if let Some(ref p) = proto {
+                        let method = p.borrow().get_property(&key);
                         (method, obj_val)
                     } else {
                         (JsValue::Undefined, obj_val)
@@ -3047,13 +3411,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
+            JsValue::BigInt(_) => {
+                if let Some(ref bp) = self.bigint_prototype {
+                    Completion::Normal(bp.borrow().get_property(&key))
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
             JsValue::Undefined | JsValue::Null => {
                 let err = self.create_type_error(&format!(
                     "Cannot read properties of {obj_val} (reading '{key}')"
                 ));
                 Completion::Throw(err)
             }
-            _ => Completion::Normal(JsValue::Undefined),
         }
     }
 

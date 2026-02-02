@@ -1,4 +1,5 @@
 mod array;
+mod bigint;
 mod collections;
 mod date;
 mod disposable;
@@ -832,7 +833,12 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::constructor("Number".to_string(), 1, |interp, this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Number(0.0));
-                let n = to_number(&val);
+                let n = if let JsValue::BigInt(ref b) = val {
+                    let s = b.value.to_string();
+                    s.parse::<f64>().unwrap_or(f64::INFINITY)
+                } else {
+                    to_number(&val)
+                };
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -938,6 +944,7 @@ impl Interpreter {
             }),
         );
 
+        self.setup_bigint_prototype();
         self.setup_symbol_prototype();
         self.cached_has_instance_key = self.get_symbol_key("hasInstance");
         self.setup_number_prototype();
@@ -946,6 +953,8 @@ impl Interpreter {
         self.setup_set_prototype();
         self.setup_weakmap_prototype();
         self.setup_weakset_prototype();
+        self.setup_weakref();
+        self.setup_finalization_registry();
         self.setup_date_builtin();
         self.setup_disposable_stack();
         self.setup_async_disposable_stack();
@@ -1266,7 +1275,9 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(op(x)))
                 },
             ));
-            math_obj.borrow_mut().insert_value(name.to_string(), fn_val);
+            math_obj
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
         // Math.max, Math.min, Math.pow, Math.random, Math.atan2
         let max_fn = self.create_function(JsFunction::native(
@@ -1465,7 +1476,24 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(op(x)))
                 },
             ));
-            math_obj.borrow_mut().insert_value(name.to_string(), fn_val);
+            math_obj
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
+        }
+
+        // @@toStringTag
+        {
+            let desc = PropertyDescriptor {
+                value: Some(JsValue::String(JsString::from_str("Math"))),
+                writable: Some(false),
+                enumerable: Some(false),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            };
+            let key = "Symbol(Symbol.toStringTag)".to_string();
+            math_obj.borrow_mut().property_order.push(key.clone());
+            math_obj.borrow_mut().properties.insert(key, desc);
         }
 
         let math_val = JsValue::Object(crate::types::JsObject { id: math_id });

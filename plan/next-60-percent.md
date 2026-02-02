@@ -1,38 +1,22 @@
 # Plan: Reach 60% test262 (from 58.61%)
 
-Current: 28,614 / 47,458 (60.29%). ✅ Hit 60% target!
+Current: 28,867 / 47,458 (60.83%).
 
 ## Phase 1: Private Name Unicode Escapes — ✅ Done (+799 passes, 58.61% → 60.29%)
 
 Fixed both match blocks in `src/lexer.rs` to handle `Token::IdentifierWithEscape(s)` in private name parsing.
 
-## Phase 2: BigInt Support (~300+ tests)
+## Phase 2: BigInt Support — ✅ Done (+253 passes, 60.29% → 60.83%)
 
-The type system (`JsBigInt`), operations module (all arithmetic/bitwise), lexer, and parser are already implemented. What's missing is the runtime glue:
-
-### 2a. BigInt literal evaluation
-- `src/interpreter/eval.rs` line 635: `Literal::BigInt(_) => JsValue::Undefined` → parse string to `JsValue::BigInt`
-
-### 2b. Binary operator dispatch
-- `src/interpreter/eval.rs` lines ~973-1059: For arithmetic (+, -, *, /, %, **), bitwise (&, |, ^, <<, >>), and comparison (<, >, <=, >=) operators, add BigInt type checks before the existing Number path. Throw TypeError on mixed BigInt/Number.
-
-### 2c. Unary operator support
-- `src/interpreter/eval.rs` lines ~728-734: Handle unary `-` and `~` for BigInt. Throw TypeError for unary `+` on BigInt (per spec).
-
-### 2d. Equality operators
-- `abstract_equality()` and `strict_equality()`: Add BigInt === BigInt, BigInt == Number (coerce), BigInt == String (parse) cases.
-
-### 2e. BigInt constructor & prototype
-- Add `setup_bigint_prototype()` in builtins: `BigInt.prototype.toString()`, `.valueOf()`, `.toLocaleString()`, `BigInt.asIntN()`, `BigInt.asUintN()`
-- Register `BigInt()` as a callable (not constructable) global
-
-### 2f. Type coercion updates
-- `to_numeric()`: return BigInt as-is (not convert to Number)
-- `to_primitive()`: handle BigInt wrapper objects
-- Increment/decrement operators: support BigInt
-
-**Tests affected:** `test262/test/built-ins/BigInt/` (75), language bigint tests (~207), plus TypedArray BigInt tests (~362 from BigInt64Array/BigUint64Array fix).
-**Estimated gain: ~300-400 tests** (conservative, excluding TypedArray which already partially works)
+Implemented full BigInt runtime support:
+- 2a. BigInt literal evaluation (parse hex/oct/bin/dec BigInt literals)
+- 2b. Binary operator dispatch (arithmetic, bitwise, shift with type checking)
+- 2c. Unary operator support (-, ~, TypeError on +)
+- 2d. Equality operators (strict, abstract with BigInt/Number/String coercion)
+- 2e. BigInt constructor & prototype (toString, valueOf, toLocaleString, asIntN, asUintN)
+- 2f. Type coercion updates (increment/decrement, relational comparison, to_boolean for 0n)
+- Fixed Number() constructor to handle BigInt argument
+- Wired bigint_prototype for property access on BigInt primitives
 
 ## Phase 3: Array Method Robustness (~150-200 tests)
 

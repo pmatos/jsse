@@ -2032,4 +2032,254 @@ impl Interpreter {
 
         self.weakset_prototype = Some(proto);
     }
+
+    pub(crate) fn setup_weakref(&mut self) {
+        let proto = self.create_object();
+        proto.borrow_mut().class_name = "WeakRef".to_string();
+
+        // WeakRef.prototype.deref
+        let deref_fn = self.create_function(JsFunction::native(
+            "deref".to_string(),
+            0,
+            |interp, this, _args| {
+                if let JsValue::Object(o) = this {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        if obj.borrow().class_name == "WeakRef" {
+                            return Completion::Normal(
+                                obj.borrow()
+                                    .primitive_value
+                                    .clone()
+                                    .unwrap_or(JsValue::Undefined),
+                            );
+                        }
+                    }
+                }
+                Completion::Throw(
+                    interp.create_type_error("WeakRef.prototype.deref requires a WeakRef"),
+                )
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("deref".to_string(), deref_fn);
+
+        // @@toStringTag
+        {
+            let desc = PropertyDescriptor {
+                value: Some(JsValue::String(JsString::from_str("WeakRef"))),
+                writable: Some(false),
+                enumerable: Some(false),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            };
+            let key = "Symbol(Symbol.toStringTag)".to_string();
+            proto.borrow_mut().property_order.push(key.clone());
+            proto.borrow_mut().properties.insert(key, desc);
+        }
+
+        // WeakRef constructor
+        let proto_clone = proto.clone();
+        let weakref_ctor = self.create_function(JsFunction::constructor(
+            "WeakRef".to_string(),
+            1,
+            move |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    let err = interp.create_type_error("Constructor WeakRef requires 'new'");
+                    return Completion::Throw(err);
+                }
+                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                match &target {
+                    JsValue::Object(_) | JsValue::Symbol(_) => {}
+                    _ => {
+                        let err =
+                            interp.create_type_error("WeakRef requires a target object or symbol");
+                        return Completion::Throw(err);
+                    }
+                }
+                let obj = interp.create_object();
+                obj.borrow_mut().class_name = "WeakRef".to_string();
+                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                obj.borrow_mut().primitive_value = Some(target);
+                let id = obj.borrow().id.unwrap();
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+            },
+        ));
+
+        if let JsValue::Object(ref ctor_obj) = weakref_ctor {
+            if let Some(obj) = self.get_object(ctor_obj.id) {
+                obj.borrow_mut().insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Object(crate::types::JsObject {
+                            id: proto.borrow().id.unwrap(),
+                        }),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
+            }
+        }
+
+        proto.borrow_mut().insert_property(
+            "constructor".to_string(),
+            PropertyDescriptor::data(weakref_ctor.clone(), true, false, true),
+        );
+
+        self.global_env
+            .borrow_mut()
+            .declare("WeakRef", BindingKind::Var);
+        let _ = self.global_env.borrow_mut().set("WeakRef", weakref_ctor);
+
+        self.weakref_prototype = Some(proto);
+    }
+
+    pub(crate) fn setup_finalization_registry(&mut self) {
+        let proto = self.create_object();
+        proto.borrow_mut().class_name = "FinalizationRegistry".to_string();
+
+        // FinalizationRegistry.prototype.register
+        let register_fn = self.create_function(JsFunction::native(
+            "register".to_string(),
+            2,
+            |interp, this, args| {
+                if let JsValue::Object(o) = this {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        if obj.borrow().class_name == "FinalizationRegistry" {
+                            let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            match &target {
+                                JsValue::Object(_) | JsValue::Symbol(_) => {}
+                                _ => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "FinalizationRegistry.register requires an object target",
+                                    ));
+                                }
+                            }
+                            // We store registrations but GC finalization callbacks are not triggered
+                            return Completion::Normal(JsValue::Undefined);
+                        }
+                    }
+                }
+                Completion::Throw(interp.create_type_error(
+                    "FinalizationRegistry.prototype.register requires a FinalizationRegistry",
+                ))
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("register".to_string(), register_fn);
+
+        // FinalizationRegistry.prototype.unregister
+        let unregister_fn = self.create_function(JsFunction::native(
+            "unregister".to_string(),
+            1,
+            |interp, this, args| {
+                if let JsValue::Object(o) = this {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        if obj.borrow().class_name == "FinalizationRegistry" {
+                            let token = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            match &token {
+                                JsValue::Object(_) | JsValue::Symbol(_) => {}
+                                _ => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "FinalizationRegistry.unregister requires an object token",
+                                    ));
+                                }
+                            }
+                            return Completion::Normal(JsValue::Boolean(false));
+                        }
+                    }
+                }
+                Completion::Throw(interp.create_type_error(
+                    "FinalizationRegistry.prototype.unregister requires a FinalizationRegistry",
+                ))
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("unregister".to_string(), unregister_fn);
+
+        // @@toStringTag
+        {
+            let desc = PropertyDescriptor {
+                value: Some(JsValue::String(JsString::from_str("FinalizationRegistry"))),
+                writable: Some(false),
+                enumerable: Some(false),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            };
+            let key = "Symbol(Symbol.toStringTag)".to_string();
+            proto.borrow_mut().property_order.push(key.clone());
+            proto.borrow_mut().properties.insert(key, desc);
+        }
+
+        // FinalizationRegistry constructor
+        let proto_clone = proto.clone();
+        let fr_ctor = self.create_function(JsFunction::constructor(
+            "FinalizationRegistry".to_string(),
+            1,
+            move |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("Constructor FinalizationRegistry requires 'new'"),
+                    );
+                }
+                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(&callback, JsValue::Object(_)) {
+                    return Completion::Throw(interp.create_type_error(
+                        "FinalizationRegistry requires a callable cleanup callback",
+                    ));
+                }
+                // Check callable
+                if let JsValue::Object(ref o) = callback {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        if obj.borrow().callable.is_none() {
+                            return Completion::Throw(interp.create_type_error(
+                                "FinalizationRegistry requires a callable cleanup callback",
+                            ));
+                        }
+                    }
+                }
+                let obj = interp.create_object();
+                obj.borrow_mut().class_name = "FinalizationRegistry".to_string();
+                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                obj.borrow_mut().primitive_value = Some(callback);
+                let id = obj.borrow().id.unwrap();
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+            },
+        ));
+
+        if let JsValue::Object(ref ctor_obj) = fr_ctor {
+            if let Some(obj) = self.get_object(ctor_obj.id) {
+                obj.borrow_mut().insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Object(crate::types::JsObject {
+                            id: proto.borrow().id.unwrap(),
+                        }),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
+            }
+        }
+
+        proto.borrow_mut().insert_property(
+            "constructor".to_string(),
+            PropertyDescriptor::data(fr_ctor.clone(), true, false, true),
+        );
+
+        self.global_env
+            .borrow_mut()
+            .declare("FinalizationRegistry", BindingKind::Var);
+        let _ = self
+            .global_env
+            .borrow_mut()
+            .set("FinalizationRegistry", fr_ctor);
+
+        self.finalization_registry_prototype = Some(proto);
+    }
 }

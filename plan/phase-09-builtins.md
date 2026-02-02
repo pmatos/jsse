@@ -76,13 +76,13 @@ Ordered roughly by dependency and importance.
   - [x] `Number.prototype.toExponential()`, `.toFixed()`, `.toPrecision()`, `.toString()`, `.valueOf()`, `.toLocaleString()` (with RangeError validation, spec-compliant formatting)
 - [x] **BigInt** (§21.2)
   - [x] `BigInt()` function (not constructor)
-  - [ ] `BigInt.asIntN()`, `BigInt.asUintN()`
+  - [x] `BigInt.asIntN()`, `BigInt.asUintN()`
   - [x] `BigInt.prototype.toString()`, `.valueOf()`, `.toLocaleString()`
 - [x] **Math** (§21.3)
   - [x] All constants: `E`, `LN10`, `LN2`, `LOG10E`, `LOG2E`, `PI`, `SQRT1_2`, `SQRT2`
   - [x] Most methods: `abs`, `acos`, `acosh`, `asin`, `asinh`, `atan`, `atanh`, `atan2`, `cbrt`, `ceil`, `clz32`, `cos`, `cosh`, `exp`, `expm1`, `floor`, `fround`, `hypot`, `imul`, `log`, `log1p`, `log10`, `log2`, `max`, `min`, `pow`, `random`, `round`, `sign`, `sin`, `sinh`, `sqrt`, `tan`, `tanh`, `trunc`
   - [ ] `f16round`, `sumPrecise`
-  - [ ] `Math[@@toStringTag]` = `"Math"`
+  - [x] `Math[@@toStringTag]` = `"Math"`
 - [ ] **Date** (§21.4) — **NOT IMPLEMENTED, 594 tests**
   - [ ] `Date()` constructor (multiple overloads)
   - [ ] `Date.now()`, `Date.parse()`, `Date.UTC()`
@@ -185,14 +185,14 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/ArrayBuffer/` (196), `built-ins/SharedArrayBuffer/` (104), `built-ins/DataView/` (561), `built-ins/Atomics/` (382), `built-ins/JSON/` (165)
 
 ### 9.8 Managing Memory (§26)
-- [ ] **WeakRef** (§26.1)
-  - [ ] `WeakRef()` constructor
-  - [ ] `WeakRef.prototype.deref()`
-- [ ] **FinalizationRegistry** (§26.2)
-  - [ ] `FinalizationRegistry()` constructor
-  - [ ] `register()`, `unregister()`
+- [x] **WeakRef** (§26.1) — ✅ 22/29 passing (76%)
+  - [x] `WeakRef()` constructor
+  - [x] `WeakRef.prototype.deref()`
+- [x] **FinalizationRegistry** (§26.2) — ✅ 34/47 passing (72%)
+  - [x] `FinalizationRegistry()` constructor
+  - [x] `register()`, `unregister()`
 
-**Tests:** `built-ins/WeakRef/` (29), `built-ins/FinalizationRegistry/` (47)
+**Tests:** `built-ins/WeakRef/` (22/29), `built-ins/FinalizationRegistry/` (34/47)
 
 ### 9.9 Control Abstraction Objects (§27)
 - [x] **Iterator** (§27.1) — ✅ 290/510 (57%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose.
