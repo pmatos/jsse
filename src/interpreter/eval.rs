@@ -71,7 +71,28 @@ impl Interpreter {
                     let key_val = JsValue::String(JsString::from_str(&key));
                     match self.invoke_proxy_trap(o.id, "has", vec![target_val.clone(), key_val]) {
                         Ok(Some(v)) => {
-                            return Completion::Normal(JsValue::Boolean(to_boolean(&v)));
+                            let trap_result = to_boolean(&v);
+                            if !trap_result {
+                                // Cannot report non-configurable own property as non-existent
+                                if let JsValue::Object(ref t) = target_val
+                                    && let Some(tobj) = self.get_object(t.id)
+                                {
+                                    let target_desc = tobj.borrow().get_own_property(&key).cloned();
+                                    if let Some(ref desc) = target_desc {
+                                        if desc.configurable == Some(false) {
+                                            return Completion::Throw(self.create_type_error(
+                                                "'has' on proxy: trap returned falsish for property which exists in the proxy target as non-configurable",
+                                            ));
+                                        }
+                                        if !tobj.borrow().extensible {
+                                            return Completion::Throw(self.create_type_error(
+                                                "'has' on proxy: trap returned falsish for property but the proxy target is not extensible",
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                            return Completion::Normal(JsValue::Boolean(trap_result));
                         }
                         Ok(None) => {
                             // No trap, fall through to target
@@ -214,7 +235,28 @@ impl Interpreter {
                                 vec![target_val.clone(), key_val],
                             ) {
                                 Ok(Some(v)) => {
-                                    return Completion::Normal(JsValue::Boolean(to_boolean(&v)));
+                                    let trap_result = to_boolean(&v);
+                                    if trap_result {
+                                        if let JsValue::Object(ref t) = target_val
+                                            && let Some(tobj) = self.get_object(t.id)
+                                        {
+                                            let target_desc =
+                                                tobj.borrow().get_own_property(&key).cloned();
+                                            if let Some(ref desc) = target_desc {
+                                                if desc.configurable == Some(false) {
+                                                    return Completion::Throw(self.create_type_error(
+                                                        "'deleteProperty' on proxy: trap returned truish for property which is non-configurable in the proxy target",
+                                                    ));
+                                                }
+                                                if !tobj.borrow().extensible {
+                                                    return Completion::Throw(self.create_type_error(
+                                                        "'deleteProperty' on proxy: trap returned truish for property but the proxy target is not extensible",
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(trap_result));
                                 }
                                 Ok(None) => {
                                     // No trap, fall through to target
@@ -1244,6 +1286,42 @@ impl Interpreter {
                         ) {
                             Ok(Some(v)) => {
                                 if to_boolean(&v) {
+                                    // Set trap invariant checks
+                                    if let JsValue::Object(ref t) = target_val
+                                        && let Some(tobj) = self.get_object(t.id)
+                                    {
+                                        let target_desc =
+                                            tobj.borrow().get_own_property(&key).cloned();
+                                        if let Some(ref desc) = target_desc {
+                                            if desc.configurable == Some(false) {
+                                                if desc.is_data_descriptor()
+                                                    && desc.writable == Some(false)
+                                                    && !same_value(
+                                                        &final_val,
+                                                        desc.value
+                                                            .as_ref()
+                                                            .unwrap_or(&JsValue::Undefined),
+                                                    )
+                                                {
+                                                    return Completion::Throw(self.create_type_error(
+                                                        "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable data property with a different value",
+                                                    ));
+                                                }
+                                                if desc.is_accessor_descriptor()
+                                                    && matches!(
+                                                        desc.set
+                                                            .as_ref()
+                                                            .unwrap_or(&JsValue::Undefined),
+                                                        JsValue::Undefined
+                                                    )
+                                                {
+                                                    return Completion::Throw(self.create_type_error(
+                                                        "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable accessor property without a setter",
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
                                     return Completion::Normal(final_val);
                                 }
                                 return Completion::Normal(final_val);
@@ -2630,6 +2708,92 @@ impl Interpreter {
         JsValue::Undefined
     }
 
+    pub(crate) fn validate_ownkeys_invariant(
+        &mut self,
+        trap_result: &JsValue,
+        target_val: &JsValue,
+    ) -> Result<(), JsValue> {
+        let trap_keys: Vec<String> = if let JsValue::Object(arr) = trap_result
+            && let Some(arr_obj) = self.get_object(arr.id)
+        {
+            let len = match arr_obj.borrow().get_property("length") {
+                JsValue::Number(n) => n as usize,
+                _ => 0,
+            };
+            (0..len)
+                .map(|i| {
+                    let v = arr_obj.borrow().get_property(&i.to_string());
+                    to_js_string(&v)
+                })
+                .collect()
+        } else {
+            return Ok(());
+        };
+
+        if let JsValue::Object(t) = target_val
+            && let Some(tobj) = self.get_object(t.id)
+        {
+            let target_extensible = tobj.borrow().extensible;
+            let (target_nonconfig, target_config): (Vec<String>, Vec<String>) = {
+                let b = tobj.borrow();
+                let nc: Vec<String> = b
+                    .property_order
+                    .iter()
+                    .filter(|k| {
+                        b.properties
+                            .get(*k)
+                            .is_some_and(|d| d.configurable == Some(false))
+                    })
+                    .cloned()
+                    .collect();
+                let c: Vec<String> = b
+                    .property_order
+                    .iter()
+                    .filter(|k| {
+                        b.properties
+                            .get(*k)
+                            .is_some_and(|d| d.configurable != Some(false))
+                    })
+                    .cloned()
+                    .collect();
+                (nc, c)
+            };
+            let trap_set: std::collections::HashSet<&str> =
+                trap_keys.iter().map(|s| s.as_str()).collect();
+
+            for key in &target_nonconfig {
+                if !trap_set.contains(key.as_str()) {
+                    return Err(self.create_type_error(
+                        "'ownKeys' on proxy: trap result did not include all non-configurable own keys of the proxy target",
+                    ));
+                }
+            }
+
+            if !target_extensible {
+                let target_keys: std::collections::HashSet<&str> = target_nonconfig
+                    .iter()
+                    .chain(target_config.iter())
+                    .map(|s| s.as_str())
+                    .collect();
+                for key in &trap_keys {
+                    if !target_keys.contains(key.as_str()) {
+                        return Err(self.create_type_error(
+                            "'ownKeys' on proxy: trap returned extra keys for non-extensible proxy target",
+                        ));
+                    }
+                }
+                for key in &target_keys {
+                    if !trap_set.contains(key) {
+                        return Err(self.create_type_error(
+                            "'ownKeys' on proxy: trap result did not include all own keys of non-extensible proxy target",
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
         if !matches!(right, JsValue::Object(_)) {
             return Completion::Throw(JsValue::String(JsString::from_str(
@@ -2721,7 +2885,41 @@ impl Interpreter {
             let receiver = this_val.clone();
             match self.invoke_proxy_trap(obj_id, "get", vec![target_val.clone(), key_val, receiver])
             {
-                Ok(Some(v)) => return Completion::Normal(v),
+                Ok(Some(v)) => {
+                    // Invariant checks
+                    if let JsValue::Object(ref t) = target_val
+                        && let Some(tobj) = self.get_object(t.id)
+                    {
+                        let target_desc = tobj.borrow().get_own_property(key).cloned();
+                        if let Some(ref desc) = target_desc {
+                            if desc.configurable == Some(false) {
+                                if desc.is_data_descriptor()
+                                    && desc.writable == Some(false)
+                                    && !same_value(
+                                        &v,
+                                        desc.value.as_ref().unwrap_or(&JsValue::Undefined),
+                                    )
+                                {
+                                    return Completion::Throw(self.create_type_error(
+                                        "'get' on proxy: property is a read-only and non-configurable data property on the proxy target but the proxy did not return its actual value",
+                                    ));
+                                }
+                                if desc.is_accessor_descriptor()
+                                    && matches!(
+                                        desc.get.as_ref().unwrap_or(&JsValue::Undefined),
+                                        JsValue::Undefined
+                                    )
+                                    && !matches!(v, JsValue::Undefined)
+                                {
+                                    return Completion::Throw(self.create_type_error(
+                                        "'get' on proxy: property is a non-configurable accessor property on the proxy target and does not have a getter function, but the trap did not return 'undefined'",
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    return Completion::Normal(v);
+                }
                 Ok(None) => {
                     // No trap, fall through to target
                     if let JsValue::Object(ref t) = target_val {
@@ -2942,7 +3140,9 @@ impl Interpreter {
                 params: vec![Pattern::Rest(Box::new(Pattern::Identifier("args".into())))],
                 body: vec![Statement::Expression(Expression::Call(
                     Box::new(Expression::Super),
-                    vec![Expression::Spread(Box::new(Expression::Identifier("args".into())))],
+                    vec![Expression::Spread(Box::new(Expression::Identifier(
+                        "args".into(),
+                    )))],
                 ))],
                 closure: class_env.clone(),
                 is_arrow: false,

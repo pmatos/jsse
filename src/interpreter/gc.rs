@@ -63,6 +63,7 @@ impl Interpreter {
             &self.biguint64array_prototype,
             &self.dataview_prototype,
             &self.promise_prototype,
+            &self.aggregate_error_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id

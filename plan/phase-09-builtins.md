@@ -62,7 +62,7 @@ Ordered roughly by dependency and importance.
   - [x] `Error.isError()`
   - [ ] `Error.prototype.stack` (implementation-defined)
   - [x] Native error types: `EvalError`, `RangeError`, `ReferenceError`, `SyntaxError`, `TypeError`, `URIError`
-  - [ ] `AggregateError`
+  - [x] `AggregateError` — ✅ 14/25 passing
   - [x] `SuppressedError` — ✅ 13/22 passing
 
 **Tests:** `built-ins/Object/` (3,411), `built-ins/Function/` (509), `built-ins/Boolean/` (51), `built-ins/Symbol/` (94), `built-ins/Error/` (53), `built-ins/NativeErrors/` (92), `built-ins/AggregateError/` (25), `built-ins/SuppressedError/` (22)
@@ -197,11 +197,11 @@ Ordered roughly by dependency and importance.
 ### 9.9 Control Abstraction Objects (§27)
 - [x] **Iterator** (§27.1) — ✅ 290/510 (57%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose.
 - [x] **AsyncIteratorPrototype** (§27.1.4) — ✅ [Symbol.asyncIterator] returns this
-- [x] **Promise** (§27.2) — ✅ 190/639 tests passing (30%)
+- [x] **Promise** (§27.2) — ✅ 364/639 tests passing (57%)
   - [x] `Promise()` constructor
   - [x] `Promise.all()`, `Promise.allSettled()`, `Promise.any()`, `Promise.race()`
   - [x] `Promise.reject()`, `Promise.resolve()`
-  - [ ] `Promise.try()`, `Promise.withResolvers()`
+  - [x] `Promise.try()`, `Promise.withResolvers()`
   - [x] `Promise.prototype.then()`, `.catch()`, `.finally()`
   - [x] NewPromiseReactionJob, NewPromiseResolveThenableJob
   - [x] PromiseResolve, PerformPromiseThen
@@ -216,15 +216,16 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Iterator/` (510), `built-ins/AsyncIteratorPrototype/` (13), `built-ins/Promise/` (639), `built-ins/GeneratorFunction/` (23), `built-ins/AsyncGeneratorFunction/` (23), `built-ins/GeneratorPrototype/` (61), `built-ins/AsyncGeneratorPrototype/` (48), `built-ins/AsyncFunction/` (18), `built-ins/AsyncFromSyncIteratorPrototype/` (38)
 
 ### 9.10 Reflection (§28)
-- [ ] **Reflect** (§28.1)
-  - [ ] `Reflect.apply()`, `.construct()`, `.defineProperty()`, `.deleteProperty()`, `.get()`, `.getOwnPropertyDescriptor()`, `.getPrototypeOf()`, `.has()`, `.isExtensible()`, `.ownKeys()`, `.preventExtensions()`, `.set()`, `.setPrototypeOf()`
-- [ ] **Proxy** (§28.2)
-  - [ ] `Proxy()` constructor
-  - [ ] `Proxy.revocable()`
-  - [ ] All 13 proxy handler traps: `getPrototypeOf`, `setPrototypeOf`, `isExtensible`, `preventExtensions`, `getOwnPropertyDescriptor`, `defineProperty`, `has`, `get`, `set`, `deleteProperty`, `ownKeys`, `apply`, `construct`
-  - [ ] Proxy invariant enforcement
+- [x] **Reflect** (§28.1) — ✅ 124/153 passing (81%)
+  - [x] `Reflect.apply()`, `.construct()`, `.defineProperty()`, `.deleteProperty()`, `.get()`, `.getOwnPropertyDescriptor()`, `.getPrototypeOf()`, `.has()`, `.isExtensible()`, `.ownKeys()`, `.preventExtensions()`, `.set()`, `.setPrototypeOf()`
+  - [x] Proxy trap delegation from Reflect methods
+- [x] **Proxy** (§28.2) — ✅ 163/310 passing (53%)
+  - [x] `Proxy()` constructor
+  - [x] `Proxy.revocable()`
+  - [x] All 13 proxy handler traps
+  - [x] Proxy invariant enforcement (get/set/has/delete/defineProperty/getOwnPropertyDescriptor/ownKeys/getPrototypeOf/setPrototypeOf/isExtensible/preventExtensions)
 
-**Tests:** `built-ins/Reflect/` (153), `built-ins/Proxy/` (311)
+**Tests:** `built-ins/Reflect/` (124/153), `built-ins/Proxy/` (163/310)
 
 ### 9.11 Resource Management
 - [x] **DisposableStack** (§Disposable) — ✅ 71/91 passing

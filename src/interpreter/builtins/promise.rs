@@ -262,6 +262,94 @@ impl Interpreter {
                 .insert_builtin("any".to_string(), any_fn);
         }
 
+        // Promise.withResolvers
+        let with_resolvers_fn = self.create_function(JsFunction::native(
+            "withResolvers".to_string(),
+            0,
+            |interp, _this, _args| {
+                if !interp.is_constructor(_this) {
+                    return Completion::Throw(
+                        interp.create_type_error("Promise.withResolvers requires a constructor"),
+                    );
+                }
+                let promise = interp.create_promise_object();
+                let promise_id = if let JsValue::Object(ref o) = promise {
+                    o.id
+                } else {
+                    0
+                };
+                let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
+                let result = interp.create_object();
+                result
+                    .borrow_mut()
+                    .insert_builtin("promise".to_string(), promise);
+                result
+                    .borrow_mut()
+                    .insert_builtin("resolve".to_string(), resolve_fn);
+                result
+                    .borrow_mut()
+                    .insert_builtin("reject".to_string(), reject_fn);
+                let id = result.borrow().id.unwrap();
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+            },
+        ));
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("withResolvers".to_string(), with_resolvers_fn);
+        }
+
+        // Promise.try
+        let try_fn = self.create_function(JsFunction::native(
+            "try".to_string(),
+            1,
+            |interp, _this, args| {
+                if !interp.is_constructor(_this) {
+                    return Completion::Throw(
+                        interp.create_type_error("Promise.try requires a constructor"),
+                    );
+                }
+                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let call_args: Vec<JsValue> = if args.len() > 1 {
+                    args[1..].to_vec()
+                } else {
+                    vec![]
+                };
+                let promise = interp.create_promise_object();
+                let promise_id = if let JsValue::Object(ref o) = promise {
+                    o.id
+                } else {
+                    0
+                };
+                let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
+                if !interp.is_callable(&callback) {
+                    let err = interp.create_type_error("Promise.try requires a callable");
+                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                    return Completion::Normal(promise);
+                }
+                let result = interp.call_function(&callback, &JsValue::Undefined, &call_args);
+                match result {
+                    Completion::Normal(v) => {
+                        let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[v]);
+                    }
+                    Completion::Throw(e) => {
+                        let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                    }
+                    _ => {}
+                }
+                Completion::Normal(promise)
+            },
+        ));
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("try".to_string(), try_fn);
+        }
+
         // Register Promise as global
         self.global_env
             .borrow_mut()
@@ -827,43 +915,17 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = "AggregateError".to_string();
-            o.insert_value(
-                "name".to_string(),
-                JsValue::String(JsString::from_str("AggregateError")),
-            );
-            o.insert_value(
+            if let Some(ref proto) = self.aggregate_error_prototype {
+                o.prototype = Some(proto.clone());
+            }
+            o.insert_builtin(
                 "message".to_string(),
                 JsValue::String(JsString::from_str(message)),
             );
         }
         let errors_arr = self.create_array(errors);
         obj.borrow_mut()
-            .insert_value("errors".to_string(), errors_arr);
-        // Set error prototype
-        let error_proto = {
-            let env = self.global_env.borrow();
-            if let Some(error_val) = env.get("Error") {
-                if let JsValue::Object(o) = &error_val {
-                    if let Some(ctor) = self.get_object(o.id) {
-                        let proto_val = ctor.borrow().get_property("prototype");
-                        if let JsValue::Object(p) = &proto_val {
-                            self.get_object(p.id)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-        if let Some(ep) = error_proto {
-            obj.borrow_mut().prototype = Some(ep);
-        }
+            .insert_builtin("errors".to_string(), errors_arr);
         let id = obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -873,6 +935,20 @@ impl Interpreter {
             && let Some(obj) = self.get_object(o.id)
         {
             return obj.borrow().callable.is_some();
+        }
+        false
+    }
+
+    pub(crate) fn is_constructor(&self, val: &JsValue) -> bool {
+        if let JsValue::Object(o) = val
+            && let Some(obj) = self.get_object(o.id)
+        {
+            if let Some(ref func) = obj.borrow().callable {
+                return match func {
+                    JsFunction::Native(_, _, _, is_ctor) => *is_ctor,
+                    JsFunction::User { .. } => true,
+                };
+            }
         }
         false
     }

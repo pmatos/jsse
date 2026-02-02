@@ -36,12 +36,12 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | String | 73% | 886/1,215 |
 | Function | 65% | 332/509 |
 | Iterator | 57% | 290/510 |
-| Promise | 30% | 190/639 |
+| Promise | 57% | 364/639 |
 | Map | 50% | 103/204 |
 | Set | 68% | 261/383 |
 | Date | 51% | 305/594 |
-| Reflect | 35% | 54/153 |
-| Proxy | 39% | 120/311 |
+| Reflect | 81% | 124/153 |
+| Proxy | 53% | 163/310 |
 | Symbol | 28% | 26/94 |
 
 ---
@@ -87,6 +87,7 @@ These features block significant numbers of tests:
 21. ~~**`instanceof` and `Function.prototype[@@hasInstance]`**~~ — ✅ Done (7 new passes, 54.95%). Spec-compliant `instanceof` (§13.10.2): checks `Symbol.hasInstance` before prototype chain walk, throws TypeError for non-objects. `OrdinaryHasInstance` extracted as reusable helper. `Function.prototype[@@hasInstance]` added (non-writable, non-enumerable, non-configurable). instanceof: 25/43 → 28/43 (65%), Function.prototype[Symbol.hasInstance]: 1/11 → 5/11 (45%).
 22. ~~**Function name inference (SetFunctionName)**~~ — ✅ Done (628 new passes, 54.95% → 56.25%). Anonymous functions get `.name` set from binding context: variable declarations, assignments, object literal properties, destructuring defaults, get/set accessors (prefixed with "get "/"set ").
 23. ~~**Generator method syntax in object literals**~~ — ✅ Done (160 new passes, 56.25% → 56.54%). Parse `{ *method() { yield ... } }` in object literals. Unblocks gen-meth-* destructuring tests and generator method-definition tests.
+24. ~~**AggregateError + Promise.try/withResolvers + Proxy invariants**~~ — ✅ Done (75 new passes, 58.30% → 58.46%). AggregateError constructor with proper prototype chain. Promise.try and Promise.withResolvers static methods. Proxy invariant enforcement for get/set/has/deleteProperty/defineProperty/getOwnPropertyDescriptor/ownKeys/getPrototypeOf/setPrototypeOf/isExtensible/preventExtensions traps. Proxy trap delegation added to Reflect methods. AggregateError: 14/25 (56%), Proxy: 163/310 (53%), Reflect: 124/153 (81%).
 
 ---
 
