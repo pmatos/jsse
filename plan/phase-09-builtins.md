@@ -59,7 +59,7 @@ Ordered roughly by dependency and importance.
   - [x] All well-known symbols as static properties
 - [x] **Error** objects (§20.5)
   - [x] `Error()`, `Error.prototype.message`, `.name`, `.toString()`
-  - [ ] `Error.isError()`
+  - [x] `Error.isError()`
   - [ ] `Error.prototype.stack` (implementation-defined)
   - [x] Native error types: `EvalError`, `RangeError`, `ReferenceError`, `SyntaxError`, `TypeError`, `URIError`
   - [ ] `AggregateError`

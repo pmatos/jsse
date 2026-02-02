@@ -83,6 +83,8 @@ These features block significant numbers of tests:
 18. ~~**String.prototype wiring fix**~~ — ✅ Done (445 new passes, 5 regressions, 52.45% → 53.38%). Reordered String constructor registration before `setup_string_prototype()` so prototype methods are wired correctly. String: 462/1,215 (38%) → 863/1,215 (71%).
 19. ~~**Iterator protocol completion**~~ — ✅ Done (70 new passes, 53.38% → 53.53%). Symbol.dispose on %IteratorPrototype%, Iterator.zip and Iterator.zipKeyed with shortest/longest/strict modes, argument validation closes iterator on failure, take/drop edge case fixes, generator return/throw borrow fix. Iterator: 138/510 (27%) → 290/510 (57%).
 
+20. ~~**Error & NativeError built-in fixes**~~ — ✅ Done (58 new passes, 54.83% → 54.95%). Per-type NativeError prototypes inheriting from Error.prototype with `name`, `message`, `constructor`. Error.prototype properties set non-enumerable. Constructor arities fixed to 1. `cause` option support. Message ToString coercion. Error.isError() static method. Error: 32/53 (60%), NativeErrors: 62/92 (67%).
+
 ---
 
 ## Cross-Cutting Concerns

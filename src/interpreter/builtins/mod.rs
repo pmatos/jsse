@@ -55,25 +55,47 @@ impl Interpreter {
             self.register_global_fn(
                 "Error",
                 BindingKind::Var,
-                JsFunction::constructor(error_name.clone(), 0, move |interp, this, args| {
-                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                JsFunction::constructor(error_name.clone(), 1, move |interp, this, args| {
+                    let msg_raw = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+
+                    macro_rules! init_error {
+                        ($o:expr) => {
+                            $o.class_name = "Error".to_string();
+                            if !matches!(msg_raw, JsValue::Undefined) {
+                                let msg_str = match interp.to_string_value(&msg_raw) {
+                                    Ok(s) => JsValue::String(JsString::from_str(&s)),
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                $o.insert_builtin("message".to_string(), msg_str);
+                            }
+                            if let JsValue::Object(opts) = &options {
+                                if let Some(opts_obj) = interp.get_object(opts.id) {
+                                    if opts_obj.borrow().has_property("cause") {
+                                        let cause = interp.get_object_property(opts.id, "cause", &options);
+                                        match cause {
+                                            Completion::Normal(v) => {
+                                                $o.insert_builtin("cause".to_string(), v);
+                                            }
+                                            c => return c,
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                    }
+
                     if let JsValue::Object(o) = this {
                         if let Some(obj) = interp.get_object(o.id) {
                             let mut o = obj.borrow_mut();
-                            o.class_name = "Error".to_string();
-                            if !matches!(msg, JsValue::Undefined) {
-                                o.insert_value("message".to_string(), msg);
-                            }
+                            init_error!(o);
                         }
                         return Completion::Normal(this.clone());
                     }
                     let obj = interp.create_object();
                     {
                         let mut o = obj.borrow_mut();
-                        o.class_name = "Error".to_string();
-                        if !matches!(msg, JsValue::Undefined) {
-                            o.insert_value("message".to_string(), msg);
-                        }
+                        init_error!(o);
                     }
                     let id = obj.borrow().id.unwrap();
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -135,14 +157,51 @@ impl Interpreter {
             ));
             ep.borrow_mut()
                 .insert_builtin("toString".to_string(), tostring_fn);
-            ep.borrow_mut().insert_value(
+            ep.borrow_mut().insert_builtin(
                 "name".to_string(),
                 JsValue::String(JsString::from_str("Error")),
             );
-            ep.borrow_mut().insert_value(
+            ep.borrow_mut().insert_builtin(
                 "message".to_string(),
                 JsValue::String(JsString::from_str("")),
             );
+            // Set constructor on Error.prototype
+            {
+                let env = self.global_env.borrow();
+                if let Some(error_ctor) = env.get("Error") {
+                    ep.borrow_mut()
+                        .insert_builtin("constructor".to_string(), error_ctor);
+                }
+            }
+        }
+
+        // Error.isError() static method
+        {
+            let is_error_fn = self.create_function(JsFunction::native(
+                "isError".to_string(),
+                1,
+                |interp, _this, args| {
+                    let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(o) = &arg {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            let cn = &obj.borrow().class_name;
+                            if cn.contains("Error") {
+                                return Completion::Normal(JsValue::Boolean(true));
+                            }
+                        }
+                    }
+                    Completion::Normal(JsValue::Boolean(false))
+                },
+            ));
+            let env = self.global_env.borrow();
+            if let Some(error_ctor) = env.get("Error") {
+                if let JsValue::Object(o) = &error_ctor {
+                    if let Some(obj) = self.get_object(o.id) {
+                        obj.borrow_mut()
+                            .insert_builtin("isError".to_string(), is_error_fn);
+                    }
+                }
+            }
         }
 
         // Test262Error
@@ -205,48 +264,98 @@ impl Interpreter {
             "EvalError",
         ] {
             let error_name = name.to_string();
-            let error_proto_clone = error_prototype.clone();
+
+            // Create per-type prototype inheriting from Error.prototype
+            let native_proto = self.create_object();
+            if let Some(ref ep) = error_prototype {
+                native_proto.borrow_mut().prototype = Some(ep.clone());
+            }
+            native_proto.borrow_mut().insert_builtin(
+                "name".to_string(),
+                JsValue::String(JsString::from_str(name)),
+            );
+            native_proto.borrow_mut().insert_builtin(
+                "message".to_string(),
+                JsValue::String(JsString::from_str("")),
+            );
+
+            let native_proto_clone = native_proto.clone();
+            let error_name_clone = error_name.clone();
             self.register_global_fn(
                 name,
                 BindingKind::Var,
-                JsFunction::constructor(error_name.clone(), 0, move |interp, this, args| {
-                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                JsFunction::constructor(error_name.clone(), 1, move |interp, this, args| {
+                    let msg_raw = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+
+                    macro_rules! init_native_error {
+                        ($o:expr) => {
+                            $o.class_name = error_name_clone.clone();
+                            $o.prototype = Some(native_proto_clone.clone());
+                            if !matches!(msg_raw, JsValue::Undefined) {
+                                let msg_str = match interp.to_string_value(&msg_raw) {
+                                    Ok(s) => JsValue::String(JsString::from_str(&s)),
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                $o.insert_builtin("message".to_string(), msg_str);
+                            }
+                            if let JsValue::Object(opts) = &options {
+                                if let Some(opts_obj) = interp.get_object(opts.id) {
+                                    if opts_obj.borrow().has_property("cause") {
+                                        let cause = interp.get_object_property(opts.id, "cause", &options);
+                                        match cause {
+                                            Completion::Normal(v) => {
+                                                $o.insert_builtin("cause".to_string(), v);
+                                            }
+                                            c => return c,
+                                        }
+                                    }
+                                }
+                            }
+                        };
+                    }
+
                     if let JsValue::Object(o) = this {
                         if let Some(obj) = interp.get_object(o.id) {
                             let mut o = obj.borrow_mut();
-                            o.class_name = error_name.clone();
-                            if let Some(ref ep) = error_proto_clone {
-                                o.prototype = Some(ep.clone());
-                            }
-                            if !matches!(msg, JsValue::Undefined) {
-                                o.insert_value("message".to_string(), msg.clone());
-                            }
-                            o.insert_value(
-                                "name".to_string(),
-                                JsValue::String(JsString::from_str(&error_name)),
-                            );
+                            init_native_error!(o);
                         }
                         return Completion::Normal(this.clone());
                     }
                     let obj = interp.create_object();
                     {
                         let mut o = obj.borrow_mut();
-                        o.class_name = error_name.clone();
-                        if let Some(ref ep) = error_proto_clone {
-                            o.prototype = Some(ep.clone());
-                        }
-                        if !matches!(msg, JsValue::Undefined) {
-                            o.insert_value("message".to_string(), msg);
-                        }
-                        o.insert_value(
-                            "name".to_string(),
-                            JsValue::String(JsString::from_str(&error_name)),
-                        );
+                        init_native_error!(o);
                     }
                     let id = obj.borrow().id.unwrap();
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),
             );
+
+            // Set constructor on the per-type prototype
+            {
+                let env = self.global_env.borrow();
+                if let Some(ctor_val) = env.get(name) {
+                    native_proto
+                        .borrow_mut()
+                        .insert_builtin("constructor".to_string(), ctor_val);
+                }
+            }
+            // Set constructor's .prototype to the per-type prototype
+            {
+                let env = self.global_env.borrow();
+                if let Some(ctor_val) = env.get(name) {
+                    if let JsValue::Object(o) = &ctor_val {
+                        if let Some(ctor_obj) = self.get_object(o.id) {
+                            let proto_id = native_proto.borrow().id.unwrap();
+                            ctor_obj.borrow_mut().insert_builtin(
+                                "prototype".to_string(),
+                                JsValue::Object(crate::types::JsObject { id: proto_id }),
+                            );
+                        }
+                    }
+                }
+            }
         }
 
         // Object constructor (minimal)
