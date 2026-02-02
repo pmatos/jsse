@@ -1614,16 +1614,17 @@ impl Interpreter {
 
                 // Step 3: If mapfn is provided and not undefined, check callable
                 if let Some(ref mf) = map_fn
-                    && !matches!(mf, JsValue::Undefined) {
-                        let is_callable = matches!(mf, JsValue::Object(o) if {
-                            interp.get_object(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
-                        });
-                        if !is_callable {
-                            return Completion::Throw(
-                                interp.create_type_error("mapfn is not a function"),
-                            );
-                        }
+                    && !matches!(mf, JsValue::Undefined)
+                {
+                    let is_callable = matches!(mf, JsValue::Object(o) if {
+                        interp.get_object(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                    });
+                    if !is_callable {
+                        return Completion::Throw(
+                            interp.create_type_error("mapfn is not a function"),
+                        );
                     }
+                }
 
                 // Get array-like or iterable
                 let values = interp.collect_iterable_or_arraylike(&source);

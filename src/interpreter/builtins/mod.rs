@@ -151,10 +151,30 @@ impl Interpreter {
             self.register_global_fn(
                 "Test262Error",
                 BindingKind::Var,
-                JsFunction::constructor("Test262Error".to_string(), 1, move |interp, this, args| {
-                    let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(o) = this {
-                        if let Some(obj) = interp.get_object(o.id) {
+                JsFunction::constructor(
+                    "Test262Error".to_string(),
+                    1,
+                    move |interp, this, args| {
+                        let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        if let JsValue::Object(o) = this {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let mut o = obj.borrow_mut();
+                                o.class_name = "Test262Error".to_string();
+                                if let Some(ref ep) = error_proto_clone {
+                                    o.prototype = Some(ep.clone());
+                                }
+                                if !matches!(msg, JsValue::Undefined) {
+                                    o.insert_value("message".to_string(), msg);
+                                }
+                                o.insert_value(
+                                    "name".to_string(),
+                                    JsValue::String(JsString::from_str("Test262Error")),
+                                );
+                            }
+                            return Completion::Normal(this.clone());
+                        }
+                        let obj = interp.create_object();
+                        {
                             let mut o = obj.borrow_mut();
                             o.class_name = "Test262Error".to_string();
                             if let Some(ref ep) = error_proto_clone {
@@ -168,26 +188,10 @@ impl Interpreter {
                                 JsValue::String(JsString::from_str("Test262Error")),
                             );
                         }
-                        return Completion::Normal(this.clone());
-                    }
-                    let obj = interp.create_object();
-                    {
-                        let mut o = obj.borrow_mut();
-                        o.class_name = "Test262Error".to_string();
-                        if let Some(ref ep) = error_proto_clone {
-                            o.prototype = Some(ep.clone());
-                        }
-                        if !matches!(msg, JsValue::Undefined) {
-                            o.insert_value("message".to_string(), msg);
-                        }
-                        o.insert_value(
-                            "name".to_string(),
-                            JsValue::String(JsString::from_str("Test262Error")),
-                        );
-                    }
-                    let id = obj.borrow().id.unwrap();
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                }),
+                        let id = obj.borrow().id.unwrap();
+                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                    },
+                ),
             );
         }
 
@@ -803,9 +807,7 @@ impl Interpreter {
                     }
                     i += 1;
                 }
-                Completion::Normal(JsValue::String(JsString {
-                    code_units: result,
-                }))
+                Completion::Normal(JsValue::String(JsString { code_units: result }))
             }),
         );
 
@@ -1207,18 +1209,20 @@ impl Interpreter {
                 let mut space_val = space_arg;
                 // Unwrap wrapper objects
                 if let JsValue::Object(o) = &space_val
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let cn = obj.borrow().class_name.clone();
-                        let pv = obj.borrow().primitive_value.clone();
-                        if cn == "Number" {
-                            if let Some(p) = pv {
-                                space_val = JsValue::Number(to_number(&p));
-                            }
-                        } else if cn == "String"
-                            && let Some(p) = pv {
-                                space_val = p;
-                            }
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let cn = obj.borrow().class_name.clone();
+                    let pv = obj.borrow().primitive_value.clone();
+                    if cn == "Number" {
+                        if let Some(p) = pv {
+                            space_val = JsValue::Number(to_number(&p));
+                        }
+                    } else if cn == "String"
+                        && let Some(p) = pv
+                    {
+                        space_val = p;
                     }
+                }
                 let gap = match &space_val {
                     JsValue::Number(n) => {
                         let count = (*n as i64).clamp(0, 10) as usize;
@@ -1226,7 +1230,11 @@ impl Interpreter {
                     }
                     JsValue::String(s) => {
                         let rs = s.to_rust_string();
-                        if rs.len() > 10 { rs[..10].to_string() } else { rs }
+                        if rs.len() > 10 {
+                            rs[..10].to_string()
+                        } else {
+                            rs
+                        }
                     }
                     _ => String::new(),
                 };
@@ -1255,14 +1263,20 @@ impl Interpreter {
                     Completion::Normal(parsed) => {
                         if let Some(JsValue::Object(rev_obj)) = &reviver
                             && let Some(obj) = interp.get_object(rev_obj.id)
-                                && obj.borrow().callable.is_some() {
-                                    let wrapper = interp.create_object();
-                                    wrapper.borrow_mut().insert_value("".to_string(), parsed);
-                                    let wrapper_val = JsValue::Object(crate::types::JsObject {
-                                        id: wrapper.borrow().id.unwrap(),
-                                    });
-                                    return json_internalize(interp, &wrapper_val, "", reviver.as_ref().unwrap());
-                                }
+                            && obj.borrow().callable.is_some()
+                        {
+                            let wrapper = interp.create_object();
+                            wrapper.borrow_mut().insert_value("".to_string(), parsed);
+                            let wrapper_val = JsValue::Object(crate::types::JsObject {
+                                id: wrapper.borrow().id.unwrap(),
+                            });
+                            return json_internalize(
+                                interp,
+                                &wrapper_val,
+                                "",
+                                reviver.as_ref().unwrap(),
+                            );
+                        }
                         Completion::Normal(parsed)
                     }
                     other => other,
@@ -1276,25 +1290,39 @@ impl Interpreter {
                 let text = args.first().map(to_js_string).unwrap_or_default();
                 // Reject empty, leading/trailing whitespace
                 if text.is_empty() {
-                    let err = interp.create_error("SyntaxError", "JSON.rawJSON cannot be called with an empty string");
+                    let err = interp.create_error(
+                        "SyntaxError",
+                        "JSON.rawJSON cannot be called with an empty string",
+                    );
                     return Completion::Throw(err);
                 }
                 let first = text.as_bytes()[0];
                 let last = text.as_bytes()[text.len() - 1];
-                if matches!(first, b'\t' | b'\n' | b'\r' | b' ') || matches!(last, b'\t' | b'\n' | b'\r' | b' ') {
-                    let err = interp.create_error("SyntaxError", "JSON.rawJSON text must not start or end with whitespace");
+                if matches!(first, b'\t' | b'\n' | b'\r' | b' ')
+                    || matches!(last, b'\t' | b'\n' | b'\r' | b' ')
+                {
+                    let err = interp.create_error(
+                        "SyntaxError",
+                        "JSON.rawJSON text must not start or end with whitespace",
+                    );
                     return Completion::Throw(err);
                 }
                 // Must be a valid JSON primitive (not object/array)
                 if text.starts_with('{') || text.starts_with('[') {
-                    let err = interp.create_error("SyntaxError", "JSON.rawJSON only accepts JSON primitives");
+                    let err = interp
+                        .create_error("SyntaxError", "JSON.rawJSON only accepts JSON primitives");
                     return Completion::Throw(err);
                 }
                 // Validate it's valid JSON
-                if let Completion::Throw(e) = json_parse_value(interp, &text) { return Completion::Throw(e) }
+                if let Completion::Throw(e) = json_parse_value(interp, &text) {
+                    return Completion::Throw(e);
+                }
                 let obj = interp.create_object();
                 obj.borrow_mut().prototype = None;
-                obj.borrow_mut().insert_value("rawJSON".to_string(), JsValue::String(JsString::from_str(&text)));
+                obj.borrow_mut().insert_value(
+                    "rawJSON".to_string(),
+                    JsValue::String(JsString::from_str(&text)),
+                );
                 obj.borrow_mut().extensible = false;
                 obj.borrow_mut().is_raw_json = true;
                 // Freeze: make all properties non-writable, non-configurable
@@ -1315,9 +1343,10 @@ impl Interpreter {
             |interp, _this, args: &[JsValue]| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &val
-                    && let Some(obj) = interp.get_object(o.id) {
-                        return Completion::Normal(JsValue::Boolean(obj.borrow().is_raw_json));
-                    }
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    return Completion::Normal(JsValue::Boolean(obj.borrow().is_raw_json));
+                }
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
@@ -3483,18 +3512,107 @@ impl Interpreter {
             "bind".to_string(),
             1,
             |interp, this_val, args: &[JsValue]| {
+                if !matches!(this_val, JsValue::Object(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("Bind must be called on a function"),
+                    );
+                }
+                // Check if target is callable
+                let is_callable = if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    obj.borrow().callable.is_some()
+                } else {
+                    false
+                };
+                if !is_callable {
+                    return Completion::Throw(
+                        interp.create_type_error("Bind must be called on a function"),
+                    );
+                }
+
                 let bind_this = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
                 let func = this_val.clone();
-                let bound = JsFunction::native(
-                    "bound".to_string(),
-                    0,
-                    move |interp2, _this, call_args: &[JsValue]| {
-                        let mut all_args = bound_args.clone();
-                        all_args.extend_from_slice(call_args);
-                        interp2.call_function(&func, &bind_this, &all_args)
-                    },
-                );
+
+                // Read target length and compute bound length
+                let target_length = if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    obj.borrow()
+                        .get_property_value("length")
+                        .and_then(|v| match v {
+                            JsValue::Number(n) => Some(n as usize),
+                            _ => None,
+                        })
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                let bound_length = target_length.saturating_sub(bound_args.len());
+
+                // Read target name
+                let target_name = if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    obj.borrow()
+                        .get_property_value("name")
+                        .and_then(|v| match v {
+                            JsValue::String(s) => Some(s.to_string()),
+                            _ => None,
+                        })
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let bound_name = format!("bound {}", target_name);
+
+                // Check if target is a constructor
+                let is_ctor = if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    match &obj.borrow().callable {
+                        Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
+                        Some(JsFunction::Native(_, _, _, ctor)) => *ctor,
+                        None => false,
+                    }
+                } else {
+                    false
+                };
+
+                let _bound_args_len = bound_args.len();
+                let bound = if is_ctor {
+                    JsFunction::constructor(
+                        bound_name,
+                        bound_length,
+                        move |interp2, this, call_args: &[JsValue]| {
+                            let mut all_args = bound_args.clone();
+                            all_args.extend_from_slice(call_args);
+                            // When called as constructor, new_target is set and this is a fresh object
+                            // Use that this (not bind_this) — the new machinery already created it
+                            if interp2.new_target.is_some() {
+                                interp2.call_function(&func, this, &all_args)
+                            } else {
+                                interp2.call_function(&func, &bind_this, &all_args)
+                            }
+                        },
+                    )
+                } else {
+                    JsFunction::Native(
+                        bound_name,
+                        bound_length,
+                        Rc::new(
+                            move |interp2: &mut Interpreter,
+                                  _this: &JsValue,
+                                  call_args: &[JsValue]| {
+                                let mut all_args = bound_args.clone();
+                                all_args.extend_from_slice(call_args);
+                                interp2.call_function(&func, &bind_this, &all_args)
+                            },
+                        ),
+                        false,
+                    )
+                };
                 Completion::Normal(interp.create_function(bound))
             },
         ));

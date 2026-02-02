@@ -48,16 +48,17 @@ fn obj_set(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
     if let Some(obj) = get_obj(interp, o) {
         let mut borrow = obj.borrow_mut();
         if let Some(ref mut elems) = borrow.array_elements
-            && let Ok(idx) = key.parse::<usize>() {
-                if idx < elems.len() {
-                    elems[idx] = value.clone();
-                } else {
-                    while elems.len() < idx {
-                        elems.push(JsValue::Undefined);
-                    }
-                    elems.push(value.clone());
+            && let Ok(idx) = key.parse::<usize>()
+        {
+            if idx < elems.len() {
+                elems[idx] = value.clone();
+            } else {
+                while elems.len() < idx {
+                    elems.push(JsValue::Undefined);
                 }
+                elems.push(value.clone());
             }
+        }
         borrow.set_property_value(key, value);
     }
 }
@@ -69,9 +70,10 @@ fn obj_has(interp: &mut Interpreter, o: &JsValue, key: &str) -> bool {
             return true;
         }
         if let Some(ref elems) = borrow.array_elements
-            && let Ok(idx) = key.parse::<usize>() {
-                return idx < elems.len();
-            }
+            && let Ok(idx) = key.parse::<usize>()
+        {
+            return idx < elems.len();
+        }
         false
     } else {
         false
@@ -85,9 +87,10 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
         borrow.property_order.retain(|k| k != key);
         if let Some(ref mut elems) = borrow.array_elements
             && let Ok(idx) = key.parse::<usize>()
-                && idx < elems.len() {
-                    elems[idx] = JsValue::Undefined;
-                }
+            && idx < elems.len()
+        {
+            elems[idx] = JsValue::Undefined;
+        }
     }
 }
 
@@ -1309,11 +1312,13 @@ impl Interpreter {
                 };
                 let compare_fn = args.first().cloned();
                 if let Some(ref cf) = compare_fn
-                    && !matches!(cf, JsValue::Undefined) && !interp.is_callable(cf) {
-                        return Completion::Throw(
-                            interp.create_type_error("compareFn is not a function"),
-                        );
-                    }
+                    && !matches!(cf, JsValue::Undefined)
+                    && !interp.is_callable(cf)
+                {
+                    return Completion::Throw(
+                        interp.create_type_error("compareFn is not a function"),
+                    );
+                }
                 let len = match length_of_array_like(interp, &o) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -1337,23 +1342,22 @@ impl Interpreter {
                         return std::cmp::Ordering::Less;
                     }
                     if let Some(ref cf) = cmp_fn
-                        && !matches!(cf, JsValue::Undefined) && interp.is_callable(cf) {
-                            let result = interp.call_function(
-                                cf,
-                                &JsValue::Undefined,
-                                &[x.clone(), y.clone()],
-                            );
-                            if let Completion::Normal(v) = result {
-                                let n = to_number(&v);
-                                if n < 0.0 {
-                                    return std::cmp::Ordering::Less;
-                                }
-                                if n > 0.0 {
-                                    return std::cmp::Ordering::Greater;
-                                }
-                                return std::cmp::Ordering::Equal;
+                        && !matches!(cf, JsValue::Undefined)
+                        && interp.is_callable(cf)
+                    {
+                        let result =
+                            interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
+                        if let Completion::Normal(v) = result {
+                            let n = to_number(&v);
+                            if n < 0.0 {
+                                return std::cmp::Ordering::Less;
                             }
+                            if n > 0.0 {
+                                return std::cmp::Ordering::Greater;
+                            }
+                            return std::cmp::Ordering::Equal;
                         }
+                    }
                     let xs = to_js_string(x);
                     let ys = to_js_string(y);
                     xs.cmp(&ys)
@@ -1383,11 +1387,13 @@ impl Interpreter {
                 };
                 let compare_fn = args.first().cloned();
                 if let Some(ref cf) = compare_fn
-                    && !matches!(cf, JsValue::Undefined) && !interp.is_callable(cf) {
-                        return Completion::Throw(
-                            interp.create_type_error("compareFn is not a function"),
-                        );
-                    }
+                    && !matches!(cf, JsValue::Undefined)
+                    && !interp.is_callable(cf)
+                {
+                    return Completion::Throw(
+                        interp.create_type_error("compareFn is not a function"),
+                    );
+                }
                 let len = match length_of_array_like(interp, &o) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -1408,23 +1414,22 @@ impl Interpreter {
                         return std::cmp::Ordering::Less;
                     }
                     if let Some(ref cf) = cmp_fn
-                        && !matches!(cf, JsValue::Undefined) && interp.is_callable(cf) {
-                            let result = interp.call_function(
-                                cf,
-                                &JsValue::Undefined,
-                                &[x.clone(), y.clone()],
-                            );
-                            if let Completion::Normal(v) = result {
-                                let n = to_number(&v);
-                                if n < 0.0 {
-                                    return std::cmp::Ordering::Less;
-                                }
-                                if n > 0.0 {
-                                    return std::cmp::Ordering::Greater;
-                                }
-                                return std::cmp::Ordering::Equal;
+                        && !matches!(cf, JsValue::Undefined)
+                        && interp.is_callable(cf)
+                    {
+                        let result =
+                            interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
+                        if let Completion::Normal(v) = result {
+                            let n = to_number(&v);
+                            if n < 0.0 {
+                                return std::cmp::Ordering::Less;
                             }
+                            if n > 0.0 {
+                                return std::cmp::Ordering::Greater;
+                            }
+                            return std::cmp::Ordering::Equal;
                         }
+                    }
                     let xs = to_js_string(x);
                     let ys = to_js_string(y);
                     xs.cmp(&ys)
@@ -1524,17 +1529,17 @@ impl Interpreter {
                             Completion::Normal(v) => {
                                 if let JsValue::Object(mo) = &v
                                     && let Some(mobj) = interp.get_object(mo.id)
-                                        && mobj.borrow().array_elements.is_some() {
-                                            let mlen =
-                                                length_of_array_like(interp, &v).unwrap_or(0);
-                                            for j in 0..mlen {
-                                                let jpk = j.to_string();
-                                                if obj_has(interp, &v, &jpk) {
-                                                    result.push(obj_get(interp, &v, &jpk));
-                                                }
-                                            }
-                                            continue;
+                                    && mobj.borrow().array_elements.is_some()
+                                {
+                                    let mlen = length_of_array_like(interp, &v).unwrap_or(0);
+                                    for j in 0..mlen {
+                                        let jpk = j.to_string();
+                                        if obj_has(interp, &v, &jpk) {
+                                            result.push(obj_get(interp, &v, &jpk));
                                         }
+                                    }
+                                    continue;
+                                }
                                 result.push(v);
                             }
                             other => return other,
@@ -1723,28 +1728,31 @@ impl Interpreter {
                 let map_fn = args.get(1).cloned();
                 let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                 if let Some(ref mf) = map_fn
-                    && !matches!(mf, JsValue::Undefined) && !interp.is_callable(mf) {
-                        return Completion::Throw(
-                            interp.create_type_error("Array.from mapFn is not a function"),
-                        );
-                    }
+                    && !matches!(mf, JsValue::Undefined)
+                    && !interp.is_callable(mf)
+                {
+                    return Completion::Throw(
+                        interp.create_type_error("Array.from mapFn is not a function"),
+                    );
+                }
                 let mut values = Vec::new();
                 match &source {
                     JsValue::String(s) => {
                         for ch in s.to_rust_string().chars() {
                             let v = JsValue::String(JsString::from_str(&ch.to_string()));
                             if let Some(ref mf) = map_fn
-                                && !matches!(mf, JsValue::Undefined) {
-                                    match interp.call_function(
-                                        mf,
-                                        &this_arg,
-                                        &[v, JsValue::Number(values.len() as f64)],
-                                    ) {
-                                        Completion::Normal(mapped) => values.push(mapped),
-                                        other => return other,
-                                    }
-                                    continue;
+                                && !matches!(mf, JsValue::Undefined)
+                            {
+                                match interp.call_function(
+                                    mf,
+                                    &this_arg,
+                                    &[v, JsValue::Number(values.len() as f64)],
+                                ) {
+                                    Completion::Normal(mapped) => values.push(mapped),
+                                    other => return other,
                                 }
+                                continue;
+                            }
                             values.push(v);
                         }
                     }
@@ -1791,19 +1799,18 @@ impl Interpreter {
                                             break;
                                         }
                                         if let Some(ref mf) = map_fn
-                                            && !matches!(mf, JsValue::Undefined) {
-                                                match interp.call_function(
-                                                    mf,
-                                                    &this_arg,
-                                                    &[value, JsValue::Number(values.len() as f64)],
-                                                ) {
-                                                    Completion::Normal(mapped) => {
-                                                        values.push(mapped)
-                                                    }
-                                                    other => return other,
-                                                }
-                                                continue;
+                                            && !matches!(mf, JsValue::Undefined)
+                                        {
+                                            match interp.call_function(
+                                                mf,
+                                                &this_arg,
+                                                &[value, JsValue::Number(values.len() as f64)],
+                                            ) {
+                                                Completion::Normal(mapped) => values.push(mapped),
+                                                other => return other,
                                             }
+                                            continue;
+                                        }
                                         values.push(value);
                                     }
                                 }
@@ -1815,17 +1822,18 @@ impl Interpreter {
                                 for i in 0..len {
                                     let v = obj.borrow().get_property(&i.to_string());
                                     if let Some(ref mf) = map_fn
-                                        && !matches!(mf, JsValue::Undefined) {
-                                            match interp.call_function(
-                                                mf,
-                                                &this_arg,
-                                                &[v, JsValue::Number(i as f64)],
-                                            ) {
-                                                Completion::Normal(mapped) => values.push(mapped),
-                                                other => return other,
-                                            }
-                                            continue;
+                                        && !matches!(mf, JsValue::Undefined)
+                                    {
+                                        match interp.call_function(
+                                            mf,
+                                            &this_arg,
+                                            &[v, JsValue::Number(i as f64)],
+                                        ) {
+                                            Completion::Normal(mapped) => values.push(mapped),
+                                            other => return other,
                                         }
+                                        continue;
+                                    }
                                     values.push(v);
                                 }
                             }

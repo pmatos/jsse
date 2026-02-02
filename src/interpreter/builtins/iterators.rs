@@ -46,10 +46,9 @@ impl Interpreter {
             },
         ));
         if let Some(key) = self.get_symbol_key("dispose") {
-            iter_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(dispose_fn, true, false, true),
-            );
+            iter_proto
+                .borrow_mut()
+                .insert_property(key, PropertyDescriptor::data(dispose_fn, true, false, true));
         }
 
         self.iterator_prototype = Some(iter_proto.clone());

@@ -190,7 +190,8 @@ impl Interpreter {
         ];
 
         for (name, arity, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
+            let fn_val =
+                self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
@@ -515,7 +516,8 @@ impl Interpreter {
         ];
 
         for (name, arity, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
+            let fn_val =
+                self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 
@@ -592,7 +594,8 @@ impl Interpreter {
         ];
 
         for (name, arity, func) in methods {
-            let fn_val = self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
+            let fn_val =
+                self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
         }
 

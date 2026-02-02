@@ -27,9 +27,10 @@ fn this_string_value(interp: &mut Interpreter, this: &JsValue) -> Result<String,
         JsValue::Object(o) => {
             if let Some(obj) = interp.get_object(o.id)
                 && obj.borrow().class_name == "String"
-                    && let Some(JsValue::String(s)) = &obj.borrow().primitive_value {
-                        return Ok(s.to_rust_string());
-                    }
+                && let Some(JsValue::String(s)) = &obj.borrow().primitive_value
+            {
+                return Ok(s.to_rust_string());
+            }
             match interp.to_string_value(this) {
                 Ok(s) => Ok(s),
                 Err(e) => Err(Completion::Throw(e)),
@@ -259,11 +260,12 @@ impl Interpreter {
                     // Throw if search is a RegExp
                     if let JsValue::Object(ref o) = search_arg
                         && let Some(obj) = interp.get_object(o.id)
-                            && obj.borrow().class_name == "RegExp" {
-                                return Completion::Throw(interp.create_type_error(
+                        && obj.borrow().class_name == "RegExp"
+                    {
+                        return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.includes must not be a regular expression",
                                 ));
-                            }
+                    }
                     let search = match to_str(interp, &search_arg) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -301,11 +303,12 @@ impl Interpreter {
                     let search_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = search_arg
                         && let Some(obj) = interp.get_object(o.id)
-                            && obj.borrow().class_name == "RegExp" {
-                                return Completion::Throw(interp.create_type_error(
+                        && obj.borrow().class_name == "RegExp"
+                    {
+                        return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.startsWith must not be a regular expression",
                                 ));
-                            }
+                    }
                     let search = match to_str(interp, &search_arg) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -339,11 +342,12 @@ impl Interpreter {
                     let search_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = search_arg
                         && let Some(obj) = interp.get_object(o.id)
-                            && obj.borrow().class_name == "RegExp" {
-                                return Completion::Throw(interp.create_type_error(
+                        && obj.borrow().class_name == "RegExp"
+                    {
+                        return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.endsWith must not be a regular expression",
                                 ));
-                            }
+                    }
                     let search = match to_str(interp, &search_arg) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -419,11 +423,7 @@ impl Interpreter {
                         Some(v) => match to_num(interp, v) {
                             Ok(n) => {
                                 let i = to_integer_or_infinity(n);
-                                if n.is_nan() {
-                                    0.0
-                                } else {
-                                    i
-                                }
+                                if n.is_nan() { 0.0 } else { i }
                             }
                             Err(c) => return c,
                         },
@@ -433,11 +433,7 @@ impl Interpreter {
                         Some(v) if !matches!(v, JsValue::Undefined) => match to_num(interp, v) {
                             Ok(n) => {
                                 let i = to_integer_or_infinity(n);
-                                if n.is_nan() {
-                                    0.0
-                                } else {
-                                    i
-                                }
+                                if n.is_nan() { 0.0 } else { i }
                             }
                             Err(c) => return c,
                         },
@@ -662,9 +658,10 @@ impl Interpreter {
                         JsValue::Object(o) => {
                             if let Some(obj) = interp.get_object(o.id)
                                 && obj.borrow().class_name == "String"
-                                    && let Some(ref pv) = obj.borrow().primitive_value {
-                                        return Completion::Normal(pv.clone());
-                                    }
+                                && let Some(ref pv) = obj.borrow().primitive_value
+                            {
+                                return Completion::Normal(pv.clone());
+                            }
                             Completion::Throw(interp.create_type_error(
                                 "String.prototype.toString requires that 'this' be a String",
                             ))
@@ -683,9 +680,10 @@ impl Interpreter {
                     JsValue::Object(o) => {
                         if let Some(obj) = interp.get_object(o.id)
                             && obj.borrow().class_name == "String"
-                                && let Some(ref pv) = obj.borrow().primitive_value {
-                                    return Completion::Normal(pv.clone());
-                                }
+                            && let Some(ref pv) = obj.borrow().primitive_value
+                        {
+                            return Completion::Normal(pv.clone());
+                        }
                         Completion::Throw(interp.create_type_error(
                             "String.prototype.valueOf requires that 'this' be a String",
                         ))
@@ -709,18 +707,15 @@ impl Interpreter {
                     // Check for Symbol.split on the separator
                     if let JsValue::Object(ref o) = separator
                         && let Some(key) = interp.get_symbol_key("split")
-                            && let Some(obj) = interp.get_object(o.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let this_str = this_val.clone();
-                                    let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                                    return interp.call_function(
-                                        &method,
-                                        &separator,
-                                        &[this_str, limit],
-                                    );
-                                }
-                            }
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        let method = obj.borrow().get_property(&key);
+                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            let this_str = this_val.clone();
+                            let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                            return interp.call_function(&method, &separator, &[this_str, limit]);
+                        }
+                    }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -800,18 +795,18 @@ impl Interpreter {
                     let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = search_value
                         && let Some(key) = interp.get_symbol_key("replace")
-                            && let Some(obj) = interp.get_object(o.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let replace_val =
-                                        args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                                    return interp.call_function(
-                                        &method,
-                                        &search_value,
-                                        &[this_val.clone(), replace_val],
-                                    );
-                                }
-                            }
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        let method = obj.borrow().get_property(&key);
+                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            let replace_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                            return interp.call_function(
+                                &method,
+                                &search_value,
+                                &[this_val.clone(), replace_val],
+                            );
+                        }
+                    }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -929,18 +924,19 @@ impl Interpreter {
                             }
                         }
                         if let Some(key) = interp.get_symbol_key("replace")
-                            && let Some(obj) = interp.get_object(o.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let replace_val =
-                                        args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                                    return interp.call_function(
-                                        &method,
-                                        &search_value,
-                                        &[this_val.clone(), replace_val],
-                                    );
-                                }
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            let method = obj.borrow().get_property(&key);
+                            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                let replace_val =
+                                    args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                return interp.call_function(
+                                    &method,
+                                    &search_value,
+                                    &[this_val.clone(), replace_val],
+                                );
                             }
+                        }
                     }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
@@ -1062,13 +1058,14 @@ impl Interpreter {
                     let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = regexp
                         && let Some(key) = interp.get_symbol_key("search")
-                            && let Some(obj) = interp.get_object(o.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let this_str = this_val.clone();
-                                    return interp.call_function(&method, &regexp, &[this_str]);
-                                }
-                            }
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        let method = obj.borrow().get_property(&key);
+                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            let this_str = this_val.clone();
+                            return interp.call_function(&method, &regexp, &[this_str]);
+                        }
+                    }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -1085,18 +1082,20 @@ impl Interpreter {
                     let rx = interp.create_regexp(&source, "");
                     if let JsValue::Object(ref ro) = rx
                         && let Some(key) = interp.get_symbol_key("search")
-                            && let Some(obj) = interp.get_object(ro.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let this_str = JsValue::String(JsString::from_str(&s));
-                                    return interp.call_function(&method, &rx, &[this_str]);
-                                }
-                            }
+                        && let Some(obj) = interp.get_object(ro.id)
+                    {
+                        let method = obj.borrow().get_property(&key);
+                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            let this_str = JsValue::String(JsString::from_str(&s));
+                            return interp.call_function(&method, &rx, &[this_str]);
+                        }
+                    }
                     // Fallback
                     if let Ok(re) = regex::Regex::new(&source)
-                        && let Some(m) = re.find(&s) {
-                            return Completion::Normal(JsValue::Number(m.start() as f64));
-                        }
+                        && let Some(m) = re.find(&s)
+                    {
+                        return Completion::Normal(JsValue::Number(m.start() as f64));
+                    }
                     Completion::Normal(JsValue::Number(-1.0))
                 }),
             ),
@@ -1112,13 +1111,14 @@ impl Interpreter {
                     let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = regexp
                         && let Some(key) = interp.get_symbol_key("match")
-                            && let Some(obj) = interp.get_object(o.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let this_str = this_val.clone();
-                                    return interp.call_function(&method, &regexp, &[this_str]);
-                                }
-                            }
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        let method = obj.borrow().get_property(&key);
+                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            let this_str = this_val.clone();
+                            return interp.call_function(&method, &regexp, &[this_str]);
+                        }
+                    }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -1135,29 +1135,31 @@ impl Interpreter {
                     let rx = interp.create_regexp(&source, "");
                     if let JsValue::Object(ref ro) = rx
                         && let Some(key) = interp.get_symbol_key("match")
-                            && let Some(obj) = interp.get_object(ro.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let this_str = JsValue::String(JsString::from_str(&s));
-                                    return interp.call_function(&method, &rx, &[this_str]);
-                                }
-                            }
+                        && let Some(obj) = interp.get_object(ro.id)
+                    {
+                        let method = obj.borrow().get_property(&key);
+                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            let this_str = JsValue::String(JsString::from_str(&s));
+                            return interp.call_function(&method, &rx, &[this_str]);
+                        }
+                    }
                     // Fallback
                     if let Ok(re) = regex::Regex::new(&source) {
                         if let Some(m) = re.find(&s) {
                             let matched = JsValue::String(JsString::from_str(m.as_str()));
                             let result = interp.create_array(vec![matched]);
                             if let JsValue::Object(ro) = &result
-                                && let Some(robj) = interp.get_object(ro.id) {
-                                    robj.borrow_mut().insert_value(
-                                        "index".to_string(),
-                                        JsValue::Number(m.start() as f64),
-                                    );
-                                    robj.borrow_mut().insert_value(
-                                        "input".to_string(),
-                                        JsValue::String(JsString::from_str(&s)),
-                                    );
-                                }
+                                && let Some(robj) = interp.get_object(ro.id)
+                            {
+                                robj.borrow_mut().insert_value(
+                                    "index".to_string(),
+                                    JsValue::Number(m.start() as f64),
+                                );
+                                robj.borrow_mut().insert_value(
+                                    "input".to_string(),
+                                    JsValue::String(JsString::from_str(&s)),
+                                );
+                            }
                             Completion::Normal(result)
                         } else {
                             Completion::Normal(JsValue::Null)
@@ -1191,13 +1193,14 @@ impl Interpreter {
                             }
                         }
                         if let Some(key) = interp.get_symbol_key("matchAll")
-                            && let Some(obj) = interp.get_object(o.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let this_str = this_val.clone();
-                                    return interp.call_function(&method, &regexp, &[this_str]);
-                                }
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            let method = obj.borrow().get_property(&key);
+                            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                let this_str = this_val.clone();
+                                return interp.call_function(&method, &regexp, &[this_str]);
                             }
+                        }
                     }
                     // Create a RegExp with 'g' flag and call @@matchAll
                     let source = match to_str(interp, &regexp) {
@@ -1207,13 +1210,14 @@ impl Interpreter {
                     let rx = interp.create_regexp(&source, "g");
                     if let JsValue::Object(ref ro) = rx
                         && let Some(key) = interp.get_symbol_key("matchAll")
-                            && let Some(obj) = interp.get_object(ro.id) {
-                                let method = obj.borrow().get_property(&key);
-                                if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                    let this_str = this_val.clone();
-                                    return interp.call_function(&method, &rx, &[this_str]);
-                                }
-                            }
+                        && let Some(obj) = interp.get_object(ro.id)
+                    {
+                        let method = obj.borrow().get_property(&key);
+                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            let this_str = this_val.clone();
+                            return interp.call_function(&method, &rx, &[this_str]);
+                        }
+                    }
                     Completion::Throw(interp.create_type_error("matchAll requires a global RegExp"))
                 }),
             ),
@@ -1489,17 +1493,18 @@ impl Interpreter {
         // Set String.prototype on the String constructor and wire constructor back
         if let Some(str_val) = self.global_env.borrow().get("String")
             && let JsValue::Object(o) = &str_val
-                && let Some(str_obj) = self.get_object(o.id) {
-                    let proto_val = JsValue::Object(crate::types::JsObject {
-                        id: proto.borrow().id.unwrap(),
-                    });
-                    str_obj
-                        .borrow_mut()
-                        .insert_value("prototype".to_string(), proto_val.clone());
-                    proto
-                        .borrow_mut()
-                        .insert_builtin("constructor".to_string(), str_val.clone());
-                }
+            && let Some(str_obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            str_obj
+                .borrow_mut()
+                .insert_value("prototype".to_string(), proto_val.clone());
+            proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), str_val.clone());
+        }
 
         self.string_prototype = Some(proto);
     }

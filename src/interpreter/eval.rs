@@ -2286,35 +2286,28 @@ impl Interpreter {
         // Check if callee is a constructor
         if let JsValue::Object(ref co) = callee_val {
             let is_proxy = self.get_proxy_info(co.id).is_some();
-            if !is_proxy
-                && let Some(func_obj) = self.get_object(co.id) {
-                    let b = func_obj.borrow();
-                    let is_ctor = match &b.callable {
-                        Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
-                        Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
-                        None => false,
+            if !is_proxy && let Some(func_obj) = self.get_object(co.id) {
+                let b = func_obj.borrow();
+                let is_ctor = match &b.callable {
+                    Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
+                    Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
+                    None => false,
+                };
+                if !is_ctor {
+                    let name = match &b.callable {
+                        Some(JsFunction::Native(n, _, _, _)) => n.clone(),
+                        Some(JsFunction::User { name, .. }) => name.clone().unwrap_or_default(),
+                        None => String::new(),
                     };
-                    if !is_ctor {
-                        let name = match &b.callable {
-                            Some(JsFunction::Native(n, _, _, _)) => n.clone(),
-                            Some(JsFunction::User { name, .. }) => {
-                                name.clone().unwrap_or_default()
-                            }
-                            None => String::new(),
-                        };
-                        drop(b);
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "{} is not a constructor",
-                            name
-                        )));
-                    }
+                    drop(b);
+                    return Completion::Throw(
+                        self.create_type_error(&format!("{} is not a constructor", name)),
+                    );
                 }
+            }
         } else {
             return Completion::Throw(
-                self.create_type_error(&format!(
-                    "{:?} is not a constructor",
-                    callee_val
-                )),
+                self.create_type_error(&format!("{:?} is not a constructor", callee_val)),
             );
         }
         // Proxy construct trap

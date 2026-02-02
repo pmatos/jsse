@@ -809,14 +809,18 @@ impl Interpreter {
                 let obj_ref = match this_val {
                     JsValue::Object(o) => o,
                     _ => {
-                        let err = interp.create_type_error("RegExp.prototype.flags requires that 'this' be an Object");
+                        let err = interp.create_type_error(
+                            "RegExp.prototype.flags requires that 'this' be an Object",
+                        );
                         return Completion::Throw(err);
                     }
                 };
                 let obj = match interp.get_object(obj_ref.id) {
                     Some(o) => o,
                     None => {
-                        let err = interp.create_type_error("RegExp.prototype.flags requires that 'this' be an Object");
+                        let err = interp.create_type_error(
+                            "RegExp.prototype.flags requires that 'this' be an Object",
+                        );
                         return Completion::Throw(err);
                     }
                 };

@@ -283,7 +283,8 @@ fn json_quote(s: &str) -> String {
 
 pub(crate) fn json_stringify_value(interp: &mut Interpreter, val: &JsValue) -> Option<String> {
     let mut stack = Vec::new();
-    json_stringify_internal(interp, None, "", val, &mut stack, &None, &None, "", "").unwrap_or_default()
+    json_stringify_internal(interp, None, "", val, &mut stack, &None, &None, "", "")
+        .unwrap_or_default()
 }
 
 pub(crate) fn json_stringify_full(
@@ -296,15 +297,23 @@ pub(crate) fn json_stringify_full(
     let mut property_list: Option<Vec<String>> = None;
     let mut replacer_fn: Option<JsValue> = None;
 
-    if let Some(rep) = replacer {
-        if let JsValue::Object(o) = rep {
-            if let Some(obj) = interp.get_object(o.id) {
+    if let Some(rep) = replacer
+        && let JsValue::Object(o) = rep
+            && let Some(obj) = interp.get_object(o.id) {
                 if obj.borrow().callable.is_some() {
                     replacer_fn = Some(rep.clone());
                 } else if obj.borrow().class_name == "Array" {
                     let mut keys = Vec::new();
-                    let len = obj.borrow().get_property_value("length")
-                        .and_then(|v| if let JsValue::Number(n) = v { Some(n as usize) } else { None })
+                    let len = obj
+                        .borrow()
+                        .get_property_value("length")
+                        .and_then(|v| {
+                            if let JsValue::Number(n) = v {
+                                Some(n as usize)
+                            } else {
+                                None
+                            }
+                        })
                         .unwrap_or(0);
                     for i in 0..len {
                         let item = obj.borrow().get_property(&i.to_string());
@@ -326,28 +335,36 @@ pub(crate) fn json_stringify_full(
                             _ => None,
                         };
                         if let Some(k) = key_str
-                            && !keys.contains(&k) {
-                                keys.push(k);
-                            }
+                            && !keys.contains(&k)
+                        {
+                            keys.push(k);
+                        }
                     }
                     property_list = Some(keys);
                 }
             }
-        }
-    }
 
     // Wrap root value in {"": val} for replacer function calls
     let holder_id = if replacer_fn.is_some() {
         let wrapper = interp.create_object();
-        wrapper.borrow_mut().insert_value("".to_string(), val.clone());
+        wrapper
+            .borrow_mut()
+            .insert_value("".to_string(), val.clone());
         Some(wrapper.borrow().id.unwrap())
     } else {
         None
     };
 
     json_stringify_internal(
-        interp, holder_id, "", val, &mut stack,
-        &replacer_fn, &property_list, space, "",
+        interp,
+        holder_id,
+        "",
+        val,
+        &mut stack,
+        &replacer_fn,
+        &property_list,
+        space,
+        "",
     )
 }
 
@@ -366,64 +383,68 @@ fn json_stringify_internal(
 
     // If value is object, check for toJSON
     if let JsValue::Object(o) = &value
-        && let Some(obj) = interp.get_object(o.id) {
-            let to_json = obj.borrow().get_property("toJSON");
-            if let JsValue::Object(fobj) = &to_json
-                && let Some(fdata) = interp.get_object(fobj.id)
-                    && fdata.borrow().callable.is_some() {
-                        let key_val = JsValue::String(JsString::from_str(key));
-                        match interp.call_function(&to_json, &value, &[key_val]) {
-                            Completion::Normal(v) => value = v,
-                            Completion::Throw(e) => return Err(e),
-                            _ => {}
-                        }
-                    }
-        }
-
-    // Apply replacer function
-    if let Some(rep) = replacer_fn
-        && let Some(hid) = holder_id {
-            let holder_val = JsValue::Object(crate::types::JsObject { id: hid });
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let to_json = obj.borrow().get_property("toJSON");
+        if let JsValue::Object(fobj) = &to_json
+            && let Some(fdata) = interp.get_object(fobj.id)
+            && fdata.borrow().callable.is_some()
+        {
             let key_val = JsValue::String(JsString::from_str(key));
-            match interp.call_function(rep, &holder_val, &[key_val, value.clone()]) {
+            match interp.call_function(&to_json, &value, &[key_val]) {
                 Completion::Normal(v) => value = v,
                 Completion::Throw(e) => return Err(e),
                 _ => {}
             }
         }
+    }
+
+    // Apply replacer function
+    if let Some(rep) = replacer_fn
+        && let Some(hid) = holder_id
+    {
+        let holder_val = JsValue::Object(crate::types::JsObject { id: hid });
+        let key_val = JsValue::String(JsString::from_str(key));
+        match interp.call_function(rep, &holder_val, &[key_val, value.clone()]) {
+            Completion::Normal(v) => value = v,
+            Completion::Throw(e) => return Err(e),
+            _ => {}
+        }
+    }
 
     // Unwrap wrapper objects (Number, String, Boolean, BigInt)
     if let JsValue::Object(o) = &value
-        && let Some(obj) = interp.get_object(o.id) {
-            let class = obj.borrow().class_name.clone();
-            let pv = obj.borrow().primitive_value.clone();
-            match class.as_str() {
-                "Number" => {
-                    if let Some(pv) = pv {
-                        value = JsValue::Number(to_number(&pv));
-                    }
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let class = obj.borrow().class_name.clone();
+        let pv = obj.borrow().primitive_value.clone();
+        match class.as_str() {
+            "Number" => {
+                if let Some(pv) = pv {
+                    value = JsValue::Number(to_number(&pv));
                 }
-                "String" => {
-                    if let Some(pv) = pv {
-                        value = JsValue::String(match pv {
-                            JsValue::String(s) => s,
-                            other => JsString::from_str(&to_js_string(&other)),
-                        });
-                    }
-                }
-                "Boolean" => {
-                    if let Some(pv) = pv {
-                        value = pv;
-                    }
-                }
-                "BigInt" => {
-                    if let Some(pv) = pv {
-                        value = pv;
-                    }
-                }
-                _ => {}
             }
+            "String" => {
+                if let Some(pv) = pv {
+                    value = JsValue::String(match pv {
+                        JsValue::String(s) => s,
+                        other => JsString::from_str(&to_js_string(&other)),
+                    });
+                }
+            }
+            "Boolean" => {
+                if let Some(pv) = pv {
+                    value = pv;
+                }
+            }
+            "BigInt" => {
+                if let Some(pv) = pv {
+                    value = pv;
+                }
+            }
+            _ => {}
         }
+    }
 
     // Type dispatch
     match &value {
@@ -444,9 +465,10 @@ fn json_stringify_internal(
             if let Some(obj) = interp.get_object(o.id) {
                 // Check for rawJSON
                 if obj.borrow().is_raw_json
-                    && let Some(raw) = obj.borrow().get_property_value("rawJSON") {
-                        return Ok(Some(to_js_string(&raw)));
-                    }
+                    && let Some(raw) = obj.borrow().get_property_value("rawJSON")
+                {
+                    return Ok(Some(to_js_string(&raw)));
+                }
 
                 // Skip functions and symbols
                 if obj.borrow().callable.is_some() {
@@ -457,10 +479,9 @@ fn json_stringify_internal(
 
                 // Circular reference check
                 if stack.contains(&obj_id) {
-                    return Err(interp.create_error(
-                        "TypeError",
-                        "Converting circular structure to JSON",
-                    ));
+                    return Err(
+                        interp.create_error("TypeError", "Converting circular structure to JSON")
+                    );
                 }
                 stack.push(obj_id);
 
@@ -468,8 +489,16 @@ fn json_stringify_internal(
                 let new_indent = format!("{}{}", indent, gap);
 
                 let result = if is_array {
-                    let len = obj.borrow().get_property_value("length")
-                        .and_then(|v| if let JsValue::Number(n) = v { Some(n as usize) } else { None })
+                    let len = obj
+                        .borrow()
+                        .get_property_value("length")
+                        .and_then(|v| {
+                            if let JsValue::Number(n) = v {
+                                Some(n as usize)
+                            } else {
+                                None
+                            }
+                        })
                         .unwrap_or(0);
                     let mut items = Vec::new();
                     // Create a holder for this array for replacer calls
@@ -477,8 +506,15 @@ fn json_stringify_internal(
                     for i in 0..len {
                         let v = obj.borrow().get_property(&i.to_string());
                         match json_stringify_internal(
-                            interp, arr_holder_id, &i.to_string(), &v, stack,
-                            replacer_fn, property_list, gap, &new_indent,
+                            interp,
+                            arr_holder_id,
+                            &i.to_string(),
+                            &v,
+                            stack,
+                            replacer_fn,
+                            property_list,
+                            gap,
+                            &new_indent,
                         )? {
                             Some(s) => items.push(s),
                             None => items.push("null".to_string()),
@@ -490,7 +526,12 @@ fn json_stringify_internal(
                         Ok(Some(format!("[{}]", items.join(","))))
                     } else {
                         let sep = format!(",\n{}", new_indent);
-                        Ok(Some(format!("[\n{}{}\n{}]", new_indent, items.join(&sep), indent)))
+                        Ok(Some(format!(
+                            "[\n{}{}\n{}]",
+                            new_indent,
+                            items.join(&sep),
+                            indent
+                        )))
                     }
                 } else {
                     // Object
@@ -510,8 +551,15 @@ fn json_stringify_internal(
                             }
                             let v = d.value.clone().unwrap_or(JsValue::Undefined);
                             match json_stringify_internal(
-                                interp, obj_holder_id, k, &v, stack,
-                                replacer_fn, property_list, gap, &new_indent,
+                                interp,
+                                obj_holder_id,
+                                k,
+                                &v,
+                                stack,
+                                replacer_fn,
+                                property_list,
+                                gap,
+                                &new_indent,
                             )? {
                                 Some(sv) => {
                                     let quoted_key = json_quote(k);
@@ -531,7 +579,12 @@ fn json_stringify_internal(
                         Ok(Some(format!("{{{}}}", entries.join(","))))
                     } else {
                         let sep = format!(",\n{}", new_indent);
-                        Ok(Some(format!("{{\n{}{}\n{}}}", new_indent, entries.join(&sep), indent)))
+                        Ok(Some(format!(
+                            "{{\n{}{}\n{}}}",
+                            new_indent,
+                            entries.join(&sep),
+                            indent
+                        )))
                     }
                 };
 
@@ -615,7 +668,8 @@ pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion 
                     if key_str.starts_with('"') && key_str.ends_with('"') && key_str.len() >= 2 {
                         let inner = &key_str[1..key_str.len() - 1];
                         if json_validate_string(inner).is_err() {
-                            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
+                            let err =
+                                interp.create_error("SyntaxError", "Unexpected token in JSON");
                             return Completion::Throw(err);
                         }
                         json_unescape_string(inner)
@@ -679,9 +733,10 @@ fn json_unescape_string(s: &str) -> String {
                 Some('u') => {
                     let hex: String = chars.by_ref().take(4).collect();
                     if let Ok(code) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(code) {
-                            result.push(c);
-                        }
+                        && let Some(c) = char::from_u32(code)
+                    {
+                        result.push(c);
+                    }
                 }
                 Some(c) => {
                     result.push('\\');
@@ -698,7 +753,10 @@ fn json_unescape_string(s: &str) -> String {
 
 fn json_internalize_apply(interp: &mut Interpreter, obj_id: u64, key: &str, new_val: JsValue) {
     if let Some(obj) = interp.get_object(obj_id) {
-        let configurable = obj.borrow().properties.get(key)
+        let configurable = obj
+            .borrow()
+            .properties
+            .get(key)
             .and_then(|d| d.configurable)
             .unwrap_or(true);
         if !configurable {
@@ -733,8 +791,16 @@ pub(crate) fn json_internalize(
         if let Some(obj) = interp.get_object(o.id) {
             let is_array = obj.borrow().class_name == "Array";
             if is_array {
-                let len = obj.borrow().get_property_value("length")
-                    .and_then(|v| if let JsValue::Number(n) = v { Some(n as usize) } else { None })
+                let len = obj
+                    .borrow()
+                    .get_property_value("length")
+                    .and_then(|v| {
+                        if let JsValue::Number(n) = v {
+                            Some(n as usize)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or(0);
                 for i in 0..len {
                     let key = i.to_string();
