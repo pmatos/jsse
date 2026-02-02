@@ -62,6 +62,7 @@ pub struct Interpreter {
     gc_alloc_count: usize,
     generator_context: Option<GeneratorContext>,
     microtask_queue: Vec<Box<dyn FnOnce(&mut Interpreter) -> Completion>>,
+    cached_has_instance_key: Option<String>,
 }
 
 impl Interpreter {
@@ -133,6 +134,7 @@ impl Interpreter {
             gc_alloc_count: 0,
             generator_context: None,
             microtask_queue: Vec::new(),
+            cached_has_instance_key: None,
         };
         interp.setup_globals();
         interp

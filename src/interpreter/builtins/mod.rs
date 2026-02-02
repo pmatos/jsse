@@ -653,6 +653,7 @@ impl Interpreter {
         );
 
         self.setup_symbol_prototype();
+        self.cached_has_instance_key = self.get_symbol_key("hasInstance");
         self.setup_number_prototype();
         self.setup_boolean_prototype();
         self.setup_map_prototype();
@@ -1298,6 +1299,39 @@ impl Interpreter {
                 }
             }),
         );
+
+        // Add Function.prototype[@@hasInstance]
+        if let Some(sym_key) = self.get_symbol_key("hasInstance") {
+            let func_val = self.global_env.borrow().get("Function");
+            let proto_data = func_val.and_then(|fv| {
+                if let JsValue::Object(fo) = fv {
+                    self.get_object(fo.id).and_then(|fd| {
+                        let pv = fd.borrow().get_property("prototype");
+                        if let JsValue::Object(pr) = pv {
+                            self.get_object(pr.id)
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                }
+            });
+            if let Some(proto_data) = proto_data {
+                let has_instance_fn = self.create_function(JsFunction::native(
+                    "[Symbol.hasInstance]".to_string(),
+                    1,
+                    |interp, this_val, args| {
+                        let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        interp.ordinary_has_instance(this_val, &arg)
+                    },
+                ));
+                proto_data.borrow_mut().insert_property(
+                    sym_key,
+                    PropertyDescriptor::data(has_instance_fn, false, false, false),
+                );
+            }
+        }
 
         // JSON object
         let json_obj = self.create_object();

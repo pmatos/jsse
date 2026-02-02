@@ -84,6 +84,7 @@ These features block significant numbers of tests:
 19. ~~**Iterator protocol completion**~~ — ✅ Done (70 new passes, 53.38% → 53.53%). Symbol.dispose on %IteratorPrototype%, Iterator.zip and Iterator.zipKeyed with shortest/longest/strict modes, argument validation closes iterator on failure, take/drop edge case fixes, generator return/throw borrow fix. Iterator: 138/510 (27%) → 290/510 (57%).
 
 20. ~~**Error & NativeError built-in fixes**~~ — ✅ Done (58 new passes, 54.83% → 54.95%). Per-type NativeError prototypes inheriting from Error.prototype with `name`, `message`, `constructor`. Error.prototype properties set non-enumerable. Constructor arities fixed to 1. `cause` option support. Message ToString coercion. Error.isError() static method. Error: 32/53 (60%), NativeErrors: 62/92 (67%).
+21. ~~**`instanceof` and `Function.prototype[@@hasInstance]`**~~ — ✅ Done (7 new passes, 54.95%). Spec-compliant `instanceof` (§13.10.2): checks `Symbol.hasInstance` before prototype chain walk, throws TypeError for non-objects. `OrdinaryHasInstance` extracted as reusable helper. `Function.prototype[@@hasInstance]` added (non-writable, non-enumerable, non-configurable). instanceof: 25/43 → 28/43 (65%), Function.prototype[Symbol.hasInstance]: 1/11 → 5/11 (45%).
 
 ---
 

@@ -45,7 +45,7 @@ Ordered roughly by dependency and importance.
   - [x] `Function()` constructor (dynamic function creation)
   - [x] `Function.prototype.apply()`, `.bind()`, `.call()`
   - [ ] `Function.prototype.toString()`
-  - [ ] `Function.prototype[@@hasInstance]`
+  - [x] `Function.prototype[@@hasInstance]`
   - [x] `Function.prototype.constructor`
   - [x] `name`, `length` properties
 - [x] **Boolean** (§20.3)

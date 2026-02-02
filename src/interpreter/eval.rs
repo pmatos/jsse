@@ -87,6 +87,9 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     }
                 }
+                if *op == BinaryOp::Instanceof {
+                    return self.eval_instanceof(&lval, &rval);
+                }
                 Completion::Normal(self.eval_binary(*op, &lval, &rval))
             }
             Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
@@ -879,41 +882,7 @@ impl Interpreter {
                 }
             }
             BinaryOp::Instanceof => {
-                if let JsValue::Object(rhs) = &right {
-                    if let Some(ctor_obj) = self.get_object(rhs.id) {
-                        let proto_val = ctor_obj.borrow().get_property("prototype");
-                        if let JsValue::Object(proto) = &proto_val {
-                            if let Some(proto_data) = self.get_object(proto.id) {
-                                if let JsValue::Object(lhs) = &left {
-                                    if let Some(inst_obj) = self.get_object(lhs.id) {
-                                        let mut current = inst_obj.borrow().prototype.clone();
-                                        let mut result = false;
-                                        while let Some(p) = current {
-                                            if Rc::ptr_eq(&p, &proto_data) {
-                                                result = true;
-                                                break;
-                                            }
-                                            current = p.borrow().prototype.clone();
-                                        }
-                                        JsValue::Boolean(result)
-                                    } else {
-                                        JsValue::Boolean(false)
-                                    }
-                                } else {
-                                    JsValue::Boolean(false)
-                                }
-                            } else {
-                                JsValue::Boolean(false)
-                            }
-                        } else {
-                            JsValue::Boolean(false)
-                        }
-                    } else {
-                        JsValue::Boolean(false)
-                    }
-                } else {
-                    JsValue::Boolean(false)
-                }
+                unreachable!("instanceof handled before eval_binary")
             }
         }
     }
@@ -2516,6 +2485,83 @@ impl Interpreter {
             }
         }
         JsValue::Undefined
+    }
+
+    fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
+        if !matches!(right, JsValue::Object(_)) {
+            return Completion::Throw(JsValue::String(JsString::from_str(
+                "Right-hand side of instanceof is not an object",
+            )));
+        }
+        let rhs_obj = match right {
+            JsValue::Object(o) => o.clone(),
+            _ => unreachable!(),
+        };
+        let sym_key = self.cached_has_instance_key.clone().or_else(|| self.get_symbol_key("hasInstance"));
+        if let Some(sym_key) = sym_key {
+            let method = match self.get_object_property(rhs_obj.id, &sym_key, right) {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
+            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                if !self.is_callable(&method) {
+                    return Completion::Throw(JsValue::String(JsString::from_str(
+                        "@@hasInstance is not callable",
+                    )));
+                }
+                let result = self.call_function(&method, right, &[left.clone()]);
+                return match result {
+                    Completion::Normal(v) => {
+                        Completion::Normal(JsValue::Boolean(to_boolean(&v)))
+                    }
+                    other => other,
+                };
+            }
+        }
+        if !self.is_callable(right) {
+            return Completion::Throw(JsValue::String(JsString::from_str(
+                "Right-hand side of instanceof is not callable",
+            )));
+        }
+        self.ordinary_has_instance(right, left)
+    }
+
+    pub(crate) fn ordinary_has_instance(&mut self, ctor: &JsValue, obj: &JsValue) -> Completion {
+        if !self.is_callable(ctor) {
+            return Completion::Normal(JsValue::Boolean(false));
+        }
+        let ctor_obj_ref = match ctor {
+            JsValue::Object(o) => o.clone(),
+            _ => return Completion::Normal(JsValue::Boolean(false)),
+        };
+        let Some(ctor_data) = self.get_object(ctor_obj_ref.id) else {
+            return Completion::Normal(JsValue::Boolean(false));
+        };
+        let proto_val = ctor_data.borrow().get_property("prototype");
+        let JsValue::Object(proto_ref) = &proto_val else {
+            return Completion::Throw(JsValue::String(JsString::from_str(
+                "Function has non-object prototype in instanceof check",
+            )));
+        };
+        let Some(proto_data) = self.get_object(proto_ref.id) else {
+            return Completion::Throw(JsValue::String(JsString::from_str(
+                "Function has non-object prototype in instanceof check",
+            )));
+        };
+        let JsValue::Object(lhs) = obj else {
+            return Completion::Normal(JsValue::Boolean(false));
+        };
+        let Some(inst_obj) = self.get_object(lhs.id) else {
+            return Completion::Normal(JsValue::Boolean(false));
+        };
+        let mut current = inst_obj.borrow().prototype.clone();
+        while let Some(p) = current {
+            if Rc::ptr_eq(&p, &proto_data) {
+                return Completion::Normal(JsValue::Boolean(true));
+            }
+            current = p.borrow().prototype.clone();
+        }
+        Completion::Normal(JsValue::Boolean(false))
     }
 
     pub(crate) fn get_object_property(
