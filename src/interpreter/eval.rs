@@ -660,6 +660,7 @@ impl Interpreter {
         let regexp_props: &[(&str, JsValue)] = &[
             ("source", JsValue::String(JsString::from_str(pattern))),
             ("flags", JsValue::String(JsString::from_str(flags))),
+            ("hasIndices", JsValue::Boolean(flags.contains('d'))),
             ("global", JsValue::Boolean(flags.contains('g'))),
             ("ignoreCase", JsValue::Boolean(flags.contains('i'))),
             ("multiline", JsValue::Boolean(flags.contains('m'))),

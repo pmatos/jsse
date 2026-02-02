@@ -100,22 +100,24 @@ Ordered roughly by dependency and importance.
   - [x] RequireObjectCoercible on `this` for all methods, UTF-16 code unit indexing, proper argument coercion via ToPrimitive
   - [ ] `String.prototype[@@iterator]`
   - [ ] String HTML methods (Annex B): `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup`
-- [x] **RegExp** (§22.2) — partial
+- [x] **RegExp** (§22.2) — 1,101/1,879 (58.6%)
   - [x] `RegExp()` constructor
-  - [x] `RegExp.prototype.exec()`
-  - [x] `RegExp.prototype.test()`
+  - [x] `RegExp.prototype.exec()` (TypeError for non-object `this`)
+  - [x] `RegExp.prototype.test()` (TypeError for non-object `this`)
   - [x] `RegExp.prototype.toString()`
   - [x] `RegExp.prototype[@@match]`, `[@@matchAll]`, `[@@replace]`, `[@@search]`, `[@@split]`
-  - [x] Basic flags: `g`, `i`, `m`, `s`, `y`
-  - [ ] Advanced flags: `u`, `v`
-  - [x] Flag properties: `global`, `ignoreCase`, `multiline`, `source`, `flags`, `sticky`, `dotAll`, `hasIndices`
-  - [ ] `unicode`, `unicodeSets`
+  - [x] Basic flags: `g`, `i`, `m`, `s`, `y`, `d`
+  - [ ] Advanced flags: `u`, `v` (partial — property escapes work via fancy-regex)
+  - [x] Flag property getters on prototype: `global`, `ignoreCase`, `multiline`, `source`, `flags`, `sticky`, `dotAll`, `hasIndices`, `unicode`, `unicodeSets`
   - [x] `RegExp.prototype.flags` getter (spec-compliant accessor)
   - [x] ToString coercion for Symbol method arguments
   - [x] `lastIndex` handling
-  - [ ] Named capture groups
-  - [ ] Lookbehind assertions
-  - [ ] Unicode property escapes
+  - [x] `RegExp.escape()` static method (TC39 stage 4)
+  - [x] JS→Rust pattern translation (`fancy-regex` backend with `regex` fallback)
+  - [x] Named capture groups (groups property, `$<name>` replacements, functional replacer groups arg)
+  - [x] Match indices (`d` flag / `hasIndices`) with `indices` and `indices.groups`
+  - [x] Lookbehind assertions (fixed-length; variable-length limited by fancy-regex)
+  - [x] Unicode property escapes (`\p{...}` / `\P{...}` via fancy-regex)
   - [ ] Set notation (`v` flag)
   - [ ] `RegExp.$1`–`$9` and legacy features (Annex B)
 
