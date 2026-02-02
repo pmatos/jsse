@@ -658,6 +658,10 @@ impl<'a> Parser<'a> {
         self.in_function += 1;
         self.allow_super_property = super_property;
         self.allow_super_call = super_call;
+        let prev_block = self.in_block_or_function;
+        let prev_sc = self.in_switch_case;
+        self.in_block_or_function = true;
+        self.in_switch_case = false;
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
         let mut has_use_strict_directive = false;
@@ -688,6 +692,8 @@ impl<'a> Parser<'a> {
         self.labels = prev_labels;
         self.allow_super_property = prev_super_property;
         self.allow_super_call = prev_super_call;
+        self.in_block_or_function = prev_block;
+        self.in_switch_case = prev_sc;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))

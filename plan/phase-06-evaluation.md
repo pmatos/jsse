@@ -80,8 +80,8 @@ Implement runtime evaluation for all expression and statement types.
 - [x] `var` — hoist to function/global scope
 - [x] `let` — block scope, TDZ
 - [x] `const` — block scope, TDZ, immutable binding
-- [ ] `using` — disposable resource management
-- [ ] `await using` — async disposable
+- [x] `using` — disposable resource management
+- [x] `await using` — async disposable
 - [x] Destructuring in declarations
 
 ### 6.13 Control Flow — Conditional

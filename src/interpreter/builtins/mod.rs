@@ -1,6 +1,7 @@
 mod array;
 mod collections;
 mod date;
+mod disposable;
 mod iterators;
 mod number;
 mod promise;
@@ -358,6 +359,103 @@ impl Interpreter {
             }
         }
 
+        // SuppressedError constructor
+        {
+            let suppressed_proto = self.create_object();
+            if let Some(ref ep) = error_prototype {
+                suppressed_proto.borrow_mut().prototype = Some(ep.clone());
+            }
+            suppressed_proto.borrow_mut().insert_builtin(
+                "name".to_string(),
+                JsValue::String(JsString::from_str("SuppressedError")),
+            );
+            suppressed_proto.borrow_mut().insert_builtin(
+                "message".to_string(),
+                JsValue::String(JsString::from_str("")),
+            );
+            let suppressed_proto_clone = suppressed_proto.clone();
+            self.register_global_fn(
+                "SuppressedError",
+                BindingKind::Var,
+                JsFunction::constructor(
+                    "SuppressedError".to_string(),
+                    3,
+                    move |interp, this, args| {
+                        let error_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let suppressed_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        let msg_raw = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                        let options = args.get(3).cloned().unwrap_or(JsValue::Undefined);
+
+                        macro_rules! init_suppressed_error {
+                            ($o:expr) => {
+                                $o.class_name = "SuppressedError".to_string();
+                                $o.prototype = Some(suppressed_proto_clone.clone());
+                                $o.insert_builtin("error".to_string(), error_val.clone());
+                                $o.insert_builtin("suppressed".to_string(), suppressed_val.clone());
+                                if !matches!(msg_raw, JsValue::Undefined) {
+                                    let msg_str = match interp.to_string_value(&msg_raw) {
+                                        Ok(s) => JsValue::String(JsString::from_str(&s)),
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                    $o.insert_builtin("message".to_string(), msg_str);
+                                }
+                                if let JsValue::Object(opts) = &options {
+                                    if let Some(opts_obj) = interp.get_object(opts.id) {
+                                        if opts_obj.borrow().has_property("cause") {
+                                            let cause = interp
+                                                .get_object_property(opts.id, "cause", &options);
+                                            match cause {
+                                                Completion::Normal(v) => {
+                                                    $o.insert_builtin("cause".to_string(), v);
+                                                }
+                                                c => return c,
+                                            }
+                                        }
+                                    }
+                                }
+                            };
+                        }
+
+                        if let JsValue::Object(o) = this {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let mut o = obj.borrow_mut();
+                                init_suppressed_error!(o);
+                            }
+                            return Completion::Normal(this.clone());
+                        }
+                        let obj = interp.create_object();
+                        {
+                            let mut o = obj.borrow_mut();
+                            init_suppressed_error!(o);
+                        }
+                        let id = obj.borrow().id.unwrap();
+                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                    },
+                ),
+            );
+            {
+                let env = self.global_env.borrow();
+                if let Some(ctor_val) = env.get("SuppressedError") {
+                    suppressed_proto
+                        .borrow_mut()
+                        .insert_builtin("constructor".to_string(), ctor_val);
+                }
+            }
+            {
+                let env = self.global_env.borrow();
+                if let Some(ctor_val) = env.get("SuppressedError")
+                    && let JsValue::Object(o) = &ctor_val
+                    && let Some(ctor_obj) = self.get_object(o.id)
+                {
+                    let proto_id = suppressed_proto.borrow().id.unwrap();
+                    ctor_obj.borrow_mut().insert_builtin(
+                        "prototype".to_string(),
+                        JsValue::Object(crate::types::JsObject { id: proto_id }),
+                    );
+                }
+            }
+        }
+
         // Object constructor (minimal)
         self.register_global_fn(
             "Object",
@@ -440,6 +538,7 @@ impl Interpreter {
                     ("unscopables", "Symbol.unscopables"),
                     ("asyncIterator", "Symbol.asyncIterator"),
                     ("dispose", "Symbol.dispose"),
+                    ("asyncDispose", "Symbol.asyncDispose"),
                 ];
                 for (name, desc) in well_known {
                     let id = self.next_symbol_id;
@@ -746,6 +845,8 @@ impl Interpreter {
         self.setup_weakmap_prototype();
         self.setup_weakset_prototype();
         self.setup_date_builtin();
+        self.setup_disposable_stack();
+        self.setup_async_disposable_stack();
 
         // Global functions
         self.register_global_fn(

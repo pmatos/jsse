@@ -279,6 +279,22 @@ impl Interpreter {
         JsValue::Object(crate::types::JsObject { id })
     }
 
+    pub(crate) fn create_resolved_promise(&mut self, value: JsValue) -> Completion {
+        let promise = self.create_promise_object();
+        if let JsValue::Object(ref o) = promise {
+            self.fulfill_promise(o.id, value);
+        }
+        Completion::Normal(promise)
+    }
+
+    pub(crate) fn create_rejected_promise(&mut self, reason: JsValue) -> Completion {
+        let promise = self.create_promise_object();
+        if let JsValue::Object(ref o) = promise {
+            self.reject_promise(o.id, reason);
+        }
+        Completion::Normal(promise)
+    }
+
     pub(crate) fn create_resolving_functions(&mut self, promise_id: u64) -> (JsValue, JsValue) {
         let already_resolved = Rc::new(Cell::new(false));
 

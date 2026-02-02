@@ -42,6 +42,8 @@ pub enum VarKind {
     Var,
     Let,
     Const,
+    Using,
+    AwaitUsing,
 }
 
 #[derive(Clone, Debug)]

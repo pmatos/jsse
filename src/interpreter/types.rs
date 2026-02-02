@@ -35,6 +35,20 @@ pub struct Environment {
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
     pub(crate) with_object: Option<WithObject>,
+    pub(crate) dispose_stack: Option<Vec<DisposableResource>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum DisposeHint {
+    Sync,
+    Async,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DisposableResource {
+    pub(crate) value: JsValue,
+    pub(crate) hint: DisposeHint,
+    pub(crate) dispose_method: JsValue,
 }
 
 impl std::fmt::Debug for Environment {
@@ -74,6 +88,7 @@ impl Environment {
             parent,
             strict,
             with_object: None,
+            dispose_stack: None,
         }))
     }
 
@@ -282,6 +297,22 @@ impl PropertyDescriptor {
         Self::data(value, true, true, true)
     }
 
+    pub fn accessor(
+        get: Option<JsValue>,
+        set: Option<JsValue>,
+        enumerable: bool,
+        configurable: bool,
+    ) -> Self {
+        Self {
+            value: None,
+            writable: None,
+            get,
+            set,
+            enumerable: Some(enumerable),
+            configurable: Some(configurable),
+        }
+    }
+
     pub fn is_data_descriptor(&self) -> bool {
         self.value.is_some() || self.writable.is_some()
     }
@@ -467,6 +498,13 @@ pub struct JsObjectData {
     pub data_view_info: Option<DataViewInfo>,
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
+    pub(crate) disposable_stack: Option<DisposableStackData>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DisposableStackData {
+    pub(crate) stack: Vec<DisposableResource>,
+    pub(crate) disposed: bool,
 }
 
 impl JsObjectData {
@@ -496,6 +534,7 @@ impl JsObjectData {
             data_view_info: None,
             promise_data: None,
             is_raw_json: false,
+            disposable_stack: None,
         }
     }
 

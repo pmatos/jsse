@@ -63,7 +63,7 @@ Ordered roughly by dependency and importance.
   - [ ] `Error.prototype.stack` (implementation-defined)
   - [x] Native error types: `EvalError`, `RangeError`, `ReferenceError`, `SyntaxError`, `TypeError`, `URIError`
   - [ ] `AggregateError`
-  - [ ] `SuppressedError`
+  - [x] `SuppressedError` — ✅ 13/22 passing
 
 **Tests:** `built-ins/Object/` (3,411), `built-ins/Function/` (509), `built-ins/Boolean/` (51), `built-ins/Symbol/` (94), `built-ins/Error/` (53), `built-ins/NativeErrors/` (92), `built-ins/AggregateError/` (25), `built-ins/SuppressedError/` (22)
 
@@ -225,14 +225,14 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Reflect/` (153), `built-ins/Proxy/` (311)
 
 ### 9.11 Resource Management
-- [ ] **DisposableStack** (§Disposable)
-  - [ ] `DisposableStack()` constructor
-  - [ ] `adopt()`, `defer()`, `dispose()`, `move()`, `use()`, `disposed`
-- [ ] **AsyncDisposableStack**
-  - [ ] Same methods as DisposableStack, async variants
-- [ ] `Symbol.dispose`, `Symbol.asyncDispose`
+- [x] **DisposableStack** (§Disposable) — ✅ 71/91 passing
+  - [x] `DisposableStack()` constructor
+  - [x] `adopt()`, `defer()`, `dispose()`, `move()`, `use()`, `disposed`
+- [x] **AsyncDisposableStack** — ✅ 35/52 passing
+  - [x] Same methods as DisposableStack, async variants
+- [x] `Symbol.dispose`, `Symbol.asyncDispose`
 
-**Tests:** `built-ins/DisposableStack/` (91), `built-ins/AsyncDisposableStack/` (52)
+**Tests:** `built-ins/DisposableStack/` (71/91), `built-ins/AsyncDisposableStack/` (35/52)
 
 ### 9.12 ShadowRealm
 - [ ] `ShadowRealm()` constructor

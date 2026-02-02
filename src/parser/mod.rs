@@ -49,6 +49,8 @@ pub struct Parser<'a> {
     allow_super_property: bool,
     allow_super_call: bool,
     in_formal_parameters: bool,
+    in_block_or_function: bool,
+    in_switch_case: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -84,6 +86,8 @@ impl<'a> Parser<'a> {
             allow_super_property: false,
             allow_super_call: false,
             in_formal_parameters: false,
+            in_block_or_function: false,
+            in_switch_case: false,
         })
     }
 

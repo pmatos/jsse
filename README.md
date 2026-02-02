@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 47,458  | 799     | 27,198  | 20,260  | 57.31%    |
+| 48,257      | 47,458  | 799     | 27,340  | 20,118  | 57.61%    |
 
 *Skipped: module tests (modules not yet implemented). Async tests now run with Promise/async-await support.*
 
@@ -27,7 +27,8 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 - Lexer: all ES2024 tokens, keywords, numeric/string/template literals, Unicode identifiers
 - Parser: recursive descent, all statements, expressions, destructuring, arrow functions, classes, private fields, strict mode
 - Interpreter: tree-walking execution with environment chain scoping
-  - Variable declarations (`var`, `let`, `const` with TDZ)
+  - Variable declarations (`var`, `let`, `const` with TDZ, `using`, `await using`)
+  - Explicit Resource Management (`using`/`await using` declarations, `DisposableStack`, `AsyncDisposableStack`, `SuppressedError`, `Symbol.dispose`, `Symbol.asyncDispose`)
   - Control flow (`if`, `while`, `do-while`, `for`, `for-in`, `for-of`, `for-await-of`, `switch`, `try/catch/finally`)
   - Functions (declarations, expressions, arrows, closures)
   - Classes (declarations, expressions, inheritance, `super`, static methods/properties, private fields, private methods, private accessors, `#x in obj` brand checks)

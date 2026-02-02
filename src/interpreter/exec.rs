@@ -87,7 +87,8 @@ impl Interpreter {
             Statement::Expression(expr) => self.eval_expr(expr, env),
             Statement::Block(stmts) => {
                 let block_env = Environment::new(Some(env.clone()));
-                self.exec_statements(stmts, &block_env)
+                let result = self.exec_statements(stmts, &block_env);
+                self.dispose_resources(&block_env, result)
             }
             Statement::Variable(decl) => self.exec_variable_declaration(decl, env),
             Statement::If(if_stmt) => {
@@ -176,6 +177,7 @@ impl Interpreter {
                                 object: obj_data,
                                 unscopables: unscopables_data,
                             }),
+                            dispose_stack: None,
                         }));
                         self.exec_statement(body, &with_env)
                     } else {
@@ -212,10 +214,11 @@ impl Interpreter {
         decl: &VariableDeclaration,
         env: &EnvRef,
     ) -> Completion {
+        let is_using = matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
         let kind = match decl.kind {
             VarKind::Var => BindingKind::Var,
             VarKind::Let => BindingKind::Let,
-            VarKind::Const => BindingKind::Const,
+            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => BindingKind::Const,
         };
         for d in &decl.declarations {
             if d.init.is_none()
@@ -237,6 +240,16 @@ impl Interpreter {
             };
             if let Pattern::Identifier(ref name) = d.pattern {
                 self.set_function_name(&val, name);
+            }
+            if is_using {
+                let hint = if decl.kind == VarKind::AwaitUsing {
+                    DisposeHint::Async
+                } else {
+                    DisposeHint::Sync
+                };
+                if let Err(e) = self.add_disposable_resource(env, &val, hint) {
+                    return Completion::Throw(e);
+                }
             }
             if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
                 return Completion::Throw(e);
@@ -495,7 +508,9 @@ impl Interpreter {
                         let kind = match decl.kind {
                             VarKind::Var => BindingKind::Var,
                             VarKind::Let => BindingKind::Let,
-                            VarKind::Const => BindingKind::Const,
+                            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
+                                BindingKind::Const
+                            }
                         };
                         let bind_env = if decl.kind == VarKind::Var {
                             env
@@ -567,16 +582,28 @@ impl Interpreter {
             let for_env = Environment::new(Some(env.clone()));
             match &fo.left {
                 ForInOfLeft::Variable(decl) => {
+                    let is_using = matches!(decl.kind, VarKind::Using | VarKind::AwaitUsing);
                     let kind = match decl.kind {
                         VarKind::Var => BindingKind::Var,
                         VarKind::Let => BindingKind::Let,
-                        VarKind::Const => BindingKind::Const,
+                        VarKind::Const | VarKind::Using | VarKind::AwaitUsing => BindingKind::Const,
                     };
                     let bind_env = if decl.kind == VarKind::Var {
                         env
                     } else {
                         &for_env
                     };
+                    if is_using {
+                        let hint = if decl.kind == VarKind::AwaitUsing {
+                            DisposeHint::Async
+                        } else {
+                            DisposeHint::Sync
+                        };
+                        if let Err(e) = self.add_disposable_resource(bind_env, &val, hint) {
+                            self.iterator_close(&iterator, e.clone());
+                            return Completion::Throw(e);
+                        }
+                    }
                     if let Some(d) = decl.declarations.first()
                         && let Err(e) = self.bind_pattern(&d.pattern, val, kind, bind_env)
                     {
@@ -593,7 +620,9 @@ impl Interpreter {
                     }
                 }
             }
-            match self.exec_statement(&fo.body, &for_env) {
+            let body_result = self.exec_statement(&fo.body, &for_env);
+            let body_result = self.dispose_resources(&for_env, body_result);
+            match body_result {
                 Completion::Normal(_) | Completion::Continue(None) => {}
                 Completion::Break(None) => {
                     self.iterator_close(&iterator, JsValue::Undefined);
@@ -684,5 +713,172 @@ impl Interpreter {
             }
         }
         Completion::Normal(JsValue::Undefined)
+    }
+
+    pub(crate) fn add_disposable_resource(
+        &mut self,
+        env: &EnvRef,
+        value: &JsValue,
+        hint: DisposeHint,
+    ) -> Result<(), JsValue> {
+        if matches!(value, JsValue::Null | JsValue::Undefined) {
+            return Ok(());
+        }
+
+        let sym_name = if hint == DisposeHint::Async {
+            "asyncDispose"
+        } else {
+            "dispose"
+        };
+        let sym_key = self.get_symbol_key(sym_name);
+
+        let mut method = JsValue::Undefined;
+
+        if let Some(ref key) = sym_key {
+            if let JsValue::Object(o) = value {
+                if let Some(obj) = self.get_object(o.id) {
+                    let val = obj.borrow().get_property(key);
+                    if !matches!(val, JsValue::Undefined) {
+                        method = val;
+                    }
+                }
+            }
+        }
+
+        if matches!(method, JsValue::Undefined) && hint == DisposeHint::Async {
+            if let Some(sync_key) = self.get_symbol_key("dispose") {
+                if let JsValue::Object(o) = value {
+                    if let Some(obj) = self.get_object(o.id) {
+                        let val = obj.borrow().get_property(&sync_key);
+                        if !matches!(val, JsValue::Undefined) {
+                            method = val;
+                        }
+                    }
+                }
+            }
+        }
+
+        if matches!(method, JsValue::Undefined) {
+            return Err(
+                self.create_type_error("Object is not disposable (missing [Symbol.dispose])")
+            );
+        }
+
+        if !self.is_callable(&method) {
+            return Err(self.create_type_error("[Symbol.dispose] is not a function"));
+        }
+
+        let resource = DisposableResource {
+            value: value.clone(),
+            hint,
+            dispose_method: method,
+        };
+
+        let mut env_ref = env.borrow_mut();
+        if env_ref.dispose_stack.is_none() {
+            env_ref.dispose_stack = Some(Vec::new());
+        }
+        env_ref.dispose_stack.as_mut().unwrap().push(resource);
+        Ok(())
+    }
+
+    pub(crate) fn dispose_resources(&mut self, env: &EnvRef, completion: Completion) -> Completion {
+        let stack = env.borrow_mut().dispose_stack.take();
+        let Some(mut stack) = stack else {
+            return completion;
+        };
+        if stack.is_empty() {
+            return completion;
+        }
+
+        stack.reverse();
+        let mut current_error: Option<JsValue> = match &completion {
+            Completion::Throw(e) => Some(e.clone()),
+            _ => None,
+        };
+        let had_error = current_error.is_some();
+
+        for resource in &stack {
+            let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
+            match result {
+                Completion::Normal(v) => {
+                    if resource.hint == DisposeHint::Async {
+                        match self.await_value(&v) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                current_error = Some(self.wrap_suppressed_error(e, current_error));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Completion::Throw(e) => {
+                    current_error = Some(self.wrap_suppressed_error(e, current_error));
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(err) = current_error {
+            if had_error {
+                Completion::Throw(err)
+            } else {
+                Completion::Throw(err)
+            }
+        } else {
+            completion
+        }
+    }
+
+    pub(crate) fn wrap_suppressed_error(
+        &mut self,
+        new_error: JsValue,
+        existing: Option<JsValue>,
+    ) -> JsValue {
+        if let Some(existing_err) = existing {
+            let env = self.global_env.clone();
+            let args = vec![new_error, existing_err];
+            match self.call_global_constructor("SuppressedError", &args, &env) {
+                Completion::Normal(v) => v,
+                _ => args[0].clone(),
+            }
+        } else {
+            new_error
+        }
+    }
+
+    pub(crate) fn call_global_constructor(
+        &mut self,
+        name: &str,
+        args: &[JsValue],
+        env: &EnvRef,
+    ) -> Completion {
+        let ctor = env.borrow().get(name);
+        if let Some(ctor_val) = ctor {
+            let new_obj = self.create_object();
+            if let JsValue::Object(ref o) = ctor_val
+                && let Some(func_obj) = self.get_object(o.id)
+            {
+                let proto = func_obj.borrow().get_property_value("prototype");
+                if let Some(JsValue::Object(proto_obj)) = proto
+                    && let Some(proto_rc) = self.get_object(proto_obj.id)
+                {
+                    new_obj.borrow_mut().prototype = Some(proto_rc);
+                }
+            }
+            let new_obj_id = new_obj.borrow().id.unwrap();
+            let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+            let prev_new_target = self.new_target.take();
+            self.new_target = Some(ctor_val.clone());
+            let result = self.call_function(&ctor_val, &this_val, args);
+            self.new_target = prev_new_target;
+            match result {
+                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Completion::Normal(v),
+                Completion::Normal(_) => Completion::Normal(this_val),
+                other => other,
+            }
+        } else {
+            Completion::Throw(self.create_type_error(&format!("{name} is not defined")))
+        }
     }
 }

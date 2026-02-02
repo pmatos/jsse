@@ -98,7 +98,7 @@ Build a complete recursive descent parser producing an AST from the token stream
 - [x] `let` declarations (§14.3.1)
 - [x] `const` declarations (§14.3.1)
 - [x] Binding patterns (array/object destructuring) (§14.3.3)
-- [ ] `using` / `await using` declarations
+- [x] `using` / `await using` declarations
 
 ### 4.12 Function Definitions (§15.2–15.8)
 - [x] FunctionDeclaration / FunctionExpression

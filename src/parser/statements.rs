@@ -2,6 +2,23 @@ use super::*;
 
 impl<'a> Parser<'a> {
     pub(super) fn parse_statement_or_declaration(&mut self) -> Result<Statement, ParseError> {
+        if matches!(&self.current, Token::Identifier(n) if n == "using")
+            && self.is_using_declaration()
+        {
+            if !self.in_block_or_function || self.in_switch_case {
+                return Err(self.error("using declaration is not allowed in this position"));
+            }
+            return self.parse_using_declaration();
+        }
+        if matches!(&self.current, Token::Keyword(Keyword::Await))
+            && self.in_async
+            && self.is_await_using_declaration()
+        {
+            if !self.in_block_or_function || self.in_switch_case {
+                return Err(self.error("await using declaration is not allowed in this position"));
+            }
+            return self.parse_await_using_declaration();
+        }
         match &self.current {
             Token::Keyword(Keyword::Function) => self.parse_function_declaration(),
             Token::Keyword(Keyword::Class) => self.parse_class_declaration(),
@@ -104,6 +121,10 @@ impl<'a> Parser<'a> {
 
     fn parse_block_statement(&mut self) -> Result<Statement, ParseError> {
         self.eat(&Token::LeftBrace)?;
+        let prev = self.in_block_or_function;
+        let prev_sc = self.in_switch_case;
+        self.in_block_or_function = true;
+        self.in_switch_case = false;
         let mut stmts = Vec::new();
         let mut lexical_names: Vec<String> = Vec::new();
         while self.current != Token::RightBrace && self.current != Token::Eof {
@@ -111,6 +132,8 @@ impl<'a> Parser<'a> {
             Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
             stmts.push(stmt);
         }
+        self.in_block_or_function = prev;
+        self.in_switch_case = prev_sc;
         self.eat(&Token::RightBrace)?;
         Ok(Statement::Block(stmts))
     }
@@ -244,6 +267,36 @@ impl<'a> Parser<'a> {
             false
         };
         self.eat(&Token::LeftParen)?;
+
+        // for (using x of expr)
+        if matches!(&self.current, Token::Identifier(n) if n == "using")
+            && self.is_using_declaration()
+        {
+            self.advance()?; // using
+            let ident = self
+                .current_identifier_name()
+                .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
+            self.advance()?;
+            if self.current == Token::Keyword(Keyword::Of) {
+                self.advance()?;
+                let right = self.parse_assignment_expression()?;
+                self.eat(&Token::RightParen)?;
+                let body = self.parse_iteration_body()?;
+                return Ok(Statement::ForOf(ForOfStatement {
+                    left: ForInOfLeft::Variable(VariableDeclaration {
+                        kind: VarKind::Using,
+                        declarations: vec![VariableDeclarator {
+                            pattern: Pattern::Identifier(ident),
+                            init: None,
+                        }],
+                    }),
+                    right,
+                    body,
+                    is_await,
+                }));
+            }
+            return Err(self.error("using in for statement only valid with for-of"));
+        }
 
         // for (init; test; update)
         // for (decl in expr)
@@ -524,6 +577,8 @@ impl<'a> Parser<'a> {
                 None
             };
             let mut consequent = Vec::new();
+            let prev_sc = self.in_switch_case;
+            self.in_switch_case = true;
             while self.current != Token::RightBrace
                 && self.current != Token::Keyword(Keyword::Case)
                 && self.current != Token::Keyword(Keyword::Default)
@@ -532,6 +587,7 @@ impl<'a> Parser<'a> {
                 Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
                 consequent.push(stmt);
             }
+            self.in_switch_case = prev_sc;
             cases.push(SwitchCase { test, consequent });
         }
         self.in_switch -= 1;
@@ -557,5 +613,84 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expression()?;
         self.eat_semicolon()?;
         Ok(Statement::Expression(expr))
+    }
+
+    fn is_using_declaration(&mut self) -> bool {
+        // `using` followed by an identifier on the same line (no line terminator)
+        let saved_lt = self.prev_line_terminator;
+        let saved = match self.advance() {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        let lt = self.prev_line_terminator;
+        let is_using = !lt && matches!(&self.current, Token::Identifier(_));
+        self.push_back(self.current.clone(), self.prev_line_terminator);
+        self.current = saved;
+        self.prev_line_terminator = saved_lt;
+        is_using
+    }
+
+    fn is_await_using_declaration(&mut self) -> bool {
+        // `await` is current. Peek: next should be `using` (no line terminator),
+        // then an identifier (no line terminator).
+        // We can only push_back one token, so peek just the next token.
+        let saved_lt = self.prev_line_terminator;
+        let saved = match self.advance() {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        let lt1 = self.prev_line_terminator;
+        let is_using_kw = !lt1 && matches!(&self.current, Token::Identifier(n) if n == "using");
+        // Restore
+        self.push_back(self.current.clone(), self.prev_line_terminator);
+        self.current = saved;
+        self.prev_line_terminator = saved_lt;
+        is_using_kw
+    }
+
+    fn parse_using_declaration(&mut self) -> Result<Statement, ParseError> {
+        self.advance()?; // using
+        let declarations = self.parse_using_binding_list()?;
+        self.eat_semicolon()?;
+        Ok(Statement::Variable(VariableDeclaration {
+            kind: VarKind::Using,
+            declarations,
+        }))
+    }
+
+    fn parse_await_using_declaration(&mut self) -> Result<Statement, ParseError> {
+        self.advance()?; // await
+        self.advance()?; // using
+        let declarations = self.parse_using_binding_list()?;
+        self.eat_semicolon()?;
+        Ok(Statement::Variable(VariableDeclaration {
+            kind: VarKind::AwaitUsing,
+            declarations,
+        }))
+    }
+
+    fn parse_using_binding_list(&mut self) -> Result<Vec<VariableDeclarator>, ParseError> {
+        let mut decls = Vec::new();
+        loop {
+            let name = self
+                .current_identifier_name()
+                .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
+            self.advance()?;
+            if self.current != Token::Assign {
+                return Err(self.error("using declaration requires an initializer"));
+            }
+            self.advance()?;
+            let init = self.parse_assignment_expression()?;
+            decls.push(VariableDeclarator {
+                pattern: Pattern::Identifier(name),
+                init: Some(init),
+            });
+            if self.current == Token::Comma {
+                self.advance()?;
+            } else {
+                break;
+            }
+        }
+        Ok(decls)
     }
 }
