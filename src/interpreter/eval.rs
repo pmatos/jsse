@@ -2141,11 +2141,15 @@ impl Interpreter {
             if let Pattern::Rest(inner) = param {
                 let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
                 let rest_arr = self.create_array(rest);
-                let _ = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env);
+                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
+                    return Completion::Throw(e);
+                }
                 break;
             }
             let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
+            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
+                return Completion::Throw(e);
+            }
         }
         func_env.borrow_mut().bindings.insert(
             "this".to_string(),
@@ -2359,11 +2363,15 @@ impl Interpreter {
             if let Pattern::Rest(inner) = param {
                 let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
                 let rest_arr = self.create_array(rest);
-                let _ = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env);
+                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
+                    return Completion::Throw(e);
+                }
                 break;
             }
             let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
+            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
+                return Completion::Throw(e);
+            }
         }
         func_env.borrow_mut().bindings.insert(
             "this".to_string(),
@@ -2730,12 +2738,15 @@ impl Interpreter {
                             if let Pattern::Rest(inner) = param {
                                 let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
                                 let rest_arr = self.create_array(rest);
-                                let _ =
-                                    self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env);
+                                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
+                                    return Completion::Throw(e);
+                                }
                                 break;
                             }
                             let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                            let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
+                            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
+                                return Completion::Throw(e);
+                            }
                         }
                         // Arrow functions inherit `this` and `arguments` from closure
                         if !is_arrow {
@@ -4022,11 +4033,19 @@ impl Interpreter {
             if let Pattern::Rest(inner) = param {
                 let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
                 let rest_arr = self.create_array(rest);
-                let _ = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env);
+                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
+                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                    self.drain_microtasks();
+                    return Completion::Normal(promise);
+                }
                 break;
             }
             let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            let _ = self.bind_pattern(param, val, BindingKind::Var, &func_env);
+            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
+                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
         }
         if !is_arrow {
             let effective_this = if !is_strict
