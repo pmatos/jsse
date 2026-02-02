@@ -182,26 +182,23 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(o) = &arg {
-                        if let Some(obj) = interp.get_object(o.id) {
+                    if let JsValue::Object(o) = &arg
+                        && let Some(obj) = interp.get_object(o.id) {
                             let cn = &obj.borrow().class_name;
                             if cn.contains("Error") {
                                 return Completion::Normal(JsValue::Boolean(true));
                             }
                         }
-                    }
                     Completion::Normal(JsValue::Boolean(false))
                 },
             ));
             let env = self.global_env.borrow();
-            if let Some(error_ctor) = env.get("Error") {
-                if let JsValue::Object(o) = &error_ctor {
-                    if let Some(obj) = self.get_object(o.id) {
+            if let Some(error_ctor) = env.get("Error")
+                && let JsValue::Object(o) = &error_ctor
+                    && let Some(obj) = self.get_object(o.id) {
                         obj.borrow_mut()
                             .insert_builtin("isError".to_string(), is_error_fn);
                     }
-                }
-            }
         }
 
         // Test262Error
@@ -344,17 +341,15 @@ impl Interpreter {
             // Set constructor's .prototype to the per-type prototype
             {
                 let env = self.global_env.borrow();
-                if let Some(ctor_val) = env.get(name) {
-                    if let JsValue::Object(o) = &ctor_val {
-                        if let Some(ctor_obj) = self.get_object(o.id) {
+                if let Some(ctor_val) = env.get(name)
+                    && let JsValue::Object(o) = &ctor_val
+                        && let Some(ctor_obj) = self.get_object(o.id) {
                             let proto_id = native_proto.borrow().id.unwrap();
                             ctor_obj.borrow_mut().insert_builtin(
                                 "prototype".to_string(),
                                 JsValue::Object(crate::types::JsObject { id: proto_id }),
                             );
                         }
-                    }
-                }
             }
         }
 
