@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 27,815 / 47,458 run (58.61%)
+**Current pass rate:** 28,614 / 47,458 run (60.29%)
 *Skipped: 799 module tests*
 
 ---

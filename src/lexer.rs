@@ -805,7 +805,7 @@ impl<'a> Lexer<'a> {
                     self.advance(); // consume first char of identifier
                     let tok = self.read_identifier(next);
                     let name_str = match tok {
-                        Token::Identifier(s) => s,
+                        Token::Identifier(s) | Token::IdentifierWithEscape(s) => s,
                         Token::Keyword(kw) => kw.to_string(),
                         _ => return Err(self.error("Invalid private name")),
                     };
@@ -825,7 +825,7 @@ impl<'a> Lexer<'a> {
                     }
                     let tok = self.read_identifier_with_escape(first);
                     let name_str = match tok {
-                        Token::Identifier(s) => s,
+                        Token::Identifier(s) | Token::IdentifierWithEscape(s) => s,
                         Token::Keyword(kw) => kw.to_string(),
                         _ => return Err(self.error("Invalid private name")),
                     };
