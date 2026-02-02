@@ -995,6 +995,7 @@ impl Interpreter {
         match left {
             Expression::Identifier(name) => {
                 let final_val = if op == AssignOp::Assign {
+                    self.set_function_name(&rval, name);
                     rval
                 } else {
                     let lval = env.borrow().get(name).unwrap_or(JsValue::Undefined);
@@ -3217,6 +3218,7 @@ impl Interpreter {
             }
             match prop.kind {
                 PropertyKind::Get => {
+                    self.set_function_name(&value, &format!("get {key}"));
                     let mut desc =
                         obj_data
                             .properties
@@ -3236,6 +3238,7 @@ impl Interpreter {
                     obj_data.insert_property(key, desc);
                 }
                 PropertyKind::Set => {
+                    self.set_function_name(&value, &format!("set {key}"));
                     let mut desc =
                         obj_data
                             .properties
@@ -3255,6 +3258,7 @@ impl Interpreter {
                     obj_data.insert_property(key, desc);
                 }
                 _ => {
+                    self.set_function_name(&value, &key);
                     obj_data.insert_value(key, value);
                 }
             }

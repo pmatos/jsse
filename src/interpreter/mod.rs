@@ -386,6 +386,38 @@ impl Interpreter {
         self.objects.get(id as usize).and_then(|slot| slot.clone())
     }
 
+    pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
+        if let JsValue::Object(o) = val {
+            if let Some(obj) = self.get_object(o.id) {
+                let obj_ref = obj.borrow();
+                if obj_ref.callable.is_none() {
+                    return;
+                }
+                if let Some(prop) = obj_ref.properties.get("name") {
+                    if let Some(ref v) = prop.value {
+                        if let JsValue::String(s) = v {
+                            if !s.to_string().is_empty() {
+                                return;
+                            }
+                        } else {
+                            return;
+                        }
+                    }
+                }
+                drop(obj_ref);
+                obj.borrow_mut().insert_property(
+                    "name".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str(name)),
+                        false,
+                        false,
+                        true,
+                    ),
+                );
+            }
+        }
+    }
+
     fn create_arguments_object(
         &mut self,
         args: &[JsValue],

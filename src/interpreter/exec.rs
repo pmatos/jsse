@@ -228,6 +228,9 @@ impl Interpreter {
             } else {
                 JsValue::Undefined
             };
+            if let Pattern::Identifier(ref name) = d.pattern {
+                self.set_function_name(&val, name);
+            }
             if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
                 return Completion::Throw(e);
             }
@@ -259,6 +262,9 @@ impl Interpreter {
                 } else {
                     val
                 };
+                if let Pattern::Identifier(ref name) = **inner {
+                    self.set_function_name(&v, name);
+                }
                 self.bind_pattern(inner, v, kind, env)
             }
             Pattern::Array(elements) => {

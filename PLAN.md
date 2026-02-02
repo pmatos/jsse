@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 20,232 / 47,458 run (42.63%)
+**Current pass rate:** 26,694 / 47,458 run (56.25%)
 *Skipped: 799 module tests*
 
 ---
@@ -85,6 +85,7 @@ These features block significant numbers of tests:
 
 20. ~~**Error & NativeError built-in fixes**~~ — ✅ Done (58 new passes, 54.83% → 54.95%). Per-type NativeError prototypes inheriting from Error.prototype with `name`, `message`, `constructor`. Error.prototype properties set non-enumerable. Constructor arities fixed to 1. `cause` option support. Message ToString coercion. Error.isError() static method. Error: 32/53 (60%), NativeErrors: 62/92 (67%).
 21. ~~**`instanceof` and `Function.prototype[@@hasInstance]`**~~ — ✅ Done (7 new passes, 54.95%). Spec-compliant `instanceof` (§13.10.2): checks `Symbol.hasInstance` before prototype chain walk, throws TypeError for non-objects. `OrdinaryHasInstance` extracted as reusable helper. `Function.prototype[@@hasInstance]` added (non-writable, non-enumerable, non-configurable). instanceof: 25/43 → 28/43 (65%), Function.prototype[Symbol.hasInstance]: 1/11 → 5/11 (45%).
+22. ~~**Function name inference (SetFunctionName)**~~ — ✅ Done (628 new passes, 54.95% → 56.25%). Anonymous functions get `.name` set from binding context: variable declarations, assignments, object literal properties, destructuring defaults, get/set accessors (prefixed with "get "/"set ").
 
 ---
 
