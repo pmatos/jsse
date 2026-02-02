@@ -9,7 +9,8 @@
     clippy::single_match,
     clippy::needless_range_loop,
     clippy::while_let_loop,
-    clippy::cloned_ref_to_slice_refs
+    clippy::cloned_ref_to_slice_refs,
+    clippy::unnecessary_unwrap
 )]
 
 mod ast;
