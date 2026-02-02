@@ -905,7 +905,7 @@ impl<'a> Parser<'a> {
         if is_async_prop {
             let saved_lt = self.prev_line_terminator;
             let saved = self.advance()?;
-            if !saved_lt && !self.prev_line_terminator {
+            if !self.prev_line_terminator {
                 let is_generator = self.eat_star()?;
                 let is_method = matches!(
                     &self.current,

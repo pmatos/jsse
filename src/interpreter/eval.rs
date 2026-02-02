@@ -2939,8 +2939,11 @@ impl Interpreter {
         } else if super_val.is_some() {
             JsFunction::User {
                 name: Some(name.to_string()),
-                params: vec![],
-                body: vec![],
+                params: vec![Pattern::Rest(Box::new(Pattern::Identifier("args".into())))],
+                body: vec![Statement::Expression(Expression::Call(
+                    Box::new(Expression::Super),
+                    vec![Expression::Spread(Box::new(Expression::Identifier("args".into())))],
+                ))],
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -2991,6 +2994,13 @@ impl Interpreter {
                 && let Some(ref proto) = proto_obj
             {
                 proto.borrow_mut().prototype = Some(super_proto);
+            }
+        }
+
+        // Handle `extends null` — set prototype's [[Prototype]] to null
+        if let Some(JsValue::Null) = super_val {
+            if let Some(ref proto) = proto_obj {
+                proto.borrow_mut().prototype = None;
             }
         }
 
