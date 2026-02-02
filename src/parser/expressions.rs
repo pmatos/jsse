@@ -935,6 +935,31 @@ impl<'a> Parser<'a> {
             self.prev_line_terminator = saved_lt;
         }
 
+        // Check for generator method: { *method() {} }
+        if self.current == Token::Star {
+            self.advance()?; // consume *
+            let (key, computed) = self.parse_property_name()?;
+            let prev_generator = self.in_generator;
+            self.in_generator = true;
+            let params = self.parse_formal_parameters()?;
+            self.in_generator = prev_generator;
+            let (body, _) = self.parse_function_body_inner(true, false, true, false)?;
+            self.check_duplicate_params_strict(&params)?;
+            return Ok(Property {
+                key,
+                value: Expression::Function(FunctionExpr {
+                    name: None,
+                    params,
+                    body,
+                    is_async: false,
+                    is_generator: true,
+                }),
+                kind: PropertyKind::Init,
+                computed,
+                shorthand: false,
+            });
+        }
+
         // Check for get/set accessor
         let get_or_set_name = match &self.current {
             Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "get" || n == "set" => {
