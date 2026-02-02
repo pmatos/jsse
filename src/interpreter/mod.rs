@@ -230,7 +230,9 @@ impl Interpreter {
 
             Ok(desc)
         } else {
-            Err(None)
+            Err(Some(self.create_type_error(
+                "Property description must be an object",
+            )))
         }
     }
 

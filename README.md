@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 47,458  | 799     | 26,894  | 20,564  | 56.67%    |
+| 48,257      | 47,458  | 799     | 27,149  | 20,309  | 57.21%    |
 
 *Skipped: module tests (modules not yet implemented). Async tests now run with Promise/async-await support.*
 
@@ -41,9 +41,9 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Property descriptors (data properties with writable/enumerable/configurable)
   - Prototype chain inheritance (Object.prototype on all objects)
   - Getter/setter support (object literals, classes, `Object.defineProperty`)
-  - `Object.defineProperty`, `Object.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors`, `Object.defineProperties`, `Object.keys`, `Object.freeze`, `Object.getPrototypeOf`, `Object.setPrototypeOf`, `Object.create`, `Object.entries`, `Object.values`, `Object.assign`, `Object.is`, `Object.getOwnPropertyNames`, `Object.preventExtensions`, `Object.isExtensible`, `Object.isFrozen`, `Object.isSealed`, `Object.seal`, `Object.hasOwn`, `Object.fromEntries`
+  - `Object.defineProperty`, `Object.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors`, `Object.defineProperties`, `Object.keys`, `Object.freeze`, `Object.getPrototypeOf`, `Object.setPrototypeOf`, `Object.create`, `Object.entries`, `Object.values`, `Object.assign`, `Object.is`, `Object.getOwnPropertyNames`, `Object.getOwnPropertySymbols`, `Object.groupBy`, `Object.preventExtensions`, `Object.isExtensible`, `Object.isFrozen`, `Object.isSealed`, `Object.seal`, `Object.hasOwn`, `Object.fromEntries`
   - `Function.prototype.call`, `Function.prototype.apply`, `Function.prototype.bind`
-  - `Object.prototype.hasOwnProperty`, `Object.prototype.toString`, `Object.prototype.valueOf`, `Object.prototype.propertyIsEnumerable`, `Object.prototype.isPrototypeOf`
+  - `Object.prototype.hasOwnProperty`, `Object.prototype.toString`, `Object.prototype.valueOf`, `Object.prototype.propertyIsEnumerable`, `Object.prototype.isPrototypeOf`, `Object.prototype.__defineGetter__`, `Object.prototype.__defineSetter__`, `Object.prototype.__lookupGetter__`, `Object.prototype.__lookupSetter__`
   - Number/Boolean primitive method calls (`toString`, `valueOf`, `toFixed`)
   - `instanceof` and `in` operators
   - ToPrimitive with valueOf/toString coercion for objects

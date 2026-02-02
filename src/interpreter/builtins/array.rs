@@ -1970,7 +1970,10 @@ impl Interpreter {
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_value(i.to_string(), v.clone());
         }
-        obj_data.insert_value("length".to_string(), JsValue::Number(values.len() as f64));
+        obj_data.insert_property(
+            "length".to_string(),
+            PropertyDescriptor::data(JsValue::Number(values.len() as f64), true, false, false),
+        );
         obj_data.array_elements = Some(values);
         let obj = Rc::new(RefCell::new(obj_data));
         let id = self.allocate_object_slot(obj);

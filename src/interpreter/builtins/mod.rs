@@ -1007,26 +1007,22 @@ impl Interpreter {
         {
             let mut m = math_obj.borrow_mut();
             m.class_name = "Math".to_string();
-            m.insert_value("PI".to_string(), JsValue::Number(std::f64::consts::PI));
-            m.insert_value("E".to_string(), JsValue::Number(std::f64::consts::E));
-            m.insert_value("LN2".to_string(), JsValue::Number(std::f64::consts::LN_2));
-            m.insert_value("LN10".to_string(), JsValue::Number(std::f64::consts::LN_10));
-            m.insert_value(
-                "LOG2E".to_string(),
-                JsValue::Number(std::f64::consts::LOG2_E),
-            );
-            m.insert_value(
-                "LOG10E".to_string(),
-                JsValue::Number(std::f64::consts::LOG10_E),
-            );
-            m.insert_value(
-                "SQRT2".to_string(),
-                JsValue::Number(std::f64::consts::SQRT_2),
-            );
-            m.insert_value(
-                "SQRT1_2".to_string(),
-                JsValue::Number(std::f64::consts::FRAC_1_SQRT_2),
-            );
+            let math_consts: &[(&str, f64)] = &[
+                ("PI", std::f64::consts::PI),
+                ("E", std::f64::consts::E),
+                ("LN2", std::f64::consts::LN_2),
+                ("LN10", std::f64::consts::LN_10),
+                ("LOG2E", std::f64::consts::LOG2_E),
+                ("LOG10E", std::f64::consts::LOG10_E),
+                ("SQRT2", std::f64::consts::SQRT_2),
+                ("SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
+            ];
+            for (name, val) in math_consts {
+                m.insert_property(
+                    name.to_string(),
+                    PropertyDescriptor::data(JsValue::Number(*val), false, false, false),
+                );
+            }
         }
         // Add Math methods
         let math_fns: Vec<(&str, fn(f64) -> f64)> = vec![
@@ -1820,6 +1816,142 @@ impl Interpreter {
                     .borrow_mut()
                     .insert_builtin("isPrototypeOf".to_string(), ipof_fn);
 
+                // Object.prototype.__defineGetter__
+                let define_getter_fn = self.create_function(JsFunction::native(
+                    "__defineGetter__".to_string(),
+                    2,
+                    |interp, this_val, args| {
+                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let getter = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        if !matches!(&getter, JsValue::Object(o) if interp.get_object(o.id).map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
+                        {
+                            return Completion::Throw(
+                                interp.create_type_error("Getter must be a function"),
+                            );
+                        }
+                        if let JsValue::Object(o) = this_val
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            obj.borrow_mut().define_own_property(
+                                key,
+                                PropertyDescriptor {
+                                    value: None,
+                                    writable: None,
+                                    get: Some(getter),
+                                    set: None,
+                                    enumerable: Some(true),
+                                    configurable: Some(true),
+                                },
+                            );
+                        }
+                        Completion::Normal(JsValue::Undefined)
+                    },
+                ));
+                proto_obj
+                    .borrow_mut()
+                    .insert_builtin("__defineGetter__".to_string(), define_getter_fn);
+
+                // Object.prototype.__defineSetter__
+                let define_setter_fn = self.create_function(JsFunction::native(
+                    "__defineSetter__".to_string(),
+                    2,
+                    |interp, this_val, args| {
+                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let setter = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        if !matches!(&setter, JsValue::Object(o) if interp.get_object(o.id).map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
+                        {
+                            return Completion::Throw(
+                                interp.create_type_error("Setter must be a function"),
+                            );
+                        }
+                        if let JsValue::Object(o) = this_val
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            obj.borrow_mut().define_own_property(
+                                key,
+                                PropertyDescriptor {
+                                    value: None,
+                                    writable: None,
+                                    get: None,
+                                    set: Some(setter),
+                                    enumerable: Some(true),
+                                    configurable: Some(true),
+                                },
+                            );
+                        }
+                        Completion::Normal(JsValue::Undefined)
+                    },
+                ));
+                proto_obj
+                    .borrow_mut()
+                    .insert_builtin("__defineSetter__".to_string(), define_setter_fn);
+
+                // Object.prototype.__lookupGetter__
+                let lookup_getter_fn = self.create_function(JsFunction::native(
+                    "__lookupGetter__".to_string(),
+                    1,
+                    |interp, this_val, args| {
+                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let mut current = this_val.clone();
+                        loop {
+                            if let JsValue::Object(ref o) = current {
+                                if let Some(obj) = interp.get_object(o.id) {
+                                    if let Some(desc) = obj.borrow().get_own_property(&key) {
+                                        if let Some(ref g) = desc.get {
+                                            return Completion::Normal(g.clone());
+                                        }
+                                        return Completion::Normal(JsValue::Undefined);
+                                    }
+                                    let proto = obj.borrow().prototype.clone();
+                                    if let Some(p) = proto {
+                                        let pid = p.borrow().id.unwrap();
+                                        current =
+                                            JsValue::Object(crate::types::JsObject { id: pid });
+                                        continue;
+                                    }
+                                }
+                            }
+                            return Completion::Normal(JsValue::Undefined);
+                        }
+                    },
+                ));
+                proto_obj
+                    .borrow_mut()
+                    .insert_builtin("__lookupGetter__".to_string(), lookup_getter_fn);
+
+                // Object.prototype.__lookupSetter__
+                let lookup_setter_fn = self.create_function(JsFunction::native(
+                    "__lookupSetter__".to_string(),
+                    1,
+                    |interp, this_val, args| {
+                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let mut current = this_val.clone();
+                        loop {
+                            if let JsValue::Object(ref o) = current {
+                                if let Some(obj) = interp.get_object(o.id) {
+                                    if let Some(desc) = obj.borrow().get_own_property(&key) {
+                                        if let Some(ref s) = desc.set {
+                                            return Completion::Normal(s.clone());
+                                        }
+                                        return Completion::Normal(JsValue::Undefined);
+                                    }
+                                    let proto = obj.borrow().prototype.clone();
+                                    if let Some(p) = proto {
+                                        let pid = p.borrow().id.unwrap();
+                                        current =
+                                            JsValue::Object(crate::types::JsObject { id: pid });
+                                        continue;
+                                    }
+                                }
+                            }
+                            return Completion::Normal(JsValue::Undefined);
+                        }
+                    },
+                ));
+                proto_obj
+                    .borrow_mut()
+                    .insert_builtin("__lookupSetter__".to_string(), lookup_setter_fn);
+
                 self.setup_function_prototype(&proto_obj);
             }
 
@@ -1902,7 +2034,12 @@ impl Interpreter {
                 "getOwnPropertyDescriptor".to_string(),
                 2,
                 |interp, _this, args| {
-                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let target_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let target = match interp.to_object(&target_arg) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => return Completion::Normal(JsValue::Undefined),
+                    };
                     let key = args.get(1).map(to_js_string).unwrap_or_default();
                     if let JsValue::Object(ref o) = target {
                         // Proxy getOwnPropertyDescriptor trap
@@ -2093,6 +2230,11 @@ impl Interpreter {
                 2,
                 |interp, _this, args| {
                     let proto_arg = args.first().cloned().unwrap_or(JsValue::Null);
+                    if !matches!(&proto_arg, JsValue::Object(_) | JsValue::Null) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Object prototype may only be an Object or null",
+                        ));
+                    }
                     let new_obj = interp.create_object();
                     match &proto_arg {
                         JsValue::Object(o) => {
@@ -2103,86 +2245,61 @@ impl Interpreter {
                         JsValue::Null => {
                             new_obj.borrow_mut().prototype = None;
                         }
-                        _ => {}
+                        _ => unreachable!(),
                     }
                     let id = new_obj.borrow().id.unwrap();
                     let target = JsValue::Object(crate::types::JsObject { id });
 
                     let props_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    if !matches!(props_arg, JsValue::Undefined)
-                        && let JsValue::Object(ref d) = props_arg
-                        && let Some(desc_obj) = interp.get_object(d.id)
-                    {
-                        let keys: Vec<String> =
-                            desc_obj.borrow().properties.keys().cloned().collect();
-                        for key in keys {
-                            let b_desc = desc_obj.borrow();
-                            let is_enum = b_desc
-                                .get_property_descriptor(&key)
-                                .map(|d| d.enumerable.unwrap_or(true))
-                                .unwrap_or(true);
-                            drop(b_desc);
-                            if !is_enum {
-                                continue;
-                            }
-                            let prop_desc_val = desc_obj.borrow().get_property(&key);
-                            if let JsValue::Object(ref pd) = prop_desc_val
-                                && let Some(pd_obj) = interp.get_object(pd.id)
-                            {
-                                let b = pd_obj.borrow();
-                                let mut desc = PropertyDescriptor {
-                                    value: None,
-                                    writable: None,
-                                    get: None,
-                                    set: None,
-                                    enumerable: None,
-                                    configurable: None,
-                                };
-                                let v = b.get_property("value");
-                                if !matches!(v, JsValue::Undefined) || b.has_own_property("value") {
-                                    desc.value = Some(v);
+                    if !matches!(props_arg, JsValue::Undefined) {
+                        // ObjectDefineProperties(target, props_arg)
+                        let props_obj_val = match interp.to_object(&props_arg) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => return Completion::Normal(target),
+                        };
+                        if let JsValue::Object(ref d) = props_obj_val
+                            && let Some(desc_obj) = interp.get_object(d.id)
+                        {
+                            let keys: Vec<String> =
+                                desc_obj.borrow().property_order.clone();
+                            for key in keys {
+                                let b_desc = desc_obj.borrow();
+                                let is_enum = b_desc
+                                    .get_property_descriptor(&key)
+                                    .map(|d| d.enumerable.unwrap_or(true))
+                                    .unwrap_or(true);
+                                drop(b_desc);
+                                if !is_enum {
+                                    continue;
                                 }
-                                let w = b.get_property("writable");
-                                if !matches!(w, JsValue::Undefined)
-                                    || b.has_own_property("writable")
-                                {
-                                    desc.writable = Some(to_boolean(&w));
-                                }
-                                let e = b.get_property("enumerable");
-                                if !matches!(e, JsValue::Undefined)
-                                    || b.has_own_property("enumerable")
-                                {
-                                    desc.enumerable = Some(to_boolean(&e));
-                                }
-                                let c = b.get_property("configurable");
-                                if !matches!(c, JsValue::Undefined)
-                                    || b.has_own_property("configurable")
-                                {
-                                    desc.configurable = Some(to_boolean(&c));
-                                }
-                                let g = b.get_property("get");
-                                if !matches!(g, JsValue::Undefined) || b.has_own_property("get") {
-                                    desc.get = Some(g);
-                                }
-                                let s = b.get_property("set");
-                                if !matches!(s, JsValue::Undefined) || b.has_own_property("set") {
-                                    desc.set = Some(s);
-                                }
-                                drop(b);
-                                if desc.enumerable.is_none() {
-                                    desc.enumerable = Some(false);
-                                }
-                                if desc.configurable.is_none() {
-                                    desc.configurable = Some(false);
-                                }
-                                if desc.writable.is_none()
-                                    && desc.get.is_none()
-                                    && desc.set.is_none()
-                                {
-                                    desc.writable = Some(false);
-                                }
-                                if let Some(target_obj) = interp.get_object(id) {
-                                    target_obj.borrow_mut().insert_property(key, desc);
+                                let prop_desc_val =
+                                    match interp.get_object_property(d.id, &key, &props_obj_val) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        _ => continue,
+                                    };
+                                match interp.to_property_descriptor(&prop_desc_val) {
+                                    Ok(desc) => {
+                                        if let Some(target_obj) = interp.get_object(id) {
+                                            if !target_obj
+                                                .borrow_mut()
+                                                .define_own_property(key, desc)
+                                            {
+                                                return Completion::Throw(
+                                                    interp.create_type_error(
+                                                        "Cannot define property on non-extensible object",
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(Some(e)) => return Completion::Throw(e),
+                                    Err(None) => {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Property description must be an object",
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -2269,33 +2386,71 @@ impl Interpreter {
                 "assign".to_string(),
                 2,
                 |interp, _this, args| {
-                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(t) = &target {
-                        for source in args.iter().skip(1) {
-                            if let JsValue::Object(s) = source
-                                && let Some(src_obj) = interp.get_object(s.id)
-                            {
-                                let borrowed = src_obj.borrow();
-                                let props: Vec<(String, JsValue)> = borrowed
-                                    .property_order
-                                    .iter()
-                                    .filter_map(|k| {
-                                        let desc = borrowed.properties.get(k)?;
-                                        if desc.enumerable == Some(false) {
-                                            return None;
-                                        }
-                                        Some((
-                                            k.clone(),
-                                            desc.value.clone().unwrap_or(JsValue::Undefined),
-                                        ))
-                                    })
-                                    .collect();
-                                drop(borrowed);
-                                if let Some(tgt_obj) = interp.get_object(t.id) {
-                                    let mut tgt = tgt_obj.borrow_mut();
-                                    for (k, v) in props {
-                                        tgt.insert_value(k, v);
+                    let target_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let target = match interp.to_object(&target_arg) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => return Completion::Normal(JsValue::Undefined),
+                    };
+                    let t_id = if let JsValue::Object(ref o) = target {
+                        o.id
+                    } else {
+                        return Completion::Normal(target);
+                    };
+                    for source in args.iter().skip(1) {
+                        if matches!(source, JsValue::Undefined | JsValue::Null) {
+                            continue;
+                        }
+                        let src_obj_val = match interp.to_object(source) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => continue,
+                        };
+                        let s_id = if let JsValue::Object(ref o) = src_obj_val {
+                            o.id
+                        } else {
+                            continue;
+                        };
+                        let keys: Vec<String> = if let Some(src) = interp.get_object(s_id) {
+                            let b = src.borrow();
+                            b.property_order
+                                .iter()
+                                .chain(
+                                    b.properties
+                                        .keys()
+                                        .filter(|k| k.starts_with("Symbol("))
+                                        .filter(|k| !b.property_order.contains(k)),
+                                )
+                                .filter(|k| {
+                                    b.properties
+                                        .get(*k)
+                                        .map(|d| d.enumerable != Some(false))
+                                        .unwrap_or(false)
+                                })
+                                .cloned()
+                                .collect()
+                        } else {
+                            continue;
+                        };
+                        for key in keys {
+                            let val = match interp.get_object_property(s_id, &key, &src_obj_val) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
+                            };
+                            // [[Set]] on target: check for setters
+                            if let Some(tgt) = interp.get_object(t_id) {
+                                let desc = tgt.borrow().get_property_descriptor(&key);
+                                if let Some(ref d) = desc
+                                    && let Some(ref setter) = d.set
+                                {
+                                    let setter = setter.clone();
+                                    match interp.call_function(&setter, &target, &[val]) {
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        _ => {}
                                     }
+                                } else {
+                                    tgt.borrow_mut().set_property_value(&key, val);
                                 }
                             }
                         }
@@ -2306,6 +2461,72 @@ impl Interpreter {
             obj_func
                 .borrow_mut()
                 .insert_value("assign".to_string(), assign_fn);
+
+            // Object.groupBy
+            let group_by_fn = self.create_function(JsFunction::native(
+                "groupBy".to_string(),
+                2,
+                |interp, _this, args| {
+                    let items = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let callback = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    if !matches!(&callback, JsValue::Object(o) if interp.get_object(o.id).map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
+                    {
+                        return Completion::Throw(
+                            interp.create_type_error("callbackfn is not a function"),
+                        );
+                    }
+                    let iterator = match interp.get_iterator(&items) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let result_obj = interp.create_object();
+                    result_obj.borrow_mut().prototype = None;
+                    let result_id = result_obj.borrow().id.unwrap();
+                    let result_val = JsValue::Object(crate::types::JsObject { id: result_id });
+                    let mut k: u64 = 0;
+                    loop {
+                        let next = match interp.iterator_step(&iterator) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let value = interp.iterator_value(&next);
+                        let key_val = match interp.call_function(
+                            &callback,
+                            &JsValue::Undefined,
+                            &[value.clone(), JsValue::Number(k as f64)],
+                        ) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+                        let key_str = to_js_string(&key_val);
+                        if let Some(obj) = interp.get_object(result_id) {
+                            let existing = obj.borrow().get_property(&key_str);
+                            if let JsValue::Object(ref arr_o) = existing
+                                && let Some(arr) = interp.get_object(arr_o.id)
+                            {
+                                let len_val = arr.borrow().get_property("length");
+                                let len = to_number(&len_val) as usize;
+                                arr.borrow_mut()
+                                    .insert_value(len.to_string(), value);
+                                arr.borrow_mut().insert_value(
+                                    "length".to_string(),
+                                    JsValue::Number((len + 1) as f64),
+                                );
+                            } else {
+                                let new_arr = interp.create_array(vec![value]);
+                                obj.borrow_mut().insert_value(key_str, new_arr);
+                            }
+                        }
+                        k += 1;
+                    }
+                    Completion::Normal(result_val)
+                },
+            ));
+            obj_func
+                .borrow_mut()
+                .insert_value("groupBy".to_string(), group_by_fn);
 
             // Object.is
             let is_fn = self.create_function(JsFunction::native(
@@ -2373,6 +2594,36 @@ impl Interpreter {
             obj_func
                 .borrow_mut()
                 .insert_value("getOwnPropertyNames".to_string(), gopn_fn);
+
+            // Object.getOwnPropertySymbols
+            let gops_fn = self.create_function(JsFunction::native(
+                "getOwnPropertySymbols".to_string(),
+                1,
+                |interp, _this, args| {
+                    let target_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let target = match interp.to_object(&target_arg) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => return Completion::Normal(interp.create_array(Vec::new())),
+                    };
+                    if let JsValue::Object(ref o) = target
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        let symbols: Vec<JsValue> = obj
+                            .borrow()
+                            .properties
+                            .keys()
+                            .filter(|k| k.starts_with("Symbol("))
+                            .map(|k| JsValue::String(JsString::from_str(k)))
+                            .collect();
+                        return Completion::Normal(interp.create_array(symbols));
+                    }
+                    Completion::Normal(interp.create_array(Vec::new()))
+                },
+            ));
+            obj_func
+                .borrow_mut()
+                .insert_value("getOwnPropertySymbols".to_string(), gops_fn);
 
             // Object.preventExtensions
             let pe_fn = self.create_function(JsFunction::native(
@@ -2639,17 +2890,29 @@ impl Interpreter {
                         && let JsValue::Object(ref d) = descs
                         && let Some(desc_obj) = interp.get_object(d.id)
                     {
-                        // Collect enumerable own property keys
+                        // Collect enumerable own property keys in insertion order
                         let keys: Vec<String> = {
                             let b = desc_obj.borrow();
-                            b.properties.iter().filter(|(_, prop)| {
-                                prop.enumerable != Some(false)
-                            }).map(|(k, _)| k.clone()).collect()
+                            b.property_order
+                                .iter()
+                                .filter(|k| {
+                                    b.properties
+                                        .get(*k)
+                                        .map(|p| p.enumerable != Some(false))
+                                        .unwrap_or(false)
+                                })
+                                .cloned()
+                                .collect()
                         };
                         // Collect all descriptors first
                         let mut descriptors: Vec<(String, PropertyDescriptor)> = Vec::new();
                         for key in keys {
-                            let prop_desc_val = desc_obj.borrow().get_property(&key);
+                            let prop_desc_val =
+                                match interp.get_object_property(d.id, &key, &descs) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => continue,
+                                };
                             match interp.to_property_descriptor(&prop_desc_val) {
                                 Ok(desc) => descriptors.push((key, desc)),
                                 Err(Some(e)) => return Completion::Throw(e),

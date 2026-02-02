@@ -590,27 +590,26 @@ impl Interpreter {
                     .clone()
                     .or(self.object_prototype.clone());
                 obj.class_name = "RegExp".to_string();
-                obj.insert_value(
-                    "source".to_string(),
-                    JsValue::String(JsString::from_str(pattern)),
+                let regexp_props: &[(&str, JsValue)] = &[
+                    ("source", JsValue::String(JsString::from_str(pattern))),
+                    ("flags", JsValue::String(JsString::from_str(flags))),
+                    ("global", JsValue::Boolean(flags.contains('g'))),
+                    ("ignoreCase", JsValue::Boolean(flags.contains('i'))),
+                    ("multiline", JsValue::Boolean(flags.contains('m'))),
+                    ("dotAll", JsValue::Boolean(flags.contains('s'))),
+                    ("unicode", JsValue::Boolean(flags.contains('u'))),
+                    ("sticky", JsValue::Boolean(flags.contains('y'))),
+                ];
+                for (name, val) in regexp_props {
+                    obj.insert_property(
+                        name.to_string(),
+                        PropertyDescriptor::data(val.clone(), false, false, false),
+                    );
+                }
+                obj.insert_property(
+                    "lastIndex".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
                 );
-                obj.insert_value(
-                    "flags".to_string(),
-                    JsValue::String(JsString::from_str(flags)),
-                );
-                obj.insert_value("global".to_string(), JsValue::Boolean(flags.contains('g')));
-                obj.insert_value(
-                    "ignoreCase".to_string(),
-                    JsValue::Boolean(flags.contains('i')),
-                );
-                obj.insert_value(
-                    "multiline".to_string(),
-                    JsValue::Boolean(flags.contains('m')),
-                );
-                obj.insert_value("dotAll".to_string(), JsValue::Boolean(flags.contains('s')));
-                obj.insert_value("unicode".to_string(), JsValue::Boolean(flags.contains('u')));
-                obj.insert_value("sticky".to_string(), JsValue::Boolean(flags.contains('y')));
-                obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
                 let rc = Rc::new(RefCell::new(obj));
                 let id = self.allocate_object_slot(rc);
                 JsValue::Object(crate::types::JsObject { id })
@@ -650,27 +649,26 @@ impl Interpreter {
             .clone()
             .or(self.object_prototype.clone());
         obj.class_name = "RegExp".to_string();
-        obj.insert_value(
-            "source".to_string(),
-            JsValue::String(JsString::from_str(pattern)),
+        let regexp_props: &[(&str, JsValue)] = &[
+            ("source", JsValue::String(JsString::from_str(pattern))),
+            ("flags", JsValue::String(JsString::from_str(flags))),
+            ("global", JsValue::Boolean(flags.contains('g'))),
+            ("ignoreCase", JsValue::Boolean(flags.contains('i'))),
+            ("multiline", JsValue::Boolean(flags.contains('m'))),
+            ("dotAll", JsValue::Boolean(flags.contains('s'))),
+            ("unicode", JsValue::Boolean(flags.contains('u'))),
+            ("sticky", JsValue::Boolean(flags.contains('y'))),
+        ];
+        for (name, val) in regexp_props {
+            obj.insert_property(
+                name.to_string(),
+                PropertyDescriptor::data(val.clone(), false, false, false),
+            );
+        }
+        obj.insert_property(
+            "lastIndex".to_string(),
+            PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
         );
-        obj.insert_value(
-            "flags".to_string(),
-            JsValue::String(JsString::from_str(flags)),
-        );
-        obj.insert_value("global".to_string(), JsValue::Boolean(flags.contains('g')));
-        obj.insert_value(
-            "ignoreCase".to_string(),
-            JsValue::Boolean(flags.contains('i')),
-        );
-        obj.insert_value(
-            "multiline".to_string(),
-            JsValue::Boolean(flags.contains('m')),
-        );
-        obj.insert_value("dotAll".to_string(), JsValue::Boolean(flags.contains('s')));
-        obj.insert_value("unicode".to_string(), JsValue::Boolean(flags.contains('u')));
-        obj.insert_value("sticky".to_string(), JsValue::Boolean(flags.contains('y')));
-        obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
         let rc = Rc::new(RefCell::new(obj));
         let id = self.allocate_object_slot(rc);
         JsValue::Object(crate::types::JsObject { id })
@@ -1264,6 +1262,7 @@ impl Interpreter {
                     let desc = obj.borrow().get_property_descriptor(&key);
                     if let Some(ref d) = desc
                         && let Some(ref setter) = d.set
+                        && !matches!(setter, JsValue::Undefined)
                     {
                         let setter = setter.clone();
                         let this = obj_val.clone();
@@ -1271,6 +1270,18 @@ impl Interpreter {
                             Completion::Normal(_) => Completion::Normal(final_val),
                             other => other,
                         };
+                    }
+                    if desc
+                        .as_ref()
+                        .map(|d| d.is_accessor_descriptor())
+                        .unwrap_or(false)
+                    {
+                        if env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(
+                                &format!("Cannot set property '{key}' which has only a getter"),
+                            ));
+                        }
+                        return Completion::Normal(final_val);
                     }
                     let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
                     if !success && env.borrow().strict {
@@ -2719,10 +2730,11 @@ impl Interpreter {
             None
         };
         match desc {
-            Some(ref d) if d.get.is_some() => {
+            Some(ref d) if d.get.is_some() && !matches!(d.get, Some(JsValue::Undefined)) => {
                 let getter = d.get.clone().unwrap();
                 self.call_function(&getter, this_val, &[])
             }
+            Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::Undefined),
             Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
             None => Completion::Normal(JsValue::Undefined),
         }

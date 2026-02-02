@@ -868,43 +868,27 @@ impl Interpreter {
                 let mut obj = JsObjectData::new();
                 obj.prototype = Some(regexp_proto_rc.clone());
                 obj.class_name = "RegExp".to_string();
-                obj.insert_value(
-                    "source".to_string(),
-                    JsValue::String(JsString::from_str(&pattern_str)),
+                let regexp_props: &[(&str, JsValue)] = &[
+                    ("source", JsValue::String(JsString::from_str(&pattern_str))),
+                    ("flags", JsValue::String(JsString::from_str(&flags_str))),
+                    ("hasIndices", JsValue::Boolean(flags_str.contains('d'))),
+                    ("global", JsValue::Boolean(flags_str.contains('g'))),
+                    ("ignoreCase", JsValue::Boolean(flags_str.contains('i'))),
+                    ("multiline", JsValue::Boolean(flags_str.contains('m'))),
+                    ("dotAll", JsValue::Boolean(flags_str.contains('s'))),
+                    ("unicode", JsValue::Boolean(flags_str.contains('u'))),
+                    ("sticky", JsValue::Boolean(flags_str.contains('y'))),
+                ];
+                for (name, val) in regexp_props {
+                    obj.insert_property(
+                        name.to_string(),
+                        PropertyDescriptor::data(val.clone(), false, false, false),
+                    );
+                }
+                obj.insert_property(
+                    "lastIndex".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
                 );
-                obj.insert_value(
-                    "flags".to_string(),
-                    JsValue::String(JsString::from_str(&flags_str)),
-                );
-                obj.insert_value(
-                    "hasIndices".to_string(),
-                    JsValue::Boolean(flags_str.contains('d')),
-                );
-                obj.insert_value(
-                    "global".to_string(),
-                    JsValue::Boolean(flags_str.contains('g')),
-                );
-                obj.insert_value(
-                    "ignoreCase".to_string(),
-                    JsValue::Boolean(flags_str.contains('i')),
-                );
-                obj.insert_value(
-                    "multiline".to_string(),
-                    JsValue::Boolean(flags_str.contains('m')),
-                );
-                obj.insert_value(
-                    "dotAll".to_string(),
-                    JsValue::Boolean(flags_str.contains('s')),
-                );
-                obj.insert_value(
-                    "unicode".to_string(),
-                    JsValue::Boolean(flags_str.contains('u')),
-                );
-                obj.insert_value(
-                    "sticky".to_string(),
-                    JsValue::Boolean(flags_str.contains('y')),
-                );
-                obj.insert_value("lastIndex".to_string(), JsValue::Number(0.0));
                 let rc = Rc::new(RefCell::new(obj));
                 let id = interp.allocate_object_slot(rc);
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))

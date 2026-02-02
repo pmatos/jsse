@@ -737,20 +737,39 @@ impl JsObjectData {
                 PropertyDescriptor {
                     value: None,
                     writable: None,
-                    get: desc.get,
-                    set: desc.set,
+                    get: desc.get.or(Some(JsValue::Undefined)),
+                    set: desc.set.or(Some(JsValue::Undefined)),
                     enumerable: desc.enumerable.or(current.enumerable),
                     configurable: desc.configurable.or(current.configurable),
                 }
             } else {
                 // Normal merge: unspecified fields retain current values
-                PropertyDescriptor {
-                    value: desc.value.or(current.value),
-                    writable: desc.writable.or(current.writable),
-                    get: desc.get.or(current.get),
-                    set: desc.set.or(current.set),
-                    enumerable: desc.enumerable.or(current.enumerable),
-                    configurable: desc.configurable.or(current.configurable),
+                // but don't leak accessor fields into data or vice versa
+                let result_is_accessor = if desc_is_accessor {
+                    true
+                } else if desc_is_data {
+                    false
+                } else {
+                    current_is_accessor
+                };
+                if result_is_accessor {
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: desc.get.or(current.get),
+                        set: desc.set.or(current.set),
+                        enumerable: desc.enumerable.or(current.enumerable),
+                        configurable: desc.configurable.or(current.configurable),
+                    }
+                } else {
+                    PropertyDescriptor {
+                        value: desc.value.or(current.value),
+                        writable: desc.writable.or(current.writable),
+                        get: None,
+                        set: None,
+                        enumerable: desc.enumerable.or(current.enumerable),
+                        configurable: desc.configurable.or(current.configurable),
+                    }
                 }
             };
 

@@ -22,7 +22,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/global/` (29), `built-ins/eval/` (10), `built-ins/isFinite/` (15), `built-ins/isNaN/` (15), `built-ins/parseFloat/` (54), `built-ins/parseInt/` (55), `built-ins/decodeURI/` (55), `built-ins/decodeURIComponent/` (56), `built-ins/encodeURI/` (31), `built-ins/encodeURIComponent/` (31), `built-ins/Infinity/` (6), `built-ins/NaN/` (6), `built-ins/undefined/` (8)
 
 ### 9.2 Fundamental Objects (§20)
-- [x] **Object** (§20.1) — 35% pass rate (1,199/3,411 tests)
+- [x] **Object** (§20.1) — 84% pass rate (2,857/3,411 tests)
   - [x] `Object()` constructor
   - [x] `Object.assign()`, `Object.create()`, `Object.defineProperty()`, `Object.defineProperties()`
   - [x] `Object.entries()`, `Object.fromEntries()`
@@ -30,7 +30,7 @@ Ordered roughly by dependency and importance.
   - [x] `Object.getOwnPropertyDescriptor()`, `Object.getOwnPropertyDescriptors()`
   - [x] `Object.getOwnPropertyNames()`, `Object.getOwnPropertySymbols()`
   - [x] `Object.getPrototypeOf()`, `Object.setPrototypeOf()`
-  - [ ] `Object.groupBy()`
+  - [x] `Object.groupBy()`
   - [x] `Object.hasOwn()`
   - [x] `Object.is()`
   - [x] `Object.isExtensible()`, `Object.preventExtensions()`
@@ -40,7 +40,7 @@ Ordered roughly by dependency and importance.
   - [x] `Object.prototype.propertyIsEnumerable()`
   - [x] `Object.prototype.toLocaleString()`, `Object.prototype.toString()`, `Object.prototype.valueOf()`
   - [ ] `Object.prototype.__proto__` (Annex B)
-  - [ ] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__` (Annex B)
+  - [x] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__` (Annex B)
 - [x] **Function** (§20.2) — 55% pass rate (279/509 tests)
   - [x] `Function()` constructor (dynamic function creation)
   - [x] `Function.prototype.apply()`, `.bind()`, `.call()`
