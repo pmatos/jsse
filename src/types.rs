@@ -292,7 +292,9 @@ pub mod number_ops {
         if x.is_infinite() {
             return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
         }
-        format!("{x}")
+        // Use ryu for spec-compliant shortest representation
+        let mut buf = ryu_js::Buffer::new();
+        buf.format(x).to_string()
     }
 
     // §7.1.6 ToInt32
