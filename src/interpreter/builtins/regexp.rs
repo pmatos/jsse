@@ -1459,6 +1459,9 @@ impl Interpreter {
             );
             obj.borrow_mut()
                 .insert_builtin("escape".to_string(), escape_fn);
+            regexp_proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), regexp_ctor.clone());
         }
         self.global_env
             .borrow_mut()

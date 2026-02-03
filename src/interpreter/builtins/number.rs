@@ -532,6 +532,9 @@ impl Interpreter {
             num_obj
                 .borrow_mut()
                 .insert_value("prototype".to_string(), proto_val);
+            proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), num_val);
         }
 
         self.number_prototype = Some(proto);
@@ -610,6 +613,9 @@ impl Interpreter {
             bool_obj
                 .borrow_mut()
                 .insert_value("prototype".to_string(), proto_val);
+            proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), bool_val);
         }
 
         self.boolean_prototype = Some(proto);

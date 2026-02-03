@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 29,602 / 47,458 run (62.38%)
+**Current pass rate:** 29,720 / 47,458 run (62.62%)
 *Skipped: 799 module tests*
 
 ---
@@ -98,6 +98,7 @@ These features block significant numbers of tests:
 29. ~~**Symbol property key uniqueness**~~ — ✅ Done (51 new passes, 62.22% → 62.28%). Symbols with same description were treated as identical property keys. Added id-based property key format for user-created symbols. Updated all built-in functions (Object.hasOwn, defineProperty, getOwnPropertyDescriptor, Reflect methods, etc.) to use `to_property_key_string` for symbol-aware key conversion.
 30. ~~**Function parameter error propagation**~~ — ✅ Done (371 new passes, 61.44% → 62.22%). Destructuring errors in function parameter binding were silently swallowed by `let _ =`. Now propagated as throws for sync functions and promise rejections for async functions.
 31. ~~**@@toPrimitive support + unary operator ToPrimitive**~~ — ✅ Done (45 new passes, 62.28% → 62.38%). `to_primitive` now checks `Symbol.toPrimitive` before falling back to valueOf/toString per §7.1.1. Unary +/- operators now call `to_number_coerce` for objects instead of raw `to_number`. 1 Date regression (year-zero parsing).
+32. ~~**Prototype constructor properties**~~ — ✅ Done (119 new passes, 62.38% → 62.62%). Added `constructor` property to Array.prototype, Number.prototype, Boolean.prototype, RegExp.prototype pointing to their respective constructors. 1 Array.from regression (thisArg constructor).
 
 ---
 

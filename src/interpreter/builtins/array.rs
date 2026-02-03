@@ -1955,6 +1955,10 @@ impl Interpreter {
             });
             obj.borrow_mut()
                 .insert_value("prototype".to_string(), proto_val);
+            // Array.prototype.constructor = Array
+            proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), array_val);
         }
 
         self.array_prototype = Some(proto);
