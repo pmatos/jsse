@@ -54,6 +54,13 @@ pub struct TryContextInfo {
     pub entered_finally: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct DelegatedIteratorInfo {
+    pub iterator: JsValue,
+    pub resume_state: usize,
+    pub sent_value_binding: Option<SentValueBinding>,
+}
+
 pub type EnvRef = Rc<RefCell<Environment>>;
 
 pub struct Environment {
@@ -421,6 +428,8 @@ pub enum IteratorState {
         sent_value: JsValue,
         try_stack: Vec<TryContextInfo>,
         pending_binding: Option<SentValueBinding>,
+        delegated_iterator: Option<DelegatedIteratorInfo>,
+        pending_exception: Option<JsValue>,
     },
     AsyncGenerator {
         body: Vec<Statement>,
@@ -436,6 +445,8 @@ pub enum IteratorState {
         sent_value: JsValue,
         try_stack: Vec<TryContextInfo>,
         pending_binding: Option<SentValueBinding>,
+        delegated_iterator: Option<DelegatedIteratorInfo>,
+        pending_exception: Option<JsValue>,
     },
     RegExpStringIterator {
         source: String,

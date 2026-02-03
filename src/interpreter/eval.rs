@@ -2313,11 +2313,96 @@ impl Interpreter {
             execution_state,
             try_stack,
             pending_binding,
+            delegated_iterator,
+            pending_exception: stored_pending_exception,
             ..
         }) = state
         else {
             return Completion::Throw(self.create_type_error("not a state machine generator"));
         };
+
+        if let Some(ref deleg_info) = delegated_iterator {
+            let iterator = deleg_info.iterator.clone();
+            let resume_state = deleg_info.resume_state;
+            let binding = deleg_info.sent_value_binding.clone();
+
+            let result = self.iterator_next_with_value(&iterator, &sent_value);
+            match result {
+                Ok(iter_result) => {
+                    let done = self.iterator_complete(&iter_result);
+                    let value = self.iterator_value(&iter_result);
+                    if done {
+                        if let Some(ref bind) = binding {
+                            use crate::interpreter::generator_transform::SentValueBindingKind;
+                            match &bind.kind {
+                                SentValueBindingKind::Variable(name) => {
+                                    func_env.borrow_mut().set(name, value.clone()).ok();
+                                }
+                                SentValueBindingKind::Pattern(pattern) => {
+                                    let _ = self.bind_pattern(
+                                        pattern,
+                                        value.clone(),
+                                        BindingKind::Var,
+                                        &func_env,
+                                    );
+                                }
+                                SentValueBindingKind::Discard => {}
+                            }
+                        }
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine: state_machine.clone(),
+                                func_env: func_env.clone(),
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: resume_state,
+                                },
+                                sent_value: JsValue::Undefined,
+                                try_stack: try_stack.clone(),
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                            });
+                        return self.generator_next_state_machine(this, JsValue::Undefined);
+                    } else {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: resume_state,
+                                },
+                                sent_value: JsValue::Undefined,
+                                try_stack,
+                                pending_binding: None,
+                                delegated_iterator: Some(crate::interpreter::types::DelegatedIteratorInfo {
+                                    iterator,
+                                    resume_state,
+                                    sent_value_binding: binding,
+                                }),
+                                pending_exception: None,
+                            });
+                        return Completion::Normal(self.create_iter_result_object(value, false));
+                    }
+                }
+                Err(e) => {
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                                pending_exception: None,
+                        });
+                    return Completion::Throw(e);
+                }
+            }
+        }
 
         let current_state_id = match &execution_state {
             StateMachineExecutionState::Completed => {
@@ -2342,6 +2427,8 @@ impl Interpreter {
             sent_value: sent_value.clone(),
             try_stack: try_stack.clone(),
             pending_binding: None,
+            delegated_iterator: None,
+                                pending_exception: None,
         });
 
         use crate::interpreter::generator_transform::SentValueBindingKind;
@@ -2367,7 +2454,7 @@ impl Interpreter {
 
         let mut current_id = current_state_id;
         let mut current_try_stack = try_stack;
-        let mut pending_exception: Option<JsValue> = None;
+        let mut pending_exception: Option<JsValue> = stored_pending_exception;
 
         loop {
             let (statements, terminator) = {
@@ -2395,6 +2482,8 @@ impl Interpreter {
                     sent_value: JsValue::Undefined,
                     try_stack: vec![],
                     pending_binding: None,
+                    delegated_iterator: None,
+                                pending_exception: None,
                 });
                 return Completion::Throw(e);
             }
@@ -2407,6 +2496,8 @@ impl Interpreter {
                     sent_value: JsValue::Undefined,
                     try_stack: vec![],
                     pending_binding: None,
+                    delegated_iterator: None,
+                                pending_exception: None,
                 });
                 return Completion::Normal(self.create_iter_result_object(v, true));
             }
@@ -2414,9 +2505,9 @@ impl Interpreter {
             match &terminator {
                 StateTerminator::Yield {
                     value,
+                    is_delegate,
                     resume_state,
                     sent_value_binding,
-                    ..
                 } => {
                     let yield_val = if let Some(expr) = value {
                         match self.eval_expr(expr, &func_env) {
@@ -2431,6 +2522,8 @@ impl Interpreter {
                                         sent_value: JsValue::Undefined,
                                         try_stack: vec![],
                                         pending_binding: None,
+                                        delegated_iterator: None,
+                                pending_exception: None,
                                     });
                                 return Completion::Throw(e);
                             }
@@ -2439,6 +2532,93 @@ impl Interpreter {
                     } else {
                         JsValue::Undefined
                     };
+
+                    if *is_delegate {
+                        let iterator = match self.get_iterator(&yield_val) {
+                            Ok(it) => it,
+                            Err(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                pending_exception: None,
+                                    });
+                                return Completion::Throw(e);
+                            }
+                        };
+
+                        let iter_result = match self.iterator_next(&iterator) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                pending_exception: None,
+                                    });
+                                return Completion::Throw(e);
+                            }
+                        };
+
+                        let done = self.iterator_complete(&iter_result);
+                        let value = self.iterator_value(&iter_result);
+
+                        if done {
+                            use crate::interpreter::generator_transform::SentValueBindingKind;
+                            if let Some(binding) = sent_value_binding {
+                                match &binding.kind {
+                                    SentValueBindingKind::Variable(name) => {
+                                        func_env.borrow_mut().set(name, value.clone()).ok();
+                                    }
+                                    SentValueBindingKind::Pattern(pattern) => {
+                                        let _ = self.bind_pattern(
+                                            pattern,
+                                            value.clone(),
+                                            BindingKind::Var,
+                                            &func_env,
+                                        );
+                                    }
+                                    SentValueBindingKind::Discard => {}
+                                }
+                            }
+                            current_id = *resume_state;
+                            continue;
+                        } else {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                                        state_id: *resume_state,
+                                    },
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: current_try_stack,
+                                    pending_binding: None,
+                                    delegated_iterator: Some(
+                                        crate::interpreter::types::DelegatedIteratorInfo {
+                                            iterator,
+                                            resume_state: *resume_state,
+                                            sent_value_binding: sent_value_binding.clone(),
+                                        },
+                                    ),
+                                    pending_exception: None,
+                                });
+                            return Completion::Normal(self.create_iter_result_object(value, false));
+                        }
+                    }
 
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineGenerator {
@@ -2451,6 +2631,8 @@ impl Interpreter {
                             sent_value: JsValue::Undefined,
                             try_stack: current_try_stack,
                             pending_binding: sent_value_binding.clone(),
+                            delegated_iterator: None,
+                                pending_exception: None,
                         });
                     return Completion::Normal(self.create_iter_result_object(yield_val, false));
                 }
@@ -2469,6 +2651,8 @@ impl Interpreter {
                                         sent_value: JsValue::Undefined,
                                         try_stack: vec![],
                                         pending_binding: None,
+                                        delegated_iterator: None,
+                                pending_exception: None,
                                     });
                                 return Completion::Throw(err);
                             }
@@ -2487,6 +2671,8 @@ impl Interpreter {
                             sent_value: JsValue::Undefined,
                             try_stack: vec![],
                             pending_binding: None,
+                            delegated_iterator: None,
+                                pending_exception: None,
                         });
                     return Completion::Normal(self.create_iter_result_object(ret_val, true));
                 }
@@ -2514,6 +2700,8 @@ impl Interpreter {
                             sent_value: JsValue::Undefined,
                             try_stack: vec![],
                             pending_binding: None,
+                            delegated_iterator: None,
+                                pending_exception: None,
                         });
                     return Completion::Throw(throw_val);
                 }
@@ -2539,6 +2727,8 @@ impl Interpreter {
                                     sent_value: JsValue::Undefined,
                                     try_stack: vec![],
                                     pending_binding: None,
+                                    delegated_iterator: None,
+                                pending_exception: None,
                                 });
                             return Completion::Throw(e);
                         }
@@ -2614,6 +2804,8 @@ impl Interpreter {
                                     sent_value: JsValue::Undefined,
                                     try_stack: vec![],
                                     pending_binding: None,
+                                    delegated_iterator: None,
+                                pending_exception: None,
                                 });
                             return Completion::Throw(e);
                         }
@@ -2634,6 +2826,8 @@ impl Interpreter {
                                         sent_value: JsValue::Undefined,
                                         try_stack: vec![],
                                         pending_binding: None,
+                                        delegated_iterator: None,
+                                pending_exception: None,
                                     });
                                 return Completion::Throw(e);
                             }
@@ -2660,6 +2854,8 @@ impl Interpreter {
                             sent_value: JsValue::Undefined,
                             try_stack: vec![],
                             pending_binding: None,
+                            delegated_iterator: None,
+                                pending_exception: None,
                         });
                     return Completion::Normal(
                         self.create_iter_result_object(JsValue::Undefined, true),
@@ -2691,9 +2887,94 @@ impl Interpreter {
             func_env,
             is_strict,
             try_stack,
+            delegated_iterator,
             ..
         }) = state
         {
+            if let Some(ref deleg_info) = delegated_iterator {
+                let iterator = deleg_info.iterator.clone();
+                let resume_state = deleg_info.resume_state;
+                let binding = deleg_info.sent_value_binding.clone();
+
+                match self.iterator_return(&iterator, &value) {
+                    Ok(Some(iter_result)) => {
+                        let done = self.iterator_complete(&iter_result);
+                        let result_value = self.iterator_value(&iter_result);
+                        if done {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                pending_exception: None,
+                                });
+                            return Completion::Normal(
+                                self.create_iter_result_object(result_value, true),
+                            );
+                        } else {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                                        state_id: resume_state,
+                                    },
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: try_stack.clone(),
+                                    pending_binding: None,
+                                    delegated_iterator: Some(
+                                        crate::interpreter::types::DelegatedIteratorInfo {
+                                            iterator,
+                                            resume_state,
+                                            sent_value_binding: binding,
+                                        },
+                                    ),
+                                    pending_exception: None,
+                                });
+                            return Completion::Normal(
+                                self.create_iter_result_object(result_value, false),
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                            });
+                        return Completion::Normal(self.create_iter_result_object(value, true));
+                    }
+                    Err(e) => {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                            });
+                        return Completion::Throw(e);
+                    }
+                }
+            }
+
             if let Some(try_info) = try_stack.last() {
                 if !try_info.entered_finally {
                     if let Some(finally_state) = try_info.finally_state {
@@ -2708,6 +2989,8 @@ impl Interpreter {
                                 sent_value: value.clone(),
                                 try_stack: try_stack[..try_stack.len() - 1].to_vec(),
                                 pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
                             });
                         return self.generator_next_state_machine(this, JsValue::Undefined);
                     }
@@ -2722,6 +3005,8 @@ impl Interpreter {
                 sent_value: JsValue::Undefined,
                 try_stack: vec![],
                 pending_binding: None,
+                delegated_iterator: None,
+                                pending_exception: None,
             });
         }
         Completion::Normal(self.create_iter_result_object(value, true))
@@ -2749,9 +3034,112 @@ impl Interpreter {
             func_env,
             is_strict,
             try_stack,
+            delegated_iterator,
             ..
         }) = state
         {
+            if let Some(ref deleg_info) = delegated_iterator {
+                let iterator = deleg_info.iterator.clone();
+                let resume_state = deleg_info.resume_state;
+                let binding = deleg_info.sent_value_binding.clone();
+
+                match self.iterator_throw(&iterator, &exception) {
+                    Ok(Some(iter_result)) => {
+                        let done = self.iterator_complete(&iter_result);
+                        let result_value = self.iterator_value(&iter_result);
+                        if done {
+                            use crate::interpreter::generator_transform::SentValueBindingKind;
+                            if let Some(ref bind) = binding {
+                                match &bind.kind {
+                                    SentValueBindingKind::Variable(name) => {
+                                        func_env.borrow_mut().set(name, result_value.clone()).ok();
+                                    }
+                                    SentValueBindingKind::Pattern(pattern) => {
+                                        let _ = self.bind_pattern(
+                                            pattern,
+                                            result_value.clone(),
+                                            BindingKind::Var,
+                                            &func_env,
+                                        );
+                                    }
+                                    SentValueBindingKind::Discard => {}
+                                }
+                            }
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine: state_machine.clone(),
+                                    func_env: func_env.clone(),
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                                        state_id: resume_state,
+                                    },
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: try_stack.clone(),
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                pending_exception: None,
+                                });
+                            return self.generator_next_state_machine(this, JsValue::Undefined);
+                        } else {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                                        state_id: resume_state,
+                                    },
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: try_stack.clone(),
+                                    pending_binding: None,
+                                    delegated_iterator: Some(
+                                        crate::interpreter::types::DelegatedIteratorInfo {
+                                            iterator,
+                                            resume_state,
+                                            sent_value_binding: binding,
+                                        },
+                                    ),
+                                    pending_exception: None,
+                                });
+                            return Completion::Normal(
+                                self.create_iter_result_object(result_value, false),
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        let _ = self.iterator_close(&iterator, exception.clone());
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                            });
+                        return Completion::Throw(exception);
+                    }
+                    Err(e) => {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                            });
+                        return Completion::Throw(e);
+                    }
+                }
+            }
+
             if let Some(try_info) = try_stack.last() {
                 if !try_info.entered_catch && !try_info.entered_finally {
                     if let Some(catch_state) = try_info.catch_state {
@@ -2763,9 +3151,11 @@ impl Interpreter {
                                 execution_state: StateMachineExecutionState::SuspendedAtState {
                                     state_id: catch_state,
                                 },
-                                sent_value: exception.clone(),
+                                sent_value: JsValue::Undefined,
                                 try_stack: try_stack[..try_stack.len() - 1].to_vec(),
                                 pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: Some(exception.clone()),
                             });
                         return self.generator_next_state_machine(this, JsValue::Undefined);
                     }
@@ -2780,9 +3170,11 @@ impl Interpreter {
                                 execution_state: StateMachineExecutionState::SuspendedAtState {
                                     state_id: finally_state,
                                 },
-                                sent_value: exception.clone(),
+                                sent_value: JsValue::Undefined,
                                 try_stack: try_stack[..try_stack.len() - 1].to_vec(),
                                 pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: Some(exception.clone()),
                             });
                         return self.generator_next_state_machine(this, JsValue::Undefined);
                     }
@@ -2797,6 +3189,8 @@ impl Interpreter {
                 sent_value: JsValue::Undefined,
                 try_stack: vec![],
                 pending_binding: None,
+                delegated_iterator: None,
+                                pending_exception: None,
             });
         }
         Completion::Throw(exception)
@@ -3255,6 +3649,8 @@ impl Interpreter {
                                     sent_value: JsValue::Undefined,
                                     try_stack: vec![],
                                     pending_binding: None,
+                                    delegated_iterator: None,
+                                pending_exception: None,
                                 });
                             } else {
                                 gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {

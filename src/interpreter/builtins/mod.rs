@@ -3687,6 +3687,37 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn iterator_next_with_value(
+        &mut self,
+        iterator: &JsValue,
+        value: &JsValue,
+    ) -> Result<JsValue, JsValue> {
+        if let JsValue::Object(io) = iterator {
+            let next_fn = self.get_object(io.id).and_then(|obj| {
+                obj.borrow()
+                    .get_property_descriptor("next")
+                    .and_then(|d| d.value)
+            });
+            if let Some(next_fn) = next_fn {
+                match self.call_function(&next_fn, iterator, &[value.clone()]) {
+                    Completion::Normal(v) => {
+                        if matches!(v, JsValue::Object(_)) {
+                            Ok(v)
+                        } else {
+                            Err(self.create_type_error("Iterator result is not an object"))
+                        }
+                    }
+                    Completion::Throw(e) => Err(e),
+                    _ => Err(self.create_type_error("Iterator next failed")),
+                }
+            } else {
+                Err(self.create_type_error("Iterator does not have a next method"))
+            }
+        } else {
+            Err(self.create_type_error("Iterator is not an object"))
+        }
+    }
+
     pub(crate) fn iterator_complete(&self, result: &JsValue) -> bool {
         if let JsValue::Object(o) = result
             && let Some(obj) = self.get_object(o.id)
@@ -3712,6 +3743,78 @@ impl Interpreter {
             Ok(None)
         } else {
             Ok(Some(result))
+        }
+    }
+
+    pub(crate) fn iterator_return(
+        &mut self,
+        iterator: &JsValue,
+        value: &JsValue,
+    ) -> Result<Option<JsValue>, JsValue> {
+        if let JsValue::Object(io) = iterator {
+            let return_fn = self.get_object(io.id).and_then(|obj| {
+                let val = obj.borrow().get_property("return");
+                if matches!(val, JsValue::Object(_)) {
+                    Some(val)
+                } else if matches!(val, JsValue::Undefined) {
+                    None
+                } else {
+                    None
+                }
+            });
+            if let Some(return_fn) = return_fn {
+                match self.call_function(&return_fn, iterator, &[value.clone()]) {
+                    Completion::Normal(v) => {
+                        if matches!(v, JsValue::Object(_)) {
+                            Ok(Some(v))
+                        } else {
+                            Err(self.create_type_error("Iterator return result is not an object"))
+                        }
+                    }
+                    Completion::Throw(e) => Err(e),
+                    _ => Err(self.create_type_error("Iterator return failed")),
+                }
+            } else {
+                Ok(None)
+            }
+        } else {
+            Err(self.create_type_error("Iterator is not an object"))
+        }
+    }
+
+    pub(crate) fn iterator_throw(
+        &mut self,
+        iterator: &JsValue,
+        exception: &JsValue,
+    ) -> Result<Option<JsValue>, JsValue> {
+        if let JsValue::Object(io) = iterator {
+            let throw_fn = self.get_object(io.id).and_then(|obj| {
+                let val = obj.borrow().get_property("throw");
+                if matches!(val, JsValue::Object(_)) {
+                    Some(val)
+                } else if matches!(val, JsValue::Undefined) {
+                    None
+                } else {
+                    None
+                }
+            });
+            if let Some(throw_fn) = throw_fn {
+                match self.call_function(&throw_fn, iterator, &[exception.clone()]) {
+                    Completion::Normal(v) => {
+                        if matches!(v, JsValue::Object(_)) {
+                            Ok(Some(v))
+                        } else {
+                            Err(self.create_type_error("Iterator throw result is not an object"))
+                        }
+                    }
+                    Completion::Throw(e) => Err(e),
+                    _ => Err(self.create_type_error("Iterator throw failed")),
+                }
+            } else {
+                Ok(None)
+            }
+        } else {
+            Err(self.create_type_error("Iterator is not an object"))
         }
     }
 
