@@ -15,6 +15,7 @@ mod eval;
 mod exec;
 mod gc;
 pub(crate) mod generator_analysis;
+pub(crate) mod generator_transform;
 
 pub struct Interpreter {
     global_env: EnvRef,
