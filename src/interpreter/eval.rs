@@ -3168,6 +3168,10 @@ impl Interpreter {
                             if use_state_machine {
                                 use crate::interpreter::generator_transform::transform_generator;
                                 let state_machine = Rc::new(transform_generator(&body, &params));
+                                // Declare temp variables used by the state machine
+                                for temp_var in &state_machine.temp_vars {
+                                    func_env.borrow_mut().declare(temp_var, BindingKind::Var);
+                                }
                                 gen_obj.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
                                     state_machine,
                                     func_env,

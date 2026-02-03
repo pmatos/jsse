@@ -8,6 +8,7 @@ pub struct GeneratorStateMachine {
     pub local_vars: Vec<LocalVariable>,
     pub params: Vec<Pattern>,
     pub num_yields: usize,
+    pub temp_vars: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +85,7 @@ struct TransformContext {
     break_targets: HashMap<Option<String>, usize>,
     continue_targets: HashMap<Option<String>, usize>,
     try_stack: Vec<TryInfo>,
+    temp_vars: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +106,14 @@ impl TransformContext {
             break_targets: HashMap::new(),
             continue_targets: HashMap::new(),
             try_stack: Vec::new(),
+            temp_vars: Vec::new(),
         }
+    }
+
+    fn new_temp_var(&mut self, prefix: &str) -> String {
+        let name = format!("${}_{}", prefix, self.yield_counter);
+        self.temp_vars.push(name.clone());
+        name
     }
 
     fn new_state(&mut self) -> usize {
@@ -158,6 +167,7 @@ pub fn transform_generator(
         local_vars: analysis.local_vars,
         params: params.to_vec(),
         num_yields: analysis.yield_points.len(),
+        temp_vars: ctx.temp_vars,
     }
 }
 
@@ -175,6 +185,7 @@ fn create_simple_machine(
         local_vars: analysis.local_vars.clone(),
         params: params.to_vec(),
         num_yields: 0,
+        temp_vars: vec![],
     }
 }
 
@@ -232,7 +243,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         Statement::Return(expr) => {
             if let Some(e) = expr {
                 if expr_contains_yield(e) {
-                    let temp_var = format!("$return_{}", ctx.yield_counter);
+                    let temp_var = ctx.new_temp_var("return");
                     let binding = SentValueBindingKind::Variable(temp_var.clone());
                     transform_yielding_expression(e, ctx, usize::MAX, Some(binding));
                     ctx.finalize_current_state(StateTerminator::Return(Some(
@@ -248,7 +259,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::Throw(expr) => {
             if expr_contains_yield(expr) {
-                let temp_var = format!("$throw_{}", ctx.yield_counter);
+                let temp_var = ctx.new_temp_var("throw");
                 let binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(expr, ctx, usize::MAX, Some(binding));
                 ctx.finalize_current_state(StateTerminator::Throw(Expression::Identifier(
@@ -273,7 +284,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
 
         Statement::With(expr, inner) => {
             if expr_contains_yield(expr) {
-                let temp_var = format!("$with_{}", ctx.yield_counter);
+                let temp_var = ctx.new_temp_var("with");
                 let binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(expr, ctx, usize::MAX, Some(binding));
                 let new_with =
@@ -320,7 +331,7 @@ fn transform_yielding_expression(
 
         Expression::Conditional(test, consequent, alternate) => {
             if expr_contains_yield(test) {
-                let temp_var = format!("$cond_test_{}", ctx.yield_counter);
+                let temp_var = ctx.new_temp_var("cond_test");
                 let test_binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(test, ctx, usize::MAX, Some(test_binding));
 
@@ -376,7 +387,7 @@ fn transform_yielding_expression(
 
         Expression::Logical(op, left, right) => {
             if expr_contains_yield(left) {
-                let temp_var = format!("$logical_{}", ctx.yield_counter);
+                let temp_var = ctx.new_temp_var("logical");
                 let left_binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(left, ctx, usize::MAX, Some(left_binding));
 
@@ -448,12 +459,12 @@ fn transform_yielding_expression(
 
         Expression::Binary(op, left, right) => {
             if expr_contains_yield(left) {
-                let temp_var = format!("$binary_left_{}", ctx.yield_counter);
+                let temp_var = ctx.new_temp_var("binary_left");
                 let left_binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(left, ctx, usize::MAX, Some(left_binding));
 
                 if expr_contains_yield(right) {
-                    let temp_var2 = format!("$binary_right_{}", ctx.yield_counter);
+                    let temp_var2 = ctx.new_temp_var("binary_right");
                     let right_binding = SentValueBindingKind::Variable(temp_var2.clone());
                     transform_yielding_expression(right, ctx, usize::MAX, Some(right_binding));
 
@@ -472,7 +483,7 @@ fn transform_yielding_expression(
                     emit_expression_with_binding(&combined, &binding, ctx);
                 }
             } else if expr_contains_yield(right) {
-                let temp_var = format!("$binary_right_{}", ctx.yield_counter);
+                let temp_var = ctx.new_temp_var("binary_right");
                 let right_binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(right, ctx, usize::MAX, Some(right_binding));
 
@@ -492,7 +503,7 @@ fn transform_yielding_expression(
         Expression::New(callee, args) => {
             let mut temp_callee = *callee.clone();
             if expr_contains_yield(callee) {
-                let temp_var = format!("$new_callee_{}", ctx.yield_counter);
+                let temp_var = ctx.new_temp_var("new_callee");
                 let callee_binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(callee, ctx, usize::MAX, Some(callee_binding));
                 temp_callee = Expression::Identifier(temp_var);
@@ -501,7 +512,7 @@ fn transform_yielding_expression(
             let mut temp_args = Vec::new();
             for (i, arg) in args.iter().enumerate() {
                 if expr_contains_yield(arg) {
-                    let temp_var = format!("$new_arg_{}_{}", i, ctx.yield_counter);
+                    let temp_var = ctx.new_temp_var(&format!("new_arg_{}", i));
                     let arg_binding = SentValueBindingKind::Variable(temp_var.clone());
                     transform_yielding_expression(arg, ctx, usize::MAX, Some(arg_binding));
                     temp_args.push(Expression::Identifier(temp_var));
@@ -516,7 +527,7 @@ fn transform_yielding_expression(
 
         Expression::Assign(op, left, right) => {
             if expr_contains_yield(right) {
-                let temp_var = format!("$assign_{}", ctx.yield_counter);
+                let temp_var = ctx.new_temp_var("assign");
                 let right_binding = SentValueBindingKind::Variable(temp_var.clone());
                 transform_yielding_expression(right, ctx, usize::MAX, Some(right_binding));
 
@@ -557,7 +568,7 @@ fn transform_call_expression(
 ) {
     let mut temp_callee = callee.clone();
     if expr_contains_yield(callee) {
-        let temp_var = format!("$call_callee_{}", ctx.yield_counter);
+        let temp_var = ctx.new_temp_var("call_callee");
         let callee_binding = SentValueBindingKind::Variable(temp_var.clone());
         transform_yielding_expression(callee, ctx, usize::MAX, Some(callee_binding));
         temp_callee = Expression::Identifier(temp_var);
@@ -566,7 +577,7 @@ fn transform_call_expression(
     let mut temp_args = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         if expr_contains_yield(arg) {
-            let temp_var = format!("$call_arg_{}_{}", i, ctx.yield_counter);
+            let temp_var = ctx.new_temp_var(&format!("call_arg_{}", i));
             let arg_binding = SentValueBindingKind::Variable(temp_var.clone());
             transform_yielding_expression(arg, ctx, usize::MAX, Some(arg_binding));
             temp_args.push(Expression::Identifier(temp_var));
@@ -647,7 +658,7 @@ fn transform_if_statement(if_stmt: &IfStatement, ctx: &mut TransformContext, aft
     };
 
     if expr_contains_yield(&if_stmt.test) {
-        let temp_var = format!("$if_test_{}", ctx.yield_counter);
+        let temp_var = ctx.new_temp_var("if_test");
         let test_binding = SentValueBindingKind::Variable(temp_var.clone());
         transform_yielding_expression(&if_stmt.test, ctx, usize::MAX, Some(test_binding));
 
@@ -740,7 +751,7 @@ fn transform_while_statement(
 
     ctx.current_state_id = test_state;
     if expr_contains_yield(&while_stmt.test) {
-        let temp_var = format!("$while_test_{}", ctx.yield_counter);
+        let temp_var = ctx.new_temp_var("while_test");
         let test_binding = SentValueBindingKind::Variable(temp_var.clone());
         transform_yielding_expression(&while_stmt.test, ctx, usize::MAX, Some(test_binding));
 
@@ -800,7 +811,7 @@ fn transform_do_while_statement(
 
     ctx.current_state_id = test_state;
     if expr_contains_yield(&do_while_stmt.test) {
-        let temp_var = format!("$dowhile_test_{}", ctx.yield_counter);
+        let temp_var = ctx.new_temp_var("dowhile_test");
         let test_binding = SentValueBindingKind::Variable(temp_var.clone());
         transform_yielding_expression(&do_while_stmt.test, ctx, usize::MAX, Some(test_binding));
 
@@ -869,7 +880,7 @@ fn transform_for_statement(
     ctx.current_state_id = test_state;
     if let Some(test) = &for_stmt.test {
         if expr_contains_yield(test) {
-            let temp_var = format!("$for_test_{}", ctx.yield_counter);
+            let temp_var = ctx.new_temp_var("for_test");
             let test_binding = SentValueBindingKind::Variable(temp_var.clone());
             transform_yielding_expression(test, ctx, usize::MAX, Some(test_binding));
 
@@ -1021,7 +1032,7 @@ fn transform_switch_statement(
 
     let mut temp_discriminant = switch_stmt.discriminant.clone();
     if expr_contains_yield(&switch_stmt.discriminant) {
-        let temp_var = format!("$switch_disc_{}", ctx.yield_counter);
+        let temp_var = ctx.new_temp_var("switch_disc");
         let disc_binding = SentValueBindingKind::Variable(temp_var.clone());
         transform_yielding_expression(
             &switch_stmt.discriminant,
