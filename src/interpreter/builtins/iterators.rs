@@ -2243,6 +2243,18 @@ impl Interpreter {
             0,
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                // Check which variant we have
+                if let JsValue::Object(o) = this {
+                    if let Some(obj_rc) = interp.get_object(o.id) {
+                        let is_state_machine = matches!(
+                            obj_rc.borrow().iterator_state,
+                            Some(IteratorState::StateMachineGenerator { .. })
+                        );
+                        if is_state_machine {
+                            return interp.generator_next_state_machine(this, value);
+                        }
+                    }
+                }
                 interp.generator_next(this, value)
             },
         ));
@@ -2257,6 +2269,18 @@ impl Interpreter {
             0,
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                // Check which variant we have
+                if let JsValue::Object(o) = this {
+                    if let Some(obj_rc) = interp.get_object(o.id) {
+                        let is_state_machine = matches!(
+                            obj_rc.borrow().iterator_state,
+                            Some(IteratorState::StateMachineGenerator { .. })
+                        );
+                        if is_state_machine {
+                            return interp.generator_return_state_machine(this, value);
+                        }
+                    }
+                }
                 interp.generator_return(this, value)
             },
         ));
@@ -2271,6 +2295,18 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
+                // Check which variant we have
+                if let JsValue::Object(o) = this {
+                    if let Some(obj_rc) = interp.get_object(o.id) {
+                        let is_state_machine = matches!(
+                            obj_rc.borrow().iterator_state,
+                            Some(IteratorState::StateMachineGenerator { .. })
+                        );
+                        if is_state_machine {
+                            return interp.generator_throw_state_machine(this, exception);
+                        }
+                    }
+                }
                 interp.generator_throw(this, exception)
             },
         ));

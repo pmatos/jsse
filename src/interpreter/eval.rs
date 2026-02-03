@@ -2287,6 +2287,446 @@ impl Interpreter {
         Completion::Throw(exception)
     }
 
+    pub(crate) fn generator_next_state_machine(
+        &mut self,
+        this: &JsValue,
+        sent_value: JsValue,
+    ) -> Completion {
+        use crate::interpreter::generator_transform::StateTerminator;
+
+        let JsValue::Object(o) = this else {
+            return Completion::Throw(
+                self.create_type_error("Generator.prototype.next called on non-object"),
+            );
+        };
+        let Some(obj_rc) = self.get_object(o.id) else {
+            return Completion::Throw(
+                self.create_type_error("Generator.prototype.next called on non-object"),
+            );
+        };
+
+        let state = obj_rc.borrow().iterator_state.clone();
+        let Some(IteratorState::StateMachineGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            execution_state,
+            try_stack,
+            ..
+        }) = state
+        else {
+            return Completion::Throw(self.create_type_error("not a state machine generator"));
+        };
+
+        let current_state_id = match &execution_state {
+            StateMachineExecutionState::Completed => {
+                return Completion::Normal(
+                    self.create_iter_result_object(JsValue::Undefined, true),
+                );
+            }
+            StateMachineExecutionState::Executing => {
+                return Completion::Throw(
+                    self.create_type_error("Generator is already executing"),
+                );
+            }
+            StateMachineExecutionState::SuspendedStart => 0,
+            StateMachineExecutionState::SuspendedAtState { state_id } => *state_id,
+        };
+
+        obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
+            state_machine: state_machine.clone(),
+            func_env: func_env.clone(),
+            is_strict,
+            execution_state: StateMachineExecutionState::Executing,
+            sent_value: sent_value.clone(),
+            try_stack: try_stack.clone(),
+        });
+
+        let mut current_id = current_state_id;
+        let mut current_try_stack = try_stack;
+
+        loop {
+            let (statements, terminator) = {
+                let gen_state = &state_machine.states[current_id];
+                (gen_state.statements.clone(), gen_state.terminator.clone())
+            };
+
+            let stmt_result = self.exec_statements(&statements, &func_env);
+            if let Completion::Throw(e) = stmt_result {
+                if let Some(try_info) = current_try_stack.pop() {
+                    if let Some(catch_state) = try_info.catch_state {
+                        current_id = catch_state;
+                        continue;
+                    } else if let Some(finally_state) = try_info.finally_state {
+                        current_id = finally_state;
+                        continue;
+                    }
+                }
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
+                    state_machine,
+                    func_env,
+                    is_strict,
+                    execution_state: StateMachineExecutionState::Completed,
+                    sent_value: JsValue::Undefined,
+                    try_stack: vec![],
+                });
+                return Completion::Throw(e);
+            }
+            if let Completion::Return(v) = stmt_result {
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
+                    state_machine,
+                    func_env,
+                    is_strict,
+                    execution_state: StateMachineExecutionState::Completed,
+                    sent_value: JsValue::Undefined,
+                    try_stack: vec![],
+                });
+                return Completion::Normal(self.create_iter_result_object(v, true));
+            }
+
+            match &terminator {
+                StateTerminator::Yield {
+                    value,
+                    resume_state,
+                    ..
+                } => {
+                    let yield_val = if let Some(expr) = value {
+                        match self.eval_expr(expr, &func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                    });
+                                return Completion::Throw(e);
+                            }
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::SuspendedAtState {
+                                state_id: *resume_state,
+                            },
+                            sent_value: JsValue::Undefined,
+                            try_stack: current_try_stack,
+                        });
+                    return Completion::Normal(self.create_iter_result_object(yield_val, false));
+                }
+
+                StateTerminator::Return(expr) => {
+                    let ret_val = if let Some(e) = expr {
+                        match self.eval_expr(e, &func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(err) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                    });
+                                return Completion::Throw(err);
+                            }
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                        });
+                    return Completion::Normal(self.create_iter_result_object(ret_val, true));
+                }
+
+                StateTerminator::Throw(expr) => {
+                    let throw_val = match self.eval_expr(expr, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => e,
+                        other => return other,
+                    };
+
+                    if let Some(try_info) = current_try_stack.pop() {
+                        if let Some(catch_state) = try_info.catch_state {
+                            current_id = catch_state;
+                            continue;
+                        }
+                    }
+
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                        });
+                    return Completion::Throw(throw_val);
+                }
+
+                StateTerminator::Goto(next_state) => {
+                    current_id = *next_state;
+                }
+
+                StateTerminator::ConditionalGoto {
+                    condition,
+                    true_state,
+                    false_state,
+                } => {
+                    let cond_val = match self.eval_expr(condition, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                });
+                            return Completion::Throw(e);
+                        }
+                        other => return other,
+                    };
+                    current_id = if to_boolean(&cond_val) {
+                        *true_state
+                    } else {
+                        *false_state
+                    };
+                }
+
+                StateTerminator::TryEnter {
+                    try_state,
+                    catch_state,
+                    finally_state,
+                    after_state,
+                } => {
+                    current_try_stack.push(TryContextInfo {
+                        catch_state: catch_state.as_ref().map(|c| c.state),
+                        finally_state: *finally_state,
+                        after_state: *after_state,
+                    });
+                    current_id = *try_state;
+                }
+
+                StateTerminator::TryExit { after_state } => {
+                    current_try_stack.pop();
+                    current_id = *after_state;
+                }
+
+                StateTerminator::SwitchDispatch {
+                    discriminant,
+                    cases,
+                    default_state,
+                    after_state,
+                } => {
+                    let disc_val = match self.eval_expr(discriminant, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                });
+                            return Completion::Throw(e);
+                        }
+                        other => return other,
+                    };
+
+                    let mut matched = false;
+                    for case in cases {
+                        let case_val = match self.eval_expr(&case.test, &func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                    });
+                                return Completion::Throw(e);
+                            }
+                            other => return other,
+                        };
+                        if strict_equality(&disc_val, &case_val) {
+                            current_id = case.state;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if !matched {
+                        current_id = default_state.unwrap_or(*after_state);
+                    }
+                }
+
+                StateTerminator::Completed => {
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                        });
+                    return Completion::Normal(
+                        self.create_iter_result_object(JsValue::Undefined, true),
+                    );
+                }
+            }
+        }
+    }
+
+    pub(crate) fn generator_return_state_machine(
+        &mut self,
+        this: &JsValue,
+        value: JsValue,
+    ) -> Completion {
+        let JsValue::Object(o) = this else {
+            return Completion::Throw(
+                self.create_type_error("Generator.prototype.return called on non-object"),
+            );
+        };
+        let Some(obj_rc) = self.get_object(o.id) else {
+            return Completion::Throw(
+                self.create_type_error("Generator.prototype.return called on non-object"),
+            );
+        };
+
+        let state = obj_rc.borrow().iterator_state.clone();
+        if let Some(IteratorState::StateMachineGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            try_stack,
+            ..
+        }) = state
+        {
+            if let Some(try_info) = try_stack.last() {
+                if let Some(finally_state) = try_info.finally_state {
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::SuspendedAtState {
+                                state_id: finally_state,
+                            },
+                            sent_value: value.clone(),
+                            try_stack: try_stack[..try_stack.len() - 1].to_vec(),
+                        });
+                    return self.generator_next_state_machine(this, JsValue::Undefined);
+                }
+            }
+
+            obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
+                state_machine,
+                func_env,
+                is_strict,
+                execution_state: StateMachineExecutionState::Completed,
+                sent_value: JsValue::Undefined,
+                try_stack: vec![],
+            });
+        }
+        Completion::Normal(self.create_iter_result_object(value, true))
+    }
+
+    pub(crate) fn generator_throw_state_machine(
+        &mut self,
+        this: &JsValue,
+        exception: JsValue,
+    ) -> Completion {
+        let JsValue::Object(o) = this else {
+            return Completion::Throw(
+                self.create_type_error("Generator.prototype.throw called on non-object"),
+            );
+        };
+        let Some(obj_rc) = self.get_object(o.id) else {
+            return Completion::Throw(
+                self.create_type_error("Generator.prototype.throw called on non-object"),
+            );
+        };
+
+        let state = obj_rc.borrow().iterator_state.clone();
+        if let Some(IteratorState::StateMachineGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            try_stack,
+            ..
+        }) = state
+        {
+            if let Some(try_info) = try_stack.last() {
+                if let Some(catch_state) = try_info.catch_state {
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::SuspendedAtState {
+                                state_id: catch_state,
+                            },
+                            sent_value: exception.clone(),
+                            try_stack: try_stack[..try_stack.len() - 1].to_vec(),
+                        });
+                    return self.generator_next_state_machine(this, JsValue::Undefined);
+                } else if let Some(finally_state) = try_info.finally_state {
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::SuspendedAtState {
+                                state_id: finally_state,
+                            },
+                            sent_value: exception.clone(),
+                            try_stack: try_stack[..try_stack.len() - 1].to_vec(),
+                        });
+                    return self.generator_next_state_machine(this, JsValue::Undefined);
+                }
+            }
+
+            obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
+                state_machine,
+                func_env,
+                is_strict,
+                execution_state: StateMachineExecutionState::Completed,
+                sent_value: JsValue::Undefined,
+                try_stack: vec![],
+            });
+        }
+        Completion::Throw(exception)
+    }
+
     fn reject_with_type_error(&mut self, msg: &str) -> Completion {
         let promise = self.create_promise_object();
         let promise_id = if let JsValue::Object(ref po) = promise {
@@ -2722,12 +3162,28 @@ impl Interpreter {
                                 self.create_arguments_object(args, JsValue::Undefined, is_strict, None, &[]);
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {
-                                body: body.clone(),
-                                func_env,
-                                is_strict,
-                                execution_state: GeneratorExecutionState::SuspendedStart,
-                            });
+
+                            // Use state machine approach if enabled
+                            let use_state_machine = std::env::var("JSSE_STATE_MACHINE_GENERATORS").is_ok();
+                            if use_state_machine {
+                                use crate::interpreter::generator_transform::transform_generator;
+                                let state_machine = Rc::new(transform_generator(&body, &params));
+                                gen_obj.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::SuspendedStart,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                });
+                            } else {
+                                gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                                    body: body.clone(),
+                                    func_env,
+                                    is_strict,
+                                    execution_state: GeneratorExecutionState::SuspendedStart,
+                                });
+                            }
                             let gen_id = gen_obj.borrow().id.unwrap();
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {
                                 id: gen_id,
