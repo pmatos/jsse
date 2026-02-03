@@ -3813,6 +3813,7 @@ test262/test/built-ins/GeneratorPrototype/return/try-finally-before-try.js
 test262/test/built-ins/GeneratorPrototype/return/try-finally-following-finally.js
 test262/test/built-ins/GeneratorPrototype/return/try-finally-nested-try-catch-within-finally.js
 test262/test/built-ins/GeneratorPrototype/return/try-finally-nested-try-catch-within-outer-try-after-nested.js
+test262/test/built-ins/GeneratorPrototype/return/try-finally-set-property-within-try.js
 test262/test/built-ins/GeneratorPrototype/return/try-finally-within-finally.js
 test262/test/built-ins/GeneratorPrototype/throw/from-state-completed.js
 test262/test/built-ins/GeneratorPrototype/throw/from-state-suspended-start.js
@@ -3822,9 +3823,11 @@ test262/test/built-ins/GeneratorPrototype/throw/this-val-not-object.js
 test262/test/built-ins/GeneratorPrototype/throw/try-catch-before-try.js
 test262/test/built-ins/GeneratorPrototype/throw/try-catch-following-catch.js
 test262/test/built-ins/GeneratorPrototype/throw/try-catch-within-catch.js
+test262/test/built-ins/GeneratorPrototype/throw/try-catch-within-try.js
 test262/test/built-ins/GeneratorPrototype/throw/try-finally-before-try.js
 test262/test/built-ins/GeneratorPrototype/throw/try-finally-following-finally.js
 test262/test/built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-finally.js
+test262/test/built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-inner-try.js
 test262/test/built-ins/GeneratorPrototype/throw/try-finally-within-finally.js
 test262/test/built-ins/Infinity/S15.1.1.2_A1.js
 test262/test/built-ins/Infinity/S15.1.1.2_A4.js
@@ -13551,6 +13554,7 @@ test262/test/language/expressions/arrow-function/dstr/ary-ptrn-elision-exhausted
 test262/test/language/expressions/arrow-function/dstr/ary-ptrn-elision.js
 test262/test/language/expressions/arrow-function/dstr/ary-ptrn-empty.js
 test262/test/language/expressions/arrow-function/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/arrow-function/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/arrow-function/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/arrow-function/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/arrow-function/dstr/ary-ptrn-rest-id-direct.js
@@ -13598,6 +13602,7 @@ test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elision-exha
 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-elision.js
 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-empty.js
 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/arrow-function/dstr/dflt-ary-ptrn-rest-id-direct.js
@@ -13752,7 +13757,6 @@ test262/test/language/expressions/assignment/dstr/array-elem-init-in.js
 test262/test/language/expressions/assignment/dstr/array-elem-init-let.js
 test262/test/language/expressions/assignment/dstr/array-elem-init-order.js
 test262/test/language/expressions/assignment/dstr/array-elem-init-simple-no-strict.js
-test262/test/language/expressions/assignment/dstr/array-elem-init-yield-expr.js
 test262/test/language/expressions/assignment/dstr/array-elem-init-yield-ident-invalid.js
 test262/test/language/expressions/assignment/dstr/array-elem-init-yield-ident-valid.js
 test262/test/language/expressions/assignment/dstr/array-elem-nested-array-yield-ident-invalid.js
@@ -13842,7 +13846,6 @@ test262/test/language/expressions/assignment/dstr/obj-id-init-let.js
 test262/test/language/expressions/assignment/dstr/obj-id-init-order.js
 test262/test/language/expressions/assignment/dstr/obj-id-init-simple-no-strict.js
 test262/test/language/expressions/assignment/dstr/obj-id-init-simple-strict.js
-test262/test/language/expressions/assignment/dstr/obj-id-init-yield-expr.js
 test262/test/language/expressions/assignment/dstr/obj-id-init-yield-ident-invalid.js
 test262/test/language/expressions/assignment/dstr/obj-id-init-yield-ident-valid.js
 test262/test/language/expressions/assignment/dstr/obj-id-simple-no-strict.js
@@ -13853,7 +13856,6 @@ test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-assignment-
 test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-evaluation.js
 test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-in.js
 test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-let.js
-test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-yield-expr.js
 test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-yield-ident-invalid.js
 test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-yield-ident-valid.js
 test262/test/language/expressions/assignment/dstr/obj-prop-elem-target-memberexpr-optchain-prop-ref-init.js
@@ -14435,6 +14437,7 @@ test262/test/language/expressions/async-generator/dstr/ary-ptrn-elision-exhauste
 test262/test/language/expressions/async-generator/dstr/ary-ptrn-elision.js
 test262/test/language/expressions/async-generator/dstr/ary-ptrn-empty.js
 test262/test/language/expressions/async-generator/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/async-generator/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/async-generator/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/async-generator/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/async-generator/dstr/ary-ptrn-rest-id-direct.js
@@ -14488,6 +14491,7 @@ test262/test/language/expressions/async-generator/dstr/dflt-ary-ptrn-elision-exh
 test262/test/language/expressions/async-generator/dstr/dflt-ary-ptrn-elision.js
 test262/test/language/expressions/async-generator/dstr/dflt-ary-ptrn-empty.js
 test262/test/language/expressions/async-generator/dstr/dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/async-generator/dstr/dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/async-generator/dstr/dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/async-generator/dstr/dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/async-generator/dstr/dflt-ary-ptrn-rest-id-direct.js
@@ -14572,6 +14576,7 @@ test262/test/language/expressions/async-generator/dstr/named-ary-ptrn-elision-ex
 test262/test/language/expressions/async-generator/dstr/named-ary-ptrn-elision.js
 test262/test/language/expressions/async-generator/dstr/named-ary-ptrn-empty.js
 test262/test/language/expressions/async-generator/dstr/named-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/async-generator/dstr/named-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/async-generator/dstr/named-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/async-generator/dstr/named-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/async-generator/dstr/named-ary-ptrn-rest-id-direct.js
@@ -14625,6 +14630,7 @@ test262/test/language/expressions/async-generator/dstr/named-dflt-ary-ptrn-elisi
 test262/test/language/expressions/async-generator/dstr/named-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/async-generator/dstr/named-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/async-generator/dstr/named-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/async-generator/dstr/named-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/async-generator/dstr/named-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/async-generator/dstr/named-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/async-generator/dstr/named-dflt-ary-ptrn-rest-id-direct.js
@@ -14795,6 +14801,7 @@ test262/test/language/expressions/async-generator/named-yield-as-identifier-refe
 test262/test/language/expressions/async-generator/named-yield-as-identifier-reference.js
 test262/test/language/expressions/async-generator/named-yield-as-label-identifier-escaped.js
 test262/test/language/expressions/async-generator/named-yield-as-label-identifier.js
+test262/test/language/expressions/async-generator/named-yield-identifier-non-strict.js
 test262/test/language/expressions/async-generator/named-yield-identifier-spread-strict.js
 test262/test/language/expressions/async-generator/named-yield-identifier-strict.js
 test262/test/language/expressions/async-generator/named-yield-promise-reject-next-catch.js
@@ -14856,6 +14863,7 @@ test262/test/language/expressions/async-generator/yield-as-identifier-reference-
 test262/test/language/expressions/async-generator/yield-as-identifier-reference.js
 test262/test/language/expressions/async-generator/yield-as-label-identifier-escaped.js
 test262/test/language/expressions/async-generator/yield-as-label-identifier.js
+test262/test/language/expressions/async-generator/yield-identifier-non-strict.js
 test262/test/language/expressions/async-generator/yield-identifier-spread-strict.js
 test262/test/language/expressions/async-generator/yield-identifier-strict.js
 test262/test/language/expressions/async-generator/yield-promise-reject-next-catch.js
@@ -15369,6 +15377,7 @@ test262/test/language/expressions/class/cpn-class-expr-accessors-computed-proper
 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-null.js
 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-numeric-literal.js
 test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-string-literal.js
+test262/test/language/expressions/class/cpn-class-expr-accessors-computed-property-name-from-yield-expression.js
 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-additive-expression-add.js
 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-additive-expression-subtract.js
 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-arrow-function-expression.js
@@ -15398,6 +15407,7 @@ test262/test/language/expressions/class/cpn-class-expr-computed-property-name-fr
 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-null.js
 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-numeric-literal.js
 test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-string-literal.js
+test262/test/language/expressions/class/cpn-class-expr-computed-property-name-from-yield-expression.js
 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-additive-expression-add.js
 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-additive-expression-subtract.js
 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-arrow-function-expression.js
@@ -15427,6 +15437,7 @@ test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-
 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-null.js
 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-numeric-literal.js
 test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-string-literal.js
+test262/test/language/expressions/class/cpn-class-expr-fields-computed-property-name-from-yield-expression.js
 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-additive-expression-add.js
 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-additive-expression-subtract.js
 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-arrow-function-expression.js
@@ -15456,6 +15467,7 @@ test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-p
 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-null.js
 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-numeric-literal.js
 test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-string-literal.js
+test262/test/language/expressions/class/cpn-class-expr-fields-methods-computed-property-name-from-yield-expression.js
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-init-iter-get-err-array-prototype.js
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-init-iter-get-err.js
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-init-iter-no-close.js
@@ -15494,6 +15506,7 @@ test262/test/language/expressions/class/dstr/async-gen-meth-ary-ptrn-elision-exh
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/async-gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/async-gen-meth-ary-ptrn-rest-id-direct.js
@@ -15547,6 +15560,7 @@ test262/test/language/expressions/class/dstr/async-gen-meth-dflt-ary-ptrn-elisio
 test262/test/language/expressions/class/dstr/async-gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/async-gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -15662,6 +15676,7 @@ test262/test/language/expressions/class/dstr/async-gen-meth-static-ary-ptrn-elis
 test262/test/language/expressions/class/dstr/async-gen-meth-static-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/async-gen-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-ary-ptrn-rest-id-direct.js
@@ -15715,6 +15730,7 @@ test262/test/language/expressions/class/dstr/async-gen-meth-static-dflt-ary-ptrn
 test262/test/language/expressions/class/dstr/async-gen-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -15822,6 +15838,7 @@ test262/test/language/expressions/class/dstr/async-private-gen-meth-ary-ptrn-eli
 test262/test/language/expressions/class/dstr/async-private-gen-meth-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/async-private-gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-ary-ptrn-rest-id-direct.js
@@ -15866,6 +15883,7 @@ test262/test/language/expressions/class/dstr/async-private-gen-meth-dflt-ary-ptr
 test262/test/language/expressions/class/dstr/async-private-gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -15946,6 +15964,7 @@ test262/test/language/expressions/class/dstr/async-private-gen-meth-static-ary-p
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-id-direct.js
@@ -15990,6 +16009,7 @@ test262/test/language/expressions/class/dstr/async-private-gen-meth-static-dflt-
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -16078,6 +16098,7 @@ test262/test/language/expressions/class/dstr/gen-meth-ary-ptrn-elision-exhausted
 test262/test/language/expressions/class/dstr/gen-meth-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/gen-meth-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/gen-meth-ary-ptrn-rest-id-direct.js
@@ -16131,6 +16152,7 @@ test262/test/language/expressions/class/dstr/gen-meth-dflt-ary-ptrn-elision-exha
 test262/test/language/expressions/class/dstr/gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -16246,6 +16268,7 @@ test262/test/language/expressions/class/dstr/gen-meth-static-ary-ptrn-elision-ex
 test262/test/language/expressions/class/dstr/gen-meth-static-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/gen-meth-static-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/gen-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/gen-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/gen-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/gen-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/gen-meth-static-ary-ptrn-rest-id-direct.js
@@ -16299,6 +16322,7 @@ test262/test/language/expressions/class/dstr/gen-meth-static-dflt-ary-ptrn-elisi
 test262/test/language/expressions/class/dstr/gen-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/gen-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -16414,6 +16438,7 @@ test262/test/language/expressions/class/dstr/meth-ary-ptrn-elision-exhausted.js
 test262/test/language/expressions/class/dstr/meth-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/meth-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/meth-ary-ptrn-rest-id-direct.js
@@ -16467,6 +16492,7 @@ test262/test/language/expressions/class/dstr/meth-dflt-ary-ptrn-elision-exhauste
 test262/test/language/expressions/class/dstr/meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/meth-dflt-ary-ptrn-rest-id-direct.js
@@ -16582,6 +16608,7 @@ test262/test/language/expressions/class/dstr/meth-static-ary-ptrn-elision-exhaus
 test262/test/language/expressions/class/dstr/meth-static-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/meth-static-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/meth-static-ary-ptrn-rest-id-direct.js
@@ -16635,6 +16662,7 @@ test262/test/language/expressions/class/dstr/meth-static-dflt-ary-ptrn-elision-e
 test262/test/language/expressions/class/dstr/meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -16742,6 +16770,7 @@ test262/test/language/expressions/class/dstr/private-gen-meth-ary-ptrn-elision-e
 test262/test/language/expressions/class/dstr/private-gen-meth-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/private-gen-meth-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/private-gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/private-gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/private-gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/private-gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/private-gen-meth-ary-ptrn-rest-id-direct.js
@@ -16786,6 +16815,7 @@ test262/test/language/expressions/class/dstr/private-gen-meth-dflt-ary-ptrn-elis
 test262/test/language/expressions/class/dstr/private-gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/private-gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -16866,6 +16896,7 @@ test262/test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-el
 test262/test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-ary-ptrn-rest-id-direct.js
@@ -16910,6 +16941,7 @@ test262/test/language/expressions/class/dstr/private-gen-meth-static-dflt-ary-pt
 test262/test/language/expressions/class/dstr/private-gen-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -16990,6 +17022,7 @@ test262/test/language/expressions/class/dstr/private-meth-ary-ptrn-elision-exhau
 test262/test/language/expressions/class/dstr/private-meth-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/private-meth-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/private-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/private-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/private-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/private-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/private-meth-ary-ptrn-rest-id-direct.js
@@ -17034,6 +17067,7 @@ test262/test/language/expressions/class/dstr/private-meth-dflt-ary-ptrn-elision-
 test262/test/language/expressions/class/dstr/private-meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/private-meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/private-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/private-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/private-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/private-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/private-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -17114,6 +17148,7 @@ test262/test/language/expressions/class/dstr/private-meth-static-ary-ptrn-elisio
 test262/test/language/expressions/class/dstr/private-meth-static-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/private-meth-static-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/private-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/private-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/private-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/private-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/private-meth-static-ary-ptrn-rest-id-direct.js
@@ -17158,6 +17193,7 @@ test262/test/language/expressions/class/dstr/private-meth-static-dflt-ary-ptrn-e
 test262/test/language/expressions/class/dstr/private-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/class/dstr/private-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/class/dstr/private-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/class/dstr/private-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/class/dstr/private-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/class/dstr/private-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/class/dstr/private-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -19450,6 +19486,7 @@ test262/test/language/expressions/function/dstr/ary-ptrn-elision-exhausted.js
 test262/test/language/expressions/function/dstr/ary-ptrn-elision.js
 test262/test/language/expressions/function/dstr/ary-ptrn-empty.js
 test262/test/language/expressions/function/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/function/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/function/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/function/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/function/dstr/ary-ptrn-rest-id-direct.js
@@ -19503,6 +19540,7 @@ test262/test/language/expressions/function/dstr/dflt-ary-ptrn-elision-exhausted.
 test262/test/language/expressions/function/dstr/dflt-ary-ptrn-elision.js
 test262/test/language/expressions/function/dstr/dflt-ary-ptrn-empty.js
 test262/test/language/expressions/function/dstr/dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/function/dstr/dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/function/dstr/dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/function/dstr/dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/function/dstr/dflt-ary-ptrn-rest-id-direct.js
@@ -19667,6 +19705,7 @@ test262/test/language/expressions/generators/dstr/ary-ptrn-elision-exhausted.js
 test262/test/language/expressions/generators/dstr/ary-ptrn-elision.js
 test262/test/language/expressions/generators/dstr/ary-ptrn-empty.js
 test262/test/language/expressions/generators/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/generators/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/generators/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/generators/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/generators/dstr/ary-ptrn-rest-id-direct.js
@@ -19720,6 +19759,7 @@ test262/test/language/expressions/generators/dstr/dflt-ary-ptrn-elision-exhauste
 test262/test/language/expressions/generators/dstr/dflt-ary-ptrn-elision.js
 test262/test/language/expressions/generators/dstr/dflt-ary-ptrn-empty.js
 test262/test/language/expressions/generators/dstr/dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/generators/dstr/dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/generators/dstr/dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/generators/dstr/dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/generators/dstr/dflt-ary-ptrn-rest-id-direct.js
@@ -19812,6 +19852,7 @@ test262/test/language/expressions/generators/named-yield-as-identifier-reference
 test262/test/language/expressions/generators/named-yield-as-identifier-reference.js
 test262/test/language/expressions/generators/named-yield-as-label-identifier-escaped.js
 test262/test/language/expressions/generators/named-yield-as-label-identifier.js
+test262/test/language/expressions/generators/named-yield-identifier-non-strict.js
 test262/test/language/expressions/generators/named-yield-identifier-spread-strict.js
 test262/test/language/expressions/generators/named-yield-identifier-strict.js
 test262/test/language/expressions/generators/no-yield.js
@@ -19848,6 +19889,7 @@ test262/test/language/expressions/generators/yield-as-parameter.js
 test262/test/language/expressions/generators/yield-as-property-name.js
 test262/test/language/expressions/generators/yield-as-statement.js
 test262/test/language/expressions/generators/yield-as-yield-operand.js
+test262/test/language/expressions/generators/yield-identifier-non-strict.js
 test262/test/language/expressions/generators/yield-identifier-spread-strict.js
 test262/test/language/expressions/generators/yield-identifier-strict.js
 test262/test/language/expressions/generators/yield-newline.js
@@ -20381,6 +20423,7 @@ test262/test/language/expressions/object/__proto__-permitted-dup-shorthand.js
 test262/test/language/expressions/object/__proto__-permitted-dup.js
 test262/test/language/expressions/object/accessor-name-computed-err-evaluation.js
 test262/test/language/expressions/object/accessor-name-computed-err-unresolvable.js
+test262/test/language/expressions/object/accessor-name-computed-yield-expr.js
 test262/test/language/expressions/object/accessor-name-computed-yield-id.js
 test262/test/language/expressions/object/accessor-name-computed.js
 test262/test/language/expressions/object/accessor-name-literal-numeric-binary.js
@@ -20478,6 +20521,7 @@ test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from
 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-null.js
 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-numeric-literal.js
 test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-string-literal.js
+test262/test/language/expressions/object/cpn-obj-lit-computed-property-name-from-yield-expression.js
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-init-iter-get-err-array-prototype.js
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-init-iter-get-err.js
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-init-iter-no-close.js
@@ -20516,6 +20560,7 @@ test262/test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elision-ex
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-elision.js
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-empty.js
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/object/dstr/async-gen-meth-ary-ptrn-rest-id-direct.js
@@ -20569,6 +20614,7 @@ test262/test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elisi
 test262/test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/object/dstr/async-gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -20684,6 +20730,7 @@ test262/test/language/expressions/object/dstr/gen-meth-ary-ptrn-elision-exhauste
 test262/test/language/expressions/object/dstr/gen-meth-ary-ptrn-elision.js
 test262/test/language/expressions/object/dstr/gen-meth-ary-ptrn-empty.js
 test262/test/language/expressions/object/dstr/gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/object/dstr/gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/object/dstr/gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/object/dstr/gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/object/dstr/gen-meth-ary-ptrn-rest-id-direct.js
@@ -20737,6 +20784,7 @@ test262/test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elision-exh
 test262/test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/object/dstr/gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -20852,6 +20900,7 @@ test262/test/language/expressions/object/dstr/meth-ary-ptrn-elision-exhausted.js
 test262/test/language/expressions/object/dstr/meth-ary-ptrn-elision.js
 test262/test/language/expressions/object/dstr/meth-ary-ptrn-empty.js
 test262/test/language/expressions/object/dstr/meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/object/dstr/meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/object/dstr/meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/object/dstr/meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/object/dstr/meth-ary-ptrn-rest-id-direct.js
@@ -20905,6 +20954,7 @@ test262/test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elision-exhaust
 test262/test/language/expressions/object/dstr/meth-dflt-ary-ptrn-elision.js
 test262/test/language/expressions/object/dstr/meth-dflt-ary-ptrn-empty.js
 test262/test/language/expressions/object/dstr/meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/expressions/object/dstr/meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/expressions/object/dstr/meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/expressions/object/dstr/meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/expressions/object/dstr/meth-dflt-ary-ptrn-rest-id-direct.js
@@ -21110,6 +21160,7 @@ test262/test/language/expressions/object/method-definition/async-gen-yield-as-id
 test262/test/language/expressions/object/method-definition/async-gen-yield-as-identifier-reference.js
 test262/test/language/expressions/object/method-definition/async-gen-yield-as-label-identifier-escaped.js
 test262/test/language/expressions/object/method-definition/async-gen-yield-as-label-identifier.js
+test262/test/language/expressions/object/method-definition/async-gen-yield-identifier-non-strict.js
 test262/test/language/expressions/object/method-definition/async-gen-yield-identifier-spread-strict.js
 test262/test/language/expressions/object/method-definition/async-gen-yield-identifier-strict.js
 test262/test/language/expressions/object/method-definition/async-gen-yield-promise-reject-next-catch.js
@@ -21224,6 +21275,7 @@ test262/test/language/expressions/object/method-definition/gen-yield-as-identifi
 test262/test/language/expressions/object/method-definition/gen-yield-as-identifier-reference.js
 test262/test/language/expressions/object/method-definition/gen-yield-as-label-identifier-escaped.js
 test262/test/language/expressions/object/method-definition/gen-yield-as-label-identifier.js
+test262/test/language/expressions/object/method-definition/gen-yield-identifier-non-strict.js
 test262/test/language/expressions/object/method-definition/gen-yield-identifier-spread-strict.js
 test262/test/language/expressions/object/method-definition/gen-yield-identifier-strict.js
 test262/test/language/expressions/object/method-definition/generator-invoke-fn-strict.js
@@ -21801,7 +21853,6 @@ test262/test/language/expressions/yield/formal-parameters-after-reassignment-str
 test262/test/language/expressions/yield/formal-parameters.js
 test262/test/language/expressions/yield/from-catch.js
 test262/test/language/expressions/yield/from-try.js
-test262/test/language/expressions/yield/from-with.js
 test262/test/language/expressions/yield/in-rltn-expr.js
 test262/test/language/expressions/yield/invalid-left-hand-side.js
 test262/test/language/expressions/yield/iter-value-specified.js
@@ -21810,15 +21861,12 @@ test262/test/language/expressions/yield/rhs-iter.js
 test262/test/language/expressions/yield/rhs-omitted.js
 test262/test/language/expressions/yield/rhs-primitive.js
 test262/test/language/expressions/yield/rhs-regexp.js
-test262/test/language/expressions/yield/rhs-template-middle.js
-test262/test/language/expressions/yield/rhs-unresolvable.js
 test262/test/language/expressions/yield/rhs-yield.js
 test262/test/language/expressions/yield/star-array.js
-test262/test/language/expressions/yield/star-rhs-iter-get-call-err.js
-test262/test/language/expressions/yield/star-rhs-iter-get-call-non-obj.js
-test262/test/language/expressions/yield/star-rhs-iter-nrml-next-call-err.js
-test262/test/language/expressions/yield/star-rhs-iter-nrml-next-call-non-obj.js
-test262/test/language/expressions/yield/star-rhs-unresolvable.js
+test262/test/language/expressions/yield/star-rhs-iter-nrml-res-value-final.js
+test262/test/language/expressions/yield/star-rhs-iter-rtrn-rtrn-invoke.js
+test262/test/language/expressions/yield/star-rhs-iter-thrw-res-value-final.js
+test262/test/language/expressions/yield/star-rhs-iter-thrw-thrw-invoke.js
 test262/test/language/expressions/yield/star-string.js
 test262/test/language/expressions/yield/then-return.js
 test262/test/language/expressions/yield/within-for.js
@@ -22959,6 +23007,7 @@ test262/test/language/statements/async-generator/dstr/ary-ptrn-elision-exhausted
 test262/test/language/statements/async-generator/dstr/ary-ptrn-elision.js
 test262/test/language/statements/async-generator/dstr/ary-ptrn-empty.js
 test262/test/language/statements/async-generator/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/async-generator/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/async-generator/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/async-generator/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/async-generator/dstr/ary-ptrn-rest-id-direct.js
@@ -23012,6 +23061,7 @@ test262/test/language/statements/async-generator/dstr/dflt-ary-ptrn-elision-exha
 test262/test/language/statements/async-generator/dstr/dflt-ary-ptrn-elision.js
 test262/test/language/statements/async-generator/dstr/dflt-ary-ptrn-empty.js
 test262/test/language/statements/async-generator/dstr/dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/async-generator/dstr/dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/async-generator/dstr/dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/async-generator/dstr/dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/async-generator/dstr/dflt-ary-ptrn-rest-id-direct.js
@@ -23106,6 +23156,7 @@ test262/test/language/statements/async-generator/yield-as-identifier-reference-e
 test262/test/language/statements/async-generator/yield-as-identifier-reference.js
 test262/test/language/statements/async-generator/yield-as-label-identifier-escaped.js
 test262/test/language/statements/async-generator/yield-as-label-identifier.js
+test262/test/language/statements/async-generator/yield-identifier-non-strict.js
 test262/test/language/statements/async-generator/yield-identifier-spread-strict.js
 test262/test/language/statements/async-generator/yield-identifier-strict.js
 test262/test/language/statements/async-generator/yield-promise-reject-next-catch.js
@@ -23513,6 +23564,7 @@ test262/test/language/statements/class/cpn-class-decl-accessors-computed-propert
 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-null.js
 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-numeric-literal.js
 test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-string-literal.js
+test262/test/language/statements/class/cpn-class-decl-accessors-computed-property-name-from-yield-expression.js
 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-additive-expression-add.js
 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-additive-expression-subtract.js
 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-arrow-function-expression.js
@@ -23542,6 +23594,7 @@ test262/test/language/statements/class/cpn-class-decl-computed-property-name-fro
 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-null.js
 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-numeric-literal.js
 test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-string-literal.js
+test262/test/language/statements/class/cpn-class-decl-computed-property-name-from-yield-expression.js
 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-additive-expression-add.js
 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-additive-expression-subtract.js
 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-arrow-function-expression.js
@@ -23571,6 +23624,7 @@ test262/test/language/statements/class/cpn-class-decl-fields-computed-property-n
 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-null.js
 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-numeric-literal.js
 test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-string-literal.js
+test262/test/language/statements/class/cpn-class-decl-fields-computed-property-name-from-yield-expression.js
 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-additive-expression-add.js
 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-additive-expression-subtract.js
 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-arrow-function-expression.js
@@ -23600,6 +23654,7 @@ test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-pr
 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-null.js
 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-numeric-literal.js
 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-string-literal.js
+test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-yield-expression.js
 test262/test/language/statements/class/cptn-decl.js
 test262/test/language/statements/class/definition/class-method-returns-promise.js
 test262/test/language/statements/class/definition/constructor-property.js
@@ -23679,6 +23734,7 @@ test262/test/language/statements/class/dstr/async-gen-meth-ary-ptrn-elision-exha
 test262/test/language/statements/class/dstr/async-gen-meth-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/async-gen-meth-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/async-gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/async-gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/async-gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/async-gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/async-gen-meth-ary-ptrn-rest-id-direct.js
@@ -23732,6 +23788,7 @@ test262/test/language/statements/class/dstr/async-gen-meth-dflt-ary-ptrn-elision
 test262/test/language/statements/class/dstr/async-gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/async-gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/async-gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -23847,6 +23904,7 @@ test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-elisi
 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-ary-ptrn-rest-id-direct.js
@@ -23900,6 +23958,7 @@ test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-ptrn-
 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/async-gen-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -24007,6 +24066,7 @@ test262/test/language/statements/class/dstr/async-private-gen-meth-ary-ptrn-elis
 test262/test/language/statements/class/dstr/async-private-gen-meth-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/async-private-gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-ary-ptrn-rest-id-direct.js
@@ -24051,6 +24111,7 @@ test262/test/language/statements/class/dstr/async-private-gen-meth-dflt-ary-ptrn
 test262/test/language/statements/class/dstr/async-private-gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -24131,6 +24192,7 @@ test262/test/language/statements/class/dstr/async-private-gen-meth-static-ary-pt
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-ary-ptrn-rest-id-direct.js
@@ -24175,6 +24237,7 @@ test262/test/language/statements/class/dstr/async-private-gen-meth-static-dflt-a
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/async-private-gen-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -24263,6 +24326,7 @@ test262/test/language/statements/class/dstr/gen-meth-ary-ptrn-elision-exhausted.
 test262/test/language/statements/class/dstr/gen-meth-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/gen-meth-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/gen-meth-ary-ptrn-rest-id-direct.js
@@ -24316,6 +24380,7 @@ test262/test/language/statements/class/dstr/gen-meth-dflt-ary-ptrn-elision-exhau
 test262/test/language/statements/class/dstr/gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -24431,6 +24496,7 @@ test262/test/language/statements/class/dstr/gen-meth-static-ary-ptrn-elision-exh
 test262/test/language/statements/class/dstr/gen-meth-static-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/gen-meth-static-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/gen-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/gen-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/gen-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/gen-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/gen-meth-static-ary-ptrn-rest-id-direct.js
@@ -24484,6 +24550,7 @@ test262/test/language/statements/class/dstr/gen-meth-static-dflt-ary-ptrn-elisio
 test262/test/language/statements/class/dstr/gen-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/gen-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/gen-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -24599,6 +24666,7 @@ test262/test/language/statements/class/dstr/meth-ary-ptrn-elision-exhausted.js
 test262/test/language/statements/class/dstr/meth-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/meth-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/meth-ary-ptrn-rest-id-direct.js
@@ -24652,6 +24720,7 @@ test262/test/language/statements/class/dstr/meth-dflt-ary-ptrn-elision-exhausted
 test262/test/language/statements/class/dstr/meth-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/meth-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/meth-dflt-ary-ptrn-rest-id-direct.js
@@ -24767,6 +24836,7 @@ test262/test/language/statements/class/dstr/meth-static-ary-ptrn-elision-exhaust
 test262/test/language/statements/class/dstr/meth-static-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/meth-static-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/meth-static-ary-ptrn-rest-id-direct.js
@@ -24820,6 +24890,7 @@ test262/test/language/statements/class/dstr/meth-static-dflt-ary-ptrn-elision-ex
 test262/test/language/statements/class/dstr/meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -24927,6 +24998,7 @@ test262/test/language/statements/class/dstr/private-gen-meth-ary-ptrn-elision-ex
 test262/test/language/statements/class/dstr/private-gen-meth-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/private-gen-meth-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/private-gen-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/private-gen-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/private-gen-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/private-gen-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/private-gen-meth-ary-ptrn-rest-id-direct.js
@@ -24971,6 +25043,7 @@ test262/test/language/statements/class/dstr/private-gen-meth-dflt-ary-ptrn-elisi
 test262/test/language/statements/class/dstr/private-gen-meth-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/private-gen-meth-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/private-gen-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -25051,6 +25124,7 @@ test262/test/language/statements/class/dstr/private-gen-meth-static-ary-ptrn-eli
 test262/test/language/statements/class/dstr/private-gen-meth-static-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/private-gen-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-ary-ptrn-rest-id-direct.js
@@ -25095,6 +25169,7 @@ test262/test/language/statements/class/dstr/private-gen-meth-static-dflt-ary-ptr
 test262/test/language/statements/class/dstr/private-gen-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/private-gen-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -25175,6 +25250,7 @@ test262/test/language/statements/class/dstr/private-meth-ary-ptrn-elision-exhaus
 test262/test/language/statements/class/dstr/private-meth-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/private-meth-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/private-meth-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/private-meth-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/private-meth-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/private-meth-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/private-meth-ary-ptrn-rest-id-direct.js
@@ -25219,6 +25295,7 @@ test262/test/language/statements/class/dstr/private-meth-dflt-ary-ptrn-elision-e
 test262/test/language/statements/class/dstr/private-meth-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/private-meth-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/private-meth-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/private-meth-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/private-meth-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/private-meth-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/private-meth-dflt-ary-ptrn-rest-id-direct.js
@@ -25299,6 +25376,7 @@ test262/test/language/statements/class/dstr/private-meth-static-ary-ptrn-elision
 test262/test/language/statements/class/dstr/private-meth-static-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/private-meth-static-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/private-meth-static-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/private-meth-static-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/private-meth-static-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/private-meth-static-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/private-meth-static-ary-ptrn-rest-id-direct.js
@@ -25343,6 +25421,7 @@ test262/test/language/statements/class/dstr/private-meth-static-dflt-ary-ptrn-el
 test262/test/language/statements/class/dstr/private-meth-static-dflt-ary-ptrn-elision.js
 test262/test/language/statements/class/dstr/private-meth-static-dflt-ary-ptrn-empty.js
 test262/test/language/statements/class/dstr/private-meth-static-dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/class/dstr/private-meth-static-dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/class/dstr/private-meth-static-dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/class/dstr/private-meth-static-dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/class/dstr/private-meth-static-dflt-ary-ptrn-rest-id-direct.js
@@ -26839,6 +26918,7 @@ test262/test/language/statements/const/dstr/ary-ptrn-elision-exhausted.js
 test262/test/language/statements/const/dstr/ary-ptrn-elision.js
 test262/test/language/statements/const/dstr/ary-ptrn-empty.js
 test262/test/language/statements/const/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/const/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/const/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/const/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/const/dstr/ary-ptrn-rest-id-direct.js
@@ -28263,12 +28343,14 @@ test262/test/language/statements/for-of/dstr/array-empty-val-num.js
 test262/test/language/statements/for-of/dstr/array-empty-val-string.js
 test262/test/language/statements/for-of/dstr/array-empty-val-symbol.js
 test262/test/language/statements/for-of/dstr/array-empty-val-undef.js
+test262/test/language/statements/for-of/dstr/array-iteration.js
 test262/test/language/statements/for-of/dstr/array-rest-after-element.js
 test262/test/language/statements/for-of/dstr/array-rest-after-elision.js
 test262/test/language/statements/for-of/dstr/array-rest-elision.js
 test262/test/language/statements/for-of/dstr/array-rest-iter-get-err.js
 test262/test/language/statements/for-of/dstr/array-rest-iter-nrml-close-skip.js
 test262/test/language/statements/for-of/dstr/array-rest-iter-thrw-close-skip.js
+test262/test/language/statements/for-of/dstr/array-rest-iteration.js
 test262/test/language/statements/for-of/dstr/array-rest-nested-array-invalid.js
 test262/test/language/statements/for-of/dstr/array-rest-nested-array-null.js
 test262/test/language/statements/for-of/dstr/array-rest-nested-array-undefined-hole.js
@@ -28323,6 +28405,7 @@ test262/test/language/statements/for-of/dstr/const-ary-ptrn-elision-exhausted.js
 test262/test/language/statements/for-of/dstr/const-ary-ptrn-elision.js
 test262/test/language/statements/for-of/dstr/const-ary-ptrn-empty.js
 test262/test/language/statements/for-of/dstr/const-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/for-of/dstr/const-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/for-of/dstr/const-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/for-of/dstr/const-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/for-of/dstr/const-ary-ptrn-rest-id-direct.js
@@ -28408,6 +28491,7 @@ test262/test/language/statements/for-of/dstr/let-ary-ptrn-elision-exhausted.js
 test262/test/language/statements/for-of/dstr/let-ary-ptrn-elision.js
 test262/test/language/statements/for-of/dstr/let-ary-ptrn-empty.js
 test262/test/language/statements/for-of/dstr/let-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/for-of/dstr/let-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/for-of/dstr/let-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/for-of/dstr/let-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/for-of/dstr/let-ary-ptrn-rest-id-direct.js
@@ -28578,6 +28662,7 @@ test262/test/language/statements/for-of/dstr/var-ary-ptrn-elision-exhausted.js
 test262/test/language/statements/for-of/dstr/var-ary-ptrn-elision.js
 test262/test/language/statements/for-of/dstr/var-ary-ptrn-empty.js
 test262/test/language/statements/for-of/dstr/var-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/for-of/dstr/var-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/for-of/dstr/var-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/for-of/dstr/var-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/for-of/dstr/var-ary-ptrn-rest-id-direct.js
@@ -28628,6 +28713,8 @@ test262/test/language/statements/for-of/dstr/var-obj-ptrn-rest-val-obj.js
 test262/test/language/statements/for-of/escaped-of.js
 test262/test/language/statements/for-of/float32array.js
 test262/test/language/statements/for-of/float64array.js
+test262/test/language/statements/for-of/generator-close-via-break.js
+test262/test/language/statements/for-of/generator-close-via-return.js
 test262/test/language/statements/for-of/generator-next-error.js
 test262/test/language/statements/for-of/generator.js
 test262/test/language/statements/for-of/generic-iterable.js
@@ -28781,6 +28868,7 @@ test262/test/language/statements/for/dstr/const-ary-ptrn-elision-exhausted.js
 test262/test/language/statements/for/dstr/const-ary-ptrn-elision.js
 test262/test/language/statements/for/dstr/const-ary-ptrn-empty.js
 test262/test/language/statements/for/dstr/const-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/for/dstr/const-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/for/dstr/const-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/for/dstr/const-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/for/dstr/const-ary-ptrn-rest-id-direct.js
@@ -28866,6 +28954,7 @@ test262/test/language/statements/for/dstr/let-ary-ptrn-elision-exhausted.js
 test262/test/language/statements/for/dstr/let-ary-ptrn-elision.js
 test262/test/language/statements/for/dstr/let-ary-ptrn-empty.js
 test262/test/language/statements/for/dstr/let-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/for/dstr/let-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/for/dstr/let-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/for/dstr/let-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/for/dstr/let-ary-ptrn-rest-id-direct.js
@@ -28951,6 +29040,7 @@ test262/test/language/statements/for/dstr/var-ary-ptrn-elision-exhausted.js
 test262/test/language/statements/for/dstr/var-ary-ptrn-elision.js
 test262/test/language/statements/for/dstr/var-ary-ptrn-empty.js
 test262/test/language/statements/for/dstr/var-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/for/dstr/var-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/for/dstr/var-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/for/dstr/var-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/for/dstr/var-ary-ptrn-rest-id-direct.js
@@ -29186,6 +29276,7 @@ test262/test/language/statements/function/dstr/ary-ptrn-elision-exhausted.js
 test262/test/language/statements/function/dstr/ary-ptrn-elision.js
 test262/test/language/statements/function/dstr/ary-ptrn-empty.js
 test262/test/language/statements/function/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/function/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/function/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/function/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/function/dstr/ary-ptrn-rest-id-direct.js
@@ -29239,6 +29330,7 @@ test262/test/language/statements/function/dstr/dflt-ary-ptrn-elision-exhausted.j
 test262/test/language/statements/function/dstr/dflt-ary-ptrn-elision.js
 test262/test/language/statements/function/dstr/dflt-ary-ptrn-empty.js
 test262/test/language/statements/function/dstr/dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/function/dstr/dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/function/dstr/dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/function/dstr/dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/function/dstr/dflt-ary-ptrn-rest-id-direct.js
@@ -29417,6 +29509,7 @@ test262/test/language/statements/generators/dstr/ary-ptrn-elision-exhausted.js
 test262/test/language/statements/generators/dstr/ary-ptrn-elision.js
 test262/test/language/statements/generators/dstr/ary-ptrn-empty.js
 test262/test/language/statements/generators/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/generators/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/generators/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/generators/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/generators/dstr/ary-ptrn-rest-id-direct.js
@@ -29470,6 +29563,7 @@ test262/test/language/statements/generators/dstr/dflt-ary-ptrn-elision-exhausted
 test262/test/language/statements/generators/dstr/dflt-ary-ptrn-elision.js
 test262/test/language/statements/generators/dstr/dflt-ary-ptrn-empty.js
 test262/test/language/statements/generators/dstr/dflt-ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/generators/dstr/dflt-ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/generators/dstr/dflt-ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/generators/dstr/dflt-ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/generators/dstr/dflt-ary-ptrn-rest-id-direct.js
@@ -29588,6 +29682,7 @@ test262/test/language/statements/generators/yield-as-parameter.js
 test262/test/language/statements/generators/yield-as-property-name.js
 test262/test/language/statements/generators/yield-as-statement.js
 test262/test/language/statements/generators/yield-as-yield-operand.js
+test262/test/language/statements/generators/yield-identifier-non-strict.js
 test262/test/language/statements/generators/yield-identifier-spread-strict.js
 test262/test/language/statements/generators/yield-identifier-strict.js
 test262/test/language/statements/generators/yield-newline.js
@@ -29697,6 +29792,7 @@ test262/test/language/statements/let/dstr/ary-ptrn-elision-exhausted.js
 test262/test/language/statements/let/dstr/ary-ptrn-elision.js
 test262/test/language/statements/let/dstr/ary-ptrn-empty.js
 test262/test/language/statements/let/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/let/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/let/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/let/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/let/dstr/ary-ptrn-rest-id-direct.js
@@ -29978,6 +30074,7 @@ test262/test/language/statements/try/dstr/ary-ptrn-elision-exhausted.js
 test262/test/language/statements/try/dstr/ary-ptrn-elision.js
 test262/test/language/statements/try/dstr/ary-ptrn-empty.js
 test262/test/language/statements/try/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/try/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/try/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/try/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/try/dstr/ary-ptrn-rest-id-direct.js
@@ -30170,6 +30267,7 @@ test262/test/language/statements/variable/dstr/ary-ptrn-elision-exhausted.js
 test262/test/language/statements/variable/dstr/ary-ptrn-elision.js
 test262/test/language/statements/variable/dstr/ary-ptrn-empty.js
 test262/test/language/statements/variable/dstr/ary-ptrn-rest-ary-elem.js
+test262/test/language/statements/variable/dstr/ary-ptrn-rest-ary-elision.js
 test262/test/language/statements/variable/dstr/ary-ptrn-rest-ary-empty.js
 test262/test/language/statements/variable/dstr/ary-ptrn-rest-ary-rest.js
 test262/test/language/statements/variable/dstr/ary-ptrn-rest-id-direct.js

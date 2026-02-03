@@ -371,30 +371,24 @@ impl Interpreter {
                         return Completion::Yield(value);
                     }
                 } else {
-                    if self.generator_context.is_some() {
-                        let value = if let Some(e) = expr {
-                            match self.eval_expr(e, env) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-                        let ctx = self.generator_context.as_mut().unwrap();
+                    let value = if let Some(e) = expr {
+                        match self.eval_expr(e, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if let Some(ctx) = self.generator_context.as_mut() {
                         let current = ctx.current_yield;
                         ctx.current_yield += 1;
                         if current < ctx.target_yield {
                             // Fast-forwarding past this yield - return sent_value
                             return Completion::Normal(ctx.sent_value.clone());
                         }
-                        // This is the target yield - actually yield the value
-                        return Completion::Yield(value);
                     }
-                    if let Some(e) = expr {
-                        self.eval_expr(e, env)
-                    } else {
-                        Completion::Normal(JsValue::Undefined)
-                    }
+                    // Yield the value - callers handle this completion type
+                    return Completion::Yield(value);
                 }
             }
             Expression::Await(expr) => {
@@ -3210,6 +3204,837 @@ impl Interpreter {
         Completion::Normal(promise)
     }
 
+    fn async_generator_next_state_machine(
+        &mut self,
+        this: &JsValue,
+        sent_value: JsValue,
+    ) -> Completion {
+        use crate::interpreter::generator_transform::StateTerminator;
+
+        let JsValue::Object(o) = this else {
+            return self
+                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
+        };
+        let Some(obj_rc) = self.get_object(o.id) else {
+            return self
+                .reject_with_type_error("AsyncGenerator.prototype.next called on non-object");
+        };
+
+        let state = obj_rc.borrow().iterator_state.clone();
+        let Some(IteratorState::StateMachineAsyncGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            execution_state,
+            try_stack,
+            pending_binding,
+            delegated_iterator,
+            pending_exception: stored_pending_exception,
+            ..
+        }) = state
+        else {
+            return self.reject_with_type_error("not a state machine async generator");
+        };
+
+        let promise = self.create_promise_object();
+        let promise_id = if let JsValue::Object(ref po) = promise {
+            po.id
+        } else {
+            0
+        };
+        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+
+        if let Some(ref deleg_info) = delegated_iterator {
+            let iterator = deleg_info.iterator.clone();
+            let resume_state = deleg_info.resume_state;
+            let binding = deleg_info.sent_value_binding.clone();
+
+            let result = self.iterator_next_with_value(&iterator, &sent_value);
+            match result {
+                Ok(iter_result) => {
+                    let done = self.iterator_complete(&iter_result);
+                    let value = self.iterator_value(&iter_result);
+                    if done {
+                        if let Some(ref bind) = binding {
+                            use crate::interpreter::generator_transform::SentValueBindingKind;
+                            match &bind.kind {
+                                SentValueBindingKind::Variable(name) => {
+                                    func_env.borrow_mut().set(name, value.clone()).ok();
+                                }
+                                SentValueBindingKind::Pattern(pattern) => {
+                                    let _ = self.bind_pattern(
+                                        pattern,
+                                        value.clone(),
+                                        BindingKind::Var,
+                                        &func_env,
+                                    );
+                                }
+                                SentValueBindingKind::Discard => {}
+                            }
+                        }
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineAsyncGenerator {
+                                state_machine: state_machine.clone(),
+                                func_env: func_env.clone(),
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: resume_state,
+                                },
+                                sent_value: JsValue::Undefined,
+                                try_stack: try_stack.clone(),
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                            });
+                        return self.async_generator_next_state_machine(this, JsValue::Undefined);
+                    } else {
+                        let awaited_value = match self.await_value(&value) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                    });
+                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise);
+                            }
+                            _ => JsValue::Undefined,
+                        };
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: resume_state,
+                                },
+                                sent_value: JsValue::Undefined,
+                                try_stack,
+                                pending_binding: None,
+                                delegated_iterator: Some(crate::interpreter::types::DelegatedIteratorInfo {
+                                    iterator,
+                                    resume_state,
+                                    sent_value_binding: binding,
+                                }),
+                                pending_exception: None,
+                            });
+                        let iter_result = self.create_iter_result_object(awaited_value, false);
+                        let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
+                }
+                Err(e) => {
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineAsyncGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                        });
+                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                    self.drain_microtasks();
+                    return Completion::Normal(promise);
+                }
+            }
+        }
+
+        let current_state_id = match &execution_state {
+            StateMachineExecutionState::Completed => {
+                let result = self.create_iter_result_object(JsValue::Undefined, true);
+                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[result]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+            StateMachineExecutionState::Executing => {
+                let err = self.create_type_error("AsyncGenerator is already executing");
+                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+            StateMachineExecutionState::SuspendedStart => 0,
+            StateMachineExecutionState::SuspendedAtState { state_id } => *state_id,
+        };
+
+        obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
+            state_machine: state_machine.clone(),
+            func_env: func_env.clone(),
+            is_strict,
+            execution_state: StateMachineExecutionState::Executing,
+            sent_value: sent_value.clone(),
+            try_stack: try_stack.clone(),
+            pending_binding: None,
+            delegated_iterator: None,
+            pending_exception: None,
+        });
+
+        use crate::interpreter::generator_transform::SentValueBindingKind;
+        if let Some(binding) = pending_binding {
+            match &binding.kind {
+                SentValueBindingKind::Variable(name) => {
+                    func_env.borrow_mut().set(name, sent_value.clone()).ok();
+                }
+                SentValueBindingKind::Pattern(pattern) => {
+                    let _ = self.bind_pattern(
+                        pattern,
+                        sent_value.clone(),
+                        BindingKind::Var,
+                        &func_env,
+                    );
+                }
+                SentValueBindingKind::Discard => {}
+            }
+        }
+
+        let mut current_id = current_state_id;
+        let mut current_try_stack = try_stack;
+        let mut pending_exception: Option<JsValue> = stored_pending_exception;
+
+        loop {
+            let (statements, terminator) = {
+                let gen_state = &state_machine.states[current_id];
+                (gen_state.statements.clone(), gen_state.terminator.clone())
+            };
+
+            let stmt_result = self.exec_statements(&statements, &func_env);
+            if let Completion::Throw(e) = stmt_result {
+                if let Some(try_info) = current_try_stack.pop() {
+                    if let Some(catch_state) = try_info.catch_state {
+                        pending_exception = Some(e);
+                        current_id = catch_state;
+                        continue;
+                    } else if let Some(finally_state) = try_info.finally_state {
+                        current_id = finally_state;
+                        continue;
+                    }
+                }
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
+                    state_machine,
+                    func_env,
+                    is_strict,
+                    execution_state: StateMachineExecutionState::Completed,
+                    sent_value: JsValue::Undefined,
+                    try_stack: vec![],
+                    pending_binding: None,
+                    delegated_iterator: None,
+                    pending_exception: None,
+                });
+                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+            if let Completion::Return(v) = stmt_result {
+                let awaited = match self.await_value(&v) {
+                    Completion::Normal(av) => av,
+                    Completion::Throw(e) => {
+                        obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                        });
+                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
+                    _ => JsValue::Undefined,
+                };
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
+                    state_machine,
+                    func_env,
+                    is_strict,
+                    execution_state: StateMachineExecutionState::Completed,
+                    sent_value: JsValue::Undefined,
+                    try_stack: vec![],
+                    pending_binding: None,
+                    delegated_iterator: None,
+                    pending_exception: None,
+                });
+                let iter_result = self.create_iter_result_object(awaited, true);
+                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+            // Handle Yield completions from exec_statements (e.g., from yields inside for-of loops)
+            if let Completion::Yield(yield_val) = stmt_result {
+                let awaited_val = match self.await_value(&yield_val) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                            });
+                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
+                    _ => yield_val,
+                };
+                // For yields inside for-of/for-await-of, we can't properly resume
+                // the loop, so we mark as completed after yielding
+                obj_rc.borrow_mut().iterator_state =
+                    Some(IteratorState::StateMachineAsyncGenerator {
+                        state_machine,
+                        func_env,
+                        is_strict,
+                        execution_state: StateMachineExecutionState::Completed,
+                        sent_value: JsValue::Undefined,
+                        try_stack: current_try_stack,
+                        pending_binding: None,
+                        delegated_iterator: None,
+                        pending_exception: None,
+                    });
+                let iter_result = self.create_iter_result_object(awaited_val, false);
+                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+
+            match &terminator {
+                StateTerminator::Yield {
+                    value,
+                    is_delegate,
+                    resume_state,
+                    sent_value_binding,
+                } => {
+                    let yield_val = if let Some(expr) = value {
+                        match self.eval_expr(expr, &func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                    });
+                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise);
+                            }
+                            other => {
+                                if let Completion::Yield(yv) = other {
+                                    yv
+                                } else {
+                                    JsValue::Undefined
+                                }
+                            }
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+
+                    if *is_delegate {
+                        let iterator = match self.get_async_iterator(&yield_val) {
+                            Ok(it) => it,
+                            Err(e) => {
+                                match self.get_iterator(&yield_val) {
+                                    Ok(it) => it,
+                                    Err(_) => {
+                                        obj_rc.borrow_mut().iterator_state =
+                                            Some(IteratorState::StateMachineAsyncGenerator {
+                                                state_machine,
+                                                func_env,
+                                                is_strict,
+                                                execution_state: StateMachineExecutionState::Completed,
+                                                sent_value: JsValue::Undefined,
+                                                try_stack: vec![],
+                                                pending_binding: None,
+                                                delegated_iterator: None,
+                                                pending_exception: None,
+                                            });
+                                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                        self.drain_microtasks();
+                                        return Completion::Normal(promise);
+                                    }
+                                }
+                            }
+                        };
+
+                        let iter_result = match self.iterator_next(&iterator) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                    });
+                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise);
+                            }
+                        };
+
+                        let awaited_result = match self.await_value(&iter_result) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                    });
+                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise);
+                            }
+                            _ => iter_result,
+                        };
+
+                        let done = self.iterator_complete(&awaited_result);
+                        let value = self.iterator_value(&awaited_result);
+
+                        if done {
+                            if let Some(binding) = sent_value_binding {
+                                match &binding.kind {
+                                    SentValueBindingKind::Variable(name) => {
+                                        func_env.borrow_mut().set(name, value.clone()).ok();
+                                    }
+                                    SentValueBindingKind::Pattern(pattern) => {
+                                        let _ = self.bind_pattern(
+                                            pattern,
+                                            value.clone(),
+                                            BindingKind::Var,
+                                            &func_env,
+                                        );
+                                    }
+                                    SentValueBindingKind::Discard => {}
+                                }
+                            }
+                            current_id = *resume_state;
+                            continue;
+                        } else {
+                            // For async generator yield*, await the value before yielding
+                            let awaited_value = match self.await_value(&value) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    obj_rc.borrow_mut().iterator_state =
+                                        Some(IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            sent_value: JsValue::Undefined,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                        });
+                                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    self.drain_microtasks();
+                                    return Completion::Normal(promise);
+                                }
+                                _ => value,
+                            };
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineAsyncGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                                        state_id: *resume_state,
+                                    },
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: current_try_stack,
+                                    pending_binding: None,
+                                    delegated_iterator: Some(
+                                        crate::interpreter::types::DelegatedIteratorInfo {
+                                            iterator,
+                                            resume_state: *resume_state,
+                                            sent_value_binding: sent_value_binding.clone(),
+                                        },
+                                    ),
+                                    pending_exception: None,
+                                });
+                            let iter_result = self.create_iter_result_object(awaited_value, false);
+                            let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                            self.drain_microtasks();
+                            return Completion::Normal(promise);
+                        }
+                    }
+
+                    let awaited_val = match self.await_value(&yield_val) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineAsyncGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                    pending_exception: None,
+                                });
+                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            self.drain_microtasks();
+                            return Completion::Normal(promise);
+                        }
+                        _ => yield_val,
+                    };
+
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineAsyncGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::SuspendedAtState {
+                                state_id: *resume_state,
+                            },
+                            sent_value: JsValue::Undefined,
+                            try_stack: current_try_stack,
+                            pending_binding: sent_value_binding.clone(),
+                            delegated_iterator: None,
+                            pending_exception: None,
+                        });
+                    let iter_result = self.create_iter_result_object(awaited_val, false);
+                    let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                    self.drain_microtasks();
+                    return Completion::Normal(promise);
+                }
+
+                StateTerminator::Return(expr) => {
+                    let ret_val = if let Some(e) = expr {
+                        match self.eval_expr(e, &func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(err) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                    });
+                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise);
+                            }
+                            other => {
+                                if let Completion::Yield(yv) = other {
+                                    yv
+                                } else {
+                                    JsValue::Undefined
+                                }
+                            }
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+
+                    let awaited = match self.await_value(&ret_val) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineAsyncGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                    pending_exception: None,
+                                });
+                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            self.drain_microtasks();
+                            return Completion::Normal(promise);
+                        }
+                        _ => ret_val,
+                    };
+
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineAsyncGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                        });
+                    let iter_result = self.create_iter_result_object(awaited, true);
+                    let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                    self.drain_microtasks();
+                    return Completion::Normal(promise);
+                }
+
+                StateTerminator::Throw(expr) => {
+                    let throw_val = match self.eval_expr(expr, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => e,
+                        other => {
+                            if let Completion::Yield(yv) = other {
+                                yv
+                            } else {
+                                JsValue::Undefined
+                            }
+                        }
+                    };
+
+                    if let Some(try_info) = current_try_stack.pop() {
+                        if let Some(catch_state) = try_info.catch_state {
+                            pending_exception = Some(throw_val);
+                            current_id = catch_state;
+                            continue;
+                        }
+                    }
+
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineAsyncGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                        });
+                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[throw_val]);
+                    self.drain_microtasks();
+                    return Completion::Normal(promise);
+                }
+
+                StateTerminator::Goto(next_state) => {
+                    current_id = *next_state;
+                }
+
+                StateTerminator::ConditionalGoto {
+                    condition,
+                    true_state,
+                    false_state,
+                } => {
+                    let cond_val = match self.eval_expr(condition, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineAsyncGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                    pending_exception: None,
+                                });
+                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            self.drain_microtasks();
+                            return Completion::Normal(promise);
+                        }
+                        other => {
+                            if let Completion::Yield(yv) = other {
+                                yv
+                            } else {
+                                JsValue::Undefined
+                            }
+                        }
+                    };
+                    current_id = if to_boolean(&cond_val) {
+                        *true_state
+                    } else {
+                        *false_state
+                    };
+                }
+
+                StateTerminator::TryEnter {
+                    try_state,
+                    catch_state,
+                    finally_state,
+                    after_state,
+                } => {
+                    current_try_stack.push(TryContextInfo {
+                        catch_state: catch_state.as_ref().map(|c| c.state),
+                        finally_state: *finally_state,
+                        after_state: *after_state,
+                        entered_catch: false,
+                        entered_finally: false,
+                    });
+                    current_id = *try_state;
+                }
+
+                StateTerminator::TryExit { after_state } => {
+                    current_try_stack.pop();
+                    current_id = *after_state;
+                }
+
+                StateTerminator::EnterCatch { body_state, param } => {
+                    if let Some(ctx) = current_try_stack.last_mut() {
+                        ctx.entered_catch = true;
+                    }
+                    if let Some(pattern) = param {
+                        let exception_val =
+                            pending_exception.take().unwrap_or(JsValue::Undefined);
+                        let _ = self.bind_pattern(
+                            pattern,
+                            exception_val,
+                            BindingKind::Let,
+                            &func_env,
+                        );
+                    }
+                    current_id = *body_state;
+                }
+
+                StateTerminator::EnterFinally { body_state } => {
+                    if let Some(ctx) = current_try_stack.last_mut() {
+                        ctx.entered_finally = true;
+                    }
+                    current_id = *body_state;
+                }
+
+                StateTerminator::SwitchDispatch {
+                    discriminant,
+                    cases,
+                    default_state,
+                    after_state,
+                } => {
+                    let disc_val = match self.eval_expr(discriminant, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineAsyncGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                    pending_exception: None,
+                                });
+                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            self.drain_microtasks();
+                            return Completion::Normal(promise);
+                        }
+                        other => {
+                            if let Completion::Yield(yv) = other {
+                                yv
+                            } else {
+                                JsValue::Undefined
+                            }
+                        }
+                    };
+
+                    let mut matched = false;
+                    for case in cases {
+                        let case_val = match self.eval_expr(&case.test, &func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineAsyncGenerator {
+                                        state_machine,
+                                        func_env,
+                                        is_strict,
+                                        execution_state: StateMachineExecutionState::Completed,
+                                        sent_value: JsValue::Undefined,
+                                        try_stack: vec![],
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                    });
+                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise);
+                            }
+                            other => {
+                                if let Completion::Yield(yv) = other {
+                                    yv
+                                } else {
+                                    JsValue::Undefined
+                                }
+                            }
+                        };
+                        if strict_equality(&disc_val, &case_val) {
+                            current_id = case.state;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if !matched {
+                        current_id = default_state.unwrap_or(*after_state);
+                    }
+                }
+
+                StateTerminator::Completed => {
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineAsyncGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: vec![],
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                        });
+                    let iter_result = self.create_iter_result_object(JsValue::Undefined, true);
+                    let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                    self.drain_microtasks();
+                    return Completion::Normal(promise);
+                }
+            }
+        }
+    }
+
     pub(crate) fn async_generator_next(
         &mut self,
         this: &JsValue,
@@ -3225,6 +4050,9 @@ impl Interpreter {
         };
 
         let state = obj_rc.borrow().iterator_state.clone();
+        if let Some(IteratorState::StateMachineAsyncGenerator { .. }) = &state {
+            return self.async_generator_next_state_machine(this, sent_value);
+        }
         let Some(IteratorState::AsyncGenerator {
             body,
             func_env,
@@ -3380,6 +4208,39 @@ impl Interpreter {
                 .reject_with_type_error("AsyncGenerator.prototype.return called on non-object");
         };
         let state = obj_rc.borrow().iterator_state.clone();
+
+        if let Some(IteratorState::StateMachineAsyncGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            ..
+        }) = &state
+        {
+            let promise = self.create_promise_object();
+            let promise_id = if let JsValue::Object(ref po) = promise {
+                po.id
+            } else {
+                0
+            };
+            let (resolve_fn, _reject_fn) = self.create_resolving_functions(promise_id);
+
+            obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
+                state_machine: state_machine.clone(),
+                func_env: func_env.clone(),
+                is_strict: *is_strict,
+                execution_state: StateMachineExecutionState::Completed,
+                sent_value: JsValue::Undefined,
+                try_stack: vec![],
+                pending_binding: None,
+                delegated_iterator: None,
+                pending_exception: None,
+            });
+            let iter_result = self.create_iter_result_object(value, true);
+            let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+            self.drain_microtasks();
+            return Completion::Normal(promise);
+        }
+
         let Some(IteratorState::AsyncGenerator {
             body,
             func_env,
@@ -3447,6 +4308,38 @@ impl Interpreter {
                 .reject_with_type_error("AsyncGenerator.prototype.throw called on non-object");
         };
         let state = obj_rc.borrow().iterator_state.clone();
+
+        if let Some(IteratorState::StateMachineAsyncGenerator {
+            state_machine,
+            func_env,
+            is_strict,
+            ..
+        }) = &state
+        {
+            let promise = self.create_promise_object();
+            let promise_id = if let JsValue::Object(ref po) = promise {
+                po.id
+            } else {
+                0
+            };
+            let (_, reject_fn) = self.create_resolving_functions(promise_id);
+
+            obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
+                state_machine: state_machine.clone(),
+                func_env: func_env.clone(),
+                is_strict: *is_strict,
+                execution_state: StateMachineExecutionState::Completed,
+                sent_value: JsValue::Undefined,
+                try_stack: vec![],
+                pending_binding: None,
+                delegated_iterator: None,
+                pending_exception: None,
+            });
+            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exception]);
+            self.drain_microtasks();
+            return Completion::Normal(promise);
+        }
+
         let Some(IteratorState::AsyncGenerator {
             body,
             func_env,
@@ -3576,12 +4469,23 @@ impl Interpreter {
                                 self.create_arguments_object(args, JsValue::Undefined, is_strict, None, &[]);
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+
+                            use crate::interpreter::generator_transform::transform_generator;
+                            let state_machine = Rc::new(transform_generator(&body, &params));
+                            for temp_var in &state_machine.temp_vars {
+                                func_env.borrow_mut().declare(temp_var, BindingKind::Var);
+                            }
                             gen_obj.borrow_mut().iterator_state =
-                                Some(IteratorState::AsyncGenerator {
-                                    body: body.clone(),
+                                Some(IteratorState::StateMachineAsyncGenerator {
+                                    state_machine,
                                     func_env,
                                     is_strict,
-                                    execution_state: GeneratorExecutionState::SuspendedStart,
+                                    execution_state: StateMachineExecutionState::SuspendedStart,
+                                    sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                    pending_exception: None,
                                 });
                             let gen_id = gen_obj.borrow().id.unwrap();
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {
@@ -3632,34 +4536,23 @@ impl Interpreter {
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
 
-                            // Use state machine approach if enabled
-                            let use_state_machine = std::env::var("JSSE_STATE_MACHINE_GENERATORS").is_ok();
-                            if use_state_machine {
-                                use crate::interpreter::generator_transform::transform_generator;
-                                let state_machine = Rc::new(transform_generator(&body, &params));
-                                // Declare temp variables used by the state machine
-                                for temp_var in &state_machine.temp_vars {
-                                    func_env.borrow_mut().declare(temp_var, BindingKind::Var);
-                                }
-                                gen_obj.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
-                                    state_machine,
-                                    func_env,
-                                    is_strict,
-                                    execution_state: StateMachineExecutionState::SuspendedStart,
-                                    sent_value: JsValue::Undefined,
-                                    try_stack: vec![],
-                                    pending_binding: None,
-                                    delegated_iterator: None,
-                                pending_exception: None,
-                                });
-                            } else {
-                                gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {
-                                    body: body.clone(),
-                                    func_env,
-                                    is_strict,
-                                    execution_state: GeneratorExecutionState::SuspendedStart,
-                                });
+                            use crate::interpreter::generator_transform::transform_generator;
+                            let state_machine = Rc::new(transform_generator(&body, &params));
+                            // Declare temp variables used by the state machine
+                            for temp_var in &state_machine.temp_vars {
+                                func_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
+                            gen_obj.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedStart,
+                                sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                            });
                             let gen_id = gen_obj.borrow().id.unwrap();
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {
                                 id: gen_id,

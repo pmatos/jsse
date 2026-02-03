@@ -579,6 +579,67 @@ fn transform_yielding_expression(
             }
         }
 
+        Expression::Array(elements) => {
+            let mut new_elements = Vec::new();
+            for (i, elem) in elements.iter().enumerate() {
+                match elem {
+                    Some(e) if expr_contains_yield(e) => {
+                        let temp_var = ctx.new_temp_var(&format!("arr_elem_{}", i));
+                        let elem_binding = SentValueBindingKind::Variable(temp_var.clone());
+                        transform_yielding_expression(e, ctx, usize::MAX, Some(elem_binding));
+                        new_elements.push(Some(Expression::Identifier(temp_var)));
+                    }
+                    other => {
+                        new_elements.push(other.clone());
+                    }
+                }
+            }
+            let combined = Expression::Array(new_elements);
+            emit_expression_with_binding(&combined, &binding, ctx);
+        }
+
+        Expression::Object(props) => {
+            use crate::ast::{Property, PropertyKey};
+            let mut new_props = Vec::new();
+            for (i, prop) in props.iter().enumerate() {
+                let key_contains_yield = match &prop.key {
+                    PropertyKey::Computed(e) => expr_contains_yield(e),
+                    _ => false,
+                };
+                let new_key = if key_contains_yield {
+                    if let PropertyKey::Computed(e) = &prop.key {
+                        let temp_var = ctx.new_temp_var(&format!("obj_key_{}", i));
+                        let key_binding = SentValueBindingKind::Variable(temp_var.clone());
+                        transform_yielding_expression(e, ctx, usize::MAX, Some(key_binding));
+                        PropertyKey::Computed(Box::new(Expression::Identifier(temp_var)))
+                    } else {
+                        prop.key.clone()
+                    }
+                } else {
+                    prop.key.clone()
+                };
+
+                let new_value = if expr_contains_yield(&prop.value) {
+                    let temp_var = ctx.new_temp_var(&format!("obj_val_{}", i));
+                    let val_binding = SentValueBindingKind::Variable(temp_var.clone());
+                    transform_yielding_expression(&prop.value, ctx, usize::MAX, Some(val_binding));
+                    Expression::Identifier(temp_var)
+                } else {
+                    prop.value.clone()
+                };
+
+                new_props.push(Property {
+                    key: new_key,
+                    value: new_value,
+                    kind: prop.kind,
+                    computed: prop.computed,
+                    shorthand: false, // Can't be shorthand anymore if we transformed
+                });
+            }
+            let combined = Expression::Object(new_props);
+            emit_expression_with_binding(&combined, &binding, ctx);
+        }
+
         _ => {
             emit_expression_with_binding(expr, &binding, ctx);
         }
@@ -960,12 +1021,12 @@ fn transform_for_in_statement(
 }
 
 fn transform_for_of_statement(
-    _for_of_stmt: &ForOfStatement,
+    for_of_stmt: &ForOfStatement,
     ctx: &mut TransformContext,
     _after_state: usize,
 ) {
-    // For-of with yields is complex - for now emit as-is and let runtime handle
-    ctx.emit_statement(Statement::Empty);
+    // Emit the for-of statement as-is and let runtime handle
+    ctx.emit_statement(Statement::ForOf(for_of_stmt.clone()));
 }
 
 fn transform_try_statement(
