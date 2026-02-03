@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::interpreter::generator_transform::GeneratorStateMachine;
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
 use std::cell::RefCell;
@@ -34,6 +35,21 @@ pub enum GeneratorExecutionState {
     SuspendedYield { target_yield: usize },
     Executing,
     Completed,
+}
+
+#[derive(Debug, Clone)]
+pub enum StateMachineExecutionState {
+    SuspendedStart,
+    SuspendedAtState { state_id: usize },
+    Executing,
+    Completed,
+}
+
+#[derive(Debug, Clone)]
+pub struct TryContextInfo {
+    pub catch_state: Option<usize>,
+    pub finally_state: Option<usize>,
+    pub after_state: usize,
 }
 
 pub type EnvRef = Rc<RefCell<Environment>>;
@@ -395,11 +411,27 @@ pub enum IteratorState {
         is_strict: bool,
         execution_state: GeneratorExecutionState,
     },
+    StateMachineGenerator {
+        state_machine: Rc<GeneratorStateMachine>,
+        func_env: EnvRef,
+        is_strict: bool,
+        execution_state: StateMachineExecutionState,
+        sent_value: JsValue,
+        try_stack: Vec<TryContextInfo>,
+    },
     AsyncGenerator {
         body: Vec<Statement>,
         func_env: EnvRef,
         is_strict: bool,
         execution_state: GeneratorExecutionState,
+    },
+    StateMachineAsyncGenerator {
+        state_machine: Rc<GeneratorStateMachine>,
+        func_env: EnvRef,
+        is_strict: bool,
+        execution_state: StateMachineExecutionState,
+        sent_value: JsValue,
+        try_stack: Vec<TryContextInfo>,
     },
     RegExpStringIterator {
         source: String,

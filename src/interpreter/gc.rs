@@ -195,7 +195,9 @@ impl Interpreter {
                     IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
                     IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
                     IteratorState::Generator { func_env, .. }
-                    | IteratorState::AsyncGenerator { func_env, .. } => {
+                    | IteratorState::AsyncGenerator { func_env, .. }
+                    | IteratorState::StateMachineGenerator { func_env, .. }
+                    | IteratorState::StateMachineAsyncGenerator { func_env, .. } => {
                         Self::collect_env_roots(func_env, &mut worklist);
                     }
                     _ => {}
