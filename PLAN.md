@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 29,558 / 47,458 run (62.28%)
+**Current pass rate:** 29,602 / 47,458 run (62.38%)
 *Skipped: 799 module tests*
 
 ---
@@ -97,6 +97,7 @@ These features block significant numbers of tests:
 24. ~~**AggregateError + Promise.try/withResolvers + Proxy invariants**~~ — ✅ Done (75 new passes, 58.30% → 58.46%). AggregateError constructor with proper prototype chain. Promise.try and Promise.withResolvers static methods. Proxy invariant enforcement for get/set/has/deleteProperty/defineProperty/getOwnPropertyDescriptor/ownKeys/getPrototypeOf/setPrototypeOf/isExtensible/preventExtensions traps. Proxy trap delegation added to Reflect methods. AggregateError: 14/25 (56%), Proxy: 163/310 (53%), Reflect: 124/153 (81%).
 29. ~~**Symbol property key uniqueness**~~ — ✅ Done (51 new passes, 62.22% → 62.28%). Symbols with same description were treated as identical property keys. Added id-based property key format for user-created symbols. Updated all built-in functions (Object.hasOwn, defineProperty, getOwnPropertyDescriptor, Reflect methods, etc.) to use `to_property_key_string` for symbol-aware key conversion.
 30. ~~**Function parameter error propagation**~~ — ✅ Done (371 new passes, 61.44% → 62.22%). Destructuring errors in function parameter binding were silently swallowed by `let _ =`. Now propagated as throws for sync functions and promise rejections for async functions.
+31. ~~**@@toPrimitive support + unary operator ToPrimitive**~~ — ✅ Done (45 new passes, 62.28% → 62.38%). `to_primitive` now checks `Symbol.toPrimitive` before falling back to valueOf/toString per §7.1.1. Unary +/- operators now call `to_number_coerce` for objects instead of raw `to_number`. 1 Date regression (year-zero parsing).
 
 ---
 

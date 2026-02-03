@@ -2643,6 +2643,7 @@ test262/test/built-ins/BigInt/asUintN/length.js
 test262/test/built-ins/BigInt/asUintN/name.js
 test262/test/built-ins/BigInt/asUintN/not-a-constructor.js
 test262/test/built-ins/BigInt/call-value-of-when-to-string-present.js
+test262/test/built-ins/BigInt/constructor-coercion.js
 test262/test/built-ins/BigInt/constructor-from-binary-string.js
 test262/test/built-ins/BigInt/constructor-from-decimal-string.js
 test262/test/built-ins/BigInt/constructor-from-hex-string.js
@@ -3269,6 +3270,7 @@ test262/test/built-ins/Date/prototype/toJSON/length.js
 test262/test/built-ins/Date/prototype/toJSON/name.js
 test262/test/built-ins/Date/prototype/toJSON/non-finite.js
 test262/test/built-ins/Date/prototype/toJSON/not-a-constructor.js
+test262/test/built-ins/Date/prototype/toJSON/to-primitive-symbol.js
 test262/test/built-ins/Date/prototype/toLocaleDateString/length.js
 test262/test/built-ins/Date/prototype/toLocaleDateString/name.js
 test262/test/built-ins/Date/prototype/toLocaleDateString/not-a-constructor.js
@@ -3304,7 +3306,6 @@ test262/test/built-ins/Date/prototype/valueOf/length.js
 test262/test/built-ins/Date/prototype/valueOf/name.js
 test262/test/built-ins/Date/prototype/valueOf/not-a-constructor.js
 test262/test/built-ins/Date/prototype/valueOf/prop-desc.js
-test262/test/built-ins/Date/year-zero.js
 test262/test/built-ins/DisposableStack/constructor.js
 test262/test/built-ins/DisposableStack/instance-extensible.js
 test262/test/built-ins/DisposableStack/is-a-constructor.js
@@ -10256,7 +10257,13 @@ test262/test/built-ins/String/prototype/indexOf/S15.5.4.7_A8.js
 test262/test/built-ins/String/prototype/indexOf/S15.5.4.7_A9.js
 test262/test/built-ins/String/prototype/indexOf/name.js
 test262/test/built-ins/String/prototype/indexOf/not-a-constructor.js
+test262/test/built-ins/String/prototype/indexOf/position-tointeger-bigint.js
+test262/test/built-ins/String/prototype/indexOf/position-tointeger-errors.js
+test262/test/built-ins/String/prototype/indexOf/position-tointeger-wrapped-values.js
 test262/test/built-ins/String/prototype/indexOf/position-tointeger.js
+test262/test/built-ins/String/prototype/indexOf/searchstring-tostring-bigint.js
+test262/test/built-ins/String/prototype/indexOf/searchstring-tostring-errors.js
+test262/test/built-ins/String/prototype/indexOf/searchstring-tostring-wrapped-values.js
 test262/test/built-ins/String/prototype/indexOf/searchstring-tostring.js
 test262/test/built-ins/String/prototype/indexOf/this-value-not-obj-coercible.js
 test262/test/built-ins/String/prototype/isWellFormed/length.js
@@ -10478,6 +10485,7 @@ test262/test/built-ins/String/prototype/replaceAll/searchValue-replacer-call.js
 test262/test/built-ins/String/prototype/replaceAll/searchValue-replacer-is-null.js
 test262/test/built-ins/String/prototype/replaceAll/this-is-null-throws.js
 test262/test/built-ins/String/prototype/replaceAll/this-is-undefined-throws.js
+test262/test/built-ins/String/prototype/replaceAll/this-tostring.js
 test262/test/built-ins/String/prototype/search/S15.5.4.12_A1.1_T1.js
 test262/test/built-ins/String/prototype/search/S15.5.4.12_A10.js
 test262/test/built-ins/String/prototype/search/S15.5.4.12_A11.js
@@ -13264,6 +13272,7 @@ test262/test/language/expressions/addition/S11.6.1_A1.js
 test262/test/language/expressions/addition/S11.6.1_A2.1_T1.js
 test262/test/language/expressions/addition/S11.6.1_A2.1_T2.js
 test262/test/language/expressions/addition/S11.6.1_A2.1_T3.js
+test262/test/language/expressions/addition/S11.6.1_A2.2_T2.js
 test262/test/language/expressions/addition/S11.6.1_A2.2_T3.js
 test262/test/language/expressions/addition/S11.6.1_A2.4_T1.js
 test262/test/language/expressions/addition/S11.6.1_A2.4_T2.js
@@ -13294,6 +13303,9 @@ test262/test/language/expressions/addition/S11.6.1_A4_T8.js
 test262/test/language/expressions/addition/S11.6.1_A4_T9.js
 test262/test/language/expressions/addition/bigint-and-number.js
 test262/test/language/expressions/addition/bigint-arithmetic.js
+test262/test/language/expressions/addition/bigint-errors.js
+test262/test/language/expressions/addition/bigint-wrapped-values.js
+test262/test/language/expressions/addition/coerce-symbol-to-prim-invocation.js
 test262/test/language/expressions/array/11.1.4-0.js
 test262/test/language/expressions/array/11.1.4_4-5-1.js
 test262/test/language/expressions/array/11.1.4_5-6-1.js
@@ -14682,10 +14694,15 @@ test262/test/language/expressions/bitwise-and/S11.10.1_A3_T2.8.js
 test262/test/language/expressions/bitwise-and/S11.10.1_A3_T2.9.js
 test262/test/language/expressions/bitwise-and/bigint-and-number.js
 test262/test/language/expressions/bitwise-and/bigint-errors.js
+test262/test/language/expressions/bitwise-and/bigint-non-primitive.js
+test262/test/language/expressions/bitwise-and/bigint-wrapped-values.js
 test262/test/language/expressions/bitwise-and/bigint.js
 test262/test/language/expressions/bitwise-not/S11.4.8_A1.js
 test262/test/language/expressions/bitwise-not/S11.4.8_A2.1_T1.js
 test262/test/language/expressions/bitwise-not/S11.4.8_A2.1_T2.js
+test262/test/language/expressions/bitwise-not/S11.4.8_A3_T1.js
+test262/test/language/expressions/bitwise-not/S11.4.8_A3_T2.js
+test262/test/language/expressions/bitwise-not/S11.4.8_A3_T3.js
 test262/test/language/expressions/bitwise-not/S11.4.8_A3_T4.js
 test262/test/language/expressions/bitwise-not/S11.4.8_A3_T5.js
 test262/test/language/expressions/bitwise-not/S9.5_A2.1_T2.js
@@ -14716,6 +14733,8 @@ test262/test/language/expressions/bitwise-or/S11.10.3_A3_T2.8.js
 test262/test/language/expressions/bitwise-or/S11.10.3_A3_T2.9.js
 test262/test/language/expressions/bitwise-or/bigint-and-number.js
 test262/test/language/expressions/bitwise-or/bigint-errors.js
+test262/test/language/expressions/bitwise-or/bigint-non-primitive.js
+test262/test/language/expressions/bitwise-or/bigint-wrapped-values.js
 test262/test/language/expressions/bitwise-or/bigint.js
 test262/test/language/expressions/bitwise-xor/S11.10.2_A1.js
 test262/test/language/expressions/bitwise-xor/S11.10.2_A2.1_T1.js
@@ -14740,6 +14759,8 @@ test262/test/language/expressions/bitwise-xor/S11.10.2_A3_T2.8.js
 test262/test/language/expressions/bitwise-xor/S11.10.2_A3_T2.9.js
 test262/test/language/expressions/bitwise-xor/bigint-and-number.js
 test262/test/language/expressions/bitwise-xor/bigint-errors.js
+test262/test/language/expressions/bitwise-xor/bigint-non-primitive.js
+test262/test/language/expressions/bitwise-xor/bigint-wrapped-values.js
 test262/test/language/expressions/bitwise-xor/bigint.js
 test262/test/language/expressions/call/11.2.3-3_1.js
 test262/test/language/expressions/call/11.2.3-3_2.js
@@ -17164,6 +17185,8 @@ test262/test/language/expressions/class/elements/async-private-method/returns-as
 test262/test/language/expressions/class/elements/async-private-method/returns-async-function.js
 test262/test/language/expressions/class/elements/comp-name-init-err-contains-arguments.js
 test262/test/language/expressions/class/elements/comp-name-init-err-contains-super.js
+test262/test/language/expressions/class/elements/computed-name-toprimitive-symbol.js
+test262/test/language/expressions/class/elements/computed-name-toprimitive.js
 test262/test/language/expressions/class/elements/ctor-called-after-fields-init.js
 test262/test/language/expressions/class/elements/derived-cls-direct-eval-err-contains-supercall-1.js
 test262/test/language/expressions/class/elements/derived-cls-direct-eval-err-contains-supercall-2.js
@@ -18518,6 +18541,7 @@ test262/test/language/expressions/division/bigint-and-number.js
 test262/test/language/expressions/division/bigint-arithmetic.js
 test262/test/language/expressions/division/bigint-complex-infinity.js
 test262/test/language/expressions/division/bigint-errors.js
+test262/test/language/expressions/division/bigint-wrapped-values.js
 test262/test/language/expressions/division/line-terminator.js
 test262/test/language/expressions/does-not-equals/S11.9.2_A1.js
 test262/test/language/expressions/does-not-equals/S11.9.2_A2.1_T1.js
@@ -18910,8 +18934,11 @@ test262/test/language/expressions/equals/bigint-and-incomparable-primitive.js
 test262/test/language/expressions/equals/bigint-and-non-finite.js
 test262/test/language/expressions/equals/bigint-and-number.js
 test262/test/language/expressions/equals/bigint-and-object.js
+test262/test/language/expressions/equals/coerce-symbol-to-prim-invocation.js
+test262/test/language/expressions/equals/coerce-symbol-to-prim-return-prim.js
 test262/test/language/expressions/equals/symbol-abstract-equality-comparison.js
 test262/test/language/expressions/equals/symbol-strict-equality-comparison.js
+test262/test/language/expressions/equals/to-prim-hint.js
 test262/test/language/expressions/exponentiation/applying-the-exp-operator_A1.js
 test262/test/language/expressions/exponentiation/applying-the-exp-operator_A10.js
 test262/test/language/expressions/exponentiation/applying-the-exp-operator_A11.js
@@ -18939,9 +18966,11 @@ test262/test/language/expressions/exponentiation/bigint-and-number.js
 test262/test/language/expressions/exponentiation/bigint-arithmetic.js
 test262/test/language/expressions/exponentiation/bigint-errors.js
 test262/test/language/expressions/exponentiation/bigint-negative-exponent-throws.js
+test262/test/language/expressions/exponentiation/bigint-wrapped-values.js
 test262/test/language/expressions/exponentiation/bigint-zero-base-zero-exponent.js
 test262/test/language/expressions/exponentiation/exp-assignment-operator.js
 test262/test/language/expressions/exponentiation/exp-operator-evaluation-order.js
+test262/test/language/expressions/exponentiation/exp-operator-precedence-unary-expression-semantics.js
 test262/test/language/expressions/exponentiation/exp-operator-precedence-update-expression-semantics.js
 test262/test/language/expressions/exponentiation/exp-operator.js
 test262/test/language/expressions/exponentiation/int32_min-exponent.js
@@ -19535,6 +19564,8 @@ test262/test/language/expressions/left-shift/S9.5_A3.1_T3.js
 test262/test/language/expressions/left-shift/S9.5_A3.2_T1.js
 test262/test/language/expressions/left-shift/bigint-and-number.js
 test262/test/language/expressions/left-shift/bigint-errors.js
+test262/test/language/expressions/left-shift/bigint-non-primitive.js
+test262/test/language/expressions/left-shift/bigint-wrapped-values.js
 test262/test/language/expressions/left-shift/bigint.js
 test262/test/language/expressions/less-than-or-equal/11.8.3-1.js
 test262/test/language/expressions/less-than-or-equal/11.8.3-2.js
@@ -19752,6 +19783,7 @@ test262/test/language/expressions/modulus/bigint-and-number.js
 test262/test/language/expressions/modulus/bigint-arithmetic.js
 test262/test/language/expressions/modulus/bigint-errors.js
 test262/test/language/expressions/modulus/bigint-modulo-zero.js
+test262/test/language/expressions/modulus/bigint-wrapped-values.js
 test262/test/language/expressions/modulus/line-terminator.js
 test262/test/language/expressions/multiplication/S11.5.1_A1.js
 test262/test/language/expressions/multiplication/S11.5.1_A2.1_T1.js
@@ -19786,6 +19818,7 @@ test262/test/language/expressions/multiplication/S11.5.1_A4_T8.js
 test262/test/language/expressions/multiplication/bigint-and-number.js
 test262/test/language/expressions/multiplication/bigint-arithmetic.js
 test262/test/language/expressions/multiplication/bigint-errors.js
+test262/test/language/expressions/multiplication/bigint-wrapped-values.js
 test262/test/language/expressions/multiplication/line-terminator.js
 test262/test/language/expressions/new.target/asi.js
 test262/test/language/expressions/new.target/escaped-new.js
@@ -20910,6 +20943,8 @@ test262/test/language/expressions/right-shift/S11.7.2_A5.1_T1.js
 test262/test/language/expressions/right-shift/S11.7.2_A5.2_T1.js
 test262/test/language/expressions/right-shift/bigint-and-number.js
 test262/test/language/expressions/right-shift/bigint-errors.js
+test262/test/language/expressions/right-shift/bigint-non-primitive.js
+test262/test/language/expressions/right-shift/bigint-wrapped-values.js
 test262/test/language/expressions/right-shift/bigint.js
 test262/test/language/expressions/strict-does-not-equals/S11.9.5_A1.js
 test262/test/language/expressions/strict-does-not-equals/S11.9.5_A2.1_T1.js
@@ -21004,6 +21039,7 @@ test262/test/language/expressions/subtraction/S11.6.2_A4_T8.js
 test262/test/language/expressions/subtraction/bigint-and-number.js
 test262/test/language/expressions/subtraction/bigint-arithmetic.js
 test262/test/language/expressions/subtraction/bigint-errors.js
+test262/test/language/expressions/subtraction/bigint-wrapped-values.js
 test262/test/language/expressions/super/call-arg-evaluation-err.js
 test262/test/language/expressions/super/call-construct-error.js
 test262/test/language/expressions/super/call-expr-value.js
@@ -21118,6 +21154,9 @@ test262/test/language/expressions/unary-minus/11.4.7-4-1.js
 test262/test/language/expressions/unary-minus/S11.4.7_A1.js
 test262/test/language/expressions/unary-minus/S11.4.7_A2.1_T1.js
 test262/test/language/expressions/unary-minus/S11.4.7_A2.1_T2.js
+test262/test/language/expressions/unary-minus/S11.4.7_A3_T1.js
+test262/test/language/expressions/unary-minus/S11.4.7_A3_T2.js
+test262/test/language/expressions/unary-minus/S11.4.7_A3_T3.js
 test262/test/language/expressions/unary-minus/S11.4.7_A3_T4.js
 test262/test/language/expressions/unary-minus/S11.4.7_A3_T5.js
 test262/test/language/expressions/unary-minus/S11.4.7_A4.1.js
@@ -21127,6 +21166,8 @@ test262/test/language/expressions/unary-plus/11.4.6-2-1.js
 test262/test/language/expressions/unary-plus/S11.4.6_A1.js
 test262/test/language/expressions/unary-plus/S11.4.6_A2.1_T1.js
 test262/test/language/expressions/unary-plus/S11.4.6_A2.1_T2.js
+test262/test/language/expressions/unary-plus/S11.4.6_A3_T1.js
+test262/test/language/expressions/unary-plus/S11.4.6_A3_T2.js
 test262/test/language/expressions/unary-plus/S11.4.6_A3_T4.js
 test262/test/language/expressions/unary-plus/S11.4.6_A3_T5.js
 test262/test/language/expressions/unary-plus/S9.3_A1_T2.js
@@ -21134,6 +21175,7 @@ test262/test/language/expressions/unary-plus/S9.3_A2_T2.js
 test262/test/language/expressions/unary-plus/S9.3_A3_T2.js
 test262/test/language/expressions/unary-plus/S9.3_A4.1_T2.js
 test262/test/language/expressions/unary-plus/S9.3_A4.2_T2.js
+test262/test/language/expressions/unary-plus/S9.3_A5_T2.js
 test262/test/language/expressions/unary-plus/bigint-throws.js
 test262/test/language/expressions/unsigned-right-shift/S11.7.3_A1.js
 test262/test/language/expressions/unsigned-right-shift/S11.7.3_A2.1_T1.js
@@ -24956,6 +24998,8 @@ test262/test/language/statements/class/elements/async-private-method/returns-asy
 test262/test/language/statements/class/elements/async-private-method/returns-async-function.js
 test262/test/language/statements/class/elements/comp-name-init-err-contains-arguments.js
 test262/test/language/statements/class/elements/comp-name-init-err-contains-super.js
+test262/test/language/statements/class/elements/computed-name-toprimitive-symbol.js
+test262/test/language/statements/class/elements/computed-name-toprimitive.js
 test262/test/language/statements/class/elements/computed-property-abrupt-completition.js
 test262/test/language/statements/class/elements/ctor-called-after-fields-init.js
 test262/test/language/statements/class/elements/derived-cls-direct-eval-err-contains-supercall-1.js

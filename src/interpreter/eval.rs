@@ -734,12 +734,18 @@ impl Interpreter {
                 JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
                     value: bigint_ops::unary_minus(&b.value),
                 })),
+                JsValue::Object(_) => {
+                    Completion::Normal(JsValue::Number(number_ops::unary_minus(self.to_number_coerce(val))))
+                }
                 _ => Completion::Normal(JsValue::Number(number_ops::unary_minus(to_number(val)))),
             },
             UnaryOp::Plus => match val {
                 JsValue::BigInt(_) => Completion::Throw(
                     self.create_type_error("Cannot convert a BigInt value to a number"),
                 ),
+                JsValue::Object(_) => {
+                    Completion::Normal(JsValue::Number(self.to_number_coerce(val)))
+                }
                 _ => Completion::Normal(JsValue::Number(to_number(val))),
             },
             UnaryOp::Not => Completion::Normal(JsValue::Boolean(!to_boolean(val))),
@@ -747,6 +753,9 @@ impl Interpreter {
                 JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
                     value: bigint_ops::bitwise_not(&b.value),
                 })),
+                JsValue::Object(_) => {
+                    Completion::Normal(JsValue::Number(number_ops::bitwise_not(self.to_number_coerce(val))))
+                }
                 _ => Completion::Normal(JsValue::Number(number_ops::bitwise_not(to_number(val)))),
             },
         }
@@ -864,6 +873,33 @@ impl Interpreter {
     pub(crate) fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> JsValue {
         match val {
             JsValue::Object(o) => {
+                // §7.1.1 Step 2-3: Check @@toPrimitive
+                let exotic_to_prim = if let Some(obj) = self.get_object(o.id) {
+                    let key = "Symbol(Symbol.toPrimitive)";
+                    obj.borrow().get_property(key)
+                } else {
+                    JsValue::Undefined
+                };
+                if !matches!(exotic_to_prim, JsValue::Undefined | JsValue::Null) {
+                    if let JsValue::Object(fo) = &exotic_to_prim
+                        && self.get_object(fo.id).map(|o| o.borrow().callable.is_some()).unwrap_or(false)
+                    {
+                        let hint = JsValue::String(JsString::from_str(preferred_type));
+                        let result = self.call_function(&exotic_to_prim, val, &[hint]);
+                        match result {
+                            Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => return v,
+                            Completion::Normal(_) => {
+                                return self.create_type_error("@@toPrimitive must return a primitive");
+                            }
+                            Completion::Throw(e) => return e,
+                            _ => {}
+                        }
+                    } else {
+                        return self.create_type_error("@@toPrimitive is not callable");
+                    }
+                }
+
+                // §7.1.1.1 OrdinaryToPrimitive
                 let methods = if preferred_type == "string" {
                     ["toString", "valueOf"]
                 } else {
