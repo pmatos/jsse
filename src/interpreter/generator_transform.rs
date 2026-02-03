@@ -43,6 +43,13 @@ pub enum StateTerminator {
     TryExit {
         after_state: usize,
     },
+    EnterCatch {
+        body_state: usize,
+        param: Option<Pattern>,
+    },
+    EnterFinally {
+        body_state: usize,
+    },
     SwitchDispatch {
         discriminant: Expression,
         cases: Vec<SwitchCaseTarget>,
@@ -158,7 +165,12 @@ pub fn transform_generator(
 
     transform_statements(body, &mut ctx, end_state);
 
-    ctx.finalize_current_state(StateTerminator::Goto(end_state));
+    if !matches!(
+        ctx.states[ctx.current_state_id].terminator,
+        StateTerminator::Return(_) | StateTerminator::Throw(_)
+    ) {
+        ctx.finalize_current_state(StateTerminator::Goto(end_state));
+    }
 
     ctx.states[end_state].terminator = StateTerminator::Completed;
 
@@ -314,12 +326,25 @@ fn transform_yielding_expression(
 ) {
     match expr {
         Expression::Yield(inner_expr, is_delegate) => {
+            let yield_value = if let Some(inner) = inner_expr {
+                if expr_contains_yield(inner) {
+                    let temp_var = ctx.new_temp_var("yield_val");
+                    let inner_binding = SentValueBindingKind::Variable(temp_var.clone());
+                    transform_yielding_expression(inner, ctx, usize::MAX, Some(inner_binding));
+                    Some(Expression::Identifier(temp_var))
+                } else {
+                    Some(*inner.clone())
+                }
+            } else {
+                None
+            };
+
             let resume_state = ctx.new_state();
 
             let sent_value_binding = binding.map(|b| SentValueBinding { kind: b });
 
             ctx.finalize_current_state(StateTerminator::Yield {
-                value: inner_expr.as_ref().map(|e| *e.clone()),
+                value: yield_value,
                 is_delegate: *is_delegate,
                 resume_state,
                 sent_value_binding,
@@ -957,14 +982,14 @@ fn transform_try_statement(
     let try_body_state = ctx.new_state();
 
     let catch_info = try_stmt.handler.as_ref().map(|h| {
-        let catch_state = ctx.new_state();
+        let catch_entry_state = ctx.new_state();
         CatchInfo {
-            state: catch_state,
+            state: catch_entry_state,
             param: h.param.clone(),
         }
     });
 
-    let finally_state = if try_stmt.finalizer.is_some() {
+    let finally_entry_state = if try_stmt.finalizer.is_some() {
         Some(ctx.new_state())
     } else {
         None
@@ -973,38 +998,51 @@ fn transform_try_statement(
     ctx.finalize_current_state(StateTerminator::TryEnter {
         try_state: try_body_state,
         catch_state: catch_info.clone(),
-        finally_state,
+        finally_state: finally_entry_state,
         after_state: after_try,
     });
 
     ctx.try_stack.push(TryInfo {
         catch_state: catch_info.clone(),
-        finally_state,
+        finally_state: finally_entry_state,
         after_state: after_try,
     });
 
     ctx.current_state_id = try_body_state;
     transform_statements(&try_stmt.block, ctx, after_try);
-    if finally_state.is_some() {
-        ctx.finalize_current_state(StateTerminator::Goto(finally_state.unwrap()));
+    if finally_entry_state.is_some() {
+        ctx.finalize_current_state(StateTerminator::Goto(finally_entry_state.unwrap()));
     } else {
         ctx.finalize_current_state(StateTerminator::Goto(after_try));
     }
 
     if let Some(ref info) = catch_info {
+        let catch_body_state = ctx.new_state();
         ctx.current_state_id = info.state;
+        ctx.finalize_current_state(StateTerminator::EnterCatch {
+            body_state: catch_body_state,
+            param: info.param.clone(),
+        });
+
+        ctx.current_state_id = catch_body_state;
         if let Some(handler) = &try_stmt.handler {
             transform_statements(&handler.body, ctx, after_try);
         }
-        if finally_state.is_some() {
-            ctx.finalize_current_state(StateTerminator::Goto(finally_state.unwrap()));
+        if finally_entry_state.is_some() {
+            ctx.finalize_current_state(StateTerminator::Goto(finally_entry_state.unwrap()));
         } else {
             ctx.finalize_current_state(StateTerminator::Goto(after_try));
         }
     }
 
-    if let Some(fin_state) = finally_state {
-        ctx.current_state_id = fin_state;
+    if let Some(fin_entry_state) = finally_entry_state {
+        let finally_body_state = ctx.new_state();
+        ctx.current_state_id = fin_entry_state;
+        ctx.finalize_current_state(StateTerminator::EnterFinally {
+            body_state: finally_body_state,
+        });
+
+        ctx.current_state_id = finally_body_state;
         if let Some(finalizer) = &try_stmt.finalizer {
             transform_statements(finalizer, ctx, after_try);
         }

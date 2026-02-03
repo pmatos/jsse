@@ -2312,6 +2312,7 @@ impl Interpreter {
             is_strict,
             execution_state,
             try_stack,
+            pending_binding,
             ..
         }) = state
         else {
@@ -2340,10 +2341,33 @@ impl Interpreter {
             execution_state: StateMachineExecutionState::Executing,
             sent_value: sent_value.clone(),
             try_stack: try_stack.clone(),
+            pending_binding: None,
         });
+
+        use crate::interpreter::generator_transform::SentValueBindingKind;
+        if let Some(binding) = pending_binding {
+            match &binding.kind {
+                SentValueBindingKind::Variable(name) => {
+                    func_env
+                        .borrow_mut()
+                        .set(name, sent_value.clone())
+                        .ok();
+                }
+                SentValueBindingKind::Pattern(pattern) => {
+                    let _ = self.bind_pattern(
+                        pattern,
+                        sent_value.clone(),
+                        BindingKind::Var,
+                        &func_env,
+                    );
+                }
+                SentValueBindingKind::Discard => {}
+            }
+        }
 
         let mut current_id = current_state_id;
         let mut current_try_stack = try_stack;
+        let mut pending_exception: Option<JsValue> = None;
 
         loop {
             let (statements, terminator) = {
@@ -2355,6 +2379,7 @@ impl Interpreter {
             if let Completion::Throw(e) = stmt_result {
                 if let Some(try_info) = current_try_stack.pop() {
                     if let Some(catch_state) = try_info.catch_state {
+                        pending_exception = Some(e);
                         current_id = catch_state;
                         continue;
                     } else if let Some(finally_state) = try_info.finally_state {
@@ -2369,6 +2394,7 @@ impl Interpreter {
                     execution_state: StateMachineExecutionState::Completed,
                     sent_value: JsValue::Undefined,
                     try_stack: vec![],
+                    pending_binding: None,
                 });
                 return Completion::Throw(e);
             }
@@ -2380,6 +2406,7 @@ impl Interpreter {
                     execution_state: StateMachineExecutionState::Completed,
                     sent_value: JsValue::Undefined,
                     try_stack: vec![],
+                    pending_binding: None,
                 });
                 return Completion::Normal(self.create_iter_result_object(v, true));
             }
@@ -2388,6 +2415,7 @@ impl Interpreter {
                 StateTerminator::Yield {
                     value,
                     resume_state,
+                    sent_value_binding,
                     ..
                 } => {
                     let yield_val = if let Some(expr) = value {
@@ -2402,6 +2430,7 @@ impl Interpreter {
                                         execution_state: StateMachineExecutionState::Completed,
                                         sent_value: JsValue::Undefined,
                                         try_stack: vec![],
+                                        pending_binding: None,
                                     });
                                 return Completion::Throw(e);
                             }
@@ -2421,6 +2450,7 @@ impl Interpreter {
                             },
                             sent_value: JsValue::Undefined,
                             try_stack: current_try_stack,
+                            pending_binding: sent_value_binding.clone(),
                         });
                     return Completion::Normal(self.create_iter_result_object(yield_val, false));
                 }
@@ -2438,6 +2468,7 @@ impl Interpreter {
                                         execution_state: StateMachineExecutionState::Completed,
                                         sent_value: JsValue::Undefined,
                                         try_stack: vec![],
+                                        pending_binding: None,
                                     });
                                 return Completion::Throw(err);
                             }
@@ -2455,6 +2486,7 @@ impl Interpreter {
                             execution_state: StateMachineExecutionState::Completed,
                             sent_value: JsValue::Undefined,
                             try_stack: vec![],
+                            pending_binding: None,
                         });
                     return Completion::Normal(self.create_iter_result_object(ret_val, true));
                 }
@@ -2481,6 +2513,7 @@ impl Interpreter {
                             execution_state: StateMachineExecutionState::Completed,
                             sent_value: JsValue::Undefined,
                             try_stack: vec![],
+                            pending_binding: None,
                         });
                     return Completion::Throw(throw_val);
                 }
@@ -2505,6 +2538,7 @@ impl Interpreter {
                                     execution_state: StateMachineExecutionState::Completed,
                                     sent_value: JsValue::Undefined,
                                     try_stack: vec![],
+                                    pending_binding: None,
                                 });
                             return Completion::Throw(e);
                         }
@@ -2527,6 +2561,8 @@ impl Interpreter {
                         catch_state: catch_state.as_ref().map(|c| c.state),
                         finally_state: *finally_state,
                         after_state: *after_state,
+                        entered_catch: false,
+                        entered_finally: false,
                     });
                     current_id = *try_state;
                 }
@@ -2534,6 +2570,30 @@ impl Interpreter {
                 StateTerminator::TryExit { after_state } => {
                     current_try_stack.pop();
                     current_id = *after_state;
+                }
+
+                StateTerminator::EnterCatch { body_state, param } => {
+                    if let Some(ctx) = current_try_stack.last_mut() {
+                        ctx.entered_catch = true;
+                    }
+                    if let Some(pattern) = param {
+                        let exception_val =
+                            pending_exception.take().unwrap_or(JsValue::Undefined);
+                        let _ = self.bind_pattern(
+                            pattern,
+                            exception_val,
+                            BindingKind::Let,
+                            &func_env,
+                        );
+                    }
+                    current_id = *body_state;
+                }
+
+                StateTerminator::EnterFinally { body_state } => {
+                    if let Some(ctx) = current_try_stack.last_mut() {
+                        ctx.entered_finally = true;
+                    }
+                    current_id = *body_state;
                 }
 
                 StateTerminator::SwitchDispatch {
@@ -2553,6 +2613,7 @@ impl Interpreter {
                                     execution_state: StateMachineExecutionState::Completed,
                                     sent_value: JsValue::Undefined,
                                     try_stack: vec![],
+                                    pending_binding: None,
                                 });
                             return Completion::Throw(e);
                         }
@@ -2572,6 +2633,7 @@ impl Interpreter {
                                         execution_state: StateMachineExecutionState::Completed,
                                         sent_value: JsValue::Undefined,
                                         try_stack: vec![],
+                                        pending_binding: None,
                                     });
                                 return Completion::Throw(e);
                             }
@@ -2597,6 +2659,7 @@ impl Interpreter {
                             execution_state: StateMachineExecutionState::Completed,
                             sent_value: JsValue::Undefined,
                             try_stack: vec![],
+                            pending_binding: None,
                         });
                     return Completion::Normal(
                         self.create_iter_result_object(JsValue::Undefined, true),
@@ -2632,19 +2695,22 @@ impl Interpreter {
         }) = state
         {
             if let Some(try_info) = try_stack.last() {
-                if let Some(finally_state) = try_info.finally_state {
-                    obj_rc.borrow_mut().iterator_state =
-                        Some(IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: finally_state,
-                            },
-                            sent_value: value.clone(),
-                            try_stack: try_stack[..try_stack.len() - 1].to_vec(),
-                        });
-                    return self.generator_next_state_machine(this, JsValue::Undefined);
+                if !try_info.entered_finally {
+                    if let Some(finally_state) = try_info.finally_state {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: finally_state,
+                                },
+                                sent_value: value.clone(),
+                                try_stack: try_stack[..try_stack.len() - 1].to_vec(),
+                                pending_binding: None,
+                            });
+                        return self.generator_next_state_machine(this, JsValue::Undefined);
+                    }
                 }
             }
 
@@ -2655,6 +2721,7 @@ impl Interpreter {
                 execution_state: StateMachineExecutionState::Completed,
                 sent_value: JsValue::Undefined,
                 try_stack: vec![],
+                pending_binding: None,
             });
         }
         Completion::Normal(self.create_iter_result_object(value, true))
@@ -2686,32 +2753,39 @@ impl Interpreter {
         }) = state
         {
             if let Some(try_info) = try_stack.last() {
-                if let Some(catch_state) = try_info.catch_state {
-                    obj_rc.borrow_mut().iterator_state =
-                        Some(IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: catch_state,
-                            },
-                            sent_value: exception.clone(),
-                            try_stack: try_stack[..try_stack.len() - 1].to_vec(),
-                        });
-                    return self.generator_next_state_machine(this, JsValue::Undefined);
-                } else if let Some(finally_state) = try_info.finally_state {
-                    obj_rc.borrow_mut().iterator_state =
-                        Some(IteratorState::StateMachineGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::SuspendedAtState {
-                                state_id: finally_state,
-                            },
-                            sent_value: exception.clone(),
-                            try_stack: try_stack[..try_stack.len() - 1].to_vec(),
-                        });
-                    return self.generator_next_state_machine(this, JsValue::Undefined);
+                if !try_info.entered_catch && !try_info.entered_finally {
+                    if let Some(catch_state) = try_info.catch_state {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: catch_state,
+                                },
+                                sent_value: exception.clone(),
+                                try_stack: try_stack[..try_stack.len() - 1].to_vec(),
+                                pending_binding: None,
+                            });
+                        return self.generator_next_state_machine(this, JsValue::Undefined);
+                    }
+                }
+                if !try_info.entered_finally {
+                    if let Some(finally_state) = try_info.finally_state {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: finally_state,
+                                },
+                                sent_value: exception.clone(),
+                                try_stack: try_stack[..try_stack.len() - 1].to_vec(),
+                                pending_binding: None,
+                            });
+                        return self.generator_next_state_machine(this, JsValue::Undefined);
+                    }
                 }
             }
 
@@ -2722,6 +2796,7 @@ impl Interpreter {
                 execution_state: StateMachineExecutionState::Completed,
                 sent_value: JsValue::Undefined,
                 try_stack: vec![],
+                pending_binding: None,
             });
         }
         Completion::Throw(exception)
@@ -3179,6 +3254,7 @@ impl Interpreter {
                                     execution_state: StateMachineExecutionState::SuspendedStart,
                                     sent_value: JsValue::Undefined,
                                     try_stack: vec![],
+                                    pending_binding: None,
                                 });
                             } else {
                                 gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {

@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::interpreter::generator_transform::GeneratorStateMachine;
+use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
 use std::cell::RefCell;
@@ -50,6 +50,8 @@ pub struct TryContextInfo {
     pub catch_state: Option<usize>,
     pub finally_state: Option<usize>,
     pub after_state: usize,
+    pub entered_catch: bool,
+    pub entered_finally: bool,
 }
 
 pub type EnvRef = Rc<RefCell<Environment>>;
@@ -418,6 +420,7 @@ pub enum IteratorState {
         execution_state: StateMachineExecutionState,
         sent_value: JsValue,
         try_stack: Vec<TryContextInfo>,
+        pending_binding: Option<SentValueBinding>,
     },
     AsyncGenerator {
         body: Vec<Statement>,
@@ -432,6 +435,7 @@ pub enum IteratorState {
         execution_state: StateMachineExecutionState,
         sent_value: JsValue,
         try_stack: Vec<TryContextInfo>,
+        pending_binding: Option<SentValueBinding>,
     },
     RegExpStringIterator {
         source: String,
