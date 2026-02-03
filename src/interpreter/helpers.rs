@@ -86,6 +86,15 @@ pub(crate) fn to_js_string(val: &JsValue) -> String {
     format!("{val}")
 }
 
+/// Convert a JsValue to a property key string. For symbols, uses the id-based
+/// format to ensure uniqueness. For other types, same as to_js_string.
+pub(crate) fn to_property_key_string(val: &JsValue) -> String {
+    match val {
+        JsValue::Symbol(s) => s.to_property_key(),
+        _ => format!("{val}"),
+    }
+}
+
 pub(crate) fn is_string(val: &JsValue) -> bool {
     matches!(val, JsValue::String(_))
 }

@@ -91,6 +91,22 @@ pub struct JsSymbol {
     pub description: Option<JsString>,
 }
 
+impl JsSymbol {
+    /// Convert to the internal property key string.
+    /// Well-known symbols (description starts with "Symbol.") use a stable format
+    /// without id, so hardcoded lookups like "Symbol(Symbol.iterator)" still work.
+    /// User-created symbols include the unique id to avoid collisions.
+    pub fn to_property_key(&self) -> String {
+        match &self.description {
+            Some(desc) if desc.to_string().starts_with("Symbol.") => {
+                format!("Symbol({})", desc)
+            }
+            Some(desc) => format!("Symbol({})#{}", desc, self.id),
+            None => format!("Symbol()#{}", self.id),
+        }
+    }
+}
+
 // Well-known symbols (§6.1.5.1)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WellKnownSymbol {

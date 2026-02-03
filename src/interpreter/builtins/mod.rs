@@ -1934,7 +1934,7 @@ impl Interpreter {
                     "hasOwnProperty".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let key = args.first().map(to_property_key_string).unwrap_or_default();
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id)
                         {
@@ -2007,7 +2007,7 @@ impl Interpreter {
                     "propertyIsEnumerable".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let key = args.first().map(to_property_key_string).unwrap_or_default();
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id)
                             && let Some(desc) = obj.borrow().get_own_property(&key)
@@ -2054,7 +2054,7 @@ impl Interpreter {
                     "__defineGetter__".to_string(),
                     2,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let key = args.first().map(to_property_key_string).unwrap_or_default();
                         let getter = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         if !matches!(&getter, JsValue::Object(o) if interp.get_object(o.id).map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
                         {
@@ -2089,7 +2089,7 @@ impl Interpreter {
                     "__defineSetter__".to_string(),
                     2,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let key = args.first().map(to_property_key_string).unwrap_or_default();
                         let setter = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         if !matches!(&setter, JsValue::Object(o) if interp.get_object(o.id).map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
                         {
@@ -2124,7 +2124,7 @@ impl Interpreter {
                     "__lookupGetter__".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let key = args.first().map(to_property_key_string).unwrap_or_default();
                         let mut current = this_val.clone();
                         loop {
                             if let JsValue::Object(ref o) = current {
@@ -2157,7 +2157,7 @@ impl Interpreter {
                     "__lookupSetter__".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let key = args.first().map(to_property_key_string).unwrap_or_default();
                         let mut current = this_val.clone();
                         loop {
                             if let JsValue::Object(ref o) = current {
@@ -2199,7 +2199,7 @@ impl Interpreter {
                             "Object.defineProperty called on non-object",
                         ));
                     }
-                    let key = args.get(1).map(to_js_string).unwrap_or_default();
+                    let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                     let desc_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
@@ -2312,7 +2312,7 @@ impl Interpreter {
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => return Completion::Normal(JsValue::Undefined),
                     };
-                    let key = args.get(1).map(to_js_string).unwrap_or_default();
+                    let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                     if let JsValue::Object(ref o) = target {
                         // Proxy getOwnPropertyDescriptor trap
                         if let Some(obj) = interp.get_object(o.id)
@@ -2852,7 +2852,7 @@ impl Interpreter {
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => JsValue::Undefined,
                         };
-                        let key_str = to_js_string(&key_val);
+                        let key_str = to_property_key_string(&key_val);
                         if let Some(obj) = interp.get_object(result_id) {
                             let existing = obj.borrow().get_property(&key_str);
                             if let JsValue::Object(ref arr_o) = existing
@@ -3175,7 +3175,7 @@ impl Interpreter {
                 2,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let key = args.get(1).map(to_js_string).unwrap_or_default();
+                    let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
                     {
@@ -3915,7 +3915,7 @@ impl Interpreter {
                         interp.create_type_error("Reflect.defineProperty requires an object"),
                     );
                 }
-                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                 let desc_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
@@ -3977,7 +3977,7 @@ impl Interpreter {
                         interp.create_type_error("Reflect.deleteProperty requires an object"),
                     );
                 }
-                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4055,7 +4055,7 @@ impl Interpreter {
                         interp.create_type_error("Reflect.get requires an object"),
                     );
                 }
-                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                 let receiver = args.get(2).cloned().unwrap_or(target.clone());
                 if let JsValue::Object(ref o) = target {
                     interp.get_object_property(o.id, &key, &receiver)
@@ -4080,7 +4080,7 @@ impl Interpreter {
                             "Reflect.getOwnPropertyDescriptor requires an object",
                         ));
                     }
-                    let key = args.get(1).map(to_js_string).unwrap_or_default();
+                    let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                     if let JsValue::Object(ref o) = target {
                         if let Some(obj) = interp.get_object(o.id)
                             && obj.borrow().is_proxy()
@@ -4201,7 +4201,7 @@ impl Interpreter {
                         interp.create_type_error("Reflect.has requires an object"),
                     );
                 }
-                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -4422,7 +4422,7 @@ impl Interpreter {
                         interp.create_type_error("Reflect.set requires an object"),
                     );
                 }
-                let key = args.get(1).map(to_js_string).unwrap_or_default();
+                let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                 let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                 let receiver = args.get(3).cloned().unwrap_or(target.clone());
                 // Check if target is a proxy

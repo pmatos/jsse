@@ -6983,9 +6983,6 @@ test262/test/built-ins/Object/defineProperty/property-description-must-be-an-obj
 test262/test/built-ins/Object/defineProperty/property-description-must-be-an-object-not-true.js
 test262/test/built-ins/Object/defineProperty/property-description-must-be-an-object-not-undefined.js
 test262/test/built-ins/Object/defineProperty/redefine-length-with-various-values-and-configurable-true.js
-test262/test/built-ins/Object/defineProperty/symbol-data-property-configurable.js
-test262/test/built-ins/Object/defineProperty/symbol-data-property-default-non-strict.js
-test262/test/built-ins/Object/defineProperty/symbol-data-property-writable.js
 test262/test/built-ins/Object/entries/function-length.js
 test262/test/built-ins/Object/entries/function-name.js
 test262/test/built-ins/Object/entries/inherited-properties-omitted.js
@@ -7051,7 +7048,6 @@ test262/test/built-ins/Object/fromEntries/name.js
 test262/test/built-ins/Object/fromEntries/not-a-constructor.js
 test262/test/built-ins/Object/fromEntries/prototype.js
 test262/test/built-ins/Object/fromEntries/simple-properties.js
-test262/test/built-ins/Object/fromEntries/supports-symbols.js
 test262/test/built-ins/Object/fromEntries/uses-define-semantics.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-0-1.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-1-1.js
@@ -8512,6 +8508,7 @@ test262/test/built-ins/Reflect/has/name.js
 test262/test/built-ins/Reflect/has/not-a-constructor.js
 test262/test/built-ins/Reflect/has/return-abrupt-from-result.js
 test262/test/built-ins/Reflect/has/return-boolean.js
+test262/test/built-ins/Reflect/has/symbol-property.js
 test262/test/built-ins/Reflect/has/target-is-not-object-throws.js
 test262/test/built-ins/Reflect/has/target-is-symbol-throws.js
 test262/test/built-ins/Reflect/isExtensible/isExtensible.js
@@ -16766,6 +16763,7 @@ test262/test/language/expressions/class/dstr/private-meth-static-obj-ptrn-prop-o
 test262/test/language/expressions/class/dstr/private-meth-static-obj-ptrn-rest-skip-non-enumerable.js
 test262/test/language/expressions/class/dstr/private-meth-static-obj-ptrn-rest-val-obj.js
 test262/test/language/expressions/class/elements/after-same-line-gen-computed-names.js
+test262/test/language/expressions/class/elements/after-same-line-gen-computed-symbol-names.js
 test262/test/language/expressions/class/elements/after-same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/after-same-line-gen-literal-names-asi.js
 test262/test/language/expressions/class/elements/after-same-line-gen-literal-names.js
@@ -16805,6 +16803,7 @@ test262/test/language/expressions/class/elements/after-same-line-gen-static-priv
 test262/test/language/expressions/class/elements/after-same-line-gen-static-private-methods.js
 test262/test/language/expressions/class/elements/after-same-line-gen-string-literal-names.js
 test262/test/language/expressions/class/elements/after-same-line-method-computed-names.js
+test262/test/language/expressions/class/elements/after-same-line-method-computed-symbol-names.js
 test262/test/language/expressions/class/elements/after-same-line-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/after-same-line-method-literal-names-asi.js
 test262/test/language/expressions/class/elements/after-same-line-method-literal-names.js
@@ -16843,6 +16842,7 @@ test262/test/language/expressions/class/elements/after-same-line-method-static-p
 test262/test/language/expressions/class/elements/after-same-line-method-static-private-methods-with-fields.js
 test262/test/language/expressions/class/elements/after-same-line-method-static-private-methods.js
 test262/test/language/expressions/class/elements/after-same-line-method-string-literal-names.js
+test262/test/language/expressions/class/elements/after-same-line-static-async-gen-computed-symbol-names.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-gen-private-field-usage.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-gen-private-method-getter-usage.js
@@ -16878,6 +16878,7 @@ test262/test/language/expressions/class/elements/after-same-line-static-async-ge
 test262/test/language/expressions/class/elements/after-same-line-static-async-gen-static-private-fields.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-gen-static-private-methods-with-fields.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-gen-static-private-methods.js
+test262/test/language/expressions/class/elements/after-same-line-static-async-method-computed-symbol-names.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-method-private-field-usage.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-method-private-method-getter-usage.js
@@ -16914,6 +16915,7 @@ test262/test/language/expressions/class/elements/after-same-line-static-async-me
 test262/test/language/expressions/class/elements/after-same-line-static-async-method-static-private-methods-with-fields.js
 test262/test/language/expressions/class/elements/after-same-line-static-async-method-static-private-methods.js
 test262/test/language/expressions/class/elements/after-same-line-static-gen-computed-names.js
+test262/test/language/expressions/class/elements/after-same-line-static-gen-computed-symbol-names.js
 test262/test/language/expressions/class/elements/after-same-line-static-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/after-same-line-static-gen-literal-names-asi.js
 test262/test/language/expressions/class/elements/after-same-line-static-gen-literal-names.js
@@ -16953,6 +16955,7 @@ test262/test/language/expressions/class/elements/after-same-line-static-gen-stat
 test262/test/language/expressions/class/elements/after-same-line-static-gen-static-private-methods.js
 test262/test/language/expressions/class/elements/after-same-line-static-gen-string-literal-names.js
 test262/test/language/expressions/class/elements/after-same-line-static-method-computed-names.js
+test262/test/language/expressions/class/elements/after-same-line-static-method-computed-symbol-names.js
 test262/test/language/expressions/class/elements/after-same-line-static-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/after-same-line-static-method-literal-names-asi.js
 test262/test/language/expressions/class/elements/after-same-line-static-method-literal-names.js
@@ -17211,6 +17214,7 @@ test262/test/language/expressions/class/elements/init-value-incremental.js
 test262/test/language/expressions/class/elements/literal-name-init-err-contains-arguments.js
 test262/test/language/expressions/class/elements/literal-name-init-err-contains-super.js
 test262/test/language/expressions/class/elements/multiple-definitions-computed-names.js
+test262/test/language/expressions/class/elements/multiple-definitions-computed-symbol-names.js
 test262/test/language/expressions/class/elements/multiple-definitions-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/multiple-definitions-literal-names-asi.js
 test262/test/language/expressions/class/elements/multiple-definitions-literal-names.js
@@ -17250,6 +17254,7 @@ test262/test/language/expressions/class/elements/multiple-definitions-static-pri
 test262/test/language/expressions/class/elements/multiple-definitions-static-private-methods.js
 test262/test/language/expressions/class/elements/multiple-definitions-string-literal-names.js
 test262/test/language/expressions/class/elements/multiple-stacked-definitions-computed-names.js
+test262/test/language/expressions/class/elements/multiple-stacked-definitions-computed-symbol-names.js
 test262/test/language/expressions/class/elements/multiple-stacked-definitions-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/multiple-stacked-definitions-literal-names-asi.js
 test262/test/language/expressions/class/elements/multiple-stacked-definitions-literal-names.js
@@ -17339,6 +17344,7 @@ test262/test/language/expressions/class/elements/nested-ternary-init-err-contain
 test262/test/language/expressions/class/elements/nested-typeof-init-err-contains-arguments.js
 test262/test/language/expressions/class/elements/nested-typeof-init-err-contains-super.js
 test262/test/language/expressions/class/elements/new-no-sc-line-method-computed-names.js
+test262/test/language/expressions/class/elements/new-no-sc-line-method-computed-symbol-names.js
 test262/test/language/expressions/class/elements/new-no-sc-line-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/new-no-sc-line-method-literal-names-asi.js
 test262/test/language/expressions/class/elements/new-no-sc-line-method-literal-names.js
@@ -17378,6 +17384,7 @@ test262/test/language/expressions/class/elements/new-no-sc-line-method-static-pr
 test262/test/language/expressions/class/elements/new-no-sc-line-method-static-private-methods.js
 test262/test/language/expressions/class/elements/new-no-sc-line-method-string-literal-names.js
 test262/test/language/expressions/class/elements/new-sc-line-gen-computed-names.js
+test262/test/language/expressions/class/elements/new-sc-line-gen-computed-symbol-names.js
 test262/test/language/expressions/class/elements/new-sc-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/new-sc-line-gen-literal-names-asi.js
 test262/test/language/expressions/class/elements/new-sc-line-gen-literal-names.js
@@ -17417,6 +17424,7 @@ test262/test/language/expressions/class/elements/new-sc-line-gen-static-private-
 test262/test/language/expressions/class/elements/new-sc-line-gen-static-private-methods.js
 test262/test/language/expressions/class/elements/new-sc-line-gen-string-literal-names.js
 test262/test/language/expressions/class/elements/new-sc-line-method-computed-names.js
+test262/test/language/expressions/class/elements/new-sc-line-method-computed-symbol-names.js
 test262/test/language/expressions/class/elements/new-sc-line-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/new-sc-line-method-literal-names-asi.js
 test262/test/language/expressions/class/elements/new-sc-line-method-literal-names.js
@@ -17536,6 +17544,7 @@ test262/test/language/expressions/class/elements/private-typeof-init-err-contain
 test262/test/language/expressions/class/elements/redeclaration-symbol.js
 test262/test/language/expressions/class/elements/redeclaration.js
 test262/test/language/expressions/class/elements/regular-definitions-computed-names.js
+test262/test/language/expressions/class/elements/regular-definitions-computed-symbol-names.js
 test262/test/language/expressions/class/elements/regular-definitions-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/regular-definitions-literal-names-asi.js
 test262/test/language/expressions/class/elements/regular-definitions-literal-names.js
@@ -17574,6 +17583,7 @@ test262/test/language/expressions/class/elements/regular-definitions-static-priv
 test262/test/language/expressions/class/elements/regular-definitions-static-private-methods-with-fields.js
 test262/test/language/expressions/class/elements/regular-definitions-static-private-methods.js
 test262/test/language/expressions/class/elements/regular-definitions-string-literal-names.js
+test262/test/language/expressions/class/elements/same-line-async-gen-computed-symbol-names.js
 test262/test/language/expressions/class/elements/same-line-async-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/same-line-async-gen-private-field-usage.js
 test262/test/language/expressions/class/elements/same-line-async-gen-private-method-getter-usage.js
@@ -17609,6 +17619,7 @@ test262/test/language/expressions/class/elements/same-line-async-gen-rs-static-p
 test262/test/language/expressions/class/elements/same-line-async-gen-static-private-fields.js
 test262/test/language/expressions/class/elements/same-line-async-gen-static-private-methods-with-fields.js
 test262/test/language/expressions/class/elements/same-line-async-gen-static-private-methods.js
+test262/test/language/expressions/class/elements/same-line-async-method-computed-symbol-names.js
 test262/test/language/expressions/class/elements/same-line-async-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/same-line-async-method-private-field-usage.js
 test262/test/language/expressions/class/elements/same-line-async-method-private-method-getter-usage.js
@@ -17645,6 +17656,7 @@ test262/test/language/expressions/class/elements/same-line-async-method-static-p
 test262/test/language/expressions/class/elements/same-line-async-method-static-private-methods-with-fields.js
 test262/test/language/expressions/class/elements/same-line-async-method-static-private-methods.js
 test262/test/language/expressions/class/elements/same-line-gen-computed-names.js
+test262/test/language/expressions/class/elements/same-line-gen-computed-symbol-names.js
 test262/test/language/expressions/class/elements/same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/same-line-gen-literal-names-asi.js
 test262/test/language/expressions/class/elements/same-line-gen-literal-names.js
@@ -17684,6 +17696,7 @@ test262/test/language/expressions/class/elements/same-line-gen-static-private-me
 test262/test/language/expressions/class/elements/same-line-gen-static-private-methods.js
 test262/test/language/expressions/class/elements/same-line-gen-string-literal-names.js
 test262/test/language/expressions/class/elements/same-line-method-computed-names.js
+test262/test/language/expressions/class/elements/same-line-method-computed-symbol-names.js
 test262/test/language/expressions/class/elements/same-line-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/same-line-method-literal-names-asi.js
 test262/test/language/expressions/class/elements/same-line-method-literal-names.js
@@ -17860,6 +17873,7 @@ test262/test/language/expressions/class/elements/ternary-init-err-contains-super
 test262/test/language/expressions/class/elements/typeof-init-err-contains-arguments.js
 test262/test/language/expressions/class/elements/typeof-init-err-contains-super.js
 test262/test/language/expressions/class/elements/wrapped-in-sc-computed-names.js
+test262/test/language/expressions/class/elements/wrapped-in-sc-computed-symbol-names.js
 test262/test/language/expressions/class/elements/wrapped-in-sc-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/expressions/class/elements/wrapped-in-sc-literal-names-asi.js
 test262/test/language/expressions/class/elements/wrapped-in-sc-literal-names.js
@@ -24541,6 +24555,7 @@ test262/test/language/statements/class/dstr/private-meth-static-obj-ptrn-rest-sk
 test262/test/language/statements/class/dstr/private-meth-static-obj-ptrn-rest-val-obj.js
 test262/test/language/statements/class/elements/abrupt-completition-on-field-initializer.js
 test262/test/language/statements/class/elements/after-same-line-gen-computed-names.js
+test262/test/language/statements/class/elements/after-same-line-gen-computed-symbol-names.js
 test262/test/language/statements/class/elements/after-same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/after-same-line-gen-literal-names-asi.js
 test262/test/language/statements/class/elements/after-same-line-gen-literal-names.js
@@ -24580,6 +24595,7 @@ test262/test/language/statements/class/elements/after-same-line-gen-static-priva
 test262/test/language/statements/class/elements/after-same-line-gen-static-private-methods.js
 test262/test/language/statements/class/elements/after-same-line-gen-string-literal-names.js
 test262/test/language/statements/class/elements/after-same-line-method-computed-names.js
+test262/test/language/statements/class/elements/after-same-line-method-computed-symbol-names.js
 test262/test/language/statements/class/elements/after-same-line-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/after-same-line-method-literal-names-asi.js
 test262/test/language/statements/class/elements/after-same-line-method-literal-names.js
@@ -24618,6 +24634,7 @@ test262/test/language/statements/class/elements/after-same-line-method-static-pr
 test262/test/language/statements/class/elements/after-same-line-method-static-private-methods-with-fields.js
 test262/test/language/statements/class/elements/after-same-line-method-static-private-methods.js
 test262/test/language/statements/class/elements/after-same-line-method-string-literal-names.js
+test262/test/language/statements/class/elements/after-same-line-static-async-gen-computed-symbol-names.js
 test262/test/language/statements/class/elements/after-same-line-static-async-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/after-same-line-static-async-gen-private-field-usage.js
 test262/test/language/statements/class/elements/after-same-line-static-async-gen-private-method-getter-usage.js
@@ -24653,6 +24670,7 @@ test262/test/language/statements/class/elements/after-same-line-static-async-gen
 test262/test/language/statements/class/elements/after-same-line-static-async-gen-static-private-fields.js
 test262/test/language/statements/class/elements/after-same-line-static-async-gen-static-private-methods-with-fields.js
 test262/test/language/statements/class/elements/after-same-line-static-async-gen-static-private-methods.js
+test262/test/language/statements/class/elements/after-same-line-static-async-method-computed-symbol-names.js
 test262/test/language/statements/class/elements/after-same-line-static-async-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/after-same-line-static-async-method-private-field-usage.js
 test262/test/language/statements/class/elements/after-same-line-static-async-method-private-method-getter-usage.js
@@ -24689,6 +24707,7 @@ test262/test/language/statements/class/elements/after-same-line-static-async-met
 test262/test/language/statements/class/elements/after-same-line-static-async-method-static-private-methods-with-fields.js
 test262/test/language/statements/class/elements/after-same-line-static-async-method-static-private-methods.js
 test262/test/language/statements/class/elements/after-same-line-static-gen-computed-names.js
+test262/test/language/statements/class/elements/after-same-line-static-gen-computed-symbol-names.js
 test262/test/language/statements/class/elements/after-same-line-static-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/after-same-line-static-gen-literal-names-asi.js
 test262/test/language/statements/class/elements/after-same-line-static-gen-literal-names.js
@@ -24728,6 +24747,7 @@ test262/test/language/statements/class/elements/after-same-line-static-gen-stati
 test262/test/language/statements/class/elements/after-same-line-static-gen-static-private-methods.js
 test262/test/language/statements/class/elements/after-same-line-static-gen-string-literal-names.js
 test262/test/language/statements/class/elements/after-same-line-static-method-computed-names.js
+test262/test/language/statements/class/elements/after-same-line-static-method-computed-symbol-names.js
 test262/test/language/statements/class/elements/after-same-line-static-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/after-same-line-static-method-literal-names-asi.js
 test262/test/language/statements/class/elements/after-same-line-static-method-literal-names.js
@@ -24994,6 +25014,7 @@ test262/test/language/statements/class/elements/init-value-incremental.js
 test262/test/language/statements/class/elements/literal-name-init-err-contains-arguments.js
 test262/test/language/statements/class/elements/literal-name-init-err-contains-super.js
 test262/test/language/statements/class/elements/multiple-definitions-computed-names.js
+test262/test/language/statements/class/elements/multiple-definitions-computed-symbol-names.js
 test262/test/language/statements/class/elements/multiple-definitions-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/multiple-definitions-literal-names-asi.js
 test262/test/language/statements/class/elements/multiple-definitions-literal-names.js
@@ -25033,6 +25054,7 @@ test262/test/language/statements/class/elements/multiple-definitions-static-priv
 test262/test/language/statements/class/elements/multiple-definitions-static-private-methods.js
 test262/test/language/statements/class/elements/multiple-definitions-string-literal-names.js
 test262/test/language/statements/class/elements/multiple-stacked-definitions-computed-names.js
+test262/test/language/statements/class/elements/multiple-stacked-definitions-computed-symbol-names.js
 test262/test/language/statements/class/elements/multiple-stacked-definitions-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/multiple-stacked-definitions-literal-names-asi.js
 test262/test/language/statements/class/elements/multiple-stacked-definitions-literal-names.js
@@ -25122,6 +25144,7 @@ test262/test/language/statements/class/elements/nested-ternary-init-err-contains
 test262/test/language/statements/class/elements/nested-typeof-init-err-contains-arguments.js
 test262/test/language/statements/class/elements/nested-typeof-init-err-contains-super.js
 test262/test/language/statements/class/elements/new-no-sc-line-method-computed-names.js
+test262/test/language/statements/class/elements/new-no-sc-line-method-computed-symbol-names.js
 test262/test/language/statements/class/elements/new-no-sc-line-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/new-no-sc-line-method-literal-names-asi.js
 test262/test/language/statements/class/elements/new-no-sc-line-method-literal-names.js
@@ -25161,6 +25184,7 @@ test262/test/language/statements/class/elements/new-no-sc-line-method-static-pri
 test262/test/language/statements/class/elements/new-no-sc-line-method-static-private-methods.js
 test262/test/language/statements/class/elements/new-no-sc-line-method-string-literal-names.js
 test262/test/language/statements/class/elements/new-sc-line-gen-computed-names.js
+test262/test/language/statements/class/elements/new-sc-line-gen-computed-symbol-names.js
 test262/test/language/statements/class/elements/new-sc-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/new-sc-line-gen-literal-names-asi.js
 test262/test/language/statements/class/elements/new-sc-line-gen-literal-names.js
@@ -25200,6 +25224,7 @@ test262/test/language/statements/class/elements/new-sc-line-gen-static-private-m
 test262/test/language/statements/class/elements/new-sc-line-gen-static-private-methods.js
 test262/test/language/statements/class/elements/new-sc-line-gen-string-literal-names.js
 test262/test/language/statements/class/elements/new-sc-line-method-computed-names.js
+test262/test/language/statements/class/elements/new-sc-line-method-computed-symbol-names.js
 test262/test/language/statements/class/elements/new-sc-line-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/new-sc-line-method-literal-names-asi.js
 test262/test/language/statements/class/elements/new-sc-line-method-literal-names.js
@@ -25342,6 +25367,7 @@ test262/test/language/statements/class/elements/public-class-field-initializatio
 test262/test/language/statements/class/elements/redeclaration-symbol.js
 test262/test/language/statements/class/elements/redeclaration.js
 test262/test/language/statements/class/elements/regular-definitions-computed-names.js
+test262/test/language/statements/class/elements/regular-definitions-computed-symbol-names.js
 test262/test/language/statements/class/elements/regular-definitions-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/regular-definitions-literal-names-asi.js
 test262/test/language/statements/class/elements/regular-definitions-literal-names.js
@@ -25380,6 +25406,7 @@ test262/test/language/statements/class/elements/regular-definitions-static-priva
 test262/test/language/statements/class/elements/regular-definitions-static-private-methods-with-fields.js
 test262/test/language/statements/class/elements/regular-definitions-static-private-methods.js
 test262/test/language/statements/class/elements/regular-definitions-string-literal-names.js
+test262/test/language/statements/class/elements/same-line-async-gen-computed-symbol-names.js
 test262/test/language/statements/class/elements/same-line-async-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/same-line-async-gen-private-field-usage.js
 test262/test/language/statements/class/elements/same-line-async-gen-private-method-getter-usage.js
@@ -25415,6 +25442,7 @@ test262/test/language/statements/class/elements/same-line-async-gen-rs-static-pr
 test262/test/language/statements/class/elements/same-line-async-gen-static-private-fields.js
 test262/test/language/statements/class/elements/same-line-async-gen-static-private-methods-with-fields.js
 test262/test/language/statements/class/elements/same-line-async-gen-static-private-methods.js
+test262/test/language/statements/class/elements/same-line-async-method-computed-symbol-names.js
 test262/test/language/statements/class/elements/same-line-async-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/same-line-async-method-private-field-usage.js
 test262/test/language/statements/class/elements/same-line-async-method-private-method-getter-usage.js
@@ -25451,6 +25479,7 @@ test262/test/language/statements/class/elements/same-line-async-method-static-pr
 test262/test/language/statements/class/elements/same-line-async-method-static-private-methods-with-fields.js
 test262/test/language/statements/class/elements/same-line-async-method-static-private-methods.js
 test262/test/language/statements/class/elements/same-line-gen-computed-names.js
+test262/test/language/statements/class/elements/same-line-gen-computed-symbol-names.js
 test262/test/language/statements/class/elements/same-line-gen-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/same-line-gen-literal-names-asi.js
 test262/test/language/statements/class/elements/same-line-gen-literal-names.js
@@ -25490,6 +25519,7 @@ test262/test/language/statements/class/elements/same-line-gen-static-private-met
 test262/test/language/statements/class/elements/same-line-gen-static-private-methods.js
 test262/test/language/statements/class/elements/same-line-gen-string-literal-names.js
 test262/test/language/statements/class/elements/same-line-method-computed-names.js
+test262/test/language/statements/class/elements/same-line-method-computed-symbol-names.js
 test262/test/language/statements/class/elements/same-line-method-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/same-line-method-literal-names-asi.js
 test262/test/language/statements/class/elements/same-line-method-literal-names.js
@@ -25675,6 +25705,7 @@ test262/test/language/statements/class/elements/ternary-init-err-contains-super.
 test262/test/language/statements/class/elements/typeof-init-err-contains-arguments.js
 test262/test/language/statements/class/elements/typeof-init-err-contains-super.js
 test262/test/language/statements/class/elements/wrapped-in-sc-computed-names.js
+test262/test/language/statements/class/elements/wrapped-in-sc-computed-symbol-names.js
 test262/test/language/statements/class/elements/wrapped-in-sc-grammar-privatename-identifier-semantics-stringvalue.js
 test262/test/language/statements/class/elements/wrapped-in-sc-literal-names-asi.js
 test262/test/language/statements/class/elements/wrapped-in-sc-literal-names.js

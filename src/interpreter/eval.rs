@@ -683,21 +683,11 @@ impl Interpreter {
     // §7.1.14 ToPropertyKey
     pub(crate) fn to_property_key(&mut self, val: &JsValue) -> Result<String, JsValue> {
         match val {
-            JsValue::Symbol(s) => {
-                if let Some(desc) = &s.description {
-                    Ok(format!("Symbol({desc})"))
-                } else {
-                    Ok("Symbol()".to_string())
-                }
-            }
+            JsValue::Symbol(s) => Ok(s.to_property_key()),
             JsValue::Object(_) => {
                 let prim = self.to_primitive(val, "string");
                 if let JsValue::Symbol(s) = &prim {
-                    if let Some(desc) = &s.description {
-                        return Ok(format!("Symbol({desc})"));
-                    } else {
-                        return Ok("Symbol()".to_string());
-                    }
+                    return Ok(s.to_property_key());
                 }
                 self.to_string_value(&prim)
             }
