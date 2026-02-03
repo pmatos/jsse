@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 29,756 / 47,458 run (62.70%)
+**Current pass rate:** 30,450 / 47,458 run (64.16%)
 *Skipped: 799 module tests*
 
 ---
@@ -99,6 +99,7 @@ These features block significant numbers of tests:
 30. ~~**Function parameter error propagation**~~ — ✅ Done (371 new passes, 61.44% → 62.22%). Destructuring errors in function parameter binding were silently swallowed by `let _ =`. Now propagated as throws for sync functions and promise rejections for async functions.
 31. ~~**@@toPrimitive support + unary operator ToPrimitive**~~ — ✅ Done (45 new passes, 62.28% → 62.38%). `to_primitive` now checks `Symbol.toPrimitive` before falling back to valueOf/toString per §7.1.1. Unary +/- operators now call `to_number_coerce` for objects instead of raw `to_number`. 1 Date regression (year-zero parsing).
 32. ~~**Prototype constructor properties**~~ — ✅ Done (119 new passes, 62.38% → 62.62%). Added `constructor` property to Array.prototype, Number.prototype, Boolean.prototype, RegExp.prototype pointing to their respective constructors. 1 Array.from regression (thisArg constructor).
+33. ~~**Generator state machine refactor**~~ — ✅ Done (694 new passes, 62.70% → 64.16%). Replaced replay-from-start generator execution with persistent environment. Parameters bound once at creation, local variables persist between yields. Added `GeneratorExecutionState` enum (SuspendedStart, SuspendedYield, Executing, Completed). Generator statements: 225/266 (85%), expressions: 233/290 (80%), GeneratorPrototype: 38/61 (62%).
 
 ---
 

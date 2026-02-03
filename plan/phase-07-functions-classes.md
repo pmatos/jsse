@@ -30,15 +30,18 @@ Implement all function types (normal, arrow, generator, async, async generator) 
 - [x] `super` method calls
 - [x] Computed method names `{ [expr]() {} }`
 
-### 7.4 Generator Functions (§15.5, §27.5) — **BLOCKER: parsing works, runtime doesn't**
+### 7.4 Generator Functions (§15.5, §27.5) — ✅ ~85% working
 - [x] `function*` declaration and expression (parsing)
-- [ ] `yield` expression (runtime)
-- [ ] `yield*` delegation
-- [ ] Generator prototype chain
-- [ ] GeneratorStart, GeneratorResume, GeneratorResumeAbrupt
-- [ ] GeneratorYield
-- [ ] Generator `next()` / `return()` / `throw()`
-- [ ] Suspended execution context
+- [x] `yield` expression (runtime)
+- [x] `yield*` delegation
+- [x] Generator prototype chain
+- [x] GeneratorStart, GeneratorResume (state machine with persistent environment)
+- [x] GeneratorYield
+- [x] Generator `next()` / `return()` / `throw()`
+- [x] Suspended execution context (environment persists between yields)
+- [x] Local variable persistence between yield calls
+- [ ] GeneratorResumeAbrupt (throw/return with try/finally)
+- Generator statements: 225/266 (85%), expressions: 233/290 (80%), GeneratorPrototype: 38/61 (62%)
 
 ### 7.5 Async Functions (§15.8, §27.7) — ✅ Basic support
 - [x] `async function` declaration and expression (parsing)

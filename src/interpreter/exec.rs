@@ -664,6 +664,10 @@ impl Interpreter {
             other => other,
         };
         if let Some(finalizer) = &t.finalizer {
+            // If we're yielding, don't run finally - generator will handle it on return/throw
+            if matches!(result, Completion::Yield(_)) {
+                return result;
+            }
             let fin_env = Environment::new(Some(env.clone()));
             let fin_result = self.exec_statements(finalizer, &fin_env);
             if fin_result.is_abrupt() {

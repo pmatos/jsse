@@ -194,17 +194,9 @@ impl Interpreter {
                     IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
                     IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
                     IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
-                    IteratorState::Generator {
-                        closure,
-                        args,
-                        this_val,
-                        ..
-                    } => {
-                        Self::collect_env_roots(closure, &mut worklist);
-                        for arg in args {
-                            Self::collect_value_roots(arg, &mut worklist);
-                        }
-                        Self::collect_value_roots(this_val, &mut worklist);
+                    IteratorState::Generator { func_env, .. }
+                    | IteratorState::AsyncGenerator { func_env, .. } => {
+                        Self::collect_env_roots(func_env, &mut worklist);
                     }
                     _ => {}
                 }

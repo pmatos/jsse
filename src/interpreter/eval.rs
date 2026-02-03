@@ -384,8 +384,10 @@ impl Interpreter {
                         let current = ctx.current_yield;
                         ctx.current_yield += 1;
                         if current < ctx.target_yield {
+                            // Fast-forwarding past this yield - return sent_value
                             return Completion::Normal(ctx.sent_value.clone());
                         }
+                        // This is the target yield - actually yield the value
                         return Completion::Yield(value);
                     }
                     if let Some(e) = expr {
@@ -2144,54 +2146,38 @@ impl Interpreter {
         let state = obj_rc.borrow().iterator_state.clone();
         let Some(IteratorState::Generator {
             body,
-            params,
-            closure,
+            func_env,
             is_strict,
-            args,
-            this_val,
-            target_yield,
-            done,
+            execution_state,
         }) = state
         else {
             let err = self.create_type_error("not a generator object");
             return Completion::Throw(err);
         };
 
-        if done {
-            return Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true));
-        }
-
-        // Create fresh function environment and bind params
-        let func_env = Environment::new(Some(closure.clone()));
-        for (i, param) in params.iter().enumerate() {
-            if let Pattern::Rest(inner) = param {
-                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                let rest_arr = self.create_array(rest);
-                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
-                    return Completion::Throw(e);
-                }
-                break;
+        // Determine target_yield based on execution state
+        let target_yield = match &execution_state {
+            GeneratorExecutionState::Completed => {
+                return Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true));
             }
-            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
-                return Completion::Throw(e);
+            GeneratorExecutionState::Executing => {
+                return Completion::Throw(
+                    self.create_type_error("Generator is already executing"),
+                );
             }
-        }
-        func_env.borrow_mut().bindings.insert(
-            "this".to_string(),
-            Binding {
-                value: this_val.clone(),
-                kind: BindingKind::Const,
-                initialized: true,
-            },
-        );
-        // arguments object
-        let arguments_obj =
-            self.create_arguments_object(&args, JsValue::Undefined, is_strict, None, &[]);
-        func_env.borrow_mut().declare("arguments", BindingKind::Var);
-        let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+            GeneratorExecutionState::SuspendedStart => 0,
+            GeneratorExecutionState::SuspendedYield { target_yield } => *target_yield,
+        };
 
-        // Set generator context for replay
+        // Mark as executing
+        obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+            body: body.clone(),
+            func_env: func_env.clone(),
+            is_strict,
+            execution_state: GeneratorExecutionState::Executing,
+        });
+
+        // Set generator context - for yield* delegation and sent values
         self.generator_context = Some(GeneratorContext {
             target_yield,
             current_yield: 0,
@@ -2204,55 +2190,40 @@ impl Interpreter {
 
         match result {
             Completion::Yield(v) => {
-                // Advance target_yield for next call
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                     body: body.clone(),
-                    params: params.clone(),
-                    closure: closure.clone(),
+                    func_env,
                     is_strict,
-                    args: args.clone(),
-                    this_val: this_val.clone(),
-                    target_yield: target_yield + 1,
-                    done: false,
+                    execution_state: GeneratorExecutionState::SuspendedYield {
+                        target_yield: target_yield + 1,
+                    },
                 });
                 Completion::Normal(self.create_iter_result_object(v, false))
             }
             Completion::Return(v) => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                     body,
-                    params,
-                    closure,
+                    func_env,
                     is_strict,
-                    args,
-                    this_val,
-                    target_yield,
-                    done: true,
+                    execution_state: GeneratorExecutionState::Completed,
                 });
                 Completion::Normal(self.create_iter_result_object(v, true))
             }
             Completion::Normal(_) => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                     body,
-                    params,
-                    closure,
+                    func_env,
                     is_strict,
-                    args,
-                    this_val,
-                    target_yield,
-                    done: true,
+                    execution_state: GeneratorExecutionState::Completed,
                 });
                 Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true))
             }
             Completion::Throw(e) => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                     body,
-                    params,
-                    closure,
+                    func_env,
                     is_strict,
-                    args,
-                    this_val,
-                    target_yield,
-                    done: true,
+                    execution_state: GeneratorExecutionState::Completed,
                 });
                 Completion::Throw(e)
             }
@@ -2265,30 +2236,25 @@ impl Interpreter {
             let err = self.create_type_error("Generator.prototype.return called on non-object");
             return Completion::Throw(err);
         };
-        if let Some(obj_rc) = self.get_object(o.id) {
-            let state = obj_rc.borrow().iterator_state.clone();
-            if let Some(IteratorState::Generator {
+        let Some(obj_rc) = self.get_object(o.id) else {
+            let err = self.create_type_error("Generator.prototype.return called on non-object");
+            return Completion::Throw(err);
+        };
+
+        let state = obj_rc.borrow().iterator_state.clone();
+        if let Some(IteratorState::Generator {
+            body,
+            func_env,
+            is_strict,
+            ..
+        }) = state
+        {
+            obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                 body,
-                params,
-                closure,
+                func_env,
                 is_strict,
-                args,
-                this_val,
-                target_yield,
-                ..
-            }) = state
-            {
-                obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
-                    body,
-                    params,
-                    closure,
-                    is_strict,
-                    args,
-                    this_val,
-                    target_yield,
-                    done: true,
-                });
-            }
+                execution_state: GeneratorExecutionState::Completed,
+            });
         }
         Completion::Normal(self.create_iter_result_object(value, true))
     }
@@ -2298,30 +2264,25 @@ impl Interpreter {
             let err = self.create_type_error("Generator.prototype.throw called on non-object");
             return Completion::Throw(err);
         };
-        if let Some(obj_rc) = self.get_object(o.id) {
-            let state = obj_rc.borrow().iterator_state.clone();
-            if let Some(IteratorState::Generator {
+        let Some(obj_rc) = self.get_object(o.id) else {
+            let err = self.create_type_error("Generator.prototype.throw called on non-object");
+            return Completion::Throw(err);
+        };
+
+        let state = obj_rc.borrow().iterator_state.clone();
+        if let Some(IteratorState::Generator {
+            body,
+            func_env,
+            is_strict,
+            ..
+        }) = state
+        {
+            obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                 body,
-                params,
-                closure,
+                func_env,
                 is_strict,
-                args,
-                this_val,
-                target_yield,
-                ..
-            }) = state
-            {
-                obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
-                    body,
-                    params,
-                    closure,
-                    is_strict,
-                    args,
-                    this_val,
-                    target_yield,
-                    done: true,
-                });
-            }
+                execution_state: GeneratorExecutionState::Completed,
+            });
         }
         Completion::Throw(exception)
     }
@@ -2357,13 +2318,9 @@ impl Interpreter {
         let state = obj_rc.borrow().iterator_state.clone();
         let Some(IteratorState::AsyncGenerator {
             body,
-            params,
-            closure,
+            func_env,
             is_strict,
-            args,
-            this_val,
-            target_yield,
-            done,
+            execution_state,
         }) = state
         else {
             return self.reject_with_type_error("not an async generator object");
@@ -2377,40 +2334,31 @@ impl Interpreter {
         };
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
 
-        if done {
-            let result = self.create_iter_result_object(JsValue::Undefined, true);
-            let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[result]);
-            self.drain_microtasks();
-            return Completion::Normal(promise);
-        }
+        // Determine target_yield based on execution state
+        let target_yield = match &execution_state {
+            GeneratorExecutionState::Completed => {
+                let result = self.create_iter_result_object(JsValue::Undefined, true);
+                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[result]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+            GeneratorExecutionState::Executing => {
+                let err = self.create_type_error("AsyncGenerator is already executing");
+                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+            GeneratorExecutionState::SuspendedStart => 0,
+            GeneratorExecutionState::SuspendedYield { target_yield } => *target_yield,
+        };
 
-        let func_env = Environment::new(Some(closure.clone()));
-        for (i, param) in params.iter().enumerate() {
-            if let Pattern::Rest(inner) = param {
-                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                let rest_arr = self.create_array(rest);
-                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
-                    return Completion::Throw(e);
-                }
-                break;
-            }
-            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
-                return Completion::Throw(e);
-            }
-        }
-        func_env.borrow_mut().bindings.insert(
-            "this".to_string(),
-            Binding {
-                value: this_val.clone(),
-                kind: BindingKind::Const,
-                initialized: true,
-            },
-        );
-        let arguments_obj =
-            self.create_arguments_object(&args, JsValue::Undefined, is_strict, None, &[]);
-        func_env.borrow_mut().declare("arguments", BindingKind::Var);
-        let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+        // Mark as executing
+        obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
+            body: body.clone(),
+            func_env: func_env.clone(),
+            is_strict,
+            execution_state: GeneratorExecutionState::Executing,
+        });
 
         self.generator_context = Some(GeneratorContext {
             target_yield,
@@ -2429,13 +2377,9 @@ impl Interpreter {
                     Completion::Throw(e) => {
                         obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
                             body,
-                            params,
-                            closure,
+                            func_env,
                             is_strict,
-                            args,
-                            this_val,
-                            target_yield,
-                            done: true,
+                            execution_state: GeneratorExecutionState::Completed,
                         });
                         let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                         self.drain_microtasks();
@@ -2451,13 +2395,11 @@ impl Interpreter {
                 };
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
                     body,
-                    params,
-                    closure,
+                    func_env,
                     is_strict,
-                    args,
-                    this_val,
-                    target_yield: target_yield + 1,
-                    done: false,
+                    execution_state: GeneratorExecutionState::SuspendedYield {
+                        target_yield: target_yield + 1,
+                    },
                 });
                 let iter_result = self.create_iter_result_object(awaited, false);
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
@@ -2468,13 +2410,9 @@ impl Interpreter {
                     Completion::Throw(e) => {
                         obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
                             body,
-                            params,
-                            closure,
+                            func_env,
                             is_strict,
-                            args,
-                            this_val,
-                            target_yield,
-                            done: true,
+                            execution_state: GeneratorExecutionState::Completed,
                         });
                         let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                         self.drain_microtasks();
@@ -2490,13 +2428,9 @@ impl Interpreter {
                 };
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
                     body,
-                    params,
-                    closure,
+                    func_env,
                     is_strict,
-                    args,
-                    this_val,
-                    target_yield,
-                    done: true,
+                    execution_state: GeneratorExecutionState::Completed,
                 });
                 let iter_result = self.create_iter_result_object(awaited, true);
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
@@ -2504,13 +2438,9 @@ impl Interpreter {
             Completion::Normal(_) => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
                     body,
-                    params,
-                    closure,
+                    func_env,
                     is_strict,
-                    args,
-                    this_val,
-                    target_yield,
-                    done: true,
+                    execution_state: GeneratorExecutionState::Completed,
                 });
                 let iter_result = self.create_iter_result_object(JsValue::Undefined, true);
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
@@ -2518,13 +2448,9 @@ impl Interpreter {
             Completion::Throw(e) => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
                     body,
-                    params,
-                    closure,
+                    func_env,
                     is_strict,
-                    args,
-                    this_val,
-                    target_yield,
-                    done: true,
+                    execution_state: GeneratorExecutionState::Completed,
                 });
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
             }
@@ -2547,13 +2473,9 @@ impl Interpreter {
         let state = obj_rc.borrow().iterator_state.clone();
         let Some(IteratorState::AsyncGenerator {
             body,
-            params,
-            closure,
+            func_env,
             is_strict,
-            args,
-            this_val,
-            target_yield,
-            ..
+            execution_state,
         }) = state
         else {
             return self.reject_with_type_error("not an async generator object");
@@ -2565,23 +2487,40 @@ impl Interpreter {
         } else {
             0
         };
-        let (resolve_fn, _reject_fn) = self.create_resolving_functions(promise_id);
+        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
 
-        obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
-            body,
-            params,
-            closure,
-            is_strict,
-            args,
-            this_val,
-            target_yield,
-            done: true,
-        });
-
-        let iter_result = self.create_iter_result_object(value, true);
-        let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
-        self.drain_microtasks();
-        Completion::Normal(promise)
+        match &execution_state {
+            GeneratorExecutionState::SuspendedStart | GeneratorExecutionState::Completed => {
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
+                    body,
+                    func_env,
+                    is_strict,
+                    execution_state: GeneratorExecutionState::Completed,
+                });
+                let iter_result = self.create_iter_result_object(value, true);
+                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+            GeneratorExecutionState::Executing => {
+                let err = self.create_type_error("AsyncGenerator is already executing");
+                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                self.drain_microtasks();
+                return Completion::Normal(promise);
+            }
+            GeneratorExecutionState::SuspendedYield { .. } => {
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
+                    body,
+                    func_env,
+                    is_strict,
+                    execution_state: GeneratorExecutionState::Completed,
+                });
+                let iter_result = self.create_iter_result_object(value, true);
+                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
+                self.drain_microtasks();
+                Completion::Normal(promise)
+            }
+        }
     }
 
     pub(crate) fn async_generator_throw(
@@ -2601,13 +2540,9 @@ impl Interpreter {
         let state = obj_rc.borrow().iterator_state.clone();
         let Some(IteratorState::AsyncGenerator {
             body,
-            params,
-            closure,
+            func_env,
             is_strict,
-            args,
-            this_val,
-            target_yield,
-            done,
+            ..
         }) = state
         else {
             return self.reject_with_type_error("not an async generator object");
@@ -2619,22 +2554,13 @@ impl Interpreter {
         } else {
             0
         };
-        let (_resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+        let (_, reject_fn) = self.create_resolving_functions(promise_id);
 
-        if done {
-            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exception]);
-            self.drain_microtasks();
-            return Completion::Normal(promise);
-        }
         obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
             body,
-            params,
-            closure,
+            func_env,
             is_strict,
-            args,
-            this_val,
-            target_yield,
-            done: true,
+            execution_state: GeneratorExecutionState::Completed,
         });
         let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exception]);
         self.drain_microtasks();
@@ -2712,16 +2638,41 @@ impl Interpreter {
                                     self.async_generator_prototype.clone();
                             }
                             gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
+                            // Create persistent function environment
+                            let func_env = Environment::new(Some(closure.clone()));
+                            func_env.borrow_mut().strict = is_strict;
+                            for (i, param) in params.iter().enumerate() {
+                                if let Pattern::Rest(inner) = param {
+                                    let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
+                                    let rest_arr = self.create_array(rest);
+                                    if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
+                                        return Completion::Throw(e);
+                                    }
+                                    break;
+                                }
+                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            func_env.borrow_mut().bindings.insert(
+                                "this".to_string(),
+                                Binding {
+                                    value: _this_val.clone(),
+                                    kind: BindingKind::Const,
+                                    initialized: true,
+                                },
+                            );
+                            let arguments_obj =
+                                self.create_arguments_object(args, JsValue::Undefined, is_strict, None, &[]);
+                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                             gen_obj.borrow_mut().iterator_state =
                                 Some(IteratorState::AsyncGenerator {
                                     body: body.clone(),
-                                    params: params.clone(),
-                                    closure: closure.clone(),
+                                    func_env,
                                     is_strict,
-                                    args: args.to_vec(),
-                                    this_val: _this_val.clone(),
-                                    target_yield: 0,
-                                    done: false,
+                                    execution_state: GeneratorExecutionState::SuspendedStart,
                                 });
                             let gen_id = gen_obj.borrow().id.unwrap();
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {
@@ -2742,15 +2693,40 @@ impl Interpreter {
                                 }
                             }
                             gen_obj.borrow_mut().class_name = "Generator".to_string();
+                            // Create persistent function environment
+                            let func_env = Environment::new(Some(closure.clone()));
+                            func_env.borrow_mut().strict = is_strict;
+                            for (i, param) in params.iter().enumerate() {
+                                if let Pattern::Rest(inner) = param {
+                                    let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
+                                    let rest_arr = self.create_array(rest);
+                                    if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
+                                        return Completion::Throw(e);
+                                    }
+                                    break;
+                                }
+                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                                if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            func_env.borrow_mut().bindings.insert(
+                                "this".to_string(),
+                                Binding {
+                                    value: _this_val.clone(),
+                                    kind: BindingKind::Const,
+                                    initialized: true,
+                                },
+                            );
+                            let arguments_obj =
+                                self.create_arguments_object(args, JsValue::Undefined, is_strict, None, &[]);
+                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                             gen_obj.borrow_mut().iterator_state = Some(IteratorState::Generator {
                                 body: body.clone(),
-                                params: params.clone(),
-                                closure: closure.clone(),
+                                func_env,
                                 is_strict,
-                                args: args.to_vec(),
-                                this_val: _this_val.clone(),
-                                target_yield: 0,
-                                done: false,
+                                execution_state: GeneratorExecutionState::SuspendedStart,
                             });
                             let gen_id = gen_obj.borrow().id.unwrap();
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {

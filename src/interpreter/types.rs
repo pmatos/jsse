@@ -28,6 +28,14 @@ pub(crate) struct GeneratorContext {
     pub(crate) is_async: bool,
 }
 
+#[derive(Debug, Clone)]
+pub enum GeneratorExecutionState {
+    SuspendedStart,
+    SuspendedYield { target_yield: usize },
+    Executing,
+    Completed,
+}
+
 pub type EnvRef = Rc<RefCell<Environment>>;
 
 pub struct Environment {
@@ -383,23 +391,15 @@ pub enum IteratorState {
     },
     Generator {
         body: Vec<Statement>,
-        params: Vec<Pattern>,
-        closure: EnvRef,
+        func_env: EnvRef,
         is_strict: bool,
-        args: Vec<JsValue>,
-        this_val: JsValue,
-        target_yield: usize,
-        done: bool,
+        execution_state: GeneratorExecutionState,
     },
     AsyncGenerator {
         body: Vec<Statement>,
-        params: Vec<Pattern>,
-        closure: EnvRef,
+        func_env: EnvRef,
         is_strict: bool,
-        args: Vec<JsValue>,
-        this_val: JsValue,
-        target_yield: usize,
-        done: bool,
+        execution_state: GeneratorExecutionState,
     },
     RegExpStringIterator {
         source: String,
