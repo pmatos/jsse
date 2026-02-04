@@ -351,7 +351,9 @@ impl<'a> Parser<'a> {
                 self.validate_assignment_target(&expr, true)?;
                 Ok(Expression::Update(op, true, Box::new(expr)))
             }
-            Token::Keyword(Keyword::Await) if self.in_async => {
+            Token::Keyword(Keyword::Await)
+                if self.in_async || (self.is_module && self.in_function == 0) =>
+            {
                 if self.in_formal_parameters {
                     return Err(self.error(
                         "Await expression is not allowed in formal parameters of an async function",

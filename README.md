@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 48,257  | 0       | 30,920  | 17,337  | 64.07%    |
+| 48,257      | 48,257  | 0       | 31,133  | 17,124  | 64.51%    |
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 
@@ -70,7 +70,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - `Set` built-in (constructor, `add`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`, ES2025 set methods: `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`)
   - Generator functions (`function*`, `yield`, `yield*`) with replay-based execution
   - Generator prototype (`next`, `return`, `throw`, `Symbol.iterator`, `Symbol.toStringTag`)
-  - ES Modules (`import`, `export`, `import()`, `import.meta`)
+  - ES Modules (`import`, `export`, `import()`, `import.meta`, top-level await)
   - `ArrayBuffer` (constructor, `byteLength`, `slice`, `isView`)
   - TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`) with indexed access, prototype methods (`at`, `set`, `subarray`, `slice`, `copyWithin`, `fill`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `every`, `some`, `reverse`, `sort`, `join`, `toString`, `toReversed`, `toSorted`, `entries`, `keys`, `values`, `from`, `of`)
   - `DataView` (constructor, all get/set methods for Int8 through BigUint64, little/big endian)
