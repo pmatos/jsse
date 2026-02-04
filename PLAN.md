@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 31,134 / 48,257 run (64.52%)
+**Current pass rate:** 31,147 / 48,257 run (64.54%)
 
 ---
 
@@ -100,6 +100,7 @@ These features block significant numbers of tests:
 32. ~~**Prototype constructor properties**~~ — ✅ Done (119 new passes, 62.38% → 62.62%). Added `constructor` property to Array.prototype, Number.prototype, Boolean.prototype, RegExp.prototype pointing to their respective constructors. 1 Array.from regression (thisArg constructor).
 33. ~~**Generator state machine refactor**~~ — ✅ Done (694 new passes, 62.70% → 64.16%). Replaced replay-from-start generator execution with persistent environment. Parameters bound once at creation, local variables persist between yields. Added `GeneratorExecutionState` enum (SuspendedStart, SuspendedYield, Executing, Completed). Generator statements: 225/266 (85%), expressions: 233/290 (80%), GeneratorPrototype: 38/61 (62%).
 34. ~~**ES Modules**~~ — ✅ Done (684 new passes, 64.16% → 64.52%). Full ES module support: import/export declarations, dynamic import(), import.meta, top-level await, module namespace objects with live bindings, circular dependency detection, duplicate export detection, re-export live binding resolution. module-code: 518/737 (70%), import: 120/162 (74%), dynamic-import: ~60%.
+35. ~~**TypedArray.prototype.with()**~~ — ✅ Done (13 new passes, 64.52% → 64.54%). ES2023 immutable update method that creates a copy with a single element replaced. Proper coercion order (index then value), BigInt TypedArray support, valueOf error propagation. TypedArray: 786/1,438 (55%).
 
 ---
 

@@ -133,12 +133,12 @@ Ordered roughly by dependency and importance.
   - [ ] `toLocaleString`, `[@@unscopables]`
   - [ ] Array species (`@@species`)
   - [ ] Array groupBy
-- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (669/1,438 = 46.5%, 323/736 constructors = 43.9%)
+- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (786/1,438 = 55%, 323/736 constructors = 43.9%)
   - [x] `%TypedArray%` intrinsic (abstract base) with shared prototype methods
   - [x] `%TypedArray%` constructor wiring: `.prototype`, `.constructor`, `@@species`, prototype chain inheritance
   - [x] All concrete constructors: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`
   - [x] `TypedArray.from()`, `TypedArray.of()`
-  - [x] Prototype methods: `at`, `set`, `subarray`, `slice`, `copyWithin`, `fill`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `every`, `some`, `reverse`, `sort`, `join`, `toString`, `toReversed`, `toSorted`, `entries`, `keys`, `values`
+  - [x] Prototype methods: `at`, `set`, `subarray`, `slice`, `copyWithin`, `fill`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `every`, `some`, `reverse`, `sort`, `join`, `toString`, `toReversed`, `toSorted`, `with`, `entries`, `keys`, `values`
   - [x] Buffer, byteOffset, byteLength, length getters
   - [ ] `Uint8Array.fromBase64()`, `Uint8Array.fromHex()`, `.toBase64()`, `.toHex()`, `.setFromBase64()`, `.setFromHex()`
   - [ ] `Float16Array` (not yet implemented)
