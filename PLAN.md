@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 31,147 / 48,257 run (64.54%)
+**Current pass rate:** 31,195 / 48,257 run (64.64%)
 
 ---
 
@@ -31,7 +31,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
 | Object | 84% | 2,857/3,411 |
-| Array | 67% | 2,050/3,079 |
+| Array | 69% | 2,110/3,079 |
 | String | 73% | 886/1,215 |
 | Function | 65% | 332/509 |
 | Iterator | 57% | 290/510 |
@@ -101,6 +101,7 @@ These features block significant numbers of tests:
 33. ~~**Generator state machine refactor**~~ — ✅ Done (694 new passes, 62.70% → 64.16%). Replaced replay-from-start generator execution with persistent environment. Parameters bound once at creation, local variables persist between yields. Added `GeneratorExecutionState` enum (SuspendedStart, SuspendedYield, Executing, Completed). Generator statements: 225/266 (85%), expressions: 233/290 (80%), GeneratorPrototype: 38/61 (62%).
 34. ~~**ES Modules**~~ — ✅ Done (684 new passes, 64.16% → 64.52%). Full ES module support: import/export declarations, dynamic import(), import.meta, top-level await, module namespace objects with live bindings, circular dependency detection, duplicate export detection, re-export live binding resolution. module-code: 518/737 (70%), import: 120/162 (74%), dynamic-import: ~60%.
 35. ~~**TypedArray.prototype.with()**~~ — ✅ Done (13 new passes, 64.52% → 64.54%). ES2023 immutable update method that creates a copy with a single element replaced. Proper coercion order (index then value), BigInt TypedArray support, valueOf error propagation. TypedArray: 786/1,438 (55%).
+36. ~~**Array.prototype.toLocaleString + Object.prototype.toLocaleString + TypedArray.prototype.toLocaleString**~~ — ✅ Done (48 new passes, 64.54% → 64.64%). Implemented per ECMA-262 §23.1.3.32: ToObject(this), LengthOfArrayLike, comma separator, skip undefined/null elements, Invoke toLocaleString on others with no arguments. Added Object.prototype.toLocaleString as base (calls this.toString). Added TypedArray.prototype.toLocaleString with ValidateTypedArray checks. Array/toLocaleString: 8/12 (67%), Object/toLocaleString: 11/12 (92%), TypedArray/toLocaleString: passing.
 
 ---
 

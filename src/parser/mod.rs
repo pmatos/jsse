@@ -523,10 +523,7 @@ impl<'a> Parser<'a> {
             if let ModuleItem::ExportDeclaration(ref export) = item {
                 for name in self.get_exported_names(export) {
                     if !exported_names.insert(name.clone()) {
-                        return Err(self.error(&format!(
-                            "Duplicate export of '{}'",
-                            name
-                        )));
+                        return Err(self.error(&format!("Duplicate export of '{}'", name)));
                     }
                 }
             }
@@ -543,7 +540,11 @@ impl<'a> Parser<'a> {
 
     fn get_exported_names(&self, export: &ExportDeclaration) -> Vec<String> {
         match export {
-            ExportDeclaration::Named { specifiers, declaration, .. } => {
+            ExportDeclaration::Named {
+                specifiers,
+                declaration,
+                ..
+            } => {
                 let mut names = Vec::new();
                 for spec in specifiers {
                     names.push(spec.exported.clone());
@@ -553,9 +554,9 @@ impl<'a> Parser<'a> {
                 }
                 names
             }
-            ExportDeclaration::Default(_) |
-            ExportDeclaration::DefaultFunction(_) |
-            ExportDeclaration::DefaultClass(_) => {
+            ExportDeclaration::Default(_)
+            | ExportDeclaration::DefaultFunction(_)
+            | ExportDeclaration::DefaultClass(_) => {
                 vec!["default".to_string()]
             }
             ExportDeclaration::All { exported, .. } => {

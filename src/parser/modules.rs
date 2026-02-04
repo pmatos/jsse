@@ -67,7 +67,10 @@ impl<'a> Parser<'a> {
         Ok(ImportDeclaration { specifiers, source })
     }
 
-    fn parse_named_imports(&mut self, specifiers: &mut Vec<ImportSpecifier>) -> Result<(), ParseError> {
+    fn parse_named_imports(
+        &mut self,
+        specifiers: &mut Vec<ImportSpecifier>,
+    ) -> Result<(), ParseError> {
         while self.current != Token::RightBrace {
             let imported = self.parse_module_export_name()?;
 

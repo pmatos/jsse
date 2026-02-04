@@ -879,6 +879,77 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toString".to_string(), tostring_fn);
 
+        // toLocaleString
+        let to_locale_string_fn = self.create_function(JsFunction::native(
+            "toLocaleString".to_string(),
+            0,
+            |interp, this_val, _args| {
+                // ValidateTypedArray: Type(O) must be Object
+                if !matches!(this_val, JsValue::Object(_)) {
+                    return Completion::Throw(interp.create_type_error("not a TypedArray"));
+                }
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let ta = {
+                        let obj_ref = obj.borrow();
+                        if let Some(ref ta) = obj_ref.typed_array_info {
+                            ta.clone()
+                        } else {
+                            // ValidateTypedArray: Must have [[TypedArrayName]] slot
+                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
+                        }
+                    };
+                    let separator = ",";
+                    let mut parts: Vec<String> = Vec::with_capacity(ta.array_length);
+                    for k in 0..ta.array_length {
+                        let next_element = typed_array_get_index(&ta, k);
+                        if matches!(next_element, JsValue::Undefined | JsValue::Null) {
+                            parts.push(String::new());
+                        } else {
+                            // Convert to object to get toLocaleString method
+                            let element_obj = match interp.to_object(&next_element) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            if let JsValue::Object(ref elem_ref) = element_obj {
+                                let to_locale_str_method = match interp.get_object_property(
+                                    elem_ref.id,
+                                    "toLocaleString",
+                                    &element_obj,
+                                ) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                                if interp.is_callable(&to_locale_str_method) {
+                                    match interp.call_function(
+                                        &to_locale_str_method,
+                                        &next_element,
+                                        &[],
+                                    ) {
+                                        Completion::Normal(v) => {
+                                            parts.push(to_js_string(&v));
+                                        }
+                                        other => return other,
+                                    }
+                                } else {
+                                    let err = interp
+                                        .create_type_error("toLocaleString is not a function");
+                                    return Completion::Throw(err);
+                                }
+                            }
+                        }
+                    }
+                    Completion::Normal(JsValue::String(JsString::from_str(&parts.join(separator))))
+                } else {
+                    Completion::Throw(interp.create_type_error("not a TypedArray"))
+                }
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("toLocaleString".to_string(), to_locale_string_fn);
+
         // toReversed
         let to_reversed_fn = self.create_function(JsFunction::native(
             "toReversed".to_string(),

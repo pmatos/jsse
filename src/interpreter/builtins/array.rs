@@ -439,6 +439,61 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toString".to_string(), tostring_fn);
 
+        // Array.prototype.toLocaleString
+        let to_locale_string_fn = self.create_function(JsFunction::native(
+            "toLocaleString".to_string(),
+            0,
+            |interp, this_val, _args| {
+                // Step 1: ToObject(this)
+                let o = match to_object_val(interp, this_val) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                // Step 2: LengthOfArrayLike
+                let len = match length_of_array_like(interp, &o) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                // Step 3: separator = ","
+                let separator = ",";
+                // Step 4-6: Build result string
+                let mut parts: Vec<String> = Vec::with_capacity(len);
+                for k in 0..len {
+                    // Step 6b: Get element
+                    let next_element = obj_get(interp, &o, &k.to_string());
+                    // Step 6c: Skip undefined/null, call toLocaleString on others
+                    if matches!(next_element, JsValue::Undefined | JsValue::Null) {
+                        parts.push(String::new());
+                    } else {
+                        // Convert to object to get toLocaleString method
+                        let element_obj = match interp.to_object(&next_element) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let to_locale_str_method = obj_get(interp, &element_obj, "toLocaleString");
+                        if interp.is_callable(&to_locale_str_method) {
+                            // Call with NO arguments per spec, using original value as this
+                            match interp.call_function(&to_locale_str_method, &next_element, &[]) {
+                                Completion::Normal(v) => {
+                                    parts.push(to_js_string(&v));
+                                }
+                                other => return other,
+                            }
+                        } else {
+                            // toLocaleString not callable - throw TypeError per spec
+                            let err = interp.create_type_error("toLocaleString is not a function");
+                            return Completion::Throw(err);
+                        }
+                    }
+                }
+                // Step 7: Return joined string
+                Completion::Normal(JsValue::String(JsString::from_str(&parts.join(separator))))
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("toLocaleString".to_string(), to_locale_string_fn);
+
         // Array.prototype.concat
         let concat_fn = self.create_function(JsFunction::native(
             "concat".to_string(),

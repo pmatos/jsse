@@ -653,7 +653,8 @@ impl Interpreter {
         for item in &program.module_items {
             if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
             {
-                if let Err(e) = self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+                if let Err(e) =
+                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
                 {
                     self.current_module_path = prev_module_path;
                     return Completion::Throw(e);
@@ -776,10 +777,7 @@ impl Interpreter {
             let source_bindings = source_module.borrow().export_bindings.clone();
             for (export_name, val) in source_exports {
                 if export_name != "default" {
-                    module
-                        .borrow_mut()
-                        .exports
-                        .insert(export_name.clone(), val);
+                    module.borrow_mut().exports.insert(export_name.clone(), val);
                     // For bindings, use a special marker for re-exports
                     if let Some(binding) = source_bindings.get(&export_name) {
                         module
@@ -987,7 +985,9 @@ impl Interpreter {
         export_name: &str,
         visited: &mut std::collections::HashSet<(PathBuf, String)>,
     ) -> Result<(), JsValue> {
-        let canon_path = module_path.canonicalize().unwrap_or_else(|_| module_path.to_path_buf());
+        let canon_path = module_path
+            .canonicalize()
+            .unwrap_or_else(|_| module_path.to_path_buf());
         let key = (canon_path.clone(), export_name.to_string());
 
         // Check for circular reference
@@ -1054,7 +1054,8 @@ impl Interpreter {
                 if let Some(src) = source {
                     // Re-export: get values from source module
                     let module_path = self.current_module_path.clone();
-                    if let Ok(resolved) = self.resolve_module_specifier(src, module_path.as_deref()) {
+                    if let Ok(resolved) = self.resolve_module_specifier(src, module_path.as_deref())
+                    {
                         if let Ok(source_mod) = self.load_module(&resolved) {
                             let source_exports = source_mod.borrow().exports.clone();
                             for spec in specifiers {
@@ -1085,7 +1086,10 @@ impl Interpreter {
             }
             ExportDeclaration::Default(expr) => {
                 if let Some(val) = env.borrow().get("*default*") {
-                    module.borrow_mut().exports.insert("default".to_string(), val);
+                    module
+                        .borrow_mut()
+                        .exports
+                        .insert("default".to_string(), val);
                 } else {
                     // For expression defaults, evaluate directly
                     let _ = expr; // Already evaluated and stored
@@ -1093,21 +1097,33 @@ impl Interpreter {
             }
             ExportDeclaration::DefaultFunction(f) => {
                 if let Some(val) = env.borrow().get("*default*") {
-                    module.borrow_mut().exports.insert("default".to_string(), val);
+                    module
+                        .borrow_mut()
+                        .exports
+                        .insert("default".to_string(), val);
                 }
                 if !f.name.is_empty() {
                     if let Some(val) = env.borrow().get(&f.name) {
-                        module.borrow_mut().exports.insert("default".to_string(), val);
+                        module
+                            .borrow_mut()
+                            .exports
+                            .insert("default".to_string(), val);
                     }
                 }
             }
             ExportDeclaration::DefaultClass(c) => {
                 if let Some(val) = env.borrow().get("*default*") {
-                    module.borrow_mut().exports.insert("default".to_string(), val);
+                    module
+                        .borrow_mut()
+                        .exports
+                        .insert("default".to_string(), val);
                 }
                 if !c.name.is_empty() {
                     if let Some(val) = env.borrow().get(&c.name) {
-                        module.borrow_mut().exports.insert("default".to_string(), val);
+                        module
+                            .borrow_mut()
+                            .exports
+                            .insert("default".to_string(), val);
                     }
                 }
             }
@@ -1432,11 +1448,7 @@ impl Interpreter {
         }
     }
 
-    fn exec_export_declaration(
-        &mut self,
-        export: &ExportDeclaration,
-        env: &EnvRef,
-    ) -> Completion {
+    fn exec_export_declaration(&mut self, export: &ExportDeclaration, env: &EnvRef) -> Completion {
         match export {
             ExportDeclaration::Named {
                 declaration: Some(decl),
@@ -1450,8 +1462,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     c => return c,
                 };
-                env.borrow_mut()
-                    .declare("*default*", BindingKind::Const);
+                env.borrow_mut().declare("*default*", BindingKind::Const);
                 let _ = env.borrow_mut().set("*default*", val);
                 Completion::Normal(JsValue::Undefined)
             }
@@ -1477,8 +1488,7 @@ impl Interpreter {
                     env.borrow_mut().declare(&func.name, BindingKind::Const);
                     let _ = env.borrow_mut().set(&func.name, fn_obj.clone());
                 }
-                env.borrow_mut()
-                    .declare("*default*", BindingKind::Const);
+                env.borrow_mut().declare("*default*", BindingKind::Const);
                 let _ = env.borrow_mut().set("*default*", fn_obj);
                 Completion::Normal(JsValue::Undefined)
             }
@@ -1502,8 +1512,7 @@ impl Interpreter {
                     env.borrow_mut().declare(&class.name, BindingKind::Const);
                     let _ = env.borrow_mut().set(&class.name, class_val.clone());
                 }
-                env.borrow_mut()
-                    .declare("*default*", BindingKind::Const);
+                env.borrow_mut().declare("*default*", BindingKind::Const);
                 let _ = env.borrow_mut().set("*default*", class_val);
                 Completion::Normal(JsValue::Undefined)
             }

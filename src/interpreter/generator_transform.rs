@@ -146,10 +146,7 @@ impl TransformContext {
     }
 }
 
-pub fn transform_generator(
-    body: &[Statement],
-    params: &[Pattern],
-) -> GeneratorStateMachine {
+pub fn transform_generator(body: &[Statement], params: &[Pattern]) -> GeneratorStateMachine {
     let analysis = analyze_generator_body(body, params);
 
     if analysis.yield_points.is_empty() {

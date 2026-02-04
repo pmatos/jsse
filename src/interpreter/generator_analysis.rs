@@ -79,10 +79,7 @@ impl AnalysisContext {
     }
 }
 
-pub fn analyze_generator_body(
-    body: &[Statement],
-    params: &[Pattern],
-) -> GeneratorAnalysis {
+pub fn analyze_generator_body(body: &[Statement], params: &[Pattern]) -> GeneratorAnalysis {
     let mut analysis = GeneratorAnalysis {
         yield_points: Vec::new(),
         local_vars: Vec::new(),
@@ -644,7 +641,10 @@ pub fn contains_yield(stmt: &Statement) -> bool {
         Statement::If(if_stmt) => {
             expr_contains_yield(&if_stmt.test)
                 || contains_yield(&if_stmt.consequent)
-                || if_stmt.alternate.as_ref().is_some_and(|s| contains_yield(s))
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|s| contains_yield(s))
         }
         Statement::While(w) => expr_contains_yield(&w.test) || contains_yield(&w.body),
         Statement::DoWhile(d) => contains_yield(&d.body) || expr_contains_yield(&d.test),

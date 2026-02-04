@@ -49,7 +49,12 @@ enum EngineError {
 }
 
 fn run_source(source: &str, is_module: bool, path: Option<&Path>) -> Result<(), EngineError> {
-    run_source_with_interp(&mut interpreter::Interpreter::new(), source, is_module, path)
+    run_source_with_interp(
+        &mut interpreter::Interpreter::new(),
+        source,
+        is_module,
+        path,
+    )
 }
 
 fn run_source_with_interp(
@@ -105,8 +110,7 @@ fn run_file(path: &Path, force_module: bool) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let is_module =
-        force_module || path.extension().is_some_and(|ext| ext == "mjs");
+    let is_module = force_module || path.extension().is_some_and(|ext| ext == "mjs");
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     execute_code(&source, is_module, Some(&abs_path))
 }

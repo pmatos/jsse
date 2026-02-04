@@ -2002,6 +2002,34 @@ impl Interpreter {
                     .borrow_mut()
                     .insert_builtin("valueOf".to_string(), obj_valueof_fn);
 
+                // Object.prototype.toLocaleString
+                let obj_tolocalestring_fn = self.create_function(JsFunction::native(
+                    "toLocaleString".to_string(),
+                    0,
+                    |interp, this_val, _args| {
+                        // 1. Let O be ? ToObject(this value).
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        // 2. Return ? Invoke(O, "toString").
+                        if let JsValue::Object(ref obj_ref) = o {
+                            let to_string_fn =
+                                match interp.get_object_property(obj_ref.id, "toString", &o) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                            if interp.is_callable(&to_string_fn) {
+                                return interp.call_function(&to_string_fn, this_val, &[]);
+                            }
+                        }
+                        Completion::Throw(interp.create_type_error("toString is not a function"))
+                    },
+                ));
+                proto_obj
+                    .borrow_mut()
+                    .insert_builtin("toLocaleString".to_string(), obj_tolocalestring_fn);
+
                 // Object.prototype.propertyIsEnumerable
                 let pie_fn = self.create_function(JsFunction::native(
                     "propertyIsEnumerable".to_string(),

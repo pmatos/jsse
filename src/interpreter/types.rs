@@ -603,7 +603,11 @@ impl JsObjectData {
         // Module namespace: look up live binding from environment
         if let Some(ref ns_data) = self.module_namespace {
             if let Some(binding_name) = ns_data.export_to_binding.get(key) {
-                return ns_data.env.borrow().get(binding_name).unwrap_or(JsValue::Undefined);
+                return ns_data
+                    .env
+                    .borrow()
+                    .get(binding_name)
+                    .unwrap_or(JsValue::Undefined);
             }
         }
         if let Some(ref map) = self.parameter_map
