@@ -105,7 +105,7 @@ These features block significant numbers of tests:
 
 37. ~~**Symbol.species accessor**~~ — ✅ Done (27 new passes, 64.64% → 64.70%). Added `[Symbol.species]` getter to Array, ArrayBuffer, Map, Set, Promise, RegExp constructors. Simple getter returning `this`. All 29 direct tests now pass. See `plan/symbol-species.md`.
 
-38. **ArrayBuffer.prototype getters** — 🔲 Pending. Add `detached`, `resizable`, `maxByteLength` accessor properties to ArrayBuffer.prototype. For non-resizable buffers: detached=false, resizable=false, maxByteLength=byteLength. Direct tests: 32 (0 passing). See `plan/arraybuffer-getters.md`.
+38. ~~**ArrayBuffer.prototype getters**~~ — ✅ Done (3 new passes, 64.70% → 64.71%). Added `detached`, `resizable`, `maxByteLength` accessor properties to ArrayBuffer.prototype. For non-resizable buffers: detached=false, resizable=false, maxByteLength=byteLength. Most direct tests require `arraybuffer-transfer` or `resizable-arraybuffer` features not yet implemented. See `plan/arraybuffer-getters.md`.
 
 ---
 

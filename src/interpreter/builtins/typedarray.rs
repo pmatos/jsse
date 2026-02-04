@@ -44,6 +44,90 @@ impl Interpreter {
             },
         );
 
+        // detached getter
+        let detached_getter = self.create_function(JsFunction::native(
+            "get detached".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if obj_ref.arraybuffer_data.is_some() {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            },
+        ));
+        ab_proto.borrow_mut().insert_property(
+            "detached".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(detached_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
+        // resizable getter
+        let resizable_getter = self.create_function(JsFunction::native(
+            "get resizable".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if obj_ref.arraybuffer_data.is_some() {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            },
+        ));
+        ab_proto.borrow_mut().insert_property(
+            "resizable".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(resizable_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
+        // maxByteLength getter
+        let max_byte_length_getter = self.create_function(JsFunction::native(
+            "get maxByteLength".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if let Some(ref buf) = obj_ref.arraybuffer_data {
+                        return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            },
+        ));
+        ab_proto.borrow_mut().insert_property(
+            "maxByteLength".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(max_byte_length_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
         // slice
         let slice_fn = self.create_function(JsFunction::native(
             "slice".to_string(),

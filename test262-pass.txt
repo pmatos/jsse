@@ -2511,8 +2511,11 @@ test262/test/built-ins/ArrayBuffer/isView/not-a-constructor.js
 test262/test/built-ins/ArrayBuffer/isView/prop-desc.js
 test262/test/built-ins/ArrayBuffer/length.js
 test262/test/built-ins/ArrayBuffer/name.js
+test262/test/built-ins/ArrayBuffer/options-maxbytelength-undefined.js
+test262/test/built-ins/ArrayBuffer/options-non-object.js
 test262/test/built-ins/ArrayBuffer/prototype/byteLength/return-bytelength.js
 test262/test/built-ins/ArrayBuffer/prototype/constructor.js
+test262/test/built-ins/ArrayBuffer/prototype/maxByteLength/return-maxbytelength-non-resizable.js
 test262/test/built-ins/ArrayBuffer/prototype/slice/context-is-not-arraybuffer-object.js
 test262/test/built-ins/ArrayBuffer/prototype/slice/context-is-not-object.js
 test262/test/built-ins/ArrayBuffer/prototype/slice/end-default-if-absent.js
