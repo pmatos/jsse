@@ -545,6 +545,28 @@ impl Interpreter {
             PropertyDescriptor::data(map_ctor.clone(), true, false, true),
         );
 
+        // Map[Symbol.species] getter
+        if let JsValue::Object(ref ctor_ref) = map_ctor
+            && let Some(ctor_obj) = self.get_object(ctor_ref.id)
+        {
+            let species_getter = self.create_function(JsFunction::native(
+                "get [Symbol.species]".to_string(),
+                0,
+                |_interp, this_val, _args| Completion::Normal(this_val.clone()),
+            ));
+            ctor_obj.borrow_mut().insert_property(
+                "Symbol(Symbol.species)".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(species_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
+        }
+
         self.global_env
             .borrow_mut()
             .declare("Map", BindingKind::Var);
@@ -1549,6 +1571,28 @@ impl Interpreter {
             "constructor".to_string(),
             PropertyDescriptor::data(set_ctor.clone(), true, false, true),
         );
+
+        // Set[Symbol.species] getter
+        if let JsValue::Object(ref ctor_ref) = set_ctor
+            && let Some(ctor_obj) = self.get_object(ctor_ref.id)
+        {
+            let species_getter = self.create_function(JsFunction::native(
+                "get [Symbol.species]".to_string(),
+                0,
+                |_interp, this_val, _args| Completion::Normal(this_val.clone()),
+            ));
+            ctor_obj.borrow_mut().insert_property(
+                "Symbol(Symbol.species)".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(species_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
+        }
 
         self.global_env
             .borrow_mut()

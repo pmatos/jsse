@@ -399,6 +399,10 @@ test262/test/built-ins/Array/S15.4_A1.1_T5.js
 test262/test/built-ins/Array/S15.4_A1.1_T6.js
 test262/test/built-ins/Array/S15.4_A1.1_T7.js
 test262/test/built-ins/Array/S15.4_A1.1_T8.js
+test262/test/built-ins/Array/Symbol.species/length.js
+test262/test/built-ins/Array/Symbol.species/return-value.js
+test262/test/built-ins/Array/Symbol.species/symbol-species-name.js
+test262/test/built-ins/Array/Symbol.species/symbol-species.js
 test262/test/built-ins/Array/constructor.js
 test262/test/built-ins/Array/from/Array.from-name.js
 test262/test/built-ins/Array/from/Array.from_arity.js
@@ -2484,6 +2488,10 @@ test262/test/built-ins/Array/prototype/with/not-a-constructor.js
 test262/test/built-ins/Array/prototype/with/property-descriptor.js
 test262/test/built-ins/Array/prototype/with/this-value-boolean.js
 test262/test/built-ins/Array/prototype/with/this-value-nullish.js
+test262/test/built-ins/ArrayBuffer/Symbol.species/length.js
+test262/test/built-ins/ArrayBuffer/Symbol.species/return-value.js
+test262/test/built-ins/ArrayBuffer/Symbol.species/symbol-species-name.js
+test262/test/built-ins/ArrayBuffer/Symbol.species/symbol-species.js
 test262/test/built-ins/ArrayBuffer/init-zero.js
 test262/test/built-ins/ArrayBuffer/isView/arg-has-no-viewedarraybuffer.js
 test262/test/built-ins/ArrayBuffer/isView/arg-is-arraybuffer.js
@@ -3788,6 +3796,7 @@ test262/test/built-ins/Function/prototype/toString/setter-class-expression.js
 test262/test/built-ins/Function/prototype/toString/setter-class-statement-static.js
 test262/test/built-ins/Function/prototype/toString/setter-class-statement.js
 test262/test/built-ins/Function/prototype/toString/setter-object.js
+test262/test/built-ins/Function/prototype/toString/symbol-named-builtins.js
 test262/test/built-ins/Function/prototype/toString/unicode.js
 test262/test/built-ins/GeneratorFunction/extensibility.js
 test262/test/built-ins/GeneratorFunction/has-instance.js
@@ -4242,6 +4251,10 @@ test262/test/built-ins/JSON/stringify/value-tojson-array-circular.js
 test262/test/built-ins/JSON/stringify/value-tojson-not-function.js
 test262/test/built-ins/JSON/stringify/value-tojson-object-circular.js
 test262/test/built-ins/JSON/stringify/value-tojson-result.js
+test262/test/built-ins/Map/Symbol.species/length.js
+test262/test/built-ins/Map/Symbol.species/return-value.js
+test262/test/built-ins/Map/Symbol.species/symbol-species-name.js
+test262/test/built-ins/Map/Symbol.species/symbol-species.js
 test262/test/built-ins/Map/bigint-number-same-value.js
 test262/test/built-ins/Map/constructor.js
 test262/test/built-ins/Map/does-not-throw-when-set-is-not-callable.js
@@ -7985,6 +7998,11 @@ test262/test/built-ins/Object/values/primitive-numbers.js
 test262/test/built-ins/Object/values/primitive-symbols.js
 test262/test/built-ins/Object/values/symbols-omitted.js
 test262/test/built-ins/Object/values/tamper-with-object-keys.js
+test262/test/built-ins/Promise/Symbol.species/length.js
+test262/test/built-ins/Promise/Symbol.species/prop-desc.js
+test262/test/built-ins/Promise/Symbol.species/return-value.js
+test262/test/built-ins/Promise/Symbol.species/symbol-species-name.js
+test262/test/built-ins/Promise/Symbol.species/symbol-species.js
 test262/test/built-ins/Promise/all/S25.4.4.1_A1.1_T1.js
 test262/test/built-ins/Promise/all/S25.4.4.1_A2.1_T1.js
 test262/test/built-ins/Promise/all/S25.4.4.1_A2.3_T1.js
@@ -8915,6 +8933,10 @@ test262/test/built-ins/RegExp/S15.10.7_A2_T1.js
 test262/test/built-ins/RegExp/S15.10.7_A2_T2.js
 test262/test/built-ins/RegExp/S15.10.7_A3_T1.js
 test262/test/built-ins/RegExp/S15.10.7_A3_T2.js
+test262/test/built-ins/RegExp/Symbol.species/length.js
+test262/test/built-ins/RegExp/Symbol.species/return-value.js
+test262/test/built-ins/RegExp/Symbol.species/symbol-species-name.js
+test262/test/built-ins/RegExp/Symbol.species/symbol-species.js
 test262/test/built-ins/RegExp/call_with_regexp_match_falsy.js
 test262/test/built-ins/RegExp/call_with_regexp_not_same_constructor.js
 test262/test/built-ins/RegExp/character-class-escape-non-whitespace-u180e.js
@@ -9749,6 +9771,10 @@ test262/test/built-ins/RegExpStringIteratorPrototype/next/custom-regexpexec-not-
 test262/test/built-ins/RegExpStringIteratorPrototype/next/next-iteration-global.js
 test262/test/built-ins/RegExpStringIteratorPrototype/next/next-iteration.js
 test262/test/built-ins/RegExpStringIteratorPrototype/next/this-is-not-object-throws.js
+test262/test/built-ins/Set/Symbol.species/length.js
+test262/test/built-ins/Set/Symbol.species/return-value.js
+test262/test/built-ins/Set/Symbol.species/symbol-species-name.js
+test262/test/built-ins/Set/Symbol.species/symbol-species.js
 test262/test/built-ins/Set/bigint-number-same-value.js
 test262/test/built-ins/Set/constructor.js
 test262/test/built-ins/Set/is-a-constructor.js
@@ -11158,6 +11184,7 @@ test262/test/built-ins/Symbol/prototype/valueOf/this-val-symbol.js
 test262/test/built-ins/Symbol/replace/prop-desc.js
 test262/test/built-ins/Symbol/search/prop-desc.js
 test262/test/built-ins/Symbol/species/basic.js
+test262/test/built-ins/Symbol/species/builtin-getter-name.js
 test262/test/built-ins/Symbol/split/prop-desc.js
 test262/test/built-ins/Symbol/toPrimitive/prop-desc.js
 test262/test/built-ins/Symbol/toStringTag/prop-desc.js

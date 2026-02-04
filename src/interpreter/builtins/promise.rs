@@ -145,6 +145,24 @@ impl Interpreter {
                     false,
                 ),
             );
+
+            // Promise[Symbol.species] getter
+            let species_getter = self.create_function(JsFunction::native(
+                "get [Symbol.species]".to_string(),
+                0,
+                |_interp, this_val, _args| Completion::Normal(this_val.clone()),
+            ));
+            func_obj.borrow_mut().insert_property(
+                "Symbol(Symbol.species)".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(species_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
         }
 
         // Set constructor on prototype

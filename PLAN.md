@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 31,195 / 48,257 run (64.64%)
+**Current pass rate:** 31,222 / 48,257 run (64.70%)
 
 ---
 
@@ -103,7 +103,7 @@ These features block significant numbers of tests:
 35. ~~**TypedArray.prototype.with()**~~ — ✅ Done (13 new passes, 64.52% → 64.54%). ES2023 immutable update method that creates a copy with a single element replaced. Proper coercion order (index then value), BigInt TypedArray support, valueOf error propagation. TypedArray: 786/1,438 (55%).
 36. ~~**Array.prototype.toLocaleString + Object.prototype.toLocaleString + TypedArray.prototype.toLocaleString**~~ — ✅ Done (48 new passes, 64.54% → 64.64%). Implemented per ECMA-262 §23.1.3.32: ToObject(this), LengthOfArrayLike, comma separator, skip undefined/null elements, Invoke toLocaleString on others with no arguments. Added Object.prototype.toLocaleString as base (calls this.toString). Added TypedArray.prototype.toLocaleString with ValidateTypedArray checks. Array/toLocaleString: 8/12 (67%), Object/toLocaleString: 11/12 (92%), TypedArray/toLocaleString: passing.
 
-37. **Symbol.species accessor** — 🔲 Pending. Add `[Symbol.species]` getter to Array, ArrayBuffer, Map, Set, Promise, RegExp, %TypedArray% constructors. Simple getter returning `this`. Affects 760+ tests that use species for constructor selection. Direct tests: 29 (4 passing, 25 failing). See `plan/symbol-species.md`.
+37. ~~**Symbol.species accessor**~~ — ✅ Done (27 new passes, 64.64% → 64.70%). Added `[Symbol.species]` getter to Array, ArrayBuffer, Map, Set, Promise, RegExp constructors. Simple getter returning `this`. All 29 direct tests now pass. See `plan/symbol-species.md`.
 
 ---
 

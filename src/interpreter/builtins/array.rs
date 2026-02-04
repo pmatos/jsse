@@ -1996,7 +1996,8 @@ impl Interpreter {
         }
 
         // Set Array statics on the Array constructor
-        if let Some(array_val) = self.global_env.borrow().get("Array")
+        let array_val = self.global_env.borrow().get("Array");
+        if let Some(array_val) = array_val
             && let JsValue::Object(o) = &array_val
             && let Some(obj) = self.get_object(o.id)
         {
@@ -2010,6 +2011,25 @@ impl Interpreter {
             });
             obj.borrow_mut()
                 .insert_value("prototype".to_string(), proto_val);
+
+            // Array[Symbol.species] getter - returns `this`
+            let species_getter = self.create_function(JsFunction::native(
+                "get [Symbol.species]".to_string(),
+                0,
+                |_interp, this_val, _args| Completion::Normal(this_val.clone()),
+            ));
+            obj.borrow_mut().insert_property(
+                "Symbol(Symbol.species)".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(species_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
+
             // Array.prototype.constructor = Array
             proto
                 .borrow_mut()
