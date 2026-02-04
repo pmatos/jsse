@@ -32,7 +32,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn is_async_function(&self) -> bool {
+    pub(super) fn is_async_function(&self) -> bool {
         // peek ahead: `async function` without line terminator
         // simplified: just check if current is async keyword
         matches!(&self.current, Token::Keyword(Keyword::Async))

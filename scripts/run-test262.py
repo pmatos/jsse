@@ -123,14 +123,40 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     return sorted(tests)
 
 
-def build_test_source(
-    test_file: Path, metadata: dict, test262_dir: Path
-) -> str:
-    """Build the full source to feed to the engine, prepending harness files."""
-    parts: list[str] = []
-
+def get_harness_files(
+    metadata: dict, test262_dir: Path, is_module: bool, is_async: bool
+) -> list[Path]:
+    """Get list of harness files needed for a test."""
     flags = metadata.get("flags", [])
+    harness_files = []
 
+    if "raw" not in flags:
+        harness_files.append(test262_dir / "harness" / "assert.js")
+        harness_files.append(test262_dir / "harness" / "sta.js")
+
+        if is_async:
+            harness_files.append(test262_dir / "harness" / "doneprintHandle.js")
+
+        for inc in metadata.get("includes", []):
+            harness_files.append(test262_dir / "harness" / inc)
+
+    return harness_files
+
+
+def build_test_source(
+    test_file: Path, metadata: dict, test262_dir: Path, is_module: bool
+) -> str:
+    """Build the full source to feed to the engine, prepending harness files.
+    For modules, we don't concatenate - harness is loaded via --prelude instead."""
+    flags = metadata.get("flags", [])
+    is_async = "async" in flags
+
+    # For modules, just return the test source (harness loaded via --prelude)
+    if is_module:
+        return test_file.read_text(encoding="utf-8", errors="replace")
+
+    # For scripts, concatenate harness + test
+    parts: list[str] = []
     source = test_file.read_text(encoding="utf-8", errors="replace")
 
     if "onlyStrict" in flags:
@@ -140,7 +166,7 @@ def build_test_source(
         parts.append(read_harness_file(test262_dir, "assert.js"))
         parts.append(read_harness_file(test262_dir, "sta.js"))
 
-        if "async" in flags:
+        if is_async:
             parts.append(read_harness_file(test262_dir, "doneprintHandle.js"))
 
         for inc in metadata.get("includes", []):
@@ -166,48 +192,65 @@ def run_single_test(
     metadata = parse_frontmatter(head)
     flags = metadata.get("flags", [])
 
-    # Skip module tests for now (engine doesn't support modules yet)
-    if "module" in flags:
-        return (test_file_str, False, "skip_module")
-
+    is_module = "module" in flags
     is_async = "async" in flags
 
     negative = metadata.get("negative")
-
-    # Build combined source with harness
-    try:
-        combined = build_test_source(test_file, metadata, test262_dir)
-    except OSError:
-        return (test_file_str, False, "harness_error")
-
-    # Write combined source to temp file and run
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".js", delete=False, encoding="utf-8"
-    ) as tmp:
-        tmp.write(combined)
-        tmp_path = tmp.name
 
     def limit_memory():
         import resource
         mem_limit = 512 * 1024 * 1024  # 512 MB
         resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
 
+    # For modules, use --prelude to load harness and run original file
+    # For scripts, use combined source in temp file
+    import tempfile
+
+    if is_module:
+        harness_files = get_harness_files(metadata, test262_dir, is_module, is_async)
+        cmd = [jsse]
+        for hf in harness_files:
+            cmd.extend(["--prelude", str(hf)])
+        cmd.append("--module")
+        cmd.append(str(test_file))
+        tmp_path = None
+    else:
+        # Build combined source with harness for scripts
+        try:
+            combined = build_test_source(test_file, metadata, test262_dir, is_module)
+        except OSError:
+            return (test_file_str, False, "harness_error")
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=False, encoding="utf-8"
+        ) as tmp:
+            tmp.write(combined)
+            tmp_path = tmp.name
+
+        cmd = [jsse, tmp_path]
+
     try:
         result = subprocess.run(
-            [jsse, tmp_path],
+            cmd,
             timeout=timeout,
             capture_output=True,
             preexec_fn=limit_memory,
         )
         exit_code = result.returncode
     except subprocess.TimeoutExpired:
+        if tmp_path:
+            os.unlink(tmp_path)
         return (test_file_str, False, "timeout")
     except OSError:
+        if tmp_path:
+            os.unlink(tmp_path)
         return (test_file_str, False, "exec_error")
     finally:
-        os.unlink(tmp_path)
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     if negative:
         phase = negative.get("phase", "runtime")

@@ -546,6 +546,15 @@ pub struct JsObjectData {
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
     pub(crate) disposable_stack: Option<DisposableStackData>,
+    pub(crate) module_namespace: Option<ModuleNamespaceData>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ModuleNamespaceData {
+    pub env: EnvRef,
+    pub export_names: Vec<String>,
+    pub export_to_binding: HashMap<String, String>,
+    pub module_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -582,6 +591,7 @@ impl JsObjectData {
             promise_data: None,
             is_raw_json: false,
             disposable_stack: None,
+            module_namespace: None,
         }
     }
 
@@ -590,6 +600,12 @@ impl JsObjectData {
     }
 
     pub fn get_property(&self, key: &str) -> JsValue {
+        // Module namespace: look up live binding from environment
+        if let Some(ref ns_data) = self.module_namespace {
+            if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+                return ns_data.env.borrow().get(binding_name).unwrap_or(JsValue::Undefined);
+            }
+        }
         if let Some(ref map) = self.parameter_map
             && let Some((env_ref, param_name)) = map.get(key)
             && let Some(val) = env_ref.borrow().get(param_name)
@@ -1195,4 +1211,67 @@ pub(crate) struct SetRecord {
     pub(crate) has: JsValue,
     pub(crate) keys: JsValue,
     pub(crate) size: f64,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModuleStatus {
+    Unlinked,
+    Linking,
+    Linked,
+    Evaluating,
+    Evaluated,
+    Error(JsValue),
+}
+
+impl PartialEq for ModuleStatus {
+    fn eq(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (ModuleStatus::Unlinked, ModuleStatus::Unlinked)
+                | (ModuleStatus::Linking, ModuleStatus::Linking)
+                | (ModuleStatus::Linked, ModuleStatus::Linked)
+                | (ModuleStatus::Evaluating, ModuleStatus::Evaluating)
+                | (ModuleStatus::Evaluated, ModuleStatus::Evaluated)
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportEntry {
+    pub module_request: String,
+    pub import_name: ImportName,
+    pub local_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum ImportName {
+    Star,
+    Default,
+    Named(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct ExportEntry {
+    pub export_name: Option<String>,
+    pub module_request: Option<String>,
+    pub import_name: Option<ExportImportName>,
+    pub local_name: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ExportImportName {
+    Star,
+    Named(String),
+}
+
+pub struct ModuleRecord {
+    pub specifier: String,
+    pub status: ModuleStatus,
+    pub environment: Option<EnvRef>,
+    pub namespace: Option<JsValue>,
+    pub import_entries: Vec<ImportEntry>,
+    pub export_entries: Vec<ExportEntry>,
+    pub local_export_entries: Vec<ExportEntry>,
+    pub indirect_export_entries: Vec<ExportEntry>,
+    pub star_export_entries: Vec<ExportEntry>,
 }

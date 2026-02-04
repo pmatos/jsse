@@ -457,6 +457,7 @@ fn analyze_expression(
         | Expression::This
         | Expression::Super
         | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::PrivateIdentifier(_) => {}
 
         Expression::Array(elements) => {
@@ -692,6 +693,7 @@ pub fn expr_contains_yield(expr: &Expression) -> bool {
         | Expression::This
         | Expression::Super
         | Expression::NewTarget
+        | Expression::ImportMeta
         | Expression::PrivateIdentifier(_) => false,
         Expression::Array(elems) => elems.iter().flatten().any(expr_contains_yield),
         Expression::Object(props) => props.iter().any(|p| {

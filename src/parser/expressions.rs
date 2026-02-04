@@ -489,6 +489,10 @@ impl<'a> Parser<'a> {
             let inner = self.parse_new_expression()?;
             return Ok(Expression::New(Box::new(inner), Vec::new()));
         }
+        // `new import(...)` is a syntax error - import() is a CallExpression, not constructable
+        if self.current == Token::Keyword(Keyword::Import) {
+            return Err(self.error("Cannot use 'new' with import()"));
+        }
         let mut callee = self.parse_primary_expression()?;
         loop {
             match &self.current {
@@ -560,6 +564,31 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Await) if !self.in_async => {
                 self.advance()?;
                 Ok(Expression::Identifier("await".to_string()))
+            }
+            Token::Keyword(Keyword::Import) => {
+                self.advance()?;
+                if self.current == Token::Dot {
+                    // import.meta
+                    self.advance()?;
+                    match &self.current {
+                        Token::Identifier(name) if name == "meta" => {
+                            if !self.is_module {
+                                return Err(self.error("import.meta is only valid in module code"));
+                            }
+                            self.advance()?;
+                            Ok(Expression::ImportMeta)
+                        }
+                        _ => Err(self.error("Expected 'meta' after 'import.'")),
+                    }
+                } else if self.current == Token::LeftParen {
+                    // import(source) - dynamic import
+                    self.advance()?;
+                    let source = self.parse_assignment_expression()?;
+                    self.eat(&Token::RightParen)?;
+                    Ok(Expression::Import(Box::new(source)))
+                } else {
+                    Err(self.error("Unexpected 'import'"))
+                }
             }
             Token::Keyword(Keyword::Async) => {
                 let source_start = self.current_token_start;

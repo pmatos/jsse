@@ -398,6 +398,34 @@ impl Interpreter {
                 };
                 self.await_value(&val)
             }
+            Expression::ImportMeta => {
+                // Create import.meta object
+                let meta = self.create_object();
+                // Set url property to the current module's file URL
+                if let Some(ref path) = self.current_module_path {
+                    let url = format!("file://{}", path.display());
+                    meta.borrow_mut().insert_property(
+                        "url".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&url)),
+                            true,
+                            true,
+                            true,
+                        ),
+                    );
+                }
+                let id = meta.borrow().id.unwrap();
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+            }
+            Expression::Import(source_expr) => {
+                // Dynamic import() - returns a Promise
+                let source_val = match self.eval_expr(source_expr, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                let source = to_js_string(&source_val);
+                self.dynamic_import(&source)
+            }
             Expression::Template(tmpl) => {
                 let mut s = String::new();
                 for (i, quasi) in tmpl.quasis.iter().enumerate() {
@@ -5133,6 +5161,25 @@ impl Interpreter {
             }
         }
 
+        // Module namespace: look up live binding from environment
+        if let Some(obj) = self.get_object(obj_id) {
+            if let Some(ref ns_data) = obj.borrow().module_namespace.clone() {
+                // First try local binding lookup
+                if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+                    let val = ns_data.env.borrow().get(binding_name).unwrap_or(JsValue::Undefined);
+                    return Completion::Normal(val);
+                }
+                // Fallback: check module's exports directly (for re-exports)
+                if let Some(ref module_path) = ns_data.module_path {
+                    if let Some(module) = self.module_registry.get(module_path) {
+                        if let Some(val) = module.borrow().exports.get(key) {
+                            return Completion::Normal(val.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         let desc = if let Some(obj) = self.get_object(obj_id) {
             obj.borrow().get_property_descriptor(key)
         } else {
@@ -5977,5 +6024,32 @@ impl Interpreter {
         } else {
             Completion::Normal(val.clone())
         }
+    }
+
+    fn dynamic_import(&mut self, specifier: &str) -> Completion {
+        // Resolve the module specifier
+        let resolved = match self.resolve_module_specifier(
+            specifier,
+            self.current_module_path.as_deref(),
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                // Return rejected promise
+                return self.create_rejected_promise(e);
+            }
+        };
+
+        // Load the module
+        let module = match self.load_module(&resolved) {
+            Ok(m) => m,
+            Err(e) => {
+                // Return rejected promise
+                return self.create_rejected_promise(e);
+            }
+        };
+
+        // Create namespace object and return fulfilled promise
+        let ns = self.create_module_namespace(&module);
+        self.create_resolved_promise(ns)
     }
 }

@@ -45,7 +45,7 @@ impl Interpreter {
         Completion::Normal(result)
     }
 
-    fn hoist_pattern(&self, pat: &Pattern, env: &EnvRef) {
+    pub(crate) fn hoist_pattern(&self, pat: &Pattern, env: &EnvRef) {
         match pat {
             Pattern::Identifier(name) => {
                 if !env.borrow().bindings.contains_key(name) {

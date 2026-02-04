@@ -3,6 +3,7 @@ use crate::parser;
 use crate::types::{JsBigInt, JsString, JsValue, bigint_ops, number_ops};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 mod types;
@@ -70,6 +71,14 @@ pub struct Interpreter {
     microtask_queue: Vec<Box<dyn FnOnce(&mut Interpreter) -> Completion>>,
     cached_has_instance_key: Option<String>,
     template_cache: HashMap<usize, u64>,
+    module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
+    current_module_path: Option<PathBuf>,
+}
+
+pub struct LoadedModule {
+    pub env: EnvRef,
+    pub exports: HashMap<String, JsValue>,
+    pub export_bindings: HashMap<String, String>, // export_name -> binding_name
 }
 
 impl Interpreter {
@@ -147,6 +156,8 @@ impl Interpreter {
             microtask_queue: Vec::new(),
             cached_has_instance_key: None,
             template_cache: HashMap::new(),
+            module_registry: HashMap::new(),
+            current_module_path: None,
         };
         interp.setup_globals();
         interp
@@ -551,9 +562,815 @@ impl Interpreter {
 
     pub fn run(&mut self, program: &Program) -> Completion {
         self.maybe_gc();
-        let result = self.exec_statements(&program.body, &self.global_env.clone());
+        let result = match program.source_type {
+            SourceType::Script => self.exec_statements(&program.body, &self.global_env.clone()),
+            SourceType::Module => self.run_module(program, None),
+        };
         self.drain_microtasks();
         result
+    }
+
+    pub fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
+        self.maybe_gc();
+        let result = match program.source_type {
+            SourceType::Script => self.exec_statements(&program.body, &self.global_env.clone()),
+            SourceType::Module => self.run_module(program, Some(path.to_path_buf())),
+        };
+        self.drain_microtasks();
+        result
+    }
+
+    pub fn get_current_module_path(&self) -> Option<&Path> {
+        self.current_module_path.as_deref()
+    }
+
+    fn run_module(&mut self, program: &Program, module_path: Option<PathBuf>) -> Completion {
+        let prev_module_path = self.current_module_path.take();
+        self.current_module_path = module_path.clone();
+
+        let module_env = Environment::new(Some(self.global_env.clone()));
+        module_env.borrow_mut().strict = true;
+
+        // Register entry-point module in registry to handle self-imports
+        let loaded_module = Rc::new(RefCell::new(LoadedModule {
+            env: module_env.clone(),
+            exports: HashMap::new(),
+            export_bindings: HashMap::new(),
+        }));
+        if let Some(ref path) = module_path {
+            let canon_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            self.module_registry
+                .insert(canon_path, loaded_module.clone());
+        }
+
+        // Collect export names and bindings first (before processing imports) for namespace objects
+        for item in &program.module_items {
+            if let ModuleItem::ExportDeclaration(export) = item {
+                let bindings = self.get_export_bindings(export);
+                for (export_name, binding_name) in bindings {
+                    loaded_module
+                        .borrow_mut()
+                        .exports
+                        .insert(export_name.clone(), JsValue::Undefined);
+                    loaded_module
+                        .borrow_mut()
+                        .export_bindings
+                        .insert(export_name, binding_name);
+                }
+            }
+        }
+
+        // First pass: hoist declarations (before processing imports)
+        for item in &program.module_items {
+            match item {
+                ModuleItem::Statement(stmt) => {
+                    self.hoist_module_statement(stmt, &module_env);
+                }
+                ModuleItem::ExportDeclaration(export) => {
+                    self.hoist_export_declaration(export, &module_env);
+                }
+                _ => {}
+            }
+        }
+
+        // Second pass: process imports (after hoisting)
+        for item in &program.module_items {
+            if let ModuleItem::ImportDeclaration(import) = item {
+                if let Err(e) = self.process_import(import, &module_env) {
+                    self.current_module_path = prev_module_path;
+                    return Completion::Throw(e);
+                }
+            }
+        }
+
+        // Third pass: process re-exports (export * from)
+        for item in &program.module_items {
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
+            {
+                if let Err(e) = self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+                {
+                    self.current_module_path = prev_module_path;
+                    return Completion::Throw(e);
+                }
+            }
+        }
+
+        // Fourth pass: execute statements
+        for item in &program.module_items {
+            match item {
+                ModuleItem::Statement(stmt) => {
+                    let result = self.exec_statement(stmt, &module_env);
+                    if result.is_abrupt() {
+                        self.current_module_path = prev_module_path;
+                        return result;
+                    }
+                }
+                ModuleItem::ImportDeclaration(_) => {
+                    // Already processed
+                }
+                ModuleItem::ExportDeclaration(export) => {
+                    let result = self.exec_export_declaration(export, &module_env);
+                    if result.is_abrupt() {
+                        self.current_module_path = prev_module_path;
+                        return result;
+                    }
+                    // Collect exports for entry-point module
+                    self.collect_exports(export, &module_env, &loaded_module);
+                }
+            }
+        }
+
+        self.current_module_path = prev_module_path;
+        Completion::Normal(JsValue::Undefined)
+    }
+
+    fn process_import(&mut self, import: &ImportDeclaration, env: &EnvRef) -> Result<(), JsValue> {
+        let module_path = self.current_module_path.clone();
+        let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
+
+        // Load the module if not already loaded
+        let loaded = self.load_module(&resolved)?;
+
+        // Create bindings for each import specifier
+        for spec in &import.specifiers {
+            match spec {
+                ImportSpecifier::Default(local) => {
+                    let exports = loaded.borrow().exports.clone();
+                    if let Some(val) = exports.get("default") {
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        let _ = env.borrow_mut().set(local, val.clone());
+                    } else {
+                        return Err(JsValue::String(JsString::from_str(&format!(
+                            "Module '{}' has no default export",
+                            import.source
+                        ))));
+                    }
+                }
+                ImportSpecifier::Named { imported, local } => {
+                    let exports = loaded.borrow().exports.clone();
+                    if let Some(val) = exports.get(imported) {
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        let _ = env.borrow_mut().set(local, val.clone());
+                    } else {
+                        return Err(JsValue::String(JsString::from_str(&format!(
+                            "Module '{}' has no export named '{}'",
+                            import.source, imported
+                        ))));
+                    }
+                }
+                ImportSpecifier::Namespace(local) => {
+                    let ns = self.create_module_namespace(&loaded);
+                    env.borrow_mut().declare(local, BindingKind::Const);
+                    let _ = env.borrow_mut().set(local, ns);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn process_star_reexport(
+        &mut self,
+        source: &str,
+        exported_as: Option<&String>,
+        module: &Rc<RefCell<LoadedModule>>,
+    ) -> Result<(), JsValue> {
+        let module_path = self.current_module_path.clone();
+        let resolved = self.resolve_module_specifier(source, module_path.as_deref())?;
+        let source_module = self.load_module(&resolved)?;
+
+        if let Some(name) = exported_as {
+            // export * as ns from './mod' - create namespace object
+            let ns = self.create_module_namespace(&source_module);
+            module.borrow_mut().exports.insert(name.clone(), ns);
+            module
+                .borrow_mut()
+                .export_bindings
+                .insert(name.clone(), format!("*ns:{}", source));
+        } else {
+            // export * from './mod' - re-export all non-default exports
+            let source_exports = source_module.borrow().exports.clone();
+            let source_bindings = source_module.borrow().export_bindings.clone();
+            for (export_name, val) in source_exports {
+                if export_name != "default" {
+                    module
+                        .borrow_mut()
+                        .exports
+                        .insert(export_name.clone(), val);
+                    // For bindings, use a special marker for re-exports
+                    if let Some(binding) = source_bindings.get(&export_name) {
+                        module
+                            .borrow_mut()
+                            .export_bindings
+                            .insert(export_name, binding.clone());
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn resolve_module_specifier(
+        &self,
+        specifier: &str,
+        referrer: Option<&Path>,
+    ) -> Result<PathBuf, JsValue> {
+        // Relative paths: ./ or ../
+        if specifier.starts_with("./") || specifier.starts_with("../") {
+            if let Some(referrer) = referrer {
+                let base = referrer.parent().unwrap_or(Path::new("."));
+                let resolved = base.join(specifier);
+                if resolved.exists() {
+                    return Ok(resolved.canonicalize().unwrap_or(resolved));
+                }
+                return Err(JsValue::String(JsString::from_str(&format!(
+                    "Cannot find module '{}'",
+                    specifier
+                ))));
+            } else {
+                return Err(JsValue::String(JsString::from_str(
+                    "Relative imports require a referrer path",
+                )));
+            }
+        }
+
+        // Absolute paths
+        let path = Path::new(specifier);
+        if path.is_absolute() && path.exists() {
+            return Ok(path.to_path_buf());
+        }
+
+        // Bare specifiers not supported
+        Err(JsValue::String(JsString::from_str(&format!(
+            "Cannot resolve bare module specifier '{}'",
+            specifier
+        ))))
+    }
+
+    fn load_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+        // Check if module is already loaded
+        if let Some(existing) = self.module_registry.get(&canon_path) {
+            return Ok(existing.clone());
+        }
+
+        // Read and parse the module
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            JsValue::String(JsString::from_str(&format!(
+                "Cannot read module '{}': {}",
+                path.display(),
+                e
+            )))
+        })?;
+
+        let mut parser = parser::Parser::new(&source).map_err(|e| {
+            JsValue::String(JsString::from_str(&format!(
+                "Parse error in '{}': {}",
+                path.display(),
+                e
+            )))
+        })?;
+
+        let program = parser.parse_program_as_module().map_err(|e| {
+            JsValue::String(JsString::from_str(&format!(
+                "Parse error in '{}': {}",
+                path.display(),
+                e
+            )))
+        })?;
+
+        // Create module environment
+        let module_env = Environment::new(Some(self.global_env.clone()));
+        module_env.borrow_mut().strict = true;
+
+        // Register module early to handle circular imports
+        let loaded_module = Rc::new(RefCell::new(LoadedModule {
+            env: module_env.clone(),
+            exports: HashMap::new(),
+            export_bindings: HashMap::new(),
+        }));
+        self.module_registry
+            .insert(canon_path.clone(), loaded_module.clone());
+
+        // Collect export names and bindings first (before processing imports) for namespace objects
+        for item in &program.module_items {
+            if let ModuleItem::ExportDeclaration(export) = item {
+                let bindings = self.get_export_bindings(export);
+                for (export_name, binding_name) in bindings {
+                    loaded_module
+                        .borrow_mut()
+                        .exports
+                        .insert(export_name.clone(), JsValue::Undefined);
+                    loaded_module
+                        .borrow_mut()
+                        .export_bindings
+                        .insert(export_name, binding_name);
+                }
+            }
+        }
+
+        // Execute module with its path set
+        let prev_path = self.current_module_path.take();
+        self.current_module_path = Some(canon_path.clone());
+
+        // First pass: hoist declarations
+        for item in &program.module_items {
+            match item {
+                ModuleItem::Statement(stmt) => {
+                    self.hoist_module_statement(stmt, &module_env);
+                }
+                ModuleItem::ExportDeclaration(export) => {
+                    self.hoist_export_declaration(export, &module_env);
+                }
+                _ => {}
+            }
+        }
+
+        // Second pass: process imports (after hoisting)
+        for item in &program.module_items {
+            if let ModuleItem::ImportDeclaration(import) = item {
+                self.process_import(import, &module_env)?;
+            }
+        }
+
+        // Third pass: process re-exports (export * from)
+        for item in &program.module_items {
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
+            {
+                self.process_star_reexport(source, exported.as_ref(), &loaded_module)?;
+            }
+        }
+
+        // Fourth pass: execute statements
+        for item in &program.module_items {
+            match item {
+                ModuleItem::Statement(stmt) => {
+                    let result = self.exec_statement(stmt, &module_env);
+                    if let Completion::Throw(e) = result {
+                        self.current_module_path = prev_path;
+                        return Err(e);
+                    }
+                }
+                ModuleItem::ImportDeclaration(_) => {}
+                ModuleItem::ExportDeclaration(export) => {
+                    let result = self.exec_export_declaration(export, &module_env);
+                    if let Completion::Throw(e) = result {
+                        self.current_module_path = prev_path;
+                        return Err(e);
+                    }
+                    // Collect exports
+                    self.collect_exports(export, &module_env, &loaded_module);
+                }
+            }
+        }
+
+        self.current_module_path = prev_path;
+        Ok(loaded_module)
+    }
+
+    fn collect_exports(
+        &self,
+        export: &ExportDeclaration,
+        env: &EnvRef,
+        module: &Rc<RefCell<LoadedModule>>,
+    ) {
+        match export {
+            ExportDeclaration::Named {
+                specifiers,
+                declaration,
+                ..
+            } => {
+                for spec in specifiers {
+                    if let Some(val) = env.borrow().get(&spec.local) {
+                        module
+                            .borrow_mut()
+                            .exports
+                            .insert(spec.exported.clone(), val);
+                    }
+                }
+                if let Some(decl) = declaration {
+                    // Extract names from declaration
+                    self.collect_declaration_exports(decl, env, module);
+                }
+            }
+            ExportDeclaration::Default(expr) => {
+                if let Some(val) = env.borrow().get("*default*") {
+                    module.borrow_mut().exports.insert("default".to_string(), val);
+                } else {
+                    // For expression defaults, evaluate directly
+                    let _ = expr; // Already evaluated and stored
+                }
+            }
+            ExportDeclaration::DefaultFunction(f) => {
+                if let Some(val) = env.borrow().get("*default*") {
+                    module.borrow_mut().exports.insert("default".to_string(), val);
+                }
+                if !f.name.is_empty() {
+                    if let Some(val) = env.borrow().get(&f.name) {
+                        module.borrow_mut().exports.insert("default".to_string(), val);
+                    }
+                }
+            }
+            ExportDeclaration::DefaultClass(c) => {
+                if let Some(val) = env.borrow().get("*default*") {
+                    module.borrow_mut().exports.insert("default".to_string(), val);
+                }
+                if !c.name.is_empty() {
+                    if let Some(val) = env.borrow().get(&c.name) {
+                        module.borrow_mut().exports.insert("default".to_string(), val);
+                    }
+                }
+            }
+            ExportDeclaration::All { .. } => {
+                // Re-exports handled separately
+            }
+        }
+    }
+
+    fn collect_declaration_exports(
+        &self,
+        decl: &Statement,
+        env: &EnvRef,
+        module: &Rc<RefCell<LoadedModule>>,
+    ) {
+        match decl {
+            Statement::Variable(var) => {
+                for d in &var.declarations {
+                    self.collect_pattern_exports(&d.pattern, env, module);
+                }
+            }
+            Statement::FunctionDeclaration(f) => {
+                if let Some(val) = env.borrow().get(&f.name) {
+                    module.borrow_mut().exports.insert(f.name.clone(), val);
+                }
+            }
+            Statement::ClassDeclaration(c) => {
+                if let Some(val) = env.borrow().get(&c.name) {
+                    module.borrow_mut().exports.insert(c.name.clone(), val);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn collect_pattern_exports(
+        &self,
+        pattern: &Pattern,
+        env: &EnvRef,
+        module: &Rc<RefCell<LoadedModule>>,
+    ) {
+        match pattern {
+            Pattern::Identifier(name) => {
+                if let Some(val) = env.borrow().get(name) {
+                    module.borrow_mut().exports.insert(name.clone(), val);
+                }
+            }
+            Pattern::Array(elems) => {
+                for elem in elems.iter().flatten() {
+                    match elem {
+                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                            self.collect_pattern_exports(p, env, module);
+                        }
+                    }
+                }
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                            self.collect_pattern_exports(p, env, module);
+                        }
+                        ObjectPatternProperty::Shorthand(name) => {
+                            if let Some(val) = env.borrow().get(name) {
+                                module.borrow_mut().exports.insert(name.clone(), val);
+                            }
+                        }
+                    }
+                }
+            }
+            Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
+                self.collect_pattern_exports(inner, env, module);
+            }
+        }
+    }
+
+    fn create_module_namespace(&mut self, module: &Rc<RefCell<LoadedModule>>) -> JsValue {
+        use crate::interpreter::types::ModuleNamespaceData;
+
+        let obj = self.create_object();
+        let module_ref = module.borrow();
+        let env = module_ref.env.clone();
+        let export_bindings = module_ref.export_bindings.clone();
+
+        // Get module path for looking up re-exports dynamically
+        let module_path = self.current_module_path.clone();
+
+        // Collect export names - these will be looked up dynamically
+        let mut export_names: Vec<String> = module_ref.exports.keys().cloned().collect();
+        export_names.sort(); // Module namespace exports are sorted alphabetically
+
+        // Set module namespace data for live bindings
+        obj.borrow_mut().module_namespace = Some(ModuleNamespaceData {
+            env: env.clone(),
+            export_names: export_names.clone(),
+            export_to_binding: export_bindings,
+            module_path,
+        });
+        obj.borrow_mut().class_name = "Module".to_string();
+        obj.borrow_mut().extensible = false; // Module namespaces are non-extensible
+        obj.borrow_mut().prototype = None; // Module namespaces have null prototype
+
+        // Add property descriptors for each export (values will be looked up dynamically)
+        for name in &export_names {
+            // Exports: writable=true, enumerable=true, configurable=false
+            // Value is left as undefined - will be looked up dynamically
+            obj.borrow_mut().insert_property(
+                name.clone(),
+                PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+            );
+        }
+
+        // Set Symbol.toStringTag to "Module"
+        // writable=false, enumerable=false, configurable=false
+        let sym_key = self
+            .get_symbol_key("toStringTag")
+            .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+        obj.borrow_mut().insert_property(
+            sym_key,
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("Module")),
+                false,
+                false,
+                false,
+            ),
+        );
+
+        let id = obj.borrow().id.unwrap();
+        JsValue::Object(crate::types::JsObject { id })
+    }
+
+    fn hoist_module_statement(&mut self, stmt: &Statement, env: &EnvRef) {
+        match stmt {
+            Statement::Variable(decl) if decl.kind == VarKind::Var => {
+                for d in &decl.declarations {
+                    self.hoist_pattern(&d.pattern, env);
+                }
+            }
+            Statement::FunctionDeclaration(f) => {
+                env.borrow_mut().declare(&f.name, BindingKind::Var);
+                let func = JsFunction::User {
+                    name: Some(f.name.clone()),
+                    params: f.params.clone(),
+                    body: f.body.clone(),
+                    closure: env.clone(),
+                    is_arrow: false,
+                    is_strict: true, // Module code is always strict
+                    is_generator: f.is_generator,
+                    is_async: f.is_async,
+                    source_text: f.source_text.clone(),
+                };
+                let val = self.create_function(func);
+                let _ = env.borrow_mut().set(&f.name, val);
+            }
+            _ => {}
+        }
+    }
+
+    fn hoist_export_declaration(&mut self, export: &ExportDeclaration, env: &EnvRef) {
+        match export {
+            ExportDeclaration::Named {
+                declaration: Some(decl),
+                ..
+            } => {
+                self.hoist_module_statement(decl, env);
+            }
+            ExportDeclaration::DefaultFunction(f) => {
+                if !f.name.is_empty() {
+                    env.borrow_mut().declare(&f.name, BindingKind::Const);
+                    let func = JsFunction::User {
+                        name: Some(f.name.clone()),
+                        params: f.params.clone(),
+                        body: f.body.clone(),
+                        closure: env.clone(),
+                        is_arrow: false,
+                        is_strict: true,
+                        is_generator: f.is_generator,
+                        is_async: f.is_async,
+                        source_text: f.source_text.clone(),
+                    };
+                    let val = self.create_function(func);
+                    let _ = env.borrow_mut().set(&f.name, val);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn get_export_names(&self, export: &ExportDeclaration) -> Vec<String> {
+        let mut names = Vec::new();
+        match export {
+            ExportDeclaration::Named {
+                specifiers,
+                declaration,
+                ..
+            } => {
+                for spec in specifiers {
+                    names.push(spec.exported.clone());
+                }
+                if let Some(decl) = declaration {
+                    self.get_declaration_export_names(decl, &mut names);
+                }
+            }
+            ExportDeclaration::Default(_)
+            | ExportDeclaration::DefaultFunction(_)
+            | ExportDeclaration::DefaultClass(_) => {
+                names.push("default".to_string());
+            }
+            ExportDeclaration::All { .. } => {
+                // Re-exports: will need to load the source module to get names
+                // For now, skip these
+            }
+        }
+        names
+    }
+
+    // Returns (export_name, binding_name) pairs
+    fn get_export_bindings(&self, export: &ExportDeclaration) -> Vec<(String, String)> {
+        let mut bindings = Vec::new();
+        match export {
+            ExportDeclaration::Named {
+                specifiers,
+                declaration,
+                ..
+            } => {
+                // export { local as exported } - local is binding, exported is export
+                for spec in specifiers {
+                    bindings.push((spec.exported.clone(), spec.local.clone()));
+                }
+                // export var x = ... - x is both binding and export
+                if let Some(decl) = declaration {
+                    let mut names = Vec::new();
+                    self.get_declaration_export_names(decl, &mut names);
+                    for name in names {
+                        bindings.push((name.clone(), name));
+                    }
+                }
+            }
+            ExportDeclaration::Default(_) => {
+                // export default expr - stored in special "*default*" binding
+                bindings.push(("default".to_string(), "*default*".to_string()));
+            }
+            ExportDeclaration::DefaultFunction(f) => {
+                if f.name.is_empty() {
+                    bindings.push(("default".to_string(), "*default*".to_string()));
+                } else {
+                    bindings.push(("default".to_string(), f.name.clone()));
+                }
+            }
+            ExportDeclaration::DefaultClass(c) => {
+                if c.name.is_empty() {
+                    bindings.push(("default".to_string(), "*default*".to_string()));
+                } else {
+                    bindings.push(("default".to_string(), c.name.clone()));
+                }
+            }
+            ExportDeclaration::All { .. } => {
+                // Re-exports: handled separately
+            }
+        }
+        bindings
+    }
+
+    fn get_declaration_export_names(&self, stmt: &Statement, names: &mut Vec<String>) {
+        match stmt {
+            Statement::Variable(decl) => {
+                for d in &decl.declarations {
+                    self.get_pattern_names(&d.pattern, names);
+                }
+            }
+            Statement::FunctionDeclaration(f) => {
+                names.push(f.name.clone());
+            }
+            Statement::ClassDeclaration(c) => {
+                names.push(c.name.clone());
+            }
+            _ => {}
+        }
+    }
+
+    fn get_pattern_names(&self, pattern: &Pattern, names: &mut Vec<String>) {
+        use crate::ast::{ArrayPatternElement, ObjectPatternProperty};
+        match pattern {
+            Pattern::Identifier(name) => names.push(name.clone()),
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::Shorthand(name) => names.push(name.clone()),
+                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                            self.get_pattern_names(p, names);
+                        }
+                    }
+                }
+            }
+            Pattern::Array(elems) => {
+                for elem in elems {
+                    if let Some(e) = elem {
+                        match e {
+                            ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                                self.get_pattern_names(p, names);
+                            }
+                        }
+                    }
+                }
+            }
+            Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
+                self.get_pattern_names(inner, names);
+            }
+        }
+    }
+
+    fn exec_export_declaration(
+        &mut self,
+        export: &ExportDeclaration,
+        env: &EnvRef,
+    ) -> Completion {
+        match export {
+            ExportDeclaration::Named {
+                declaration: Some(decl),
+                ..
+            } => self.exec_statement(decl, env),
+            ExportDeclaration::Named {
+                declaration: None, ..
+            } => Completion::Normal(JsValue::Undefined),
+            ExportDeclaration::Default(expr) => {
+                let val = match self.eval_expr(expr, env) {
+                    Completion::Normal(v) => v,
+                    c => return c,
+                };
+                env.borrow_mut()
+                    .declare("*default*", BindingKind::Const);
+                let _ = env.borrow_mut().set("*default*", val);
+                Completion::Normal(JsValue::Undefined)
+            }
+            ExportDeclaration::DefaultFunction(func) => {
+                let name = if func.name.is_empty() {
+                    "default".to_string()
+                } else {
+                    func.name.clone()
+                };
+                let js_func = JsFunction::User {
+                    name: Some(name),
+                    params: func.params.clone(),
+                    body: func.body.clone(),
+                    closure: env.clone(),
+                    is_arrow: false,
+                    is_strict: Self::is_strict_mode_body(&func.body),
+                    is_generator: func.is_generator,
+                    is_async: func.is_async,
+                    source_text: func.source_text.clone(),
+                };
+                let fn_obj = self.create_function(js_func);
+                if !func.name.is_empty() {
+                    env.borrow_mut().declare(&func.name, BindingKind::Const);
+                    let _ = env.borrow_mut().set(&func.name, fn_obj.clone());
+                }
+                env.borrow_mut()
+                    .declare("*default*", BindingKind::Const);
+                let _ = env.borrow_mut().set("*default*", fn_obj);
+                Completion::Normal(JsValue::Undefined)
+            }
+            ExportDeclaration::DefaultClass(class) => {
+                let name = if class.name.is_empty() {
+                    "default".to_string()
+                } else {
+                    class.name.clone()
+                };
+                let class_val = match self.eval_class(
+                    &name,
+                    &class.super_class,
+                    &class.body,
+                    env,
+                    class.source_text.clone(),
+                ) {
+                    Completion::Normal(v) => v,
+                    c => return c,
+                };
+                if !class.name.is_empty() {
+                    env.borrow_mut().declare(&class.name, BindingKind::Const);
+                    let _ = env.borrow_mut().set(&class.name, class_val.clone());
+                }
+                env.borrow_mut()
+                    .declare("*default*", BindingKind::Const);
+                let _ = env.borrow_mut().set("*default*", class_val);
+                Completion::Normal(JsValue::Undefined)
+            }
+            ExportDeclaration::All { .. } => {
+                // Re-exports handled in Phase 3
+                Completion::Normal(JsValue::Undefined)
+            }
+        }
     }
 
     pub(crate) fn drain_microtasks(&mut self) {

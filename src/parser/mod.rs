@@ -4,6 +4,7 @@ use std::fmt;
 
 mod declarations;
 mod expressions;
+mod modules;
 mod statements;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -40,6 +41,7 @@ pub struct Parser<'a> {
     prev_line_terminator: bool,
     pushback: Option<(Token, bool, usize, usize)>, // (token, had_line_terminator_before, token_start, token_end)
     strict: bool,
+    is_module: bool,
     in_function: u32,
     in_generator: bool,
     in_async: bool,
@@ -77,6 +79,7 @@ impl<'a> Parser<'a> {
             prev_line_terminator: had_lt,
             pushback: None,
             strict: false,
+            is_module: false,
             in_function: 0,
             in_generator: false,
             in_async: false,
@@ -394,6 +397,7 @@ impl<'a> Parser<'a> {
             | Expression::This
             | Expression::Super
             | Expression::NewTarget
+            | Expression::ImportMeta
             | Expression::Function(_)
             | Expression::Class(_)
             | Expression::PrivateIdentifier(_) => false,
@@ -498,7 +502,70 @@ impl<'a> Parser<'a> {
             body.push(stmt);
         }
 
-        Ok(Program { body })
+        Ok(Program {
+            source_type: SourceType::Script,
+            body,
+            module_items: Vec::new(),
+        })
+    }
+
+    pub fn parse_program_as_module(&mut self) -> Result<Program, ParseError> {
+        self.is_module = true;
+        self.set_strict(true);
+
+        let mut module_items = Vec::new();
+
+        while self.current != Token::Eof {
+            let item = self.parse_module_item()?;
+            module_items.push(item);
+        }
+
+        Ok(Program {
+            source_type: SourceType::Module,
+            body: Vec::new(),
+            module_items,
+        })
+    }
+
+    fn parse_module_item(&mut self) -> Result<ModuleItem, ParseError> {
+        match &self.current {
+            Token::Keyword(Keyword::Import) => {
+                // Check if it's dynamic import or import.meta (expressions), not declaration
+                if self.is_import_expression() {
+                    let stmt = self.parse_statement_or_declaration()?;
+                    return Ok(ModuleItem::Statement(stmt));
+                }
+                let decl = self.parse_import_declaration()?;
+                Ok(ModuleItem::ImportDeclaration(decl))
+            }
+            Token::Keyword(Keyword::Export) => {
+                let decl = self.parse_export_declaration()?;
+                Ok(ModuleItem::ExportDeclaration(decl))
+            }
+            _ => {
+                let stmt = self.parse_statement_or_declaration()?;
+                Ok(ModuleItem::Statement(stmt))
+            }
+        }
+    }
+
+    fn is_import_expression(&mut self) -> bool {
+        // Peek ahead to see if this is `import(` or `import.meta`
+        let saved_lt = self.prev_line_terminator;
+        let saved_ts = self.current_token_start;
+        let saved_te = self.current_token_end;
+        let saved = match self.advance() {
+            Ok(t) => t,
+            Err(_) => return false,
+        };
+        let is_expr = self.current == Token::LeftParen || self.current == Token::Dot;
+        // Restore
+        self.push_back(self.current.clone(), self.prev_line_terminator);
+        self.current = saved;
+        self.prev_line_terminator = saved_lt;
+        self.current_token_start = saved_ts;
+        self.current_token_end = saved_te;
+        is_expr
     }
 }
 

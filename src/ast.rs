@@ -1,9 +1,59 @@
 /// AST node types for ECMAScript.
 /// Each node represents a syntactic element from the spec.
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SourceType {
+    Script,
+    Module,
+}
+
 #[derive(Clone, Debug)]
 pub struct Program {
+    pub source_type: SourceType,
     pub body: Vec<Statement>,
+    pub module_items: Vec<ModuleItem>,
+}
+
+#[derive(Clone, Debug)]
+pub enum ModuleItem {
+    Statement(Statement),
+    ImportDeclaration(ImportDeclaration),
+    ExportDeclaration(ExportDeclaration),
+}
+
+#[derive(Clone, Debug)]
+pub struct ImportDeclaration {
+    pub specifiers: Vec<ImportSpecifier>,
+    pub source: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum ImportSpecifier {
+    Named { imported: String, local: String },
+    Default(String),
+    Namespace(String),
+}
+
+#[derive(Clone, Debug)]
+pub enum ExportDeclaration {
+    Named {
+        specifiers: Vec<ExportSpecifier>,
+        source: Option<String>,
+        declaration: Option<Box<Statement>>,
+    },
+    Default(Box<Expression>),
+    DefaultFunction(FunctionDecl),
+    DefaultClass(ClassDecl),
+    All {
+        exported: Option<String>,
+        source: String,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct ExportSpecifier {
+    pub local: String,
+    pub exported: String,
 }
 
 #[derive(Clone, Debug)]
@@ -106,6 +156,7 @@ pub enum Expression {
     Delete(Box<Expression>),
     Sequence(Vec<Expression>),
     Import(Box<Expression>), // dynamic import
+    ImportMeta,
     NewTarget,
     PrivateIdentifier(String),
 }
