@@ -22940,6 +22940,7 @@ test262/test/language/module-code/export-expname-from-star-unpaired-surrogate.js
 test262/test/language/module-code/export-expname-from-star.js
 test262/test/language/module-code/export-expname-from-string-binding.js
 test262/test/language/module-code/export-expname-from-string-string.js
+test262/test/language/module-code/export-expname-from-string.js
 test262/test/language/module-code/export-expname-from-unpaired-surrogate.js
 test262/test/language/module-code/export-expname-import-string-binding.js
 test262/test/language/module-code/export-expname-import-unpaired-surrogate.js

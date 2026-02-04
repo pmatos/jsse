@@ -76,6 +76,7 @@ pub struct Interpreter {
 }
 
 pub struct LoadedModule {
+    pub path: PathBuf,
     pub env: EnvRef,
     pub exports: HashMap<String, JsValue>,
     pub export_bindings: HashMap<String, String>, // export_name -> binding_name
@@ -592,7 +593,12 @@ impl Interpreter {
         module_env.borrow_mut().strict = true;
 
         // Register entry-point module in registry to handle self-imports
+        let canon_path_entry = module_path
+            .as_ref()
+            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
+            .unwrap_or_default();
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
+            path: canon_path_entry.clone(),
             env: module_env.clone(),
             exports: HashMap::new(),
             export_bindings: HashMap::new(),
@@ -651,6 +657,23 @@ impl Interpreter {
                 {
                     self.current_module_path = prev_module_path;
                     return Completion::Throw(e);
+                }
+            }
+        }
+
+        // Third-and-half pass: validate named re-exports (export { x } from './mod')
+        if let Some(ref canon_path) = module_path {
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    specifiers,
+                    source: Some(source),
+                    ..
+                }) = item
+                {
+                    if let Err(e) = self.validate_named_reexports(canon_path, source, specifiers) {
+                        self.current_module_path = prev_module_path;
+                        return Completion::Throw(e);
+                    }
                 }
             }
         }
@@ -847,6 +870,7 @@ impl Interpreter {
 
         // Register module early to handle circular imports
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
+            path: canon_path.clone(),
             env: module_env.clone(),
             exports: HashMap::new(),
             export_bindings: HashMap::new(),
@@ -903,6 +927,18 @@ impl Interpreter {
             }
         }
 
+        // Third-and-half pass: validate named re-exports (export { x } from './mod')
+        for item in &program.module_items {
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                specifiers,
+                source: Some(source),
+                ..
+            }) = item
+            {
+                self.validate_named_reexports(&canon_path, source, specifiers)?;
+            }
+        }
+
         // Fourth pass: execute statements
         for item in &program.module_items {
             match item {
@@ -930,8 +966,81 @@ impl Interpreter {
         Ok(loaded_module)
     }
 
+    fn validate_named_reexports(
+        &mut self,
+        current_module: &Path,
+        source: &str,
+        specifiers: &[ExportSpecifier],
+    ) -> Result<(), JsValue> {
+        let resolved = self.resolve_module_specifier(source, Some(current_module))?;
+
+        for spec in specifiers {
+            let mut visited = std::collections::HashSet::new();
+            self.resolve_export(&resolved, &spec.local, &mut visited)?;
+        }
+        Ok(())
+    }
+
+    fn resolve_export(
+        &mut self,
+        module_path: &Path,
+        export_name: &str,
+        visited: &mut std::collections::HashSet<(PathBuf, String)>,
+    ) -> Result<(), JsValue> {
+        let canon_path = module_path.canonicalize().unwrap_or_else(|_| module_path.to_path_buf());
+        let key = (canon_path.clone(), export_name.to_string());
+
+        // Check for circular reference
+        if visited.contains(&key) {
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!("Circular re-export of '{}'", export_name),
+            ));
+        }
+        visited.insert(key);
+
+        // Load the module if not already loaded
+        let module = self.load_module(&canon_path)?;
+
+        // Check if this export is a local binding or a re-export
+        let reexport_info = {
+            let module_ref = module.borrow();
+            if let Some(binding) = module_ref.export_bindings.get(export_name) {
+                if let Some(info) = binding.strip_prefix("*reexport:") {
+                    // Format: "source_module:export_name"
+                    let parts: Vec<&str> = info.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        Some((parts[0].to_string(), parts[1].to_string()))
+                    } else {
+                        None
+                    }
+                } else {
+                    // Local binding - exists, no cycle
+                    return Ok(());
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some((source_specifier, source_export)) = reexport_info {
+            let resolved = self.resolve_module_specifier(&source_specifier, Some(&canon_path))?;
+            return self.resolve_export(&resolved, &source_export, visited);
+        }
+
+        // Export not found
+        Err(self.create_error(
+            "SyntaxError",
+            &format!(
+                "Module '{}' has no export named '{}'",
+                canon_path.display(),
+                export_name
+            ),
+        ))
+    }
+
     fn collect_exports(
-        &self,
+        &mut self,
         export: &ExportDeclaration,
         env: &EnvRef,
         module: &Rc<RefCell<LoadedModule>>,
@@ -939,20 +1048,39 @@ impl Interpreter {
         match export {
             ExportDeclaration::Named {
                 specifiers,
+                source,
                 declaration,
-                ..
             } => {
-                for spec in specifiers {
-                    if let Some(val) = env.borrow().get(&spec.local) {
-                        module
-                            .borrow_mut()
-                            .exports
-                            .insert(spec.exported.clone(), val);
+                if let Some(src) = source {
+                    // Re-export: get values from source module
+                    let module_path = self.current_module_path.clone();
+                    if let Ok(resolved) = self.resolve_module_specifier(src, module_path.as_deref()) {
+                        if let Ok(source_mod) = self.load_module(&resolved) {
+                            let source_exports = source_mod.borrow().exports.clone();
+                            for spec in specifiers {
+                                if let Some(val) = source_exports.get(&spec.local) {
+                                    module
+                                        .borrow_mut()
+                                        .exports
+                                        .insert(spec.exported.clone(), val.clone());
+                                }
+                            }
+                        }
                     }
-                }
-                if let Some(decl) = declaration {
-                    // Extract names from declaration
-                    self.collect_declaration_exports(decl, env, module);
+                } else {
+                    // Local export
+                    for spec in specifiers {
+                        if let Some(val) = env.borrow().get(&spec.local) {
+                            module
+                                .borrow_mut()
+                                .exports
+                                .insert(spec.exported.clone(), val);
+                        }
+                    }
+                    if let Some(decl) = declaration {
+                        // Extract names from declaration
+                        self.collect_declaration_exports(decl, env, module);
+                    }
                 }
             }
             ExportDeclaration::Default(expr) => {
@@ -1065,7 +1193,11 @@ impl Interpreter {
         let export_bindings = module_ref.export_bindings.clone();
 
         // Get module path for looking up re-exports dynamically
-        let module_path = self.current_module_path.clone();
+        let module_path = if module_ref.path.as_os_str().is_empty() {
+            None
+        } else {
+            Some(module_ref.path.clone())
+        };
 
         // Collect export names - these will be looked up dynamically
         let mut export_names: Vec<String> = module_ref.exports.keys().cloned().collect();
@@ -1197,24 +1329,33 @@ impl Interpreter {
     }
 
     // Returns (export_name, binding_name) pairs
+    // For re-exports, binding_name is "*reexport:source:export_name"
     fn get_export_bindings(&self, export: &ExportDeclaration) -> Vec<(String, String)> {
         let mut bindings = Vec::new();
         match export {
             ExportDeclaration::Named {
                 specifiers,
+                source,
                 declaration,
-                ..
             } => {
-                // export { local as exported } - local is binding, exported is export
-                for spec in specifiers {
-                    bindings.push((spec.exported.clone(), spec.local.clone()));
-                }
-                // export var x = ... - x is both binding and export
-                if let Some(decl) = declaration {
-                    let mut names = Vec::new();
-                    self.get_declaration_export_names(decl, &mut names);
-                    for name in names {
-                        bindings.push((name.clone(), name));
+                if let Some(src) = source {
+                    // Re-export: export { x } from './mod'
+                    for spec in specifiers {
+                        let binding = format!("*reexport:{}:{}", src, spec.local);
+                        bindings.push((spec.exported.clone(), binding));
+                    }
+                } else {
+                    // Local export: export { local as exported }
+                    for spec in specifiers {
+                        bindings.push((spec.exported.clone(), spec.local.clone()));
+                    }
+                    // export var x = ... - x is both binding and export
+                    if let Some(decl) = declaration {
+                        let mut names = Vec::new();
+                        self.get_declaration_export_names(decl, &mut names);
+                        for name in names {
+                            bindings.push((name.clone(), name));
+                        }
                     }
                 }
             }

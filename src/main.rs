@@ -85,8 +85,14 @@ fn execute_code(code: &str, is_module: bool, path: Option<&Path>) -> ExitCode {
             ExitCode::from(2)
         }
         Err(EngineError::Runtime(msg)) => {
-            eprintln!("{msg}");
-            ExitCode::from(1)
+            // SyntaxErrors thrown during module resolution should use exit code 2
+            if msg.starts_with("SyntaxError:") {
+                eprintln!("{msg}");
+                ExitCode::from(2)
+            } else {
+                eprintln!("{msg}");
+                ExitCode::from(1)
+            }
         }
     }
 }

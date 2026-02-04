@@ -5166,8 +5166,50 @@ impl Interpreter {
             if let Some(ref ns_data) = obj.borrow().module_namespace.clone() {
                 // First try local binding lookup
                 if let Some(binding_name) = ns_data.export_to_binding.get(key) {
-                    let val = ns_data.env.borrow().get(binding_name).unwrap_or(JsValue::Undefined);
-                    return Completion::Normal(val);
+                    // Handle re-export binding format: *reexport:source:name
+                    if let Some(rest) = binding_name.strip_prefix("*reexport:") {
+                        // Parse source:name format
+                        if let Some(colon_idx) = rest.rfind(':') {
+                            let source = &rest[..colon_idx];
+                            let export_name = &rest[colon_idx + 1..];
+                            // Resolve the source module
+                            if let Some(ref module_path) = ns_data.module_path {
+                                if let Ok(resolved) =
+                                    self.resolve_module_specifier(source, Some(module_path))
+                                {
+                                    if let Ok(source_mod) = self.load_module(&resolved) {
+                                        // Get the source module's export binding to find the env variable
+                                        let source_ref = source_mod.borrow();
+                                        // Try environment lookup first for live bindings
+                                        if let Some(binding) =
+                                            source_ref.export_bindings.get(export_name)
+                                        {
+                                            if let Some(val) = source_ref.env.borrow().get(binding) {
+                                                return Completion::Normal(val);
+                                            }
+                                        }
+                                        // Fallback: direct environment lookup
+                                        if let Some(val) =
+                                            source_ref.env.borrow().get(export_name)
+                                        {
+                                            return Completion::Normal(val);
+                                        }
+                                        // Fallback: check exports map
+                                        if let Some(val) = source_ref.exports.get(export_name) {
+                                            return Completion::Normal(val.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        let val = ns_data
+                            .env
+                            .borrow()
+                            .get(binding_name)
+                            .unwrap_or(JsValue::Undefined);
+                        return Completion::Normal(val);
+                    }
                 }
                 // Fallback: check module's exports directly (for re-exports)
                 if let Some(ref module_path) = ns_data.module_path {
