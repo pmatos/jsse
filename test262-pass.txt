@@ -22884,7 +22884,13 @@ test262/test/language/module-code/ambiguous-export-bindings/namespace-empty-modu
 test262/test/language/module-code/comment-multi-line-html-close.js
 test262/test/language/module-code/comment-single-line-html-close.js
 test262/test/language/module-code/comment-single-line-html-open.js
+test262/test/language/module-code/early-dup-export-as-star-as.js
+test262/test/language/module-code/early-dup-export-decl.js
+test262/test/language/module-code/early-dup-export-dflt-id.js
 test262/test/language/module-code/early-dup-export-dflt.js
+test262/test/language/module-code/early-dup-export-id-as.js
+test262/test/language/module-code/early-dup-export-id.js
+test262/test/language/module-code/early-dup-export-star-as-dflt.js
 test262/test/language/module-code/early-export-ill-formed-string.js
 test262/test/language/module-code/early-new-target.js
 test262/test/language/module-code/early-strict-mode.js

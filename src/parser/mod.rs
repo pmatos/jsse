@@ -514,9 +514,23 @@ impl<'a> Parser<'a> {
         self.set_strict(true);
 
         let mut module_items = Vec::new();
+        let mut exported_names = std::collections::HashSet::new();
 
         while self.current != Token::Eof {
             let item = self.parse_module_item()?;
+
+            // Check for duplicate exported names
+            if let ModuleItem::ExportDeclaration(ref export) = item {
+                for name in self.get_exported_names(export) {
+                    if !exported_names.insert(name.clone()) {
+                        return Err(self.error(&format!(
+                            "Duplicate export of '{}'",
+                            name
+                        )));
+                    }
+                }
+            }
+
             module_items.push(item);
         }
 
@@ -525,6 +539,85 @@ impl<'a> Parser<'a> {
             body: Vec::new(),
             module_items,
         })
+    }
+
+    fn get_exported_names(&self, export: &ExportDeclaration) -> Vec<String> {
+        match export {
+            ExportDeclaration::Named { specifiers, declaration, .. } => {
+                let mut names = Vec::new();
+                for spec in specifiers {
+                    names.push(spec.exported.clone());
+                }
+                if let Some(decl) = declaration {
+                    names.extend(self.get_declaration_export_names(decl));
+                }
+                names
+            }
+            ExportDeclaration::Default(_) |
+            ExportDeclaration::DefaultFunction(_) |
+            ExportDeclaration::DefaultClass(_) => {
+                vec!["default".to_string()]
+            }
+            ExportDeclaration::All { exported, .. } => {
+                // export * as ns from "mod" exports 'ns'
+                // export * from "mod" doesn't add to local exported names
+                exported.iter().cloned().collect()
+            }
+        }
+    }
+
+    fn get_declaration_export_names(&self, decl: &Statement) -> Vec<String> {
+        match decl {
+            Statement::Variable(var) => {
+                let mut names = Vec::new();
+                for d in &var.declarations {
+                    self.collect_pattern_names(&d.pattern, &mut names);
+                }
+                names
+            }
+            Statement::FunctionDeclaration(f) => vec![f.name.clone()],
+            Statement::ClassDeclaration(c) => vec![c.name.clone()],
+            _ => vec![],
+        }
+    }
+
+    fn collect_pattern_names(&self, pattern: &Pattern, names: &mut Vec<String>) {
+        match pattern {
+            Pattern::Identifier(name) => names.push(name.clone()),
+            Pattern::Array(elements) => {
+                for elem in elements.iter().flatten() {
+                    match elem {
+                        ArrayPatternElement::Pattern(p) => {
+                            self.collect_pattern_names(p, names);
+                        }
+                        ArrayPatternElement::Rest(p) => {
+                            self.collect_pattern_names(p, names);
+                        }
+                    }
+                }
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::KeyValue(_, value) => {
+                            self.collect_pattern_names(value, names);
+                        }
+                        ObjectPatternProperty::Shorthand(name) => {
+                            names.push(name.clone());
+                        }
+                        ObjectPatternProperty::Rest(pat) => {
+                            self.collect_pattern_names(pat, names);
+                        }
+                    }
+                }
+            }
+            Pattern::Assign(inner, _) => {
+                self.collect_pattern_names(inner, names);
+            }
+            Pattern::Rest(inner) => {
+                self.collect_pattern_names(inner, names);
+            }
+        }
     }
 
     fn parse_module_item(&mut self) -> Result<ModuleItem, ParseError> {
