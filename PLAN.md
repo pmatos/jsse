@@ -3,8 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 30,450 / 47,458 run (64.16%)
-*Skipped: 799 module tests*
+**Current pass rate:** 31,134 / 48,257 run (64.52%)
 
 ---
 
@@ -17,11 +16,11 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | 1 | [Project Scaffolding & Infrastructure](plan/phase-01-infrastructure.md) | — | ✅ Complete | Rust project, CLI, test harness, CI |
 | 2 | [Types & Values](plan/phase-02-types.md) | §6 | ✅ ~95% | Language types, spec types, type conversions |
 | 3 | [Lexer](plan/phase-03-lexer.md) | §12 | ✅ Complete | Lexical grammar, tokens, Unicode |
-| 4 | [Parser (AST)](plan/phase-04-parser.md) | §13–16 | 🟡 ~95% | Expressions, statements, functions (modules missing) |
+| 4 | [Parser (AST)](plan/phase-04-parser.md) | §13–16 | ✅ Complete | Expressions, statements, functions, modules |
 | 5 | [Runtime Core](plan/phase-05-runtime.md) | §6–10 | 🟡 ~30% | Environments, execution contexts, objects |
 | 6 | [Evaluation — Expressions & Statements](plan/phase-06-evaluation.md) | §13–14 | 🟡 ~60% | Most operators/statements work |
 | 7 | [Functions & Classes](plan/phase-07-functions-classes.md) | §15 | 🟡 ~70% | Functions, classes, generators, async/await work |
-| 8 | [Modules & Scripts](plan/phase-08-modules.md) | §16 | ⬜ 0% | Script/module evaluation, import/export |
+| 8 | [Modules & Scripts](plan/phase-08-modules.md) | §16 | ✅ ~90% | import/export, dynamic import(), import.meta, TLA, cyclic deps |
 | 9 | [Built-in Objects](plan/phase-09-builtins.md) | §19–28 | 🟡 ~40% | Object, Array, String, Math, JSON (105/165), URI encode/decode work |
 | 10 | [Advanced Features](plan/phase-10-advanced.md) | §17,25–27,B | 🟡 ~20% | Error handling, memory model, Proxy, Reflect, Annex B |
 
@@ -100,6 +99,7 @@ These features block significant numbers of tests:
 31. ~~**@@toPrimitive support + unary operator ToPrimitive**~~ — ✅ Done (45 new passes, 62.28% → 62.38%). `to_primitive` now checks `Symbol.toPrimitive` before falling back to valueOf/toString per §7.1.1. Unary +/- operators now call `to_number_coerce` for objects instead of raw `to_number`. 1 Date regression (year-zero parsing).
 32. ~~**Prototype constructor properties**~~ — ✅ Done (119 new passes, 62.38% → 62.62%). Added `constructor` property to Array.prototype, Number.prototype, Boolean.prototype, RegExp.prototype pointing to their respective constructors. 1 Array.from regression (thisArg constructor).
 33. ~~**Generator state machine refactor**~~ — ✅ Done (694 new passes, 62.70% → 64.16%). Replaced replay-from-start generator execution with persistent environment. Parameters bound once at creation, local variables persist between yields. Added `GeneratorExecutionState` enum (SuspendedStart, SuspendedYield, Executing, Completed). Generator statements: 225/266 (85%), expressions: 233/290 (80%), GeneratorPrototype: 38/61 (62%).
+34. ~~**ES Modules**~~ — ✅ Done (684 new passes, 64.16% → 64.52%). Full ES module support: import/export declarations, dynamic import(), import.meta, top-level await, module namespace objects with live bindings, circular dependency detection, duplicate export detection, re-export live binding resolution. module-code: 518/737 (70%), import: 120/162 (74%), dynamic-import: ~60%.
 
 ---
 
