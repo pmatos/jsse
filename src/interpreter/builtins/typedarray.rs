@@ -1021,6 +1021,234 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toSorted".to_string(), to_sorted_fn);
 
+        // with
+        let with_fn = self.create_function(JsFunction::native(
+            "with".to_string(),
+            2,
+            |interp, this_val, args| {
+                // Helper: ToNumber that properly calls valueOf and propagates errors
+                fn to_number_throwing(
+                    interp: &mut Interpreter,
+                    val: &JsValue,
+                ) -> Result<f64, JsValue> {
+                    match val {
+                        JsValue::Object(o) => {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let method = {
+                                    let borrow = obj.borrow();
+                                    borrow
+                                        .get_property_descriptor("valueOf")
+                                        .and_then(|d| d.value)
+                                };
+                                if let Some(func) = method {
+                                    if interp.is_callable(&func) {
+                                        match interp.call_function(&func, val, &[]) {
+                                            Completion::Normal(v)
+                                                if !matches!(v, JsValue::Object(_)) =>
+                                            {
+                                                return to_number_throwing(interp, &v);
+                                            }
+                                            Completion::Normal(_) => {}
+                                            Completion::Throw(e) => return Err(e),
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                let tostring_method = {
+                                    let borrow = obj.borrow();
+                                    borrow
+                                        .get_property_descriptor("toString")
+                                        .and_then(|d| d.value)
+                                };
+                                if let Some(func) = tostring_method {
+                                    if interp.is_callable(&func) {
+                                        match interp.call_function(&func, val, &[]) {
+                                            Completion::Normal(v)
+                                                if !matches!(v, JsValue::Object(_)) =>
+                                            {
+                                                return to_number_throwing(interp, &v);
+                                            }
+                                            Completion::Normal(_) => {}
+                                            Completion::Throw(e) => return Err(e),
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(f64::NAN)
+                        }
+                        JsValue::Symbol(_) => {
+                            Err(interp
+                                .create_type_error("Cannot convert a Symbol value to a number"))
+                        }
+                        JsValue::BigInt(_) => {
+                            Err(interp
+                                .create_type_error("Cannot convert a BigInt value to a number"))
+                        }
+                        _ => Ok(to_number(val)),
+                    }
+                }
+
+                // Helper: ToBigInt that properly calls valueOf and propagates errors
+                fn to_bigint_throwing(
+                    interp: &mut Interpreter,
+                    val: &JsValue,
+                ) -> Result<JsValue, JsValue> {
+                    match val {
+                        JsValue::BigInt(_) => Ok(val.clone()),
+                        JsValue::Object(o) => {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                let method = {
+                                    let borrow = obj.borrow();
+                                    borrow
+                                        .get_property_descriptor("valueOf")
+                                        .and_then(|d| d.value)
+                                };
+                                if let Some(func) = method {
+                                    if interp.is_callable(&func) {
+                                        match interp.call_function(&func, val, &[]) {
+                                            Completion::Normal(v)
+                                                if !matches!(v, JsValue::Object(_)) =>
+                                            {
+                                                return to_bigint_throwing(interp, &v);
+                                            }
+                                            Completion::Normal(_) => {}
+                                            Completion::Throw(e) => return Err(e),
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            Err(interp.create_type_error("Cannot convert value to a BigInt"))
+                        }
+                        JsValue::Boolean(b) => Ok(JsValue::BigInt(JsBigInt {
+                            value: num_bigint::BigInt::from(if *b { 1 } else { 0 }),
+                        })),
+                        JsValue::Number(n) => {
+                            // ToBigInt throws TypeError for Number values
+                            Err(interp
+                                .create_type_error(&format!("Cannot convert {} to a BigInt", n)))
+                        }
+                        JsValue::String(s) => {
+                            let text = s.to_rust_string().trim().to_string();
+                            if text.is_empty() {
+                                return Err(interp.create_error(
+                                    "SyntaxError",
+                                    "Cannot convert empty string to a BigInt",
+                                ));
+                            }
+                            let parsed = if let Some(hex) =
+                                text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
+                            {
+                                num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
+                            } else if let Some(oct) =
+                                text.strip_prefix("0o").or_else(|| text.strip_prefix("0O"))
+                            {
+                                num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
+                            } else if let Some(bin) =
+                                text.strip_prefix("0b").or_else(|| text.strip_prefix("0B"))
+                            {
+                                num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
+                            } else {
+                                text.parse::<num_bigint::BigInt>().ok()
+                            };
+                            match parsed {
+                                Some(v) => Ok(JsValue::BigInt(JsBigInt { value: v })),
+                                None => Err(interp.create_error(
+                                    "SyntaxError",
+                                    &format!("Cannot convert {} to a BigInt", text),
+                                )),
+                            }
+                        }
+                        _ => Err(interp.create_type_error("Cannot convert value to a BigInt")),
+                    }
+                }
+
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let ta = {
+                        let obj_ref = obj.borrow();
+                        if let Some(ref ta) = obj_ref.typed_array_info {
+                            ta.clone()
+                        } else {
+                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
+                        }
+                    };
+                    let len = ta.array_length as i64;
+
+                    // Step 4: ToIntegerOrInfinity(index) - must call valueOf on objects
+                    let index_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let relative_index = match to_number_throwing(interp, &index_arg) {
+                        Ok(n) => to_integer_or_infinity(n) as i64,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let actual_index = if relative_index >= 0 {
+                        relative_index
+                    } else {
+                        len + relative_index
+                    };
+
+                    // Steps 7-8: Coerce value BEFORE checking index bounds
+                    let value_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let numeric_value = if ta.kind.is_bigint() {
+                        match to_bigint_throwing(interp, &value_arg) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        match to_number_throwing(interp, &value_arg) {
+                            Ok(n) => JsValue::Number(n),
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    };
+
+                    // Step 9: Now check index bounds AFTER coercions
+                    if actual_index < 0 || actual_index >= len {
+                        return Completion::Throw(
+                            interp
+                                .create_range_error("Invalid index for TypedArray.prototype.with"),
+                        );
+                    }
+
+                    let bpe = ta.kind.bytes_per_element();
+                    let new_buf = vec![0u8; len as usize * bpe];
+                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                    let new_ta = TypedArrayInfo {
+                        kind: ta.kind,
+                        buffer: new_buf_rc.clone(),
+                        byte_offset: 0,
+                        byte_length: len as usize * bpe,
+                        array_length: len as usize,
+                    };
+                    for k in 0..len as usize {
+                        let elem = if k == actual_index as usize {
+                            numeric_value.clone()
+                        } else {
+                            typed_array_get_index(&ta, k)
+                        };
+                        typed_array_set_index(&new_ta, k, &elem);
+                    }
+                    let ab_obj = interp.create_object();
+                    {
+                        let mut ab = ab_obj.borrow_mut();
+                        ab.class_name = "ArrayBuffer".to_string();
+                        ab.prototype = interp.arraybuffer_prototype.clone();
+                        ab.arraybuffer_data = Some(new_buf_rc);
+                    }
+                    let ab_id = ab_obj.borrow().id.unwrap();
+                    let buf_val = JsValue::Object(JsObject { id: ab_id });
+                    let result = interp.create_typed_array_object(new_ta, buf_val);
+                    let id = result.borrow().id.unwrap();
+                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                }
+                Completion::Throw(interp.create_type_error("not a TypedArray"))
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("with".to_string(), with_fn);
+
         // @@toStringTag getter
         let to_string_tag_getter = self.create_function(JsFunction::native(
             "get [Symbol.toStringTag]".to_string(),
