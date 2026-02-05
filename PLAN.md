@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 31,222 / 48,257 run (64.70%)
+**Current pass rate:** 31,281 / 48,257 run (64.82%)
 
 ---
 
@@ -36,7 +36,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Function | 65% | 332/509 |
 | Iterator | 57% | 290/510 |
 | Promise | 57% | 364/639 |
-| Map | 50% | 103/204 |
+| Map | 76% | 156/204 |
 | Set | 68% | 261/383 |
 | Date | 51% | 305/594 |
 | Reflect | 81% | 124/153 |
@@ -106,6 +106,10 @@ These features block significant numbers of tests:
 37. ~~**Symbol.species accessor**~~ — ✅ Done (27 new passes, 64.64% → 64.70%). Added `[Symbol.species]` getter to Array, ArrayBuffer, Map, Set, Promise, RegExp constructors. Simple getter returning `this`. All 29 direct tests now pass. See `plan/symbol-species.md`.
 
 38. ~~**ArrayBuffer.prototype getters**~~ — ✅ Done (3 new passes, 64.70% → 64.71%). Added `detached`, `resizable`, `maxByteLength` accessor properties to ArrayBuffer.prototype. For non-resizable buffers: detached=false, resizable=false, maxByteLength=byteLength. Most direct tests require `arraybuffer-transfer` or `resizable-arraybuffer` features not yet implemented. See `plan/arraybuffer-getters.md`.
+
+39. ~~**GeneratorFunction constructor**~~ — ✅ Done (27 new passes, 64.71% → 64.78%). Implemented GeneratorFunction constructor (§27.3) with proper prototype chain: GeneratorFunction.prototype inherits from Function.prototype, links to Generator.prototype. Fixed `create_function()` to assign `generator_function_prototype` to generator functions. Fixed `eval_new()` to reject generators and async functions as constructors. Fixed Generator.prototype.return/throw to validate generator state. GeneratorFunction: 7/23 → 18/23 (78%), GeneratorPrototype: 41/61 → 49/61 (80%).
+
+40. ~~**AsyncFunction and AsyncGeneratorFunction constructors**~~ — ✅ Done (21 new passes, 64.78% → 64.82%). Implemented AsyncFunction (§27.7) and AsyncGeneratorFunction (§27.4) constructors. Added `async_function_prototype` field to Interpreter with Symbol.toStringTag. AsyncFunction.prototype inherits from Function.prototype. Fixed `create_function()` to detect async non-generator functions and assign correct prototype/class_name. Constructors are intrinsics (not exposed as globals) - accessed via `Object.getPrototypeOf(async function(){}).constructor`. AsyncFunction: 10/18 → 15/18 (83%), AsyncGeneratorFunction: 9/23 → 19/23 (83%).
 
 ---
 

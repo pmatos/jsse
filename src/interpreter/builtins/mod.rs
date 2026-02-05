@@ -1647,6 +1647,319 @@ impl Interpreter {
             }
         }
 
+        // %AsyncFunction.prototype%
+        // Per spec, this should inherit from Function.prototype
+        {
+            let af_proto = self.create_object();
+            af_proto.borrow_mut().class_name = "AsyncFunction".to_string();
+
+            // [[Prototype]] = Function.prototype
+            if let Some(func_val) = self.global_env.borrow().get("Function") {
+                if let JsValue::Object(func_obj) = func_val {
+                    if let Some(func_data) = self.get_object(func_obj.id) {
+                        if let JsValue::Object(func_proto_obj) =
+                            func_data.borrow().get_property("prototype")
+                        {
+                            if let Some(func_proto) = self.get_object(func_proto_obj.id) {
+                                af_proto.borrow_mut().prototype = Some(func_proto);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Symbol.toStringTag = "AsyncFunction"
+            af_proto.borrow_mut().insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("AsyncFunction")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
+
+            self.async_function_prototype = Some(af_proto);
+        }
+
+        // AsyncFunction constructor (not a global per spec)
+        // Create the constructor and wire it up with AsyncFunction.prototype
+        if let Some(af_proto) = self.async_function_prototype.clone() {
+            let af_ctor = self.create_function(JsFunction::constructor(
+                "AsyncFunction".to_string(),
+                1,
+                |interp, _this, args| {
+                    let (params_str, body_str) = if args.is_empty() {
+                        (String::new(), String::new())
+                    } else if args.len() == 1 {
+                        (String::new(), to_js_string(&args[0]))
+                    } else {
+                        let params: Vec<String> =
+                            args[..args.len() - 1].iter().map(to_js_string).collect();
+                        (params.join(","), to_js_string(args.last().unwrap()))
+                    };
+
+                    let fn_source_text =
+                        format!("async function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
+                    let source =
+                        format!("(async function anonymous({}) {{ {} }})", params_str, body_str);
+                    let mut p = match parser::Parser::new(&source) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return Completion::Throw(
+                                interp.create_error("SyntaxError", &format!("{}", e)),
+                            );
+                        }
+                    };
+                    let program = match p.parse_program() {
+                        Ok(prog) => prog,
+                        Err(e) => {
+                            return Completion::Throw(
+                                interp.create_error("SyntaxError", &format!("{}", e)),
+                            );
+                        }
+                    };
+
+                    if let Some(Statement::Expression(Expression::Function(fe))) =
+                        program.body.first()
+                    {
+                        let is_strict = fe.body.first().is_some_and(|s| {
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                        });
+                        let js_func = JsFunction::User {
+                            name: Some("anonymous".to_string()),
+                            params: fe.params.clone(),
+                            body: fe.body.clone(),
+                            closure: interp.global_env.clone(),
+                            is_arrow: false,
+                            is_strict,
+                            is_generator: false,
+                            is_async: true,
+                            source_text: Some(fn_source_text),
+                        };
+                        Completion::Normal(interp.create_function(js_func))
+                    } else {
+                        Completion::Throw(
+                            interp.create_error("SyntaxError", "Failed to parse async function"),
+                        )
+                    }
+                },
+            ));
+            // Wire up AsyncFunction.prototype and constructor property
+            if let JsValue::Object(af_obj) = &af_ctor {
+                if let Some(af) = self.get_object(af_obj.id) {
+                    let proto_id = af_proto.borrow().id.unwrap();
+                    // Set AsyncFunction.prototype
+                    af.borrow_mut().insert_property(
+                        "prototype".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::Object(crate::types::JsObject { id: proto_id }),
+                            false,
+                            false,
+                            false,
+                        ),
+                    );
+                    // Set constructor back-reference on AsyncFunction.prototype
+                    af_proto.borrow_mut().insert_property(
+                        "constructor".to_string(),
+                        PropertyDescriptor::data(
+                            af_ctor.clone(),
+                            true,
+                            false,
+                            true,
+                        ),
+                    );
+                }
+            }
+        }
+
+        // GeneratorFunction constructor (not a global per spec)
+        // Create the constructor and wire it up with GeneratorFunction.prototype
+        if let Some(gf_proto) = self.generator_function_prototype.clone() {
+            let gf_ctor = self.create_function(JsFunction::constructor(
+                "GeneratorFunction".to_string(),
+                1,
+                |interp, _this, args| {
+                    let (params_str, body_str) = if args.is_empty() {
+                        (String::new(), String::new())
+                    } else if args.len() == 1 {
+                        (String::new(), to_js_string(&args[0]))
+                    } else {
+                        let params: Vec<String> =
+                            args[..args.len() - 1].iter().map(to_js_string).collect();
+                        (params.join(","), to_js_string(args.last().unwrap()))
+                    };
+
+                    let fn_source_text = format!(
+                        "function* anonymous({}\n) {{\n{}\n}}",
+                        params_str, body_str
+                    );
+                    let source =
+                        format!("(function* anonymous({}) {{ {} }})", params_str, body_str);
+                    let mut p = match parser::Parser::new(&source) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return Completion::Throw(
+                                interp.create_error("SyntaxError", &format!("{}", e)),
+                            );
+                        }
+                    };
+                    let program = match p.parse_program() {
+                        Ok(prog) => prog,
+                        Err(e) => {
+                            return Completion::Throw(
+                                interp.create_error("SyntaxError", &format!("{}", e)),
+                            );
+                        }
+                    };
+
+                    if let Some(Statement::Expression(Expression::Function(fe))) =
+                        program.body.first()
+                    {
+                        let is_strict = fe.body.first().is_some_and(|s| {
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                        });
+                        let js_func = JsFunction::User {
+                            name: Some("anonymous".to_string()),
+                            params: fe.params.clone(),
+                            body: fe.body.clone(),
+                            closure: interp.global_env.clone(),
+                            is_arrow: false,
+                            is_strict,
+                            is_generator: true,
+                            is_async: false,
+                            source_text: Some(fn_source_text),
+                        };
+                        Completion::Normal(interp.create_function(js_func))
+                    } else {
+                        Completion::Throw(
+                            interp.create_error("SyntaxError", "Failed to parse generator function"),
+                        )
+                    }
+                },
+            ));
+            // Wire up GeneratorFunction.prototype and constructor property
+            if let JsValue::Object(gf_obj) = &gf_ctor {
+                if let Some(gf) = self.get_object(gf_obj.id) {
+                    let proto_id = gf_proto.borrow().id.unwrap();
+                    // Set GeneratorFunction.prototype
+                    gf.borrow_mut().insert_property(
+                        "prototype".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::Object(crate::types::JsObject { id: proto_id }),
+                            false,
+                            false,
+                            false,
+                        ),
+                    );
+                    // Set constructor back-reference on GeneratorFunction.prototype
+                    gf_proto.borrow_mut().insert_property(
+                        "constructor".to_string(),
+                        PropertyDescriptor::data(
+                            gf_ctor.clone(),
+                            true,
+                            false,
+                            true,
+                        ),
+                    );
+                }
+            }
+        }
+
+        // AsyncGeneratorFunction constructor (not a global per spec)
+        // Create the constructor and wire it up with AsyncGeneratorFunction.prototype
+        if let Some(agf_proto) = self.async_generator_function_prototype.clone() {
+            let agf_ctor = self.create_function(JsFunction::constructor(
+                "AsyncGeneratorFunction".to_string(),
+                1,
+                |interp, _this, args| {
+                    let (params_str, body_str) = if args.is_empty() {
+                        (String::new(), String::new())
+                    } else if args.len() == 1 {
+                        (String::new(), to_js_string(&args[0]))
+                    } else {
+                        let params: Vec<String> =
+                            args[..args.len() - 1].iter().map(to_js_string).collect();
+                        (params.join(","), to_js_string(args.last().unwrap()))
+                    };
+
+                    let fn_source_text = format!(
+                        "async function* anonymous({}\n) {{\n{}\n}}",
+                        params_str, body_str
+                    );
+                    let source =
+                        format!("(async function* anonymous({}) {{ {} }})", params_str, body_str);
+                    let mut p = match parser::Parser::new(&source) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return Completion::Throw(
+                                interp.create_error("SyntaxError", &format!("{}", e)),
+                            );
+                        }
+                    };
+                    let program = match p.parse_program() {
+                        Ok(prog) => prog,
+                        Err(e) => {
+                            return Completion::Throw(
+                                interp.create_error("SyntaxError", &format!("{}", e)),
+                            );
+                        }
+                    };
+
+                    if let Some(Statement::Expression(Expression::Function(fe))) =
+                        program.body.first()
+                    {
+                        let is_strict = fe.body.first().is_some_and(|s| {
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                        });
+                        let js_func = JsFunction::User {
+                            name: Some("anonymous".to_string()),
+                            params: fe.params.clone(),
+                            body: fe.body.clone(),
+                            closure: interp.global_env.clone(),
+                            is_arrow: false,
+                            is_strict,
+                            is_generator: true,
+                            is_async: true,
+                            source_text: Some(fn_source_text),
+                        };
+                        Completion::Normal(interp.create_function(js_func))
+                    } else {
+                        Completion::Throw(interp.create_error(
+                            "SyntaxError",
+                            "Failed to parse async generator function",
+                        ))
+                    }
+                },
+            ));
+            // Wire up AsyncGeneratorFunction.prototype and constructor property
+            if let JsValue::Object(agf_obj) = &agf_ctor {
+                if let Some(agf) = self.get_object(agf_obj.id) {
+                    let proto_id = agf_proto.borrow().id.unwrap();
+                    // Set AsyncGeneratorFunction.prototype
+                    agf.borrow_mut().insert_property(
+                        "prototype".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::Object(crate::types::JsObject { id: proto_id }),
+                            false,
+                            false,
+                            false,
+                        ),
+                    );
+                    // Set constructor back-reference on AsyncGeneratorFunction.prototype
+                    agf_proto.borrow_mut().insert_property(
+                        "constructor".to_string(),
+                        PropertyDescriptor::data(
+                            agf_ctor.clone(),
+                            true,
+                            false,
+                            true,
+                        ),
+                    );
+                }
+            }
+        }
+
         // JSON object
         let json_obj = self.create_object();
         let json_stringify = self.create_function(JsFunction::native(

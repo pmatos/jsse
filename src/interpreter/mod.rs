@@ -40,9 +40,11 @@ pub struct Interpreter {
     finalization_registry_prototype: Option<Rc<RefCell<JsObjectData>>>,
     date_prototype: Option<Rc<RefCell<JsObjectData>>>,
     generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    async_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
     bigint_prototype: Option<Rc<RefCell<JsObjectData>>>,
     symbol_prototype: Option<Rc<RefCell<JsObjectData>>>,
     arraybuffer_prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -126,9 +128,11 @@ impl Interpreter {
             finalization_registry_prototype: None,
             date_prototype: None,
             generator_prototype: None,
+            generator_function_prototype: None,
             async_iterator_prototype: None,
             async_generator_prototype: None,
             async_generator_function_prototype: None,
+            async_function_prototype: None,
             bigint_prototype: None,
             symbol_prototype: None,
             arraybuffer_prototype: None,
@@ -336,6 +340,14 @@ impl Interpreter {
                 ..
             }
         );
+        let is_async_non_gen = matches!(
+            &func,
+            JsFunction::User {
+                is_generator: false,
+                is_async: true,
+                ..
+            }
+        );
         let (fn_name, fn_length) = match &func {
             JsFunction::User { name, params, .. } => {
                 let n = name.clone().unwrap_or_default();
@@ -352,6 +364,14 @@ impl Interpreter {
             self.async_generator_function_prototype
                 .clone()
                 .or(self.object_prototype.clone())
+        } else if is_gen {
+            self.generator_function_prototype
+                .clone()
+                .or(self.object_prototype.clone())
+        } else if is_async_non_gen {
+            self.async_function_prototype
+                .clone()
+                .or(self.object_prototype.clone())
         } else {
             self.object_prototype.clone()
         };
@@ -360,6 +380,8 @@ impl Interpreter {
             "AsyncGeneratorFunction".to_string()
         } else if is_gen {
             "GeneratorFunction".to_string()
+        } else if is_async_non_gen {
+            "AsyncFunction".to_string()
         } else {
             "Function".to_string()
         };

@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
 |-------------|---------|---------|---------|---------|-----------|
-| 48,257      | 48,257  | 0       | 31,225  | 17,032  | 64.71%    |
+| 48,257      | 48,257  | 0       | 31,281  | 16,976  | 64.82%    |
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 
@@ -50,7 +50,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - ToPrimitive with valueOf/toString coercion for objects
   - Wrapper objects (`new Boolean`, `new Number`, `new String`) with primitive value
   - `eval()` support
-  - `Function` constructor (dynamic function creation)
+  - `Function`, `GeneratorFunction`, `AsyncFunction`, `AsyncGeneratorFunction` constructors (dynamic function creation)
   - `Symbol` with well-known symbols (iterator, hasInstance, toPrimitive, etc.)
   - `delete` operator for object properties
   - Iterator protocol (`Symbol.iterator`, lazy `ArrayIterator`, `StringIterator`)
@@ -66,7 +66,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
   - Proper Error objects (`TypeError`, `ReferenceError`, `SyntaxError`, `RangeError`) with prototype chains and `instanceof` support
   - `JSON.stringify` (replacer function/array, space/indent, toJSON, circular detection, BigInt TypeError, wrapper unwrapping), `JSON.parse` (reviver), `JSON.rawJSON`, `JSON.isRawJSON`
   - `String.fromCharCode`
-  - `Map` built-in (constructor, `get`, `set`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`)
+  - `Map` built-in (constructor, `get`, `set`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`, `Map.groupBy`)
   - `Set` built-in (constructor, `add`, `has`, `delete`, `clear`, `size`, `entries`, `keys`, `values`, `forEach`, `@@iterator`, ES2025 set methods: `union`, `intersection`, `difference`, `symmetricDifference`, `isSubsetOf`, `isSupersetOf`, `isDisjointFrom`)
   - Generator functions (`function*`, `yield`, `yield*`) with replay-based execution
   - Generator prototype (`next`, `return`, `throw`, `Symbol.iterator`, `Symbol.toStringTag`)
