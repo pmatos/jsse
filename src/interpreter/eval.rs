@@ -2281,8 +2281,14 @@ impl Interpreter {
                 is_strict,
                 execution_state: GeneratorExecutionState::Completed,
             });
+            Completion::Normal(self.create_iter_result_object(value, true))
+        } else {
+            Completion::Throw(
+                self.create_type_error(
+                    "Generator.prototype.return called on incompatible receiver",
+                ),
+            )
         }
-        Completion::Normal(self.create_iter_result_object(value, true))
     }
 
     pub(crate) fn generator_throw(&mut self, this: &JsValue, exception: JsValue) -> Completion {
@@ -2309,8 +2315,12 @@ impl Interpreter {
                 is_strict,
                 execution_state: GeneratorExecutionState::Completed,
             });
+            Completion::Throw(exception)
+        } else {
+            Completion::Throw(
+                self.create_type_error("Generator.prototype.throw called on incompatible receiver"),
+            )
         }
-        Completion::Throw(exception)
     }
 
     pub(crate) fn generator_next_state_machine(
@@ -4733,7 +4743,12 @@ impl Interpreter {
             if !is_proxy && let Some(func_obj) = self.get_object(co.id) {
                 let b = func_obj.borrow();
                 let is_ctor = match &b.callable {
-                    Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
+                    Some(JsFunction::User {
+                        is_arrow,
+                        is_generator,
+                        is_async,
+                        ..
+                    }) => !is_arrow && !is_generator && !is_async,
                     Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
                     None => false,
                 };

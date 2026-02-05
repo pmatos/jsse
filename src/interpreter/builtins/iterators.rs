@@ -2339,7 +2339,64 @@ impl Interpreter {
             ),
         );
 
-        self.generator_prototype = Some(gen_proto);
+        self.generator_prototype = Some(gen_proto.clone());
+
+        // %GeneratorFunction.prototype% - the prototype of generator function objects
+        let gf_proto = self.create_object();
+        gf_proto.borrow_mut().class_name = "GeneratorFunction".to_string();
+
+        // [[Prototype]] = Function.prototype
+        // Get Function.prototype from global Function
+        if let Some(func_val) = self.global_env.borrow().get("Function") {
+            if let JsValue::Object(func_obj) = func_val {
+                if let Some(func_data) = self.get_object(func_obj.id) {
+                    if let JsValue::Object(func_proto_obj) =
+                        func_data.borrow().get_property("prototype")
+                    {
+                        if let Some(func_proto) = self.get_object(func_proto_obj.id) {
+                            gf_proto.borrow_mut().prototype = Some(func_proto);
+                        }
+                    }
+                }
+            }
+        }
+
+        // GeneratorFunction.prototype.prototype = Generator.prototype
+        let gen_proto_id = gen_proto.borrow().id.unwrap();
+        gf_proto.borrow_mut().insert_property(
+            "prototype".to_string(),
+            PropertyDescriptor::data(
+                JsValue::Object(crate::types::JsObject { id: gen_proto_id }),
+                false,
+                false,
+                true,
+            ),
+        );
+
+        // Symbol.toStringTag = "GeneratorFunction"
+        gf_proto.borrow_mut().insert_property(
+            "Symbol(Symbol.toStringTag)".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("GeneratorFunction")),
+                false,
+                false,
+                true,
+            ),
+        );
+
+        // Set constructor on Generator.prototype pointing back to GeneratorFunction.prototype
+        let gf_proto_id = gf_proto.borrow().id.unwrap();
+        gen_proto.borrow_mut().insert_property(
+            "constructor".to_string(),
+            PropertyDescriptor::data(
+                JsValue::Object(crate::types::JsObject { id: gf_proto_id }),
+                false,
+                false,
+                true,
+            ),
+        );
+
+        self.generator_function_prototype = Some(gf_proto);
     }
 
     pub(crate) fn setup_async_generator_prototype(&mut self) {

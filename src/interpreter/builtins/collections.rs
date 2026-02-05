@@ -567,6 +567,126 @@ impl Interpreter {
             );
         }
 
+        // Map.groupBy static method
+        if let JsValue::Object(ref ctor_ref) = map_ctor
+            && let Some(ctor_obj) = self.get_object(ctor_ref.id)
+        {
+            let map_proto_for_groupby = proto.clone();
+            let group_by_fn = self.create_function(JsFunction::native(
+                "groupBy".to_string(),
+                2,
+                move |interp, _this, args| {
+                    let items = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let callback = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+
+                    // 1. Validate callback is callable
+                    if !matches!(&callback, JsValue::Object(o) if interp.get_object(o.id)
+                        .map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
+                    {
+                        return Completion::Throw(
+                            interp.create_type_error("callbackfn is not a function"),
+                        );
+                    }
+
+                    // 2. Get iterator from items
+                    let iterator = match interp.get_iterator(&items) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+
+                    // 3. Create result Map
+                    let result_map = interp.create_object();
+                    result_map.borrow_mut().prototype = Some(map_proto_for_groupby.clone());
+                    result_map.borrow_mut().class_name = "Map".to_string();
+                    result_map.borrow_mut().map_data = Some(Vec::new());
+                    let result_id = result_map.borrow().id.unwrap();
+                    let result_val = JsValue::Object(crate::types::JsObject { id: result_id });
+
+                    // 4. Iterate and group
+                    let mut k: u64 = 0;
+                    loop {
+                        let next = match interp.iterator_step(&iterator) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let value = interp.iterator_value(&next);
+
+                        // Call callback with (value, index)
+                        let key_val = match interp.call_function(
+                            &callback,
+                            &JsValue::Undefined,
+                            &[value.clone(), JsValue::Number(k as f64)],
+                        ) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+
+                        // Per spec: If key is -0, set key to +0
+                        let key_val = if let JsValue::Number(n) = &key_val {
+                            if *n == 0.0 {
+                                JsValue::Number(0.0)
+                            } else {
+                                key_val
+                            }
+                        } else {
+                            key_val
+                        };
+
+                        // Add value to the group for this key (using Map's SameValueZero semantics)
+                        if let Some(map_obj) = interp.get_object(result_id) {
+                            let mut borrowed = map_obj.borrow_mut();
+                            let entries = borrowed.map_data.as_mut().unwrap();
+
+                            // Find existing entry with SameValueZero key equality
+                            let existing_idx = entries.iter().position(|entry| {
+                                if let Some((k, _)) = entry {
+                                    same_value_zero(k, &key_val)
+                                } else {
+                                    false
+                                }
+                            });
+
+                            if let Some(idx) = existing_idx {
+                                // Append to existing array
+                                if let Some((_, arr_val)) = entries[idx].as_ref() {
+                                    if let JsValue::Object(arr_obj) = arr_val {
+                                        let arr_id = arr_obj.id;
+                                        drop(borrowed);
+                                        if let Some(arr) = interp.get_object(arr_id) {
+                                            let len_val = arr.borrow().get_property("length");
+                                            let len = to_number(&len_val) as usize;
+                                            arr.borrow_mut().insert_value(len.to_string(), value);
+                                            arr.borrow_mut().insert_value(
+                                                "length".to_string(),
+                                                JsValue::Number((len + 1) as f64),
+                                            );
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Create new array and add entry
+                                drop(borrowed);
+                                let new_arr = interp.create_array(vec![value]);
+                                if let Some(map_obj) = interp.get_object(result_id) {
+                                    let mut borrowed = map_obj.borrow_mut();
+                                    let entries = borrowed.map_data.as_mut().unwrap();
+                                    entries.push(Some((key_val, new_arr)));
+                                }
+                            }
+                        }
+                        k += 1;
+                    }
+
+                    Completion::Normal(result_val)
+                },
+            ));
+            ctor_obj
+                .borrow_mut()
+                .insert_value("groupBy".to_string(), group_by_fn);
+        }
+
         self.global_env
             .borrow_mut()
             .declare("Map", BindingKind::Var);
