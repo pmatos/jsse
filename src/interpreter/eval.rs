@@ -1783,153 +1783,16 @@ impl Interpreter {
                 Completion::Normal(rval)
             }
             Expression::Array(elements) if op == AssignOp::Assign => {
-                // Destructuring array assignment
-                for (i, elem) in elements.iter().enumerate() {
-                    if let Some(expr) = elem {
-                        if let Expression::Spread(inner) = expr {
-                            let rest: Vec<JsValue> = if let JsValue::Object(o) = &rval {
-                                if let Some(obj) = self.get_object(o.id) {
-                                    obj.borrow()
-                                        .array_elements
-                                        .as_ref()
-                                        .map(|e| e.get(i..).unwrap_or(&[]).to_vec())
-                                        .unwrap_or_default()
-                                } else {
-                                    vec![]
-                                }
-                            } else {
-                                vec![]
-                            };
-                            let arr = self.create_array(rest);
-                            let _result = self.eval_assign(
-                                AssignOp::Assign,
-                                inner,
-                                &Expression::Literal(Literal::Null),
-                                env,
-                            );
-                            // Assign directly
-                            if let Expression::Identifier(name) = inner.as_ref() {
-                                if !env.borrow().has(name) {
-                                    env.borrow_mut().declare(name, BindingKind::Var);
-                                }
-                                let _ = env.borrow_mut().set(name, arr);
-                            }
-                            break;
-                        }
-                        let item = if let JsValue::Object(o) = &rval {
-                            if let Some(obj) = self.get_object(o.id) {
-                                obj.borrow()
-                                    .array_elements
-                                    .as_ref()
-                                    .and_then(|e| e.get(i).cloned())
-                                    .unwrap_or(JsValue::Undefined)
-                            } else {
-                                JsValue::Undefined
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-                        // Check for default value: `[a = defaultVal] = arr`
-                        let (target, val) =
-                            if let Expression::Assign(AssignOp::Assign, target, default) = expr {
-                                let v = if item.is_undefined() {
-                                    match self.eval_expr(default, env) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
-                                    }
-                                } else {
-                                    item
-                                };
-                                (target.as_ref(), v)
-                            } else {
-                                (expr, item)
-                            };
-                        match target {
-                            Expression::Identifier(name) => {
-                                if !env.borrow().has(name) {
-                                    env.borrow_mut().declare(name, BindingKind::Var);
-                                }
-                                let _ = env.borrow_mut().set(name, val);
-                            }
-                            Expression::Member(..) => {
-                                // Create a temp to hold the val, assign to member
-                                let _temp_lit = Expression::Literal(Literal::Null);
-                                // We'd need to manually do the member assign here
-                                // For now, skip complex member destructuring
-                            }
-                            _ => {}
-                        }
-                    }
+                match self.destructure_array_assignment(elements, &rval, env) {
+                    Ok(()) => Completion::Normal(rval),
+                    Err(e) => Completion::Throw(e),
                 }
-                Completion::Normal(rval)
             }
             Expression::Object(props) if op == AssignOp::Assign => {
-                // Destructuring object assignment
-                for prop in props {
-                    let (key, target, default_val) = match &prop.kind {
-                        PropertyKind::Init => {
-                            let key = match &prop.key {
-                                PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                                PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
-                                PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                                    Completion::Normal(v) => match self.to_property_key(&v) {
-                                        Ok(s) => s,
-                                        Err(e) => return Completion::Throw(e),
-                                    },
-                                    other => return other,
-                                },
-                                PropertyKey::Private(_) => {
-                                    return Completion::Throw(self.create_type_error(
-                                        "Private names are not valid in object patterns",
-                                    ));
-                                }
-                            };
-                            // Check if shorthand ({a} = obj) or key-value ({a: b} = obj)
-                            if let Expression::Identifier(name) = &prop.value {
-                                if name == &key {
-                                    (key, prop.value.clone(), None)
-                                } else {
-                                    (key, prop.value.clone(), None)
-                                }
-                            } else if let Expression::Assign(AssignOp::Assign, target, default) =
-                                &prop.value
-                            {
-                                (key, *target.clone(), Some(*default.clone()))
-                            } else {
-                                (key, prop.value.clone(), None)
-                            }
-                        }
-                        _ => continue,
-                    };
-                    let val = if let JsValue::Object(o) = &rval {
-                        if let Some(obj) = self.get_object(o.id) {
-                            obj.borrow().get_property(&key)
-                        } else {
-                            JsValue::Undefined
-                        }
-                    } else {
-                        JsValue::Undefined
-                    };
-                    let val = if val.is_undefined() {
-                        if let Some(default) = default_val {
-                            match self.eval_expr(&default, env) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            }
-                        } else {
-                            val
-                        }
-                    } else {
-                        val
-                    };
-                    if let Expression::Identifier(name) = &target {
-                        if !env.borrow().has(name) {
-                            env.borrow_mut().declare(name, BindingKind::Var);
-                        }
-                        let _ = env.borrow_mut().set(name, val);
-                    }
+                match self.destructure_object_assignment(props, &rval, env) {
+                    Ok(()) => Completion::Normal(rval),
+                    Err(e) => Completion::Throw(e),
                 }
-                Completion::Normal(rval)
             }
             _ => Completion::Normal(rval),
         }
@@ -1956,6 +1819,440 @@ impl Interpreter {
             AssignOp::BitXorAssign => self.eval_binary(BinaryOp::BitXor, lval, rval),
             _ => Completion::Normal(rval.clone()),
         }
+    }
+
+    fn set_member_property(
+        &mut self,
+        obj_expr: &Expression,
+        prop: &MemberProperty,
+        val: JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        let obj_val = match self.eval_expr(obj_expr, env) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(()),
+        };
+
+        if let MemberProperty::Private(name) = prop {
+            return match &obj_val {
+                JsValue::Object(o) => {
+                    if let Some(obj) = self.get_object(o.id) {
+                        let elem = obj.borrow().private_fields.get(name).cloned();
+                        match elem {
+                            Some(PrivateElement::Field(_)) => {
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(name.clone(), PrivateElement::Field(val));
+                                Ok(())
+                            }
+                            Some(PrivateElement::Method(_)) => Err(self.create_type_error(
+                                &format!("Cannot assign to private method #{name}"),
+                            )),
+                            Some(PrivateElement::Accessor { set, .. }) => {
+                                if let Some(setter) = &set {
+                                    let setter = setter.clone();
+                                    match self.call_function(&setter, &obj_val, &[val]) {
+                                        Completion::Normal(_) => Ok(()),
+                                        Completion::Throw(e) => Err(e),
+                                        _ => Ok(()),
+                                    }
+                                } else {
+                                    Err(self.create_type_error(&format!(
+                                        "Cannot set private member #{name} which has no setter"
+                                    )))
+                                }
+                            }
+                            None => Err(self.create_type_error(&format!(
+                                "Cannot write private member #{name} to an object whose class did not declare it"
+                            ))),
+                        }
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Err(self.create_type_error(&format!(
+                    "Cannot write private member #{name} to a non-object"
+                ))),
+            };
+        }
+
+        let key = match prop {
+            MemberProperty::Dot(name) => name.clone(),
+            MemberProperty::Computed(expr) => {
+                let v = match self.eval_expr(expr, env) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => return Ok(()),
+                };
+                self.to_property_key(&v)?
+            }
+            MemberProperty::Private(_) => unreachable!(),
+        };
+
+        // Auto-box primitives for property access
+        let obj_val = if !matches!(obj_val, JsValue::Object(_)) {
+            match self.to_object(&obj_val) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Ok(()),
+            }
+        } else {
+            obj_val
+        };
+
+        if let JsValue::Object(ref o) = obj_val
+            && let Some(obj) = self.get_object(o.id)
+        {
+            // Proxy set trap
+            if obj.borrow().is_proxy() {
+                let target_val = self.get_proxy_target_val(o.id);
+                let key_val = JsValue::String(JsString::from_str(&key));
+                let receiver = obj_val.clone();
+                match self.invoke_proxy_trap(
+                    o.id,
+                    "set",
+                    vec![target_val.clone(), key_val, val.clone(), receiver],
+                ) {
+                    Ok(Some(v)) => {
+                        if to_boolean(&v) {
+                            return Ok(());
+                        }
+                        if env.borrow().strict {
+                            return Err(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}'"
+                            )));
+                        }
+                        return Ok(());
+                    }
+                    Ok(None) => {
+                        if let JsValue::Object(ref t) = target_val
+                            && let Some(tobj) = self.get_object(t.id)
+                        {
+                            tobj.borrow_mut().set_property_value(&key, val);
+                        }
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            // Check for setter
+            let desc = obj.borrow().get_property_descriptor(&key);
+            if let Some(ref d) = desc
+                && let Some(ref setter) = d.set
+                && !matches!(setter, JsValue::Undefined)
+            {
+                let setter = setter.clone();
+                let this = obj_val.clone();
+                return match self.call_function(&setter, &this, &[val]) {
+                    Completion::Normal(_) => Ok(()),
+                    Completion::Throw(e) => Err(e),
+                    _ => Ok(()),
+                };
+            }
+            if desc
+                .as_ref()
+                .map(|d| d.is_accessor_descriptor())
+                .unwrap_or(false)
+            {
+                if env.borrow().strict {
+                    return Err(self.create_type_error(&format!(
+                        "Cannot set property '{key}' which has only a getter"
+                    )));
+                }
+                return Ok(());
+            }
+            let success = obj.borrow_mut().set_property_value(&key, val);
+            if !success && env.borrow().strict {
+                return Err(
+                    self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn put_value_to_target(
+        &mut self,
+        target: &Expression,
+        val: JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        match target {
+            Expression::Identifier(name) => {
+                self.set_function_name(&val, name);
+                if !env.borrow().has(name) {
+                    env.borrow_mut().declare(name, BindingKind::Var);
+                }
+                env.borrow_mut().set(name, val)
+            }
+            Expression::Member(obj_expr, prop) => {
+                self.set_member_property(obj_expr, prop, val, env)
+            }
+            Expression::Array(elements) => self.destructure_array_assignment(elements, &val, env),
+            Expression::Object(props) => self.destructure_object_assignment(props, &val, env),
+            Expression::Assign(AssignOp::Assign, inner_target, default) => {
+                let v = if val.is_undefined() {
+                    match self.eval_expr(default, env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => JsValue::Undefined,
+                    }
+                } else {
+                    val
+                };
+                self.put_value_to_target(inner_target, v, env)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn destructure_array_assignment(
+        &mut self,
+        elements: &[Option<Expression>],
+        rval: &JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        let iterator = self.get_iterator(rval)?;
+        let mut done = false;
+        let mut error: Option<JsValue> = None;
+
+        for elem in elements {
+            match elem {
+                None => {
+                    // Elision — skip one iterator position
+                    if !done {
+                        match self.iterator_step(&iterator) {
+                            Ok(None) => done = true,
+                            Ok(Some(_)) => {}
+                            Err(e) => {
+                                done = true;
+                                error = Some(e);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Some(Expression::Spread(inner)) => {
+                    // Rest element: collect remaining into array
+                    let mut rest = Vec::new();
+                    if !done {
+                        loop {
+                            match self.iterator_step(&iterator) {
+                                Ok(Some(result)) => {
+                                    rest.push(self.iterator_value(&result));
+                                }
+                                Ok(None) => {
+                                    done = true;
+                                    break;
+                                }
+                                Err(e) => {
+                                    done = true;
+                                    error = Some(e);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if error.is_none() {
+                        let arr = self.create_array(rest);
+                        // The inner of Spread can itself have a default
+                        if let Err(e) = self.put_value_to_target(inner, arr, env) {
+                            error = Some(e);
+                        }
+                    }
+                    break;
+                }
+                Some(expr) => {
+                    // Extract target and default
+                    let (target, default_expr) =
+                        if let Expression::Assign(AssignOp::Assign, target, default) = expr {
+                            (target.as_ref(), Some(default.as_ref()))
+                        } else {
+                            (expr, None)
+                        };
+
+                    let item = if done {
+                        JsValue::Undefined
+                    } else {
+                        match self.iterator_step(&iterator) {
+                            Ok(Some(result)) => self.iterator_value(&result),
+                            Ok(None) => {
+                                done = true;
+                                JsValue::Undefined
+                            }
+                            Err(e) => {
+                                done = true;
+                                error = Some(e);
+                                break;
+                            }
+                        }
+                    };
+
+                    let val = if item.is_undefined() {
+                        if let Some(default) = default_expr {
+                            match self.eval_expr(default, env) {
+                                Completion::Normal(v) => {
+                                    if let Expression::Identifier(name) = target {
+                                        self.set_function_name(&v, name);
+                                    }
+                                    v
+                                }
+                                Completion::Throw(e) => {
+                                    error = Some(e);
+                                    break;
+                                }
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            item
+                        }
+                    } else {
+                        item
+                    };
+
+                    if let Err(e) = self.put_value_to_target(target, val, env) {
+                        error = Some(e);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // IteratorClose: if iterator is not done, call return()
+        if !done {
+            if let Some(err) = error {
+                // Original error wins over close error
+                let _ = self.iterator_close_result(&iterator);
+                return Err(err);
+            }
+            // No prior error — close error propagates
+            return self.iterator_close_result(&iterator);
+        }
+
+        if let Some(err) = error {
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn destructure_object_assignment(
+        &mut self,
+        props: &[Property],
+        rval: &JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        // RequireObjectCoercible
+        match self.require_object_coercible(rval) {
+            Completion::Throw(e) => return Err(e),
+            _ => {}
+        }
+
+        // ToObject to wrap primitives
+        let obj_val = match self.to_object(rval) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => unreachable!(),
+        };
+
+        let mut excluded_keys: Vec<String> = Vec::new();
+
+        for prop in props {
+            // Handle rest: {...rest} = obj
+            if let Expression::Spread(inner) = &prop.value {
+                let rest_obj = self.create_object();
+                if let JsValue::Object(o) = &obj_val {
+                    if let Some(src) = self.get_object(o.id) {
+                        let keys: Vec<String> = src.borrow().property_order.clone();
+                        for key in &keys {
+                            if !excluded_keys.contains(key) {
+                                let desc = src.borrow().get_own_property(key).cloned();
+                                if let Some(ref d) = desc
+                                    && d.enumerable.unwrap_or(true)
+                                {
+                                    let v = match self.get_object_property(o.id, key, &obj_val) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Err(e),
+                                        _ => JsValue::Undefined,
+                                    };
+                                    rest_obj.borrow_mut().insert_value(key.clone(), v);
+                                }
+                            }
+                        }
+                    }
+                }
+                let rest_id = rest_obj.borrow().id.unwrap();
+                let rest_val = JsValue::Object(crate::types::JsObject { id: rest_id });
+                self.put_value_to_target(inner, rest_val, env)?;
+                continue;
+            }
+
+            match &prop.kind {
+                PropertyKind::Init => {
+                    let key = match &prop.key {
+                        PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
+                        PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                        PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
+                            Completion::Normal(v) => self.to_property_key(&v)?,
+                            Completion::Throw(e) => return Err(e),
+                            _ => String::new(),
+                        },
+                        PropertyKey::Private(_) => {
+                            return Err(self.create_type_error(
+                                "Private names are not valid in object patterns",
+                            ));
+                        }
+                    };
+                    excluded_keys.push(key.clone());
+
+                    // Get property via get_object_property (invokes getters/Proxy)
+                    let val = if let JsValue::Object(o) = &obj_val {
+                        match self.get_object_property(o.id, &key, &obj_val) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => JsValue::Undefined,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+
+                    // Extract target and default from value
+                    let (target, default_expr) = if let Expression::Assign(
+                        AssignOp::Assign,
+                        target,
+                        default,
+                    ) = &prop.value
+                    {
+                        (target.as_ref(), Some(default.as_ref()))
+                    } else {
+                        (&prop.value, None)
+                    };
+
+                    let val = if val.is_undefined() {
+                        if let Some(default) = default_expr {
+                            match self.eval_expr(default, env) {
+                                Completion::Normal(v) => {
+                                    if let Expression::Identifier(name) = target {
+                                        self.set_function_name(&v, name);
+                                    }
+                                    v
+                                }
+                                Completion::Throw(e) => return Err(e),
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            val
+                        }
+                    } else {
+                        val
+                    };
+
+                    self.put_value_to_target(target, val, env)?;
+                }
+                _ => continue,
+            }
+        }
+        Ok(())
     }
 
     fn eval_call(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {

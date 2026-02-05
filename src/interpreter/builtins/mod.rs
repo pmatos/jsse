@@ -4176,6 +4176,31 @@ impl Interpreter {
         _completion
     }
 
+    pub(crate) fn iterator_close_result(&mut self, iterator: &JsValue) -> Result<(), JsValue> {
+        if let JsValue::Object(io) = iterator {
+            let return_fn = self.get_object(io.id).and_then(|obj| {
+                let val = obj.borrow().get_property("return");
+                if matches!(val, JsValue::Object(_)) {
+                    Some(val)
+                } else {
+                    None
+                }
+            });
+            if let Some(return_fn) = return_fn {
+                match self.call_function(&return_fn, iterator, &[]) {
+                    Completion::Normal(inner_result) => {
+                        if !matches!(inner_result, JsValue::Object(_)) {
+                            return Err(self.create_type_error("Iterator result is not an object"));
+                        }
+                    }
+                    Completion::Throw(e) => return Err(e),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn get_iterator_direct(&mut self, obj: &JsValue) -> Result<(JsValue, JsValue), JsValue> {
         match obj {
             JsValue::Object(o) => {

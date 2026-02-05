@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 31,281 / 48,257 run (64.82%)
+**Current pass rate:** 31,419 / 48,257 run (65.11%)
 
 ---
 
@@ -110,6 +110,8 @@ These features block significant numbers of tests:
 39. ~~**GeneratorFunction constructor**~~ — ✅ Done (27 new passes, 64.71% → 64.78%). Implemented GeneratorFunction constructor (§27.3) with proper prototype chain: GeneratorFunction.prototype inherits from Function.prototype, links to Generator.prototype. Fixed `create_function()` to assign `generator_function_prototype` to generator functions. Fixed `eval_new()` to reject generators and async functions as constructors. Fixed Generator.prototype.return/throw to validate generator state. GeneratorFunction: 7/23 → 18/23 (78%), GeneratorPrototype: 41/61 → 49/61 (80%).
 
 40. ~~**AsyncFunction and AsyncGeneratorFunction constructors**~~ — ✅ Done (21 new passes, 64.78% → 64.82%). Implemented AsyncFunction (§27.7) and AsyncGeneratorFunction (§27.4) constructors. Added `async_function_prototype` field to Interpreter with Symbol.toStringTag. AsyncFunction.prototype inherits from Function.prototype. Fixed `create_function()` to detect async non-generator functions and assign correct prototype/class_name. Constructors are intrinsics (not exposed as globals) - accessed via `Object.getPrototypeOf(async function(){}).constructor`. AsyncFunction: 10/18 → 15/18 (83%), AsyncGeneratorFunction: 9/23 → 19/23 (83%).
+
+41. ~~**Rewrite assignment destructuring**~~ — ✅ Done (138 new passes, 64.82% → 65.11%). Rewrote array and object assignment destructuring to use iterator protocol (`get_iterator`/`iterator_step`/`iterator_value`) instead of direct `array_elements` access. Added `put_value_to_target` for recursive dispatch to any assignment target (identifiers, member expressions, nested patterns). Added `set_member_property` helper for member expression targets (dot, computed, private, Proxy set traps, setters). Added `iterator_close_result` for proper IteratorClose error propagation. Object destructuring now uses `get_object_property` for getter/Proxy trap invocation, supports rest (`{...r} = obj`). assignment/dstr: 120/368 (33%) → 252/368 (69%).
 
 ---
 
