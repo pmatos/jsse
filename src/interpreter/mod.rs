@@ -632,7 +632,7 @@ impl Interpreter {
         let prev_module_path = self.current_module_path.take();
         self.current_module_path = module_path.clone();
 
-        let module_env = Environment::new(Some(self.global_env.clone()));
+        let module_env = Environment::new_function_scope(Some(self.global_env.clone()));
         module_env.borrow_mut().strict = true;
 
         // Register entry-point module in registry to handle self-imports
@@ -906,7 +906,7 @@ impl Interpreter {
         })?;
 
         // Create module environment
-        let module_env = Environment::new(Some(self.global_env.clone()));
+        let module_env = Environment::new_function_scope(Some(self.global_env.clone()));
         module_env.borrow_mut().strict = true;
 
         // Register module early to handle circular imports

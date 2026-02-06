@@ -6,12 +6,13 @@ impl Interpreter {
             env.borrow_mut().strict = true;
         }
         // Hoist var and function declarations
-        let is_global = env.borrow().global_object.is_some();
+        let var_scope = Environment::find_var_scope(env);
+        let is_global = var_scope.borrow().global_object.is_some();
         for stmt in stmts {
             match stmt {
                 Statement::Variable(decl) if decl.kind == VarKind::Var => {
                     for d in &decl.declarations {
-                        self.hoist_pattern(&d.pattern, env, is_global);
+                        self.hoist_pattern(&d.pattern, &var_scope, is_global);
                     }
                 }
                 Statement::FunctionDeclaration(f) => {
@@ -45,9 +46,21 @@ impl Interpreter {
             match comp {
                 Completion::Normal(val) => result = Completion::Normal(val),
                 Completion::Empty => {} // keep previous result (UpdateEmpty semantics)
-                Completion::Break(label, _) => {
-                    // UpdateEmpty: break carries running completion value
-                    return Completion::Break(label, result.value_or(JsValue::Undefined));
+                Completion::Break(label, break_val) => {
+                    // UpdateEmpty: only replace if break's value is empty (None)
+                    let val = match break_val {
+                        None => Some(result.value_or(JsValue::Undefined)),
+                        some => some,
+                    };
+                    return Completion::Break(label, val);
+                }
+                Completion::Continue(label, cont_val) => {
+                    // UpdateEmpty: only replace if continue's value is empty (None)
+                    let val = match cont_val {
+                        None => Some(result.value_or(JsValue::Undefined)),
+                        some => some,
+                    };
+                    return Completion::Continue(label, val);
                 }
                 other => return other,
             }
@@ -145,8 +158,8 @@ impl Interpreter {
                 };
                 Completion::Return(val)
             }
-            Statement::Break(label) => Completion::Break(label.clone(), JsValue::Undefined),
-            Statement::Continue(label) => Completion::Continue(label.clone()),
+            Statement::Break(label) => Completion::Break(label.clone(), None),
+            Statement::Continue(label) => Completion::Continue(label.clone(), None),
             Statement::Throw(expr) => {
                 let val = match self.eval_expr(expr, env) {
                     Completion::Normal(v) => v,
@@ -160,10 +173,10 @@ impl Interpreter {
                 let comp = self.exec_statement(stmt, env);
                 match &comp {
                     Completion::Break(Some(l), val) if l == label => {
-                        Completion::Normal(val.clone())
+                        Completion::Normal(val.clone().unwrap_or(JsValue::Undefined))
                     }
-                    Completion::Continue(Some(l)) if l == label => {
-                        Completion::Normal(JsValue::Undefined)
+                    Completion::Continue(Some(l), val) if l == label => {
+                        Completion::Normal(val.clone().unwrap_or(JsValue::Undefined))
                     }
                     _ => comp,
                 }
@@ -197,6 +210,7 @@ impl Interpreter {
                             bindings: HashMap::new(),
                             parent: Some(env.clone()),
                             strict: env.borrow().strict,
+                            is_function_scope: false,
                             with_object: Some(WithObject {
                                 object: obj_data,
                                 unscopables: unscopables_data,
@@ -448,8 +462,13 @@ impl Interpreter {
             match self.exec_statement(&w.body, env) {
                 Completion::Normal(val) => { v = val; }
                 Completion::Empty => {}
-                Completion::Continue(None) => {}
-                Completion::Break(None, _) => return Completion::Normal(v),
+                Completion::Continue(None, cont_val) => {
+                    if let Some(val) = cont_val { v = val; }
+                }
+                Completion::Break(None, break_val) => {
+                    if let Some(val) = break_val { v = val; }
+                    return Completion::Normal(v);
+                }
                 other => return other,
             }
         }
@@ -462,8 +481,13 @@ impl Interpreter {
             match self.exec_statement(&dw.body, env) {
                 Completion::Normal(val) => { v = val; }
                 Completion::Empty => {}
-                Completion::Continue(None) => {}
-                Completion::Break(None, _) => return Completion::Normal(v),
+                Completion::Continue(None, cont_val) => {
+                    if let Some(val) = cont_val { v = val; }
+                }
+                Completion::Break(None, break_val) => {
+                    if let Some(val) = break_val { v = val; }
+                    return Completion::Normal(v);
+                }
                 other => return other,
             }
             let test = match self.eval_expr(&dw.test, env) {
@@ -515,8 +539,13 @@ impl Interpreter {
             match self.exec_statement(&f.body, &for_env) {
                 Completion::Normal(val) => { v = val; }
                 Completion::Empty => {}
-                Completion::Continue(None) => {}
-                Completion::Break(None, _) => return Completion::Normal(v),
+                Completion::Continue(None, cont_val) => {
+                    if let Some(val) = cont_val { v = val; }
+                }
+                Completion::Break(None, break_val) => {
+                    if let Some(val) = break_val { v = val; }
+                    return Completion::Normal(v);
+                }
                 other => return other,
             }
             if let Some(update) = &f.update {
@@ -595,8 +624,11 @@ impl Interpreter {
                 match result {
                     Completion::Normal(val) => { v = val; }
                     Completion::Empty => {}
-                    Completion::Continue(None) => {}
-                    Completion::Break(None, _) => {
+                    Completion::Continue(None, cont_val) => {
+                        if let Some(val) = cont_val { v = val; }
+                    }
+                    Completion::Break(None, break_val) => {
+                        if let Some(val) = break_val { v = val; }
                         return Completion::Normal(v);
                     }
                     other => return other,
@@ -712,8 +744,11 @@ impl Interpreter {
             match body_result {
                 Completion::Normal(val) => { v = val; }
                 Completion::Empty => {}
-                Completion::Continue(None) => {}
-                Completion::Break(None, _) => {
+                Completion::Continue(None, cont_val) => {
+                    if let Some(val) = cont_val { v = val; }
+                }
+                Completion::Break(None, break_val) => {
+                    if let Some(val) = break_val { v = val; }
                     self.iterator_close(&iterator, JsValue::Undefined);
                     return Completion::Normal(v);
                 }
@@ -729,9 +764,9 @@ impl Interpreter {
                     self.iterator_close(&iterator, JsValue::Undefined);
                     return Completion::Break(Some(label), val);
                 }
-                Completion::Continue(Some(label)) => {
+                Completion::Continue(Some(label), val) => {
                     self.iterator_close(&iterator, JsValue::Undefined);
-                    return Completion::Continue(Some(label));
+                    return Completion::Continue(Some(label), val);
                 }
                 other => return other,
             }
@@ -850,8 +885,8 @@ impl Interpreter {
                         *v = val;
                     }
                     Completion::Empty => {}
-                    Completion::Break(None, _) => {
-                        return Some(Completion::Normal(v.clone()))
+                    Completion::Break(None, break_val) => {
+                        return Some(Completion::Normal(break_val.unwrap_or(JsValue::Undefined)))
                     }
                     other => return Some(other),
                 }

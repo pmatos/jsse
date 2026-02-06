@@ -169,14 +169,14 @@ impl Interpreter {
                         }
                     };
                     let len = buf_len as f64;
-                    let start_arg = args.first().map(to_number).unwrap_or(0.0);
+                    let start_arg = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
                     let start = if start_arg < 0.0 {
                         ((len + start_arg) as isize).max(0) as usize
                     } else {
                         (start_arg as usize).min(buf_len)
                     };
                     let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        to_number(&args[1])
+                        interp.to_number_coerce(&args[1])
                     } else {
                         len
                     };
@@ -212,7 +212,7 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 let len_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let len = to_number(&len_val);
+                let len = interp.to_number_coerce(&len_val);
                 if len.is_nan() || len < 0.0 || len.fract() != 0.0 || len > 2147483647.0 {
                     return Completion::Throw(
                         interp.create_type_error("Invalid array buffer length"),
@@ -410,7 +410,7 @@ impl Interpreter {
                             );
                         }
                         let idx_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let idx = to_number(&idx_val) as i64;
+                        let idx = interp.to_number_coerce(&idx_val) as i64;
                         let len = ta.array_length as i64;
                         let actual = if idx < 0 { len + idx } else { idx };
                         if actual < 0 || actual >= len {
@@ -447,7 +447,7 @@ impl Interpreter {
                     };
                     let source = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let offset_f = if args.len() > 1 {
-                        to_integer(to_number(&args[1]))
+                        to_integer(interp.to_number_coerce(&args[1]))
                     } else {
                         0.0
                     };
@@ -483,7 +483,7 @@ impl Interpreter {
                         // Array-like source
                         let len_val = src_ref.get_property("length");
                         drop(src_ref);
-                        let src_len = to_number(&len_val) as usize;
+                        let src_len = interp.to_number_coerce(&len_val) as usize;
                         if offset + src_len > ta.array_length {
                             return Completion::Throw(
                                 interp.create_range_error("offset is out of bounds"),
@@ -559,14 +559,14 @@ impl Interpreter {
                         }
                     };
                     let len = ta.array_length as f64;
-                    let begin_arg = to_integer(args.first().map(to_number).unwrap_or(0.0));
+                    let begin_arg = to_integer(args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(0.0));
                     let begin = if begin_arg < 0.0 {
                         ((len + begin_arg) as isize).max(0) as usize
                     } else {
                         (begin_arg as usize).min(ta.array_length)
                     };
                     let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        to_integer(to_number(&args[1]))
+                        to_integer(interp.to_number_coerce(&args[1]))
                     } else {
                         len
                     };
@@ -620,14 +620,14 @@ impl Interpreter {
                         }
                     };
                     let len = ta.array_length as f64;
-                    let begin_arg = to_integer(args.first().map(to_number).unwrap_or(0.0));
+                    let begin_arg = to_integer(args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(0.0));
                     let begin = if begin_arg < 0.0 {
                         ((len + begin_arg) as isize).max(0) as usize
                     } else {
                         (begin_arg as usize).min(ta.array_length)
                     };
                     let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        to_integer(to_number(&args[1]))
+                        to_integer(interp.to_number_coerce(&args[1]))
                     } else {
                         len
                     };
@@ -707,16 +707,16 @@ impl Interpreter {
                     };
                     let len = ta.array_length as i64;
                     let target = {
-                        let v = to_integer(to_number(args.first().unwrap_or(&JsValue::Undefined))) as i64;
+                        let v = to_integer(interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined))) as i64;
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
                     let start = {
-                        let v = to_integer(to_number(args.get(1).unwrap_or(&JsValue::Undefined))) as i64;
+                        let v = to_integer(interp.to_number_coerce(args.get(1).unwrap_or(&JsValue::Undefined))) as i64;
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
                     let end = {
                         let v = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            to_integer(to_number(&args[2])) as i64
+                            to_integer(interp.to_number_coerce(&args[2])) as i64
                         } else {
                             len
                         };
@@ -765,7 +765,7 @@ impl Interpreter {
                     let len = ta.array_length as f64;
                     let start = {
                         let v = to_integer(if args.len() > 1 {
-                            to_number(&args[1])
+                            interp.to_number_coerce(&args[1])
                         } else {
                             0.0
                         });
@@ -777,7 +777,7 @@ impl Interpreter {
                     };
                     let end = {
                         let v = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            to_integer(to_number(&args[2]))
+                            to_integer(interp.to_number_coerce(&args[2]))
                         } else {
                             len
                         };
@@ -822,7 +822,7 @@ impl Interpreter {
                     };
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(to_number(&args[1])) as i64
+                        to_integer(interp.to_number_coerce(&args[1])) as i64
                     } else {
                         0
                     };
@@ -869,7 +869,7 @@ impl Interpreter {
                     };
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(to_number(&args[1])) as i64
+                        to_integer(interp.to_number_coerce(&args[1])) as i64
                     } else {
                         ta.array_length as i64 - 1
                     };
@@ -918,7 +918,7 @@ impl Interpreter {
                     };
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(to_number(&args[1])) as i64
+                        to_integer(interp.to_number_coerce(&args[1])) as i64
                     } else {
                         0
                     };
@@ -1040,7 +1040,7 @@ impl Interpreter {
                                 &[a.clone(), b.clone()],
                             ) {
                                 Completion::Normal(v) => {
-                                    let n = to_number(&v);
+                                    let n = interp.to_number_coerce(&v);
                                     if n < 0.0 {
                                         return std::cmp::Ordering::Less;
                                     }
@@ -1057,8 +1057,8 @@ impl Interpreter {
                             }
                         }
                         // Default numeric sort
-                        let na = to_number(a);
-                        let nb = to_number(b);
+                        let na = interp.to_number_coerce(a);
+                        let nb = interp.to_number_coerce(b);
                         na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
                     });
                     if let Some(e) = error {
@@ -1337,7 +1337,7 @@ impl Interpreter {
                                 &[a.clone(), b.clone()],
                             ) {
                                 Completion::Normal(v) => {
-                                    let n = to_number(&v);
+                                    let n = interp.to_number_coerce(&v);
                                     if n < 0.0 {
                                         return std::cmp::Ordering::Less;
                                     }
@@ -1353,8 +1353,8 @@ impl Interpreter {
                                 _ => return std::cmp::Ordering::Equal,
                             }
                         }
-                        let na = to_number(a);
-                        let nb = to_number(b);
+                        let na = interp.to_number_coerce(a);
+                        let nb = interp.to_number_coerce(b);
                         na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
                     });
                     if let Some(e) = error {
@@ -1461,7 +1461,7 @@ impl Interpreter {
                             Err(interp
                                 .create_type_error("Cannot convert a BigInt value to a number"))
                         }
-                        _ => Ok(to_number(val)),
+                        _ => Ok(interp.to_number_coerce(val)),
                     }
                 }
 
@@ -2401,10 +2401,10 @@ impl Interpreter {
                                     let buf_len = buf_rc.borrow().len();
                                     drop(src_ref);
                                     let byte_offset = if args.len() > 1 {
-                                        to_number(&args[1]) as usize
+                                        interp.to_number_coerce(&args[1]) as usize
                                     } else { 0 };
                                     let array_length = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                                        to_number(&args[2]) as usize
+                                        interp.to_number_coerce(&args[2]) as usize
                                     } else {
                                         if (buf_len - byte_offset) % bpe != 0 {
                                             return Completion::Throw(interp.create_type_error(
@@ -2504,7 +2504,7 @@ impl Interpreter {
                         }
                         _ => {
                             // Treat as length
-                            let len = to_number(first) as usize;
+                            let len = interp.to_number_coerce(first) as usize;
                             interp.create_typed_array_from_length(kind, len, &type_proto_clone)
                         }
                     }
@@ -2811,7 +2811,7 @@ impl Interpreter {
                 Completion::Normal(v) => v,
                 _ => return Ok(Vec::new()),
             };
-            let len = to_number(&len_val) as usize;
+            let len = self.to_number_coerce(&len_val) as usize;
             let mut values = Vec::new();
             for i in 0..len {
                 let v = match self.get_object_property(o.id, &i.to_string(), val) {
@@ -2930,7 +2930,7 @@ impl Interpreter {
                                 }
                             };
                             let byte_offset =
-                                to_number(args.first().unwrap_or(&JsValue::Undefined)) as usize;
+                                interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined)) as usize;
                             let little_endian = if args.len() > 1 {
                                 to_boolean(&args[1])
                             } else {
@@ -3064,7 +3064,7 @@ impl Interpreter {
                                 }
                             };
                             let byte_offset =
-                                to_number(args.first().unwrap_or(&JsValue::Undefined)) as usize;
+                                interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined)) as usize;
                             let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                             let little_endian = if args.len() > 2 {
                                 to_boolean(&args[2])
@@ -3185,12 +3185,12 @@ impl Interpreter {
                     };
                     let buf_len = buf_rc.borrow().len();
                     let byte_offset = if args.len() > 1 {
-                        to_number(&args[1]) as usize
+                        interp.to_number_coerce(&args[1]) as usize
                     } else {
                         0
                     };
                     let byte_length = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                        to_number(&args[2]) as usize
+                        interp.to_number_coerce(&args[2]) as usize
                     } else {
                         buf_len - byte_offset
                     };

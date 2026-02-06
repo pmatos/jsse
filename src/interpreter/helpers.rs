@@ -132,7 +132,7 @@ pub(crate) fn get_set_record(
             _ => borrowed.get_property("size"),
         }
     };
-    let size = to_number(&size_val);
+    let size = interp.to_number_coerce(&size_val);
     if size.is_nan() {
         return Err(interp.create_type_error("Set-like size is not a number"));
     }

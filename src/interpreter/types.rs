@@ -11,8 +11,8 @@ pub enum Completion {
     Normal(JsValue),
     Return(JsValue),
     Throw(JsValue),
-    Break(Option<String>, JsValue),
-    Continue(Option<String>),
+    Break(Option<String>, Option<JsValue>),
+    Continue(Option<String>, Option<JsValue>),
     Yield(JsValue),
     Empty,
 }
@@ -24,6 +24,8 @@ impl Completion {
     pub(crate) fn update_empty(self, val: JsValue) -> Completion {
         match self {
             Completion::Empty => Completion::Normal(val),
+            Completion::Break(label, None) => Completion::Break(label, Some(val)),
+            Completion::Continue(label, None) => Completion::Continue(label, Some(val)),
             other => other,
         }
     }
@@ -81,6 +83,7 @@ pub struct Environment {
     pub(crate) bindings: HashMap<String, Binding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
+    pub(crate) is_function_scope: bool,
     pub(crate) with_object: Option<WithObject>,
     pub(crate) dispose_stack: Option<Vec<DisposableResource>>,
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
@@ -135,10 +138,36 @@ impl Environment {
             bindings: HashMap::new(),
             parent,
             strict,
+            is_function_scope: false,
             with_object: None,
             dispose_stack: None,
             global_object: None,
         }))
+    }
+
+    pub fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
+        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
+        Rc::new(RefCell::new(Environment {
+            bindings: HashMap::new(),
+            parent,
+            strict,
+            is_function_scope: true,
+            with_object: None,
+            dispose_stack: None,
+            global_object: None,
+        }))
+    }
+
+    /// Find the nearest function scope (for var hoisting).
+    /// Returns self if this is a function scope, otherwise traverses up.
+    pub fn find_var_scope(env: &EnvRef) -> EnvRef {
+        if env.borrow().is_function_scope || env.borrow().global_object.is_some() {
+            return env.clone();
+        }
+        if let Some(ref parent) = env.borrow().parent {
+            return Self::find_var_scope(parent);
+        }
+        env.clone()
     }
 
     pub fn declare(&mut self, name: &str, kind: BindingKind) {

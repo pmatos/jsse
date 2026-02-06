@@ -936,7 +936,7 @@ impl Interpreter {
                 let lim = if matches!(limit, JsValue::Undefined) {
                     u32::MAX
                 } else {
-                    to_number(&limit) as u32
+                    interp.to_number_coerce(&limit) as u32
                 };
                 let (source, flags, _obj_id) = match extract_source_flags(interp, this_val) {
                     Some(v) => v,

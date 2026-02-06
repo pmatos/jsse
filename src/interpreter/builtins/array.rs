@@ -16,7 +16,7 @@ fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, 
     } else {
         JsValue::Undefined
     };
-    let n = to_number(&len_val);
+    let n = interp.to_number_coerce(&len_val);
     let len = to_integer_or_infinity(n);
     if len < 0.0 {
         return Ok(0);
@@ -355,7 +355,7 @@ impl Interpreter {
                 }
                 let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let n = if args.len() >= 2 {
-                    to_integer_or_infinity(to_number(&args[1]))
+                    to_integer_or_infinity(interp.to_number_coerce(&args[1]))
                 } else {
                     0.0
                 };
@@ -405,7 +405,7 @@ impl Interpreter {
                 }
                 let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let n = if args.len() >= 2 {
-                    to_integer_or_infinity(to_number(&args[1]))
+                    to_integer_or_infinity(interp.to_number_coerce(&args[1]))
                 } else {
                     len as f64 - 1.0
                 };
@@ -455,7 +455,7 @@ impl Interpreter {
                 }
                 let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let n = if args.len() >= 2 {
-                    to_integer_or_infinity(to_number(&args[1]))
+                    to_integer_or_infinity(interp.to_number_coerce(&args[1]))
                 } else {
                     0.0
                 };
@@ -700,7 +700,7 @@ impl Interpreter {
                 } as i64;
                 let relative_start = args
                     .first()
-                    .map(|v| to_integer_or_infinity(to_number(v)))
+                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
                     .unwrap_or(0.0);
                 let k = if relative_start < 0.0 {
                     (len as f64 + relative_start).max(0.0) as usize
@@ -711,7 +711,7 @@ impl Interpreter {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
                     } else {
-                        to_integer_or_infinity(to_number(v))
+                        to_integer_or_infinity(interp.to_number_coerce(v))
                     }
                 } else {
                     len as f64
@@ -1412,7 +1412,7 @@ impl Interpreter {
                 };
                 let relative_start = args
                     .first()
-                    .map(|v| to_integer_or_infinity(to_number(v)))
+                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
                     .unwrap_or(0.0);
                 let actual_start = if relative_start < 0.0 {
                     (len as f64 + relative_start).max(0.0) as usize
@@ -1425,7 +1425,7 @@ impl Interpreter {
                 } else if args.len() == 1 {
                     (len - actual_start as i64) as usize
                 } else {
-                    let dc = to_integer_or_infinity(to_number(&args[1]));
+                    let dc = to_integer_or_infinity(interp.to_number_coerce(&args[1]));
                     dc.max(0.0).min((len - actual_start as i64) as f64) as usize
                 };
                 let a = match array_species_create(interp, &o, actual_delete_count) {
@@ -1505,7 +1505,7 @@ impl Interpreter {
                 };
                 let relative_start = args
                     .first()
-                    .map(|v| to_integer_or_infinity(to_number(v)))
+                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
                     .unwrap_or(0.0);
                 let actual_start = if relative_start < 0.0 {
                     (len as f64 + relative_start).max(0.0) as usize
@@ -1517,7 +1517,7 @@ impl Interpreter {
                 } else if args.len() == 1 {
                     (len - actual_start as i64) as usize
                 } else {
-                    let dc = to_integer_or_infinity(to_number(&args[1]));
+                    let dc = to_integer_or_infinity(interp.to_number_coerce(&args[1]));
                     dc.max(0.0).min((len - actual_start as i64) as f64) as usize
                 };
                 let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
@@ -1558,7 +1558,7 @@ impl Interpreter {
                 };
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let relative_start = if let Some(v) = args.get(1) {
-                    to_integer_or_infinity(to_number(v))
+                    to_integer_or_infinity(interp.to_number_coerce(v))
                 } else {
                     0.0
                 };
@@ -1571,7 +1571,7 @@ impl Interpreter {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
                     } else {
-                        to_integer_or_infinity(to_number(v))
+                        to_integer_or_infinity(interp.to_number_coerce(v))
                     }
                 } else {
                     len as f64
@@ -1641,7 +1641,7 @@ impl Interpreter {
                         let result =
                             interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
                         if let Completion::Normal(v) = result {
-                            let n = to_number(&v);
+                            let n = interp.to_number_coerce(&v);
                             if n < 0.0 {
                                 return std::cmp::Ordering::Less;
                             }
@@ -1716,7 +1716,7 @@ impl Interpreter {
                         let result =
                             interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
                         if let Completion::Normal(v) = result {
-                            let n = to_number(&v);
+                            let n = interp.to_number_coerce(&v);
                             if n < 0.0 {
                                 return std::cmp::Ordering::Less;
                             }
@@ -1754,7 +1754,7 @@ impl Interpreter {
                     if matches!(d, JsValue::Undefined) {
                         1.0
                     } else {
-                        to_integer_or_infinity(to_number(d))
+                        to_integer_or_infinity(interp.to_number_coerce(d))
                     }
                 } else {
                     1.0
@@ -1894,7 +1894,7 @@ impl Interpreter {
                 };
                 let relative_target = args
                     .first()
-                    .map(|v| to_integer_or_infinity(to_number(v)))
+                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
                     .unwrap_or(0.0);
                 let to_val = if relative_target < 0.0 {
                     (len as f64 + relative_target).max(0.0) as i64
@@ -1903,7 +1903,7 @@ impl Interpreter {
                 };
                 let relative_start = args
                     .get(1)
-                    .map(|v| to_integer_or_infinity(to_number(v)))
+                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
                     .unwrap_or(0.0);
                 let from = if relative_start < 0.0 {
                     (len as f64 + relative_start).max(0.0) as i64
@@ -1914,7 +1914,7 @@ impl Interpreter {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
                     } else {
-                        to_integer_or_infinity(to_number(v))
+                        to_integer_or_infinity(interp.to_number_coerce(v))
                     }
                 } else {
                     len as f64
@@ -1972,7 +1972,7 @@ impl Interpreter {
                 };
                 let relative_index = args
                     .first()
-                    .map(|v| to_integer_or_infinity(to_number(v)) as i64)
+                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)) as i64)
                     .unwrap_or(0);
                 let k = if relative_index >= 0 {
                     relative_index
@@ -2008,7 +2008,7 @@ impl Interpreter {
                 }
                 let relative_index = args
                     .first()
-                    .map(|v| to_integer_or_infinity(to_number(v)) as i64)
+                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)) as i64)
                     .unwrap_or(0);
                 let actual = if relative_index >= 0 {
                     relative_index
@@ -2159,7 +2159,7 @@ impl Interpreter {
                                     other => return other,
                                 };
                                 let len =
-                                    to_integer_or_infinity(to_number(&len_val)).max(0.0) as usize;
+                                    to_integer_or_infinity(interp.to_number_coerce(&len_val)).max(0.0) as usize;
                                 for i in 0..len {
                                     let v = match interp.get_object_property(o.id, &i.to_string(), &source) {
                                         Completion::Normal(v) => v,

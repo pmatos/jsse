@@ -891,7 +891,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let limit = to_number(&limit_val);
+                let limit = interp.to_number_coerce(&limit_val);
                 if limit.is_nan() || limit < 0.0 {
                     interp.iterator_close(this, JsValue::Undefined);
                     let err = interp
@@ -991,7 +991,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let limit = to_number(&limit_val);
+                let limit = interp.to_number_coerce(&limit_val);
                 if limit.is_nan() || limit < 0.0 {
                     interp.iterator_close(this, JsValue::Undefined);
                     let err = interp

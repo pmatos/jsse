@@ -4919,7 +4919,7 @@ impl Interpreter {
                             }
                             gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
                             // Create persistent function environment
-                            let func_env = Environment::new(Some(closure.clone()));
+                            let func_env = Environment::new_function_scope(Some(closure.clone()));
                             func_env.borrow_mut().strict = is_strict;
                             for (i, param) in params.iter().enumerate() {
                                 if let Pattern::Rest(inner) = param {
@@ -4997,7 +4997,7 @@ impl Interpreter {
                             }
                             gen_obj.borrow_mut().class_name = "Generator".to_string();
                             // Create persistent function environment
-                            let func_env = Environment::new(Some(closure.clone()));
+                            let func_env = Environment::new_function_scope(Some(closure.clone()));
                             func_env.borrow_mut().strict = is_strict;
                             for (i, param) in params.iter().enumerate() {
                                 if let Pattern::Rest(inner) = param {
@@ -5062,7 +5062,7 @@ impl Interpreter {
                             }));
                         }
                         let closure_strict = closure.borrow().strict;
-                        let func_env = Environment::new(Some(closure));
+                        let func_env = Environment::new_function_scope(Some(closure));
                         // Bind parameters
                         for (i, param) in params.iter().enumerate() {
                             if let Pattern::Rest(inner) = param {
@@ -6668,7 +6668,7 @@ impl Interpreter {
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
 
         let closure_strict = closure.borrow().strict;
-        let func_env = Environment::new(Some(closure));
+        let func_env = Environment::new_function_scope(Some(closure));
         for (i, param) in params.iter().enumerate() {
             if let Pattern::Rest(inner) = param {
                 let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();

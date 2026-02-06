@@ -870,7 +870,7 @@ impl Interpreter {
                     let s = b.value.to_string();
                     s.parse::<f64>().unwrap_or(f64::INFINITY)
                 } else {
-                    to_number(&val)
+                    interp.to_number_coerce(&val)
                 };
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
@@ -996,9 +996,19 @@ impl Interpreter {
         self.register_global_fn(
             "parseInt",
             BindingKind::Var,
-            JsFunction::native("parseInt".to_string(), 2, |_interp, _this, args| {
-                let s = args.first().map(to_js_string).unwrap_or_default();
-                let radix = args.get(1).map(|v| to_number(v) as i32).unwrap_or(10);
+            JsFunction::native("parseInt".to_string(), 2, |interp, _this, args| {
+                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&input) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let radix_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let radix_num = interp.to_number_coerce(&radix_val);
+                let mut radix = if radix_num.is_nan() || radix_num == 0.0 {
+                    0i32
+                } else {
+                    radix_num as i32
+                };
                 let s = s.trim();
                 let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
                     (true, rest)
@@ -1007,15 +1017,16 @@ impl Interpreter {
                 } else {
                     (false, s)
                 };
-                let radix = if radix == 0 {
+                if radix == 0 {
                     if s.starts_with("0x") || s.starts_with("0X") {
-                        16
+                        radix = 16;
                     } else {
-                        10
+                        radix = 10;
                     }
-                } else {
-                    radix
-                };
+                }
+                if radix < 2 || radix > 36 {
+                    return Completion::Normal(JsValue::Number(f64::NAN));
+                }
                 let s = if radix == 16 {
                     s.strip_prefix("0x")
                         .or_else(|| s.strip_prefix("0X"))
@@ -1023,23 +1034,101 @@ impl Interpreter {
                 } else {
                     s
                 };
-                match i64::from_str_radix(s, radix as u32) {
-                    Ok(n) => {
-                        let n = if negative { -n } else { n };
-                        Completion::Normal(JsValue::Number(n as f64))
+                // Parse digits character by character (partial parsing)
+                let mut result: f64 = 0.0;
+                let mut found_digit = false;
+                for ch in s.chars() {
+                    let digit = match ch {
+                        '0'..='9' => ch as i32 - '0' as i32,
+                        'a'..='z' => ch as i32 - 'a' as i32 + 10,
+                        'A'..='Z' => ch as i32 - 'A' as i32 + 10,
+                        _ => break,
+                    };
+                    if digit >= radix {
+                        break;
                     }
-                    Err(_) => Completion::Normal(JsValue::Number(f64::NAN)),
+                    found_digit = true;
+                    result = result * (radix as f64) + (digit as f64);
                 }
+                if !found_digit {
+                    return Completion::Normal(JsValue::Number(f64::NAN));
+                }
+                if negative {
+                    result = -result;
+                }
+                Completion::Normal(JsValue::Number(result))
             }),
         );
 
         self.register_global_fn(
             "parseFloat",
             BindingKind::Var,
-            JsFunction::native("parseFloat".to_string(), 1, |_interp, _this, args| {
-                let s = args.first().map(to_js_string).unwrap_or_default();
+            JsFunction::native("parseFloat".to_string(), 1, |interp, _this, args| {
+                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&input) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let s = s.trim();
-                match s.parse::<f64>() {
+                if s.is_empty() {
+                    return Completion::Normal(JsValue::Number(f64::NAN));
+                }
+                // Handle Infinity/-Infinity
+                if let Some(rest) = s.strip_prefix("Infinity") {
+                    if rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.') {
+                        return Completion::Normal(JsValue::Number(f64::INFINITY));
+                    }
+                }
+                if let Some(rest) = s.strip_prefix("+Infinity") {
+                    if rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.') {
+                        return Completion::Normal(JsValue::Number(f64::INFINITY));
+                    }
+                }
+                if let Some(rest) = s.strip_prefix("-Infinity") {
+                    if rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.') {
+                        return Completion::Normal(JsValue::Number(f64::NEG_INFINITY));
+                    }
+                }
+                // Find longest valid float prefix
+                let mut end = 0;
+                let mut has_dot = false;
+                let mut has_e = false;
+                let bytes = s.as_bytes();
+                if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+                    end += 1;
+                }
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end < bytes.len() && bytes[end] == b'.' {
+                    has_dot = true;
+                    end += 1;
+                    while end < bytes.len() && bytes[end].is_ascii_digit() {
+                        end += 1;
+                    }
+                }
+                if end < bytes.len() && (bytes[end] == b'e' || bytes[end] == b'E') {
+                    let saved = end;
+                    has_e = true;
+                    end += 1;
+                    if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+                        end += 1;
+                    }
+                    if end < bytes.len() && bytes[end].is_ascii_digit() {
+                        while end < bytes.len() && bytes[end].is_ascii_digit() {
+                            end += 1;
+                        }
+                    } else {
+                        end = saved;
+                        has_e = false;
+                    }
+                }
+                let _ = (has_dot, has_e);
+                let prefix = &s[..end];
+                if prefix.is_empty() || prefix == "+" || prefix == "-" {
+                    return Completion::Normal(JsValue::Number(f64::NAN));
+                }
+                match prefix.parse::<f64>() {
                     Ok(n) => Completion::Normal(JsValue::Number(n)),
                     Err(_) => Completion::Normal(JsValue::Number(f64::NAN)),
                 }
@@ -1067,9 +1156,9 @@ impl Interpreter {
         self.register_global_fn(
             "isNaN",
             BindingKind::Var,
-            JsFunction::native("isNaN".to_string(), 1, |_interp, _this, args| {
+            JsFunction::native("isNaN".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let n = to_number(&val);
+                let n = interp.to_number_coerce(&val);
                 Completion::Normal(JsValue::Boolean(n.is_nan()))
             }),
         );
@@ -1077,9 +1166,9 @@ impl Interpreter {
         self.register_global_fn(
             "isFinite",
             BindingKind::Var,
-            JsFunction::native("isFinite".to_string(), 1, |_interp, _this, args| {
+            JsFunction::native("isFinite".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let n = to_number(&val);
+                let n = interp.to_number_coerce(&val);
                 Completion::Normal(JsValue::Boolean(n.is_finite()))
             }),
         );
@@ -1565,7 +1654,7 @@ impl Interpreter {
                     matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
                 });
                 let env = if is_strict {
-                    Environment::new(Some(interp.global_env.clone()))
+                    Environment::new_function_scope(Some(interp.global_env.clone()))
                 } else {
                     interp.global_env.clone()
                 };

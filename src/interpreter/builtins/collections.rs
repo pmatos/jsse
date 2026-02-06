@@ -656,7 +656,7 @@ impl Interpreter {
                                         drop(borrowed);
                                         if let Some(arr) = interp.get_object(arr_id) {
                                             let len_val = arr.borrow().get_property("length");
-                                            let len = to_number(&len_val) as usize;
+                                            let len = interp.to_number_coerce(&len_val) as usize;
                                             arr.borrow_mut().insert_builtin(len.to_string(), value);
                                             arr.borrow_mut().insert_builtin(
                                                 "length".to_string(),
