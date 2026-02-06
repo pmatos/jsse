@@ -8,21 +8,20 @@ fn to_object_val(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, Co
 }
 
 fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, Completion> {
-    let len_val = obj_get_simple(interp, o, "length");
+    let len_val = if let JsValue::Object(obj_ref) = o {
+        match interp.get_object_property(obj_ref.id, "length", o) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        }
+    } else {
+        JsValue::Undefined
+    };
     let n = to_number(&len_val);
     let len = to_integer_or_infinity(n);
     if len < 0.0 {
         return Ok(0);
     }
     Ok(len.min(9007199254740991.0) as usize)
-}
-
-fn obj_get_simple(interp: &Interpreter, o: &JsValue, key: &str) -> JsValue {
-    if let Some(obj) = get_obj(interp, o) {
-        obj.borrow().get_property(key)
-    } else {
-        JsValue::Undefined
-    }
 }
 
 fn get_obj(interp: &Interpreter, o: &JsValue) -> Option<Rc<RefCell<JsObjectData>>> {
@@ -33,14 +32,14 @@ fn get_obj(interp: &Interpreter, o: &JsValue) -> Option<Rc<RefCell<JsObjectData>
     }
 }
 
-fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> JsValue {
+fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<JsValue, Completion> {
     if let JsValue::Object(obj_ref) = o {
         match interp.get_object_property(obj_ref.id, key, o) {
-            Completion::Normal(v) => v,
-            _ => JsValue::Undefined,
+            Completion::Normal(v) => Ok(v),
+            other => Err(other),
         }
     } else {
-        JsValue::Undefined
+        Ok(JsValue::Undefined)
     }
 }
 
@@ -176,7 +175,7 @@ fn array_species_create(interp: &mut Interpreter, original_array: &JsValue, leng
     };
     // If C is undefined, create a default array
     if matches!(c, JsValue::Undefined) {
-        let mut arr = interp.create_array(Vec::new());
+        let arr = interp.create_array(Vec::new());
         set_length(interp, &arr, length);
         return Ok(arr);
     }
@@ -242,7 +241,10 @@ impl Interpreter {
                     return Completion::Normal(JsValue::Undefined);
                 }
                 let idx = (len - 1).to_string();
-                let val = obj_get(interp, &o, &idx);
+                let val = match obj_get(interp, &o, &idx) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 obj_delete(interp, &o, &idx);
                 set_length(interp, &o, len - 1);
                 Completion::Normal(val)
@@ -267,12 +269,18 @@ impl Interpreter {
                     set_length(interp, &o, 0);
                     return Completion::Normal(JsValue::Undefined);
                 }
-                let first = obj_get(interp, &o, "0");
+                let first = match obj_get(interp, &o, "0") {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 for k in 1..len {
                     let from = k.to_string();
                     let to = (k - 1).to_string();
                     if obj_has(interp, &o, &from) {
-                        let val = obj_get(interp, &o, &from);
+                        let val = match obj_get(interp, &o, &from) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         obj_set(interp, &o, &to, val);
                     } else {
                         obj_delete(interp, &o, &to);
@@ -307,7 +315,10 @@ impl Interpreter {
                         let from = k.to_string();
                         let to = (k + arg_count).to_string();
                         if obj_has(interp, &o, &from) {
-                            let val = obj_get(interp, &o, &from);
+                            let val = match obj_get(interp, &o, &from) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
                             obj_set(interp, &o, &to, val);
                         } else {
                             obj_delete(interp, &o, &to);
@@ -360,7 +371,10 @@ impl Interpreter {
                 for i in k..len {
                     let pk = i.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let elem = obj_get(interp, &o, &pk);
+                        let elem = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         if strict_equality(&elem, &search) {
                             return Completion::Normal(JsValue::Number(i as f64));
                         }
@@ -407,7 +421,10 @@ impl Interpreter {
                 for i in (0..=k).rev() {
                     let pk = i.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let elem = obj_get(interp, &o, &pk);
+                        let elem = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         if strict_equality(&elem, &search) {
                             return Completion::Normal(JsValue::Number(i as f64));
                         }
@@ -449,7 +466,10 @@ impl Interpreter {
                     if calc < 0.0 { 0 } else { calc as usize }
                 };
                 for i in k..len {
-                    let elem = obj_get(interp, &o, &i.to_string());
+                    let elem = match obj_get(interp, &o, &i.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                     if same_value_zero(&elem, &search) {
                         return Completion::Normal(JsValue::Boolean(true));
                     }
@@ -485,7 +505,10 @@ impl Interpreter {
                 };
                 let mut parts = Vec::with_capacity(len);
                 for i in 0..len {
-                    let elem = obj_get(interp, &o, &i.to_string());
+                    let elem = match obj_get(interp, &o, &i.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                     if elem.is_undefined() || elem.is_null() {
                         parts.push(String::new());
                     } else {
@@ -509,7 +532,10 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 // Look for a "join" method
-                let join_fn = obj_get(interp, &o, "join");
+                let join_fn = match obj_get(interp, &o, "join") {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 if interp.is_callable(&join_fn) {
                     return interp.call_function(&join_fn, &o, &[]);
                 }
@@ -542,7 +568,10 @@ impl Interpreter {
                 let mut parts: Vec<String> = Vec::with_capacity(len);
                 for k in 0..len {
                     // Step 6b: Get element
-                    let next_element = obj_get(interp, &o, &k.to_string());
+                    let next_element = match obj_get(interp, &o, &k.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                     // Step 6c: Skip undefined/null, call toLocaleString on others
                     if matches!(next_element, JsValue::Undefined | JsValue::Null) {
                         parts.push(String::new());
@@ -552,7 +581,10 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let to_locale_str_method = obj_get(interp, &element_obj, "toLocaleString");
+                        let to_locale_str_method = match obj_get(interp, &element_obj, "toLocaleString") {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         if interp.is_callable(&to_locale_str_method) {
                             // Call with NO arguments per spec, using original value as this
                             match interp.call_function(&to_locale_str_method, &next_element, &[]) {
@@ -631,7 +663,10 @@ impl Interpreter {
                                         other => return other,
                                     }
                                 } else {
-                                    obj_get(interp, item, &pk)
+                                    match obj_get(interp, item, &pk) {
+                                        Ok(v) => v,
+                                        Err(c) => return c,
+                                    }
                                 };
                                 create_data_property(interp, &a, &n.to_string(), val);
                             }
@@ -695,7 +730,10 @@ impl Interpreter {
                 for i in k..fin {
                     let pk = i.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let val = obj_get(interp, &o, &pk);
+                        let val = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         create_data_property(interp, &a, &n.to_string(), val);
                     }
                     n += 1;
@@ -729,12 +767,18 @@ impl Interpreter {
                     let lower_exists = obj_has(interp, &o, &lower_s);
                     let upper_exists = obj_has(interp, &o, &upper_s);
                     let lower_val = if lower_exists {
-                        obj_get(interp, &o, &lower_s)
+                        match obj_get(interp, &o, &lower_s) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        }
                     } else {
                         JsValue::Undefined
                     };
                     let upper_val = if upper_exists {
-                        obj_get(interp, &o, &upper_s)
+                        match obj_get(interp, &o, &upper_s) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        }
                     } else {
                         JsValue::Undefined
                     };
@@ -771,7 +815,10 @@ impl Interpreter {
                 };
                 let mut result = Vec::with_capacity(len);
                 for i in (0..len).rev() {
-                    result.push(obj_get(interp, &o, &i.to_string()));
+                    result.push(match obj_get(interp, &o, &i.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    });
                 }
                 let arr = interp.create_array(result);
                 Completion::Normal(arr)
@@ -804,7 +851,10 @@ impl Interpreter {
                 for k in 0..len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let kvalue = obj_get(interp, &o, &pk);
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         let call_args = vec![kvalue, JsValue::Number(k as f64), o.clone()];
                         if let result @ Completion::Throw(_) =
                             interp.call_function(&callback, &this_arg, &call_args)
@@ -847,7 +897,10 @@ impl Interpreter {
                 for k in 0..len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let kvalue = obj_get(interp, &o, &pk);
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         match interp.call_function(
                             &callback,
                             &this_arg,
@@ -894,7 +947,10 @@ impl Interpreter {
                 for k in 0..len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let kvalue = obj_get(interp, &o, &pk);
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         match interp.call_function(
                             &callback,
                             &this_arg,
@@ -956,7 +1012,10 @@ impl Interpreter {
                             }
                             let pk = k.to_string();
                             if obj_has(interp, &o, &pk) {
-                                let val = obj_get(interp, &o, &pk);
+                                let val = match obj_get(interp, &o, &pk) {
+                                    Ok(v) => v,
+                                    Err(c) => return c,
+                                };
                                 k += 1;
                                 break val;
                             }
@@ -966,7 +1025,10 @@ impl Interpreter {
                 while k < len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let kvalue = obj_get(interp, &o, &pk);
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         match interp.call_function(
                             &callback,
                             &JsValue::Undefined,
@@ -1022,7 +1084,10 @@ impl Interpreter {
                             }
                             let pk = (k as usize).to_string();
                             if obj_has(interp, &o, &pk) {
-                                let val = obj_get(interp, &o, &pk);
+                                let val = match obj_get(interp, &o, &pk) {
+                                    Ok(v) => v,
+                                    Err(c) => return c,
+                                };
                                 k -= 1;
                                 break val;
                             }
@@ -1032,7 +1097,10 @@ impl Interpreter {
                 while k >= 0 {
                     let pk = (k as usize).to_string();
                     if obj_has(interp, &o, &pk) {
-                        let kvalue = obj_get(interp, &o, &pk);
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         match interp.call_function(
                             &callback,
                             &JsValue::Undefined,
@@ -1074,7 +1142,10 @@ impl Interpreter {
                 for k in 0..len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let kvalue = obj_get(interp, &o, &pk);
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         match interp.call_function(
                             &callback,
                             &this_arg,
@@ -1119,7 +1190,10 @@ impl Interpreter {
                 for k in 0..len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let kvalue = obj_get(interp, &o, &pk);
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         match interp.call_function(
                             &callback,
                             &this_arg,
@@ -1162,7 +1236,10 @@ impl Interpreter {
                 }
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 for k in 0..len {
-                    let kvalue = obj_get(interp, &o, &k.to_string());
+                    let kvalue = match obj_get(interp, &o, &k.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                     match interp.call_function(
                         &callback,
                         &this_arg,
@@ -1204,7 +1281,10 @@ impl Interpreter {
                 }
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 for k in 0..len {
-                    let kvalue = obj_get(interp, &o, &k.to_string());
+                    let kvalue = match obj_get(interp, &o, &k.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                     match interp.call_function(
                         &callback,
                         &this_arg,
@@ -1246,7 +1326,10 @@ impl Interpreter {
                 }
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 for k in (0..len).rev() {
-                    let kvalue = obj_get(interp, &o, &k.to_string());
+                    let kvalue = match obj_get(interp, &o, &k.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                     match interp.call_function(
                         &callback,
                         &this_arg,
@@ -1290,7 +1373,10 @@ impl Interpreter {
                 }
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 for k in (0..len).rev() {
-                    let kvalue = obj_get(interp, &o, &k.to_string());
+                    let kvalue = match obj_get(interp, &o, &k.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                     match interp.call_function(
                         &callback,
                         &this_arg,
@@ -1349,7 +1435,10 @@ impl Interpreter {
                 for i in 0..actual_delete_count {
                     let from = (actual_start + i).to_string();
                     if obj_has(interp, &o, &from) {
-                        let val = obj_get(interp, &o, &from);
+                        let val = match obj_get(interp, &o, &from) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         create_data_property(interp, &a, &i.to_string(), val);
                     }
                 }
@@ -1360,7 +1449,10 @@ impl Interpreter {
                         let from = (k + actual_delete_count).to_string();
                         let to = (k + insert_count).to_string();
                         if obj_has(interp, &o, &from) {
-                            let val = obj_get(interp, &o, &from);
+                            let val = match obj_get(interp, &o, &from) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
                             obj_set(interp, &o, &to, val);
                         } else {
                             obj_delete(interp, &o, &to);
@@ -1376,7 +1468,10 @@ impl Interpreter {
                         let from = (k + actual_delete_count).to_string();
                         let to = (k + insert_count).to_string();
                         if obj_has(interp, &o, &from) {
-                            let val = obj_get(interp, &o, &from);
+                            let val = match obj_get(interp, &o, &from) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
                             obj_set(interp, &o, &to, val);
                         } else {
                             obj_delete(interp, &o, &to);
@@ -1429,11 +1524,17 @@ impl Interpreter {
                 let new_len = (len as usize) - actual_delete_count + items.len();
                 let mut result = Vec::with_capacity(new_len);
                 for i in 0..actual_start {
-                    result.push(obj_get(interp, &o, &i.to_string()));
+                    result.push(match obj_get(interp, &o, &i.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    });
                 }
                 result.extend(items);
                 for i in (actual_start + actual_delete_count)..(len as usize) {
-                    result.push(obj_get(interp, &o, &i.to_string()));
+                    result.push(match obj_get(interp, &o, &i.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    });
                 }
                 Completion::Normal(interp.create_array(result))
             },
@@ -1516,7 +1617,10 @@ impl Interpreter {
                 for i in 0..len {
                     let pk = i.to_string();
                     if obj_has(interp, &o, &pk) {
-                        items.push(obj_get(interp, &o, &pk));
+                        items.push(match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        });
                     }
                 }
                 let cmp_fn = compare_fn.clone();
@@ -1589,7 +1693,10 @@ impl Interpreter {
                 };
                 let mut items: Vec<JsValue> = Vec::with_capacity(len);
                 for i in 0..len {
-                    items.push(obj_get(interp, &o, &i.to_string()));
+                    items.push(match obj_get(interp, &o, &i.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    });
                 }
                 let cmp_fn = compare_fn.clone();
                 items.sort_by(|x, y| {
@@ -1659,24 +1766,30 @@ impl Interpreter {
                     source: &JsValue,
                     source_len: usize,
                     depth: i64,
-                ) {
+                ) -> Result<(), Completion> {
                     for k in 0..source_len {
                         let pk = k.to_string();
                         if obj_has(interp, source, &pk) {
-                            let elem = obj_get(interp, source, &pk);
+                            let elem = match obj_get(interp, source, &pk) {
+                                Ok(v) => v,
+                                Err(c) => return Err(c),
+                            };
                             let should_flatten = depth > 0
                                 && matches!(&elem, JsValue::Object(eo) if interp.get_object(eo.id).is_some_and(|o| o.borrow().array_elements.is_some()));
                             if should_flatten {
-                                let elem_len = length_of_array_like(interp, &elem).unwrap_or(0);
-                                flatten_into(interp, target, &elem, elem_len, depth - 1);
+                                let elem_len = length_of_array_like(interp, &elem)?;
+                                flatten_into(interp, target, &elem, elem_len, depth - 1)?;
                             } else {
                                 target.push(elem);
                             }
                         }
                     }
+                    Ok(())
                 }
                 let mut result = Vec::new();
-                flatten_into(interp, &mut result, &o, len, depth);
+                if let Err(c) = flatten_into(interp, &mut result, &o, len, depth) {
+                    return c;
+                }
                 let result_len = result.len();
                 let a = match array_species_create(interp, &o, 0) {
                     Ok(v) => v,
@@ -1717,7 +1830,10 @@ impl Interpreter {
                 for k in 0..len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
-                        let kvalue = obj_get(interp, &o, &pk);
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         let mapped = interp.call_function(
                             &callback,
                             &this_arg,
@@ -1733,7 +1849,10 @@ impl Interpreter {
                                     for j in 0..mlen {
                                         let jpk = j.to_string();
                                         if obj_has(interp, &v, &jpk) {
-                                            result.push(obj_get(interp, &v, &jpk));
+                                            result.push(match obj_get(interp, &v, &jpk) {
+                                                Ok(v) => v,
+                                                Err(c) => return c,
+                                            });
                                         }
                                     }
                                     continue;
@@ -1820,7 +1939,10 @@ impl Interpreter {
                     let from_s = (from_idx as usize).to_string();
                     let to_s = (to_idx as usize).to_string();
                     if obj_has(interp, &o, &from_s) {
-                        let val = obj_get(interp, &o, &from_s);
+                        let val = match obj_get(interp, &o, &from_s) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         obj_set(interp, &o, &to_s, val);
                     } else {
                         obj_delete(interp, &o, &to_s);
@@ -1860,7 +1982,10 @@ impl Interpreter {
                 if k < 0 || k >= len {
                     return Completion::Normal(JsValue::Undefined);
                 }
-                Completion::Normal(obj_get(interp, &o, &(k as usize).to_string()))
+                match obj_get(interp, &o, &(k as usize).to_string()) {
+                    Ok(v) => Completion::Normal(v),
+                    Err(c) => c,
+                }
             },
         ));
         proto.borrow_mut().insert_builtin("at".to_string(), at_fn);
@@ -1899,7 +2024,10 @@ impl Interpreter {
                     if k == actual as usize {
                         result.push(value.clone());
                     } else {
-                        result.push(obj_get(interp, &o, &k.to_string()));
+                        result.push(match obj_get(interp, &o, &k.to_string()) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        });
                     }
                 }
                 Completion::Normal(interp.create_array(result))
@@ -1995,7 +2123,10 @@ impl Interpreter {
                                             other => return other,
                                         };
                                     loop {
-                                        let next_fn = obj_get(interp, &iterator, "next");
+                                        let next_fn = match obj_get(interp, &iterator, "next") {
+                                            Ok(v) => v,
+                                            Err(c) => return c,
+                                        };
                                         let result =
                                             match interp.call_function(&next_fn, &iterator, &[]) {
                                                 Completion::Normal(v) => v,
@@ -2023,11 +2154,17 @@ impl Interpreter {
                                 }
                             } else {
                                 // Array-like
-                                let len_val = obj.borrow().get_property("length");
+                                let len_val = match interp.get_object_property(o.id, "length", &source) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
                                 let len =
                                     to_integer_or_infinity(to_number(&len_val)).max(0.0) as usize;
                                 for i in 0..len {
-                                    let v = obj.borrow().get_property(&i.to_string());
+                                    let v = match interp.get_object_property(o.id, &i.to_string(), &source) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
                                     if let Some(ref mf) = map_fn
                                         && !matches!(mf, JsValue::Undefined)
                                     {

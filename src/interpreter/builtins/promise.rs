@@ -214,68 +214,160 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("catch".to_string(), catch_fn);
 
-        // Promise.prototype.finally
+        // Promise.prototype.finally — spec 27.2.5.3
         let finally_fn = self.create_function(JsFunction::native(
             "finally".to_string(),
             1,
             |interp, this, args| {
+                // Step 1-2: Let promise be the this value. If not Object, throw TypeError.
+                let promise_id = match this {
+                    JsValue::Object(o) => o.id,
+                    _ => {
+                        return Completion::Throw(
+                            interp.create_type_error(
+                                "Promise.prototype.finally called on non-object",
+                            ),
+                        );
+                    }
+                };
+
+                // Step 3: Let C = ? SpeciesConstructor(promise, %Promise%).
+                let promise_ctor = interp
+                    .global_env
+                    .borrow()
+                    .get("Promise")
+                    .unwrap_or(JsValue::Undefined);
+                let c = match interp.species_constructor(this, &promise_ctor) {
+                    Ok(c) => c,
+                    Err(e) => return Completion::Throw(e),
+                };
+
                 let on_finally = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !interp.is_callable(&on_finally) {
-                    return interp.promise_then(this, &on_finally, &on_finally);
-                }
-                let on_finally_clone = on_finally.clone();
-                let then_finally = interp.create_function(JsFunction::native(
-                    "".to_string(),
-                    1,
-                    move |interp, _this, args| {
-                        let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let result =
-                            interp.call_function(&on_finally_clone, &JsValue::Undefined, &[]);
-                        match result {
-                            Completion::Throw(e) => Completion::Throw(e),
-                            Completion::Normal(r) => {
-                                let p = interp.promise_resolve_value(&r);
-                                let value_clone = value.clone();
-                                let return_fn = interp.create_function(JsFunction::native(
-                                    "".to_string(),
-                                    0,
-                                    move |_interp, _this, _args| {
-                                        Completion::Normal(value_clone.clone())
-                                    },
-                                ));
-                                interp.promise_then(&p, &return_fn, &JsValue::Undefined)
+
+                // Steps 5-6: Create thenFinally and catchFinally
+                let (then_finally, catch_finally) = if !interp.is_callable(&on_finally) {
+                    // Step 5: If IsCallable(onFinally) is false, pass through
+                    (on_finally.clone(), on_finally)
+                } else {
+                    // Step 6a: thenFinally closure
+                    let on_finally_clone = on_finally.clone();
+                    let c_clone = c.clone();
+                    let then_finally = interp.create_function(JsFunction::native(
+                        "".to_string(),
+                        1,
+                        move |interp, _this, args| {
+                            let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            // Step 6a.i: Let result = ? Call(onFinally, undefined).
+                            let result = interp.call_function(
+                                &on_finally_clone,
+                                &JsValue::Undefined,
+                                &[],
+                            );
+                            match result {
+                                Completion::Throw(e) => Completion::Throw(e),
+                                Completion::Normal(r) => {
+                                    // Step 6a.ii: Let promise = ? PromiseResolve(C, result).
+                                    let p = match interp
+                                        .promise_resolve_with_constructor(&c_clone, &r)
+                                    {
+                                        Ok(p) => p,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                    // Step 6a.iii-iv: valueThunk that returns value
+                                    let value_clone = value.clone();
+                                    let return_fn =
+                                        interp.create_function(JsFunction::native(
+                                            "".to_string(),
+                                            0,
+                                            move |_interp, _this, _args| {
+                                                Completion::Normal(value_clone.clone())
+                                            },
+                                        ));
+                                    // Step 6a.v: Return ? Invoke(promise, "then", « valueThunk »).
+                                    let p_id = if let JsValue::Object(ref o) = p {
+                                        o.id
+                                    } else {
+                                        0
+                                    };
+                                    let then_method = match interp
+                                        .get_object_property(p_id, "then", &p)
+                                    {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        _ => JsValue::Undefined,
+                                    };
+                                    interp.call_function(&then_method, &p, &[return_fn])
+                                }
+                                _ => Completion::Normal(JsValue::Undefined),
                             }
-                            _ => Completion::Normal(JsValue::Undefined),
-                        }
-                    },
-                ));
-                let on_finally_clone2 = on_finally.clone();
-                let catch_finally = interp.create_function(JsFunction::native(
-                    "".to_string(),
-                    1,
-                    move |interp, _this, args| {
-                        let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let result =
-                            interp.call_function(&on_finally_clone2, &JsValue::Undefined, &[]);
-                        match result {
-                            Completion::Throw(e) => Completion::Throw(e),
-                            Completion::Normal(r) => {
-                                let p = interp.promise_resolve_value(&r);
-                                let reason_clone = reason.clone();
-                                let throw_fn = interp.create_function(JsFunction::native(
-                                    "".to_string(),
-                                    0,
-                                    move |_interp, _this, _args| {
-                                        Completion::Throw(reason_clone.clone())
-                                    },
-                                ));
-                                interp.promise_then(&p, &throw_fn, &JsValue::Undefined)
+                        },
+                    ));
+
+                    // Step 6c: catchFinally closure
+                    let on_finally_clone2 = on_finally.clone();
+                    let c_clone2 = c;
+                    let catch_finally = interp.create_function(JsFunction::native(
+                        "".to_string(),
+                        1,
+                        move |interp, _this, args| {
+                            let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            // Step 6c.i: Let result = ? Call(onFinally, undefined).
+                            let result = interp.call_function(
+                                &on_finally_clone2,
+                                &JsValue::Undefined,
+                                &[],
+                            );
+                            match result {
+                                Completion::Throw(e) => Completion::Throw(e),
+                                Completion::Normal(r) => {
+                                    // Step 6c.ii: Let promise = ? PromiseResolve(C, result).
+                                    let p = match interp
+                                        .promise_resolve_with_constructor(&c_clone2, &r)
+                                    {
+                                        Ok(p) => p,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                    // Step 6c.iii-iv: thrower that throws reason
+                                    let reason_clone = reason.clone();
+                                    let throw_fn =
+                                        interp.create_function(JsFunction::native(
+                                            "".to_string(),
+                                            0,
+                                            move |_interp, _this, _args| {
+                                                Completion::Throw(reason_clone.clone())
+                                            },
+                                        ));
+                                    // Step 6c.v: Return ? Invoke(promise, "then", « thrower »).
+                                    let p_id = if let JsValue::Object(ref o) = p {
+                                        o.id
+                                    } else {
+                                        0
+                                    };
+                                    let then_method = match interp
+                                        .get_object_property(p_id, "then", &p)
+                                    {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        _ => JsValue::Undefined,
+                                    };
+                                    interp.call_function(&then_method, &p, &[throw_fn])
+                                }
+                                _ => Completion::Normal(JsValue::Undefined),
                             }
-                            _ => Completion::Normal(JsValue::Undefined),
-                        }
-                    },
-                ));
-                interp.promise_then(this, &then_finally, &catch_finally)
+                        },
+                    ));
+
+                    (then_finally, catch_finally)
+                };
+
+                // Step 7: Return ? Invoke(promise, "then", « thenFinally, catchFinally »).
+                let then_method =
+                    match interp.get_object_property(promise_id, "then", this) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => JsValue::Undefined,
+                    };
+                interp.call_function(&then_method, this, &[then_finally, catch_finally])
             },
         ));
         proto

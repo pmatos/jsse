@@ -2277,13 +2277,10 @@ impl Interpreter {
         if matches!(callee, Expression::Super) {
             let super_ctor = env.borrow().get("__super__").unwrap_or(JsValue::Undefined);
             let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
-            let mut arg_vals = Vec::new();
-            for arg in args {
-                match self.eval_expr(arg, env) {
-                    Completion::Normal(v) => arg_vals.push(v),
-                    other => return other,
-                }
-            }
+            let arg_vals = match self.eval_spread_args(args, env) {
+                Ok(v) => v,
+                Err(e) => return Completion::Throw(e),
+            };
             return self.call_function(&super_ctor, &this_val, &arg_vals);
         }
 
@@ -2358,16 +2355,28 @@ impl Interpreter {
                         )));
                     }
                 };
-                // super.method() - look up on super constructor's prototype, bind this
+                // super.method() - look up on [[Prototype]] of HomeObject, bind this
                 if is_super_call {
-                    if let JsValue::Object(ref o) = obj_val {
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                    let home = env.borrow().get("__home_object__");
+                    if let Some(JsValue::Object(ref ho)) = home
+                        && let Some(home_obj) = self.get_object(ho.id)
+                    {
+                        if let Some(ref proto_rc) = home_obj.borrow().prototype.clone() {
+                            let method = proto_rc.borrow().get_property(&key);
+                            (method, this_val)
+                        } else {
+                            return Completion::Throw(self.create_type_error(
+                                &format!("Cannot read properties of null (reading '{key}')"),
+                            ));
+                        }
+                    } else if let JsValue::Object(ref o) = obj_val {
+                        // Fallback: __super__.prototype for class super
                         if let Some(obj) = self.get_object(o.id) {
                             let proto_val = obj.borrow().get_property("prototype");
                             if let JsValue::Object(ref p) = proto_val {
                                 if let Some(proto) = self.get_object(p.id) {
                                     let method = proto.borrow().get_property(&key);
-                                    let this_val =
-                                        env.borrow().get("this").unwrap_or(JsValue::Undefined);
                                     (method, this_val)
                                 } else {
                                     (JsValue::Undefined, JsValue::Undefined)
@@ -5747,6 +5756,32 @@ impl Interpreter {
             }
             MemberProperty::Private(_) => unreachable!(),
         };
+        // super.x - look up on [[Prototype]] of HomeObject
+        if matches!(obj, Expression::Super) {
+            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+            let home = env.borrow().get("__home_object__");
+            if let Some(JsValue::Object(ref ho)) = home
+                && let Some(home_obj) = self.get_object(ho.id)
+            {
+                if let Some(ref proto_rc) = home_obj.borrow().prototype.clone() {
+                    let proto_id = proto_rc.borrow().id.unwrap();
+                    return self.get_object_property(proto_id, &key, &this_val);
+                }
+                return Completion::Throw(self.create_type_error(
+                    &format!("Cannot read properties of null (reading '{key}')"),
+                ));
+            }
+            // Fallback: __super__.prototype for class super
+            if let JsValue::Object(ref o) = obj_val {
+                if let Some(sup_obj) = self.get_object(o.id) {
+                    let proto_val = sup_obj.borrow().get_property("prototype");
+                    if let JsValue::Object(ref p) = proto_val {
+                        return self.get_object_property(p.id, &key, &this_val);
+                    }
+                }
+            }
+            return Completion::Normal(JsValue::Undefined);
+        }
         match &obj_val {
             JsValue::Object(o) => self.get_object_property(o.id, &key, &obj_val.clone()),
             JsValue::String(s) => {
@@ -6137,6 +6172,24 @@ impl Interpreter {
                     };
                     let method_val = self.create_function(method_func);
 
+                    // Set __home_object__ for super property access
+                    let home_target = if m.is_static {
+                        ctor_val.clone()
+                    } else if let Some(ref p) = proto_obj {
+                        let pid = p.borrow().id.unwrap();
+                        JsValue::Object(crate::types::JsObject { id: pid })
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if let JsValue::Object(ref fo) = method_val
+                        && let Some(func_obj) = self.get_object(fo.id)
+                    {
+                        if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
+                            closure.borrow_mut().declare("__home_object__", BindingKind::Const);
+                            let _ = closure.borrow_mut().set("__home_object__", home_target);
+                        }
+                    }
+
                     let target = if m.is_static {
                         if let JsValue::Object(ref o) = ctor_val {
                             self.get_object(o.id)
@@ -6382,14 +6435,66 @@ impl Interpreter {
                     obj_data.insert_property(key, desc);
                 }
                 _ => {
-                    self.set_function_name(&value, &key);
-                    obj_data.insert_value(key, value);
+                    // __proto__: value sets [[Prototype]] per spec §13.2.5.5
+                    if key == "__proto__" && !prop.computed && !prop.shorthand {
+                        match &value {
+                            JsValue::Object(o) => {
+                                obj_data.prototype = self.get_object(o.id);
+                            }
+                            JsValue::Null => {
+                                obj_data.prototype = None;
+                            }
+                            _ => {
+                                // Non-object, non-null values are ignored per spec
+                            }
+                        }
+                    } else {
+                        self.set_function_name(&value, &key);
+                        obj_data.insert_value(key, value);
+                    }
                 }
             }
         }
         let obj = Rc::new(RefCell::new(obj_data));
         let id = self.allocate_object_slot(obj);
-        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+        // Set __home_object__ for concise methods, getters, and setters
+        let obj_val = JsValue::Object(crate::types::JsObject { id });
+        if let Some(obj_rc) = self.get_object(id) {
+            let prop_values: Vec<JsValue> = {
+                let b = obj_rc.borrow();
+                b.properties
+                    .values()
+                    .flat_map(|desc| {
+                        let mut vals = vec![];
+                        if let Some(ref v) = desc.value {
+                            vals.push(v.clone());
+                        }
+                        if let Some(ref g) = desc.get {
+                            vals.push(g.clone());
+                        }
+                        if let Some(ref s) = desc.set {
+                            vals.push(s.clone());
+                        }
+                        vals
+                    })
+                    .collect()
+            };
+            for val in &prop_values {
+                if let JsValue::Object(fo) = val
+                    && let Some(func_obj) = self.get_object(fo.id)
+                {
+                    if let Some(JsFunction::User { ref closure, .. }) =
+                        func_obj.borrow().callable
+                    {
+                        closure
+                            .borrow_mut()
+                            .declare("__home_object__", BindingKind::Const);
+                        let _ = closure.borrow_mut().set("__home_object__", obj_val.clone());
+                    }
+                }
+            }
+        }
+        Completion::Normal(obj_val)
     }
 
     fn call_async_function(
