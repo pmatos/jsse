@@ -796,8 +796,35 @@ impl JsObjectData {
         None
     }
 
-    pub fn get_own_property(&self, key: &str) -> Option<&PropertyDescriptor> {
-        self.properties.get(key)
+    pub fn get_own_property(&self, key: &str) -> Option<PropertyDescriptor> {
+        if let Some(desc) = self.properties.get(key) {
+            return Some(desc.clone());
+        }
+        // String exotic: §10.4.3.1
+        if let Some(JsValue::String(ref s)) = self.primitive_value {
+            if self.class_name == "String" {
+                if key == "length" {
+                    return Some(PropertyDescriptor::data(
+                        JsValue::Number(s.code_units.len() as f64),
+                        false, false, false,
+                    ));
+                }
+                if let Ok(idx) = key.parse::<usize>() {
+                    if idx < s.code_units.len() {
+                        let ch = std::char::from_u32(s.code_units[idx] as u32)
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| {
+                                String::from_utf16_lossy(&[s.code_units[idx]])
+                            });
+                        return Some(PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&ch)),
+                            false, true, false,
+                        ));
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn has_own_property(&self, key: &str) -> bool {

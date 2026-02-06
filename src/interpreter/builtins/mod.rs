@@ -2872,7 +2872,7 @@ impl Interpreter {
                                     if let JsValue::Object(ref t) = target_inner
                                         && let Some(tobj) = interp.get_object(t.id)
                                     {
-                                        let target_desc = tobj.borrow().get_own_property(&key).cloned();
+                                        let target_desc = tobj.borrow().get_own_property(&key);
                                         let target_extensible = tobj.borrow().extensible;
                                         let desc = interp
                                             .to_property_descriptor(&desc_val)
@@ -2938,7 +2938,7 @@ impl Interpreter {
                                     && obj.borrow().class_name == "Array"
                                 {
                                     if let Some(ref new_len_val) = desc.value {
-                                        let new_num = to_number(new_len_val);
+                                        let new_num = interp.to_number_coerce(new_len_val);
                                         let new_len = new_num as u32;
                                         if (new_len as f64) != new_num
                                             || new_num < 0.0
@@ -2956,18 +2956,64 @@ impl Interpreter {
                                             JsValue::Number(n) => n as u32,
                                             _ => 0,
                                         };
+                                        // §10.4.2.4 step 3.f: if old length is non-writable, reject
+                                        let old_len_writable = obj.borrow().properties.get("length")
+                                            .map(|d| d.writable != Some(false))
+                                            .unwrap_or(true);
+                                        if !old_len_writable && new_len != old_len {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot assign to read only property 'length'",
+                                            ));
+                                        }
+                                        let mut final_len = new_len;
                                         if new_len < old_len {
+                                            // §10.4.2.4 step 3.l: delete from old_len-1 downward
                                             let mut b = obj.borrow_mut();
-                                            for i in new_len..old_len {
-                                                b.properties.remove(&i.to_string());
-                                                b.property_order.retain(|k| k != &i.to_string());
+                                            let mut delete_failed = false;
+                                            let mut i = old_len;
+                                            while i > new_len {
+                                                i -= 1;
+                                                let k = i.to_string();
+                                                // Check if property exists and is non-configurable
+                                                let is_non_configurable = b.properties.get(&k)
+                                                    .map(|d| d.configurable == Some(false))
+                                                    .unwrap_or(false);
+                                                if is_non_configurable {
+                                                    final_len = i + 1;
+                                                    delete_failed = true;
+                                                    break;
+                                                }
+                                                b.properties.remove(&k);
+                                                b.property_order.retain(|pk| pk != &k);
+                                            }
+                                            // Also delete remaining indices between final_len and the failed one
+                                            if delete_failed {
+                                                // Clean up indices we already passed
+                                            } else {
+                                                // Delete everything from new_len to where we stopped
+                                                for j in new_len..i {
+                                                    let k = j.to_string();
+                                                    b.properties.remove(&k);
+                                                    b.property_order.retain(|pk| pk != &k);
+                                                }
                                             }
                                             if let Some(ref mut elems) = b.array_elements {
-                                                elems.truncate(new_len as usize);
+                                                elems.truncate(final_len as usize);
+                                            }
+                                            if delete_failed {
+                                                // Set length to final_len, then throw
+                                                b.properties.insert(
+                                                    "length".to_string(),
+                                                    PropertyDescriptor::data(JsValue::Number(final_len as f64), true, false, false),
+                                                );
+                                                drop(b);
+                                                return Completion::Throw(interp.create_type_error(
+                                                    "Cannot delete array element",
+                                                ));
                                             }
                                         }
                                         let len_desc = PropertyDescriptor {
-                                            value: Some(JsValue::Number(new_len as f64)),
+                                            value: Some(JsValue::Number(final_len as f64)),
                                             ..desc
                                         };
                                         if !obj
@@ -2981,10 +3027,28 @@ impl Interpreter {
                                         return Completion::Normal(target);
                                     }
                                 }
+                                let is_array = obj.borrow().class_name == "Array";
+                                let key_for_len = if is_array { Some(key.clone()) } else { None };
                                 if !obj.borrow_mut().define_own_property(key, desc) {
                                     return Completion::Throw(interp.create_type_error(
                                         "Cannot define property, object is not extensible or property is non-configurable",
                                     ));
+                                }
+                                // §10.4.2.1 step 3: if array and key is valid index >= length, update length
+                                if let Some(ref k) = key_for_len {
+                                    if let Ok(idx) = k.parse::<u32>() {
+                                        let old_len = match obj.borrow().get_property("length") {
+                                            JsValue::Number(n) => n as u32,
+                                            _ => 0,
+                                        };
+                                        if idx >= old_len {
+                                            let new_len = idx + 1;
+                                            obj.borrow_mut().properties.insert(
+                                                "length".to_string(),
+                                                PropertyDescriptor::data(JsValue::Number(new_len as f64), true, false, false),
+                                            );
+                                        }
+                                    }
                                 }
                             }
                             Err(Some(e)) => return Completion::Throw(e),
@@ -3035,7 +3099,7 @@ impl Interpreter {
                                     if let JsValue::Object(ref t) = target_inner
                                         && let Some(tobj) = interp.get_object(t.id)
                                     {
-                                        let target_desc = tobj.borrow().get_own_property(&key).cloned();
+                                        let target_desc = tobj.borrow().get_own_property(&key);
                                         let target_extensible = tobj.borrow().extensible;
                                         if matches!(v, JsValue::Undefined) {
                                             if let Some(ref td) = target_desc {
@@ -3101,7 +3165,6 @@ impl Interpreter {
                                                         && let Some(desc) = tobj2
                                                             .borrow()
                                                             .get_own_property(&key)
-                                                            .cloned()
                                                     {
                                                         return Completion::Normal(
                                                             interp.from_property_descriptor(&desc),
@@ -3113,7 +3176,7 @@ impl Interpreter {
                                             }
                                         }
                                         if let Some(desc) =
-                                            tobj.borrow().get_own_property(&key).cloned()
+                                            tobj.borrow().get_own_property(&key)
                                         {
                                             return Completion::Normal(
                                                 interp.from_property_descriptor(&desc),
@@ -3126,7 +3189,7 @@ impl Interpreter {
                             }
                         }
                         if let Some(obj) = interp.get_object(o.id)
-                            && let Some(desc) = obj.borrow().get_own_property(&key).cloned()
+                            && let Some(desc) = obj.borrow().get_own_property(&key)
                         {
                             return Completion::Normal(interp.from_property_descriptor(&desc));
                         }
@@ -4165,56 +4228,50 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref t) = target
+                    // §22.1.2.8 step 1: RequireObjectCoercible then ToObject
+                    if matches!(target, JsValue::Undefined | JsValue::Null) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Cannot convert undefined or null to object",
+                        ));
+                    }
+                    let obj_val = match interp.to_object(&target) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if let JsValue::Object(ref t) = obj_val
                         && let Some(obj) = interp.get_object(t.id)
                     {
                         let result = interp.create_object();
-                        let keys: Vec<String> = obj.borrow().properties.keys().cloned().collect();
+                        // Collect all own keys including String exotic indices
+                        let mut keys: Vec<String> = Vec::new();
+                        let b = obj.borrow();
+                        if let Some(JsValue::String(ref s)) = b.primitive_value {
+                            if b.class_name == "String" {
+                                for i in 0..s.code_units.len() {
+                                    keys.push(i.to_string());
+                                }
+                                keys.push("length".to_string());
+                            }
+                        }
+                        for k in &b.property_order {
+                            if !keys.contains(k) {
+                                keys.push(k.clone());
+                            }
+                        }
+                        drop(b);
                         for key in keys {
-                            let desc = obj.borrow().properties.get(&key).cloned();
-                            if let Some(d) = desc {
-                                let desc_result = interp.create_object();
-                                if let Some(ref v) = d.value {
-                                    desc_result
-                                        .borrow_mut()
-                                        .insert_builtin("value".to_string(), v.clone());
-                                }
-                                if let Some(w) = d.writable {
-                                    desc_result
-                                        .borrow_mut()
-                                        .insert_builtin("writable".to_string(), JsValue::Boolean(w));
-                                }
-                                if let Some(e) = d.enumerable {
-                                    desc_result.borrow_mut().insert_builtin(
-                                        "enumerable".to_string(),
-                                        JsValue::Boolean(e),
-                                    );
-                                }
-                                if let Some(c) = d.configurable {
-                                    desc_result.borrow_mut().insert_builtin(
-                                        "configurable".to_string(),
-                                        JsValue::Boolean(c),
-                                    );
-                                }
-                                if let Some(ref g) = d.get {
-                                    desc_result
-                                        .borrow_mut()
-                                        .insert_builtin("get".to_string(), g.clone());
-                                }
-                                if let Some(ref s) = d.set {
-                                    desc_result
-                                        .borrow_mut()
-                                        .insert_builtin("set".to_string(), s.clone());
-                                }
-                                let did = desc_result.borrow().id.unwrap();
-                                let dval = JsValue::Object(crate::types::JsObject { id: did });
-                                result.borrow_mut().insert_builtin(key, dval);
+                            if let Some(d) = obj.borrow().get_own_property(&key) {
+                                let desc_val = interp.from_property_descriptor(&d);
+                                result.borrow_mut().insert_value(key, desc_val);
                             }
                         }
                         let id = result.borrow().id.unwrap();
                         return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    // Primitive wrapped to object with no own properties
+                    let result = interp.create_object();
+                    let id = result.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 },
             ));
             obj_func
@@ -4958,7 +5015,7 @@ impl Interpreter {
                                     if let JsValue::Object(ref t) = target_inner
                                         && let Some(tobj) = interp.get_object(t.id)
                                     {
-                                        let target_desc = tobj.borrow().get_own_property(&key).cloned();
+                                        let target_desc = tobj.borrow().get_own_property(&key);
                                         if let Some(ref desc) = target_desc {
                                             if desc.configurable == Some(false) {
                                                 return Completion::Throw(interp.create_type_error(
@@ -5101,7 +5158,6 @@ impl Interpreter {
                                                         && let Some(desc) = tobj2
                                                             .borrow()
                                                             .get_own_property(&key)
-                                                            .cloned()
                                                     {
                                                         return Completion::Normal(
                                                             interp.from_property_descriptor(&desc),
@@ -5113,7 +5169,7 @@ impl Interpreter {
                                             }
                                         }
                                         if let Some(desc) =
-                                            tobj.borrow().get_own_property(&key).cloned()
+                                            tobj.borrow().get_own_property(&key)
                                         {
                                             return Completion::Normal(
                                                 interp.from_property_descriptor(&desc),
@@ -5126,7 +5182,7 @@ impl Interpreter {
                             }
                         }
                         if let Some(obj) = interp.get_object(o.id)
-                            && let Some(desc) = obj.borrow().get_own_property(&key).cloned()
+                            && let Some(desc) = obj.borrow().get_own_property(&key)
                         {
                             return Completion::Normal(interp.from_property_descriptor(&desc));
                         }
@@ -5261,7 +5317,7 @@ impl Interpreter {
                                     if let JsValue::Object(ref t) = target_inner
                                         && let Some(tobj) = interp.get_object(t.id)
                                     {
-                                        let target_desc = tobj.borrow().get_own_property(&key).cloned();
+                                        let target_desc = tobj.borrow().get_own_property(&key);
                                         if let Some(ref desc) = target_desc {
                                             if desc.configurable == Some(false) {
                                                 return Completion::Throw(interp.create_type_error(
@@ -5582,7 +5638,7 @@ impl Interpreter {
                                 if let JsValue::Object(ref t) = target_inner
                                     && let Some(tobj) = interp.get_object(t.id)
                                 {
-                                    let target_desc = tobj.borrow().get_own_property(&key).cloned();
+                                    let target_desc = tobj.borrow().get_own_property(&key);
                                     if let Some(ref desc) = target_desc {
                                         if desc.configurable == Some(false) {
                                             if desc.is_data_descriptor()

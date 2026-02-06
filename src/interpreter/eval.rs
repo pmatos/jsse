@@ -77,7 +77,7 @@ impl Interpreter {
                                 if let JsValue::Object(ref t) = target_val
                                     && let Some(tobj) = self.get_object(t.id)
                                 {
-                                    let target_desc = tobj.borrow().get_own_property(&key).cloned();
+                                    let target_desc = tobj.borrow().get_own_property(&key);
                                     if let Some(ref desc) = target_desc {
                                         if desc.configurable == Some(false) {
                                             return Completion::Throw(self.create_type_error(
@@ -241,7 +241,7 @@ impl Interpreter {
                                             && let Some(tobj) = self.get_object(t.id)
                                         {
                                             let target_desc =
-                                                tobj.borrow().get_own_property(&key).cloned();
+                                                tobj.borrow().get_own_property(&key);
                                             if let Some(ref desc) = target_desc {
                                                 if desc.configurable == Some(false) {
                                                     return Completion::Throw(self.create_type_error(
@@ -1804,7 +1804,7 @@ impl Interpreter {
                                         && let Some(tobj) = self.get_object(t.id)
                                     {
                                         let target_desc =
-                                            tobj.borrow().get_own_property(&key).cloned();
+                                            tobj.borrow().get_own_property(&key);
                                         if let Some(ref desc) = target_desc {
                                             if desc.configurable == Some(false) {
                                                 if desc.is_data_descriptor()
@@ -2282,7 +2282,7 @@ impl Interpreter {
                         let keys: Vec<String> = src.borrow().property_order.clone();
                         for key in &keys {
                             if !excluded_keys.contains(key) {
-                                let desc = src.borrow().get_own_property(key).cloned();
+                                let desc = src.borrow().get_own_property(key);
                                 if let Some(ref d) = desc
                                     && d.enumerable.unwrap_or(true)
                                 {
@@ -5731,7 +5731,7 @@ impl Interpreter {
                     if let JsValue::Object(ref t) = target_val
                         && let Some(tobj) = self.get_object(t.id)
                     {
-                        let target_desc = tobj.borrow().get_own_property(key).cloned();
+                        let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc {
                             if desc.configurable == Some(false) {
                                 if desc.is_data_descriptor()
