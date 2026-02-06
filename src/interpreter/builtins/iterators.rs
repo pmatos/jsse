@@ -54,7 +54,7 @@ impl Interpreter {
         self.iterator_prototype = Some(iter_proto.clone());
 
         // Iterator constructor (abstract — throws TypeError when called directly)
-        let iterator_ctor = self.create_function(JsFunction::native(
+        let iterator_ctor = self.create_function(JsFunction::constructor(
             "Iterator".to_string(),
             0,
             move |interp, this, _args| {

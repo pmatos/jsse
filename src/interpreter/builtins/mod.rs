@@ -51,6 +51,39 @@ impl Interpreter {
             let _ = self.global_env.borrow_mut().set("print", print_fn);
         }
 
+        // $262 test harness object
+        {
+            let dollar_262 = self.create_object();
+            let detach_fn = self.create_function(JsFunction::native(
+                "detachArrayBuffer".to_string(),
+                1,
+                |interp, _this, args| {
+                    let buf = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    interp.detach_arraybuffer(&buf)
+                },
+            ));
+            dollar_262
+                .borrow_mut()
+                .insert_value("detachArrayBuffer".to_string(), detach_fn);
+            let gc_fn = self.create_function(JsFunction::native(
+                "gc".to_string(),
+                0,
+                |interp, _this, _args| {
+                    interp.maybe_gc();
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ));
+            dollar_262
+                .borrow_mut()
+                .insert_value("gc".to_string(), gc_fn);
+            let dollar_262_val =
+                JsValue::Object(crate::types::JsObject { id: dollar_262.borrow().id.unwrap() });
+            self.global_env
+                .borrow_mut()
+                .declare("$262", BindingKind::Var);
+            let _ = self.global_env.borrow_mut().set("$262", dollar_262_val);
+        }
+
         // Error constructor
         {
             let error_name = "Error".to_string();
@@ -600,7 +633,7 @@ impl Interpreter {
 
         // Symbol — must be before iterator prototypes so @@iterator key is available
         {
-            let symbol_fn = self.create_function(JsFunction::native(
+            let symbol_fn = self.create_function(JsFunction::constructor(
                 "Symbol".to_string(),
                 0,
                 |interp, _this, args| {

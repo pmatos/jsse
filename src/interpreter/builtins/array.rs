@@ -63,6 +63,25 @@ fn obj_set(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
     }
 }
 
+fn create_data_property(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
+    if let Some(obj) = get_obj(interp, o) {
+        let mut borrow = obj.borrow_mut();
+        if let Some(ref mut elems) = borrow.array_elements
+            && let Ok(idx) = key.parse::<usize>()
+        {
+            if idx < elems.len() {
+                elems[idx] = value.clone();
+            } else {
+                while elems.len() < idx {
+                    elems.push(JsValue::Undefined);
+                }
+                elems.push(value.clone());
+            }
+        }
+        borrow.define_own_property(key.to_string(), PropertyDescriptor::data_default(value));
+    }
+}
+
 fn obj_has(interp: &mut Interpreter, o: &JsValue, key: &str) -> bool {
     if let Some(obj) = get_obj(interp, o) {
         let borrow = obj.borrow();
@@ -109,6 +128,69 @@ fn require_callable(interp: &mut Interpreter, val: &JsValue, msg: &str) -> Resul
         Err(Completion::Throw(interp.create_type_error(msg)))
     } else {
         Ok(())
+    }
+}
+
+// ArraySpeciesCreate (§23.1.3.7.1)
+fn array_species_create(interp: &mut Interpreter, original_array: &JsValue, length: usize) -> Result<JsValue, Completion> {
+    let is_array = if let JsValue::Object(o) = original_array
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        obj.borrow().array_elements.is_some()
+    } else {
+        false
+    };
+    if !is_array {
+        return Ok(interp.create_array(Vec::new()));
+    }
+    // Get constructor
+    let c = if let JsValue::Object(o) = original_array {
+        match interp.get_object_property(o.id, "constructor", original_array) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(Completion::Throw(e)),
+            other => return Err(other),
+        }
+    } else {
+        JsValue::Undefined
+    };
+    // If C is Object, get C[@@species]
+    let c = if let JsValue::Object(co) = &c {
+        let sym_key = interp.get_symbol_key("species");
+        let species = if let Some(key) = &sym_key {
+            match interp.get_object_property(co.id, key, &c) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(Completion::Throw(e)),
+                other => return Err(other),
+            }
+        } else {
+            JsValue::Undefined
+        };
+        // If species is null, treat as undefined
+        if matches!(species, JsValue::Null) {
+            JsValue::Undefined
+        } else {
+            species
+        }
+    } else {
+        c
+    };
+    // If C is undefined, create a default array
+    if matches!(c, JsValue::Undefined) {
+        let mut arr = interp.create_array(Vec::new());
+        set_length(interp, &arr, length);
+        return Ok(arr);
+    }
+    // If C is not a constructor, throw TypeError
+    if !interp.is_constructor(&c) {
+        return Err(Completion::Throw(
+            interp.create_type_error("Species constructor is not a constructor"),
+        ));
+    }
+    // Construct(C, [length])
+    match interp.construct(&c, &[JsValue::Number(length as f64)]) {
+        Completion::Normal(v) => Ok(v),
+        Completion::Throw(e) => Err(Completion::Throw(e)),
+        other => Err(other),
     }
 }
 
@@ -503,30 +585,65 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let mut result = Vec::new();
+                let a = match array_species_create(interp, &o, 0) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                let mut n: usize = 0;
                 let items: Vec<JsValue> = std::iter::once(o).chain(args.iter().cloned()).collect();
                 for item in &items {
-                    let spreadable = if let Some(obj) = get_obj(interp, item) {
-                        obj.borrow().array_elements.is_some()
+                    // IsConcatSpreadable (§23.1.3.1.1)
+                    let spreadable = if let JsValue::Object(obj_ref) = item {
+                        let sym_key = interp.get_symbol_key("isConcatSpreadable");
+                        let spreadable_val = if let Some(key) = &sym_key {
+                            match interp.get_object_property(obj_ref.id, key, item) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        if !matches!(spreadable_val, JsValue::Undefined) {
+                            to_boolean(&spreadable_val)
+                        } else {
+                            if let Some(obj) = interp.get_object(obj_ref.id) {
+                                obj.borrow().array_elements.is_some()
+                            } else {
+                                false
+                            }
+                        }
                     } else {
                         false
                     };
                     if spreadable {
-                        let len = length_of_array_like(interp, item).unwrap_or(0);
+                        let len = match length_of_array_like(interp, item) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         for k in 0..len {
                             let pk = k.to_string();
                             if obj_has(interp, item, &pk) {
-                                result.push(obj_get(interp, item, &pk));
-                            } else {
-                                result.push(JsValue::Undefined);
+                                let val = if let JsValue::Object(obj_ref) = item {
+                                    match interp.get_object_property(obj_ref.id, &pk, item) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        other => return other,
+                                    }
+                                } else {
+                                    obj_get(interp, item, &pk)
+                                };
+                                create_data_property(interp, &a, &n.to_string(), val);
                             }
+                            n += 1;
                         }
                     } else {
-                        result.push(item.clone());
+                        create_data_property(interp, &a, &n.to_string(), item.clone());
+                        n += 1;
                     }
                 }
-                let arr = interp.create_array(result);
-                Completion::Normal(arr)
+                set_length(interp, &a, n);
+                Completion::Normal(a)
             },
         ));
         proto
@@ -569,17 +686,22 @@ impl Interpreter {
                 } else {
                     (relative_end as i64).min(len) as usize
                 };
-                let mut result = Vec::new();
+                let count = if fin > k { fin - k } else { 0 };
+                let a = match array_species_create(interp, &o, count) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                let mut n: usize = 0;
                 for i in k..fin {
                     let pk = i.to_string();
                     if obj_has(interp, &o, &pk) {
-                        result.push(obj_get(interp, &o, &pk));
-                    } else {
-                        result.push(JsValue::Undefined);
+                        let val = obj_get(interp, &o, &pk);
+                        create_data_property(interp, &a, &n.to_string(), val);
                     }
+                    n += 1;
                 }
-                let arr = interp.create_array(result);
-                Completion::Normal(arr)
+                set_length(interp, &a, n);
+                Completion::Normal(a)
             },
         ));
         proto
@@ -718,7 +840,10 @@ impl Interpreter {
                     return c;
                 }
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let mut result = Vec::with_capacity(len);
+                let a = match array_species_create(interp, &o, len) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 for k in 0..len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
@@ -728,14 +853,15 @@ impl Interpreter {
                             &this_arg,
                             &[kvalue, JsValue::Number(k as f64), o.clone()],
                         ) {
-                            Completion::Normal(v) => result.push(v),
+                            Completion::Normal(v) => {
+                                create_data_property(interp, &a, &pk, v);
+                            }
                             other => return other,
                         }
-                    } else {
-                        result.push(JsValue::Undefined);
                     }
                 }
-                Completion::Normal(interp.create_array(result))
+                set_length(interp, &a, len);
+                Completion::Normal(a)
             },
         ));
         proto.borrow_mut().insert_builtin("map".to_string(), map_fn);
@@ -760,7 +886,11 @@ impl Interpreter {
                     return c;
                 }
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let mut result = Vec::new();
+                let a = match array_species_create(interp, &o, 0) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                let mut to: usize = 0;
                 for k in 0..len {
                     let pk = k.to_string();
                     if obj_has(interp, &o, &pk) {
@@ -772,14 +902,16 @@ impl Interpreter {
                         ) {
                             Completion::Normal(v) => {
                                 if to_boolean(&v) {
-                                    result.push(kvalue);
+                                    create_data_property(interp, &a, &to.to_string(), kvalue);
+                                    to += 1;
                                 }
                             }
                             other => return other,
                         }
                     }
                 }
-                Completion::Normal(interp.create_array(result))
+                set_length(interp, &a, to);
+                Completion::Normal(a)
             },
         ));
         proto
@@ -1210,16 +1342,18 @@ impl Interpreter {
                     let dc = to_integer_or_infinity(to_number(&args[1]));
                     dc.max(0.0).min((len - actual_start as i64) as f64) as usize
                 };
-                // Collect removed elements
-                let mut removed = Vec::with_capacity(actual_delete_count);
+                let a = match array_species_create(interp, &o, actual_delete_count) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 for i in 0..actual_delete_count {
                     let from = (actual_start + i).to_string();
                     if obj_has(interp, &o, &from) {
-                        removed.push(obj_get(interp, &o, &from));
-                    } else {
-                        removed.push(JsValue::Undefined);
+                        let val = obj_get(interp, &o, &from);
+                        create_data_property(interp, &a, &i.to_string(), val);
                     }
                 }
+                set_length(interp, &a, actual_delete_count);
                 let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
                 if insert_count < actual_delete_count {
                     for k in actual_start..((len as usize) - actual_delete_count) {
@@ -1254,7 +1388,7 @@ impl Interpreter {
                 }
                 let new_len = (len as usize) - actual_delete_count + insert_count;
                 set_length(interp, &o, new_len);
-                Completion::Normal(interp.create_array(removed))
+                Completion::Normal(a)
             },
         ));
         proto
@@ -1543,7 +1677,16 @@ impl Interpreter {
                 }
                 let mut result = Vec::new();
                 flatten_into(interp, &mut result, &o, len, depth);
-                Completion::Normal(interp.create_array(result))
+                let result_len = result.len();
+                let a = match array_species_create(interp, &o, 0) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                for (i, val) in result.into_iter().enumerate() {
+                    create_data_property(interp, &a, &i.to_string(), val);
+                }
+                set_length(interp, &a, result_len);
+                Completion::Normal(a)
             },
         ));
         proto
@@ -1601,7 +1744,16 @@ impl Interpreter {
                         }
                     }
                 }
-                Completion::Normal(interp.create_array(result))
+                let result_len = result.len();
+                let a = match array_species_create(interp, &o, 0) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                for (i, val) in result.into_iter().enumerate() {
+                    create_data_property(interp, &a, &i.to_string(), val);
+                }
+                set_length(interp, &a, result_len);
+                Completion::Normal(a)
             },
         ));
         proto

@@ -5231,6 +5231,112 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn construct(&mut self, constructor: &JsValue, args: &[JsValue]) -> Completion {
+        let co = if let JsValue::Object(co) = constructor {
+            co.clone()
+        } else {
+            return Completion::Throw(
+                self.create_type_error("not a constructor"),
+            );
+        };
+
+        // Proxy construct trap
+        if self.get_proxy_info(co.id).is_some() {
+            let target_val = self.get_proxy_target_val(co.id);
+            let args_array = self.create_array(args.to_vec());
+            let new_target = constructor.clone();
+            match self.invoke_proxy_trap(
+                co.id,
+                "construct",
+                vec![target_val.clone(), args_array, new_target],
+            ) {
+                Ok(Some(v)) => {
+                    if matches!(v, JsValue::Object(_)) {
+                        return Completion::Normal(v);
+                    }
+                    return Completion::Throw(
+                        self.create_type_error("'construct' on proxy: trap returned non-Object"),
+                    );
+                }
+                Ok(None) => {
+                    let prev_new_target = self.new_target.take();
+                    self.new_target = Some(constructor.clone());
+                    let new_obj = self.create_object();
+                    if let JsValue::Object(ref t) = target_val
+                        && let Some(func_obj) = self.get_object(t.id)
+                    {
+                        let proto = func_obj.borrow().get_property_value("prototype");
+                        if let Some(JsValue::Object(proto_obj)) = proto
+                            && let Some(proto_rc) = self.get_object(proto_obj.id)
+                        {
+                            new_obj.borrow_mut().prototype = Some(proto_rc);
+                        }
+                    }
+                    let new_obj_id = new_obj.borrow().id.unwrap();
+                    let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+                    let result = self.call_function(&target_val, &this_val, args);
+                    self.new_target = prev_new_target;
+                    return match result {
+                        Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
+                            Completion::Normal(v)
+                        }
+                        Completion::Normal(_) => Completion::Normal(this_val),
+                        other => other,
+                    };
+                }
+                Err(e) => return Completion::Throw(e),
+            }
+        }
+
+        // Check is_constructor
+        if let Some(func_obj) = self.get_object(co.id) {
+            let b = func_obj.borrow();
+            let is_ctor = match &b.callable {
+                Some(JsFunction::User {
+                    is_arrow,
+                    is_generator,
+                    is_async,
+                    ..
+                }) => !is_arrow && !is_generator && !is_async,
+                Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
+                None => false,
+            };
+            if !is_ctor {
+                drop(b);
+                return Completion::Throw(
+                    self.create_type_error("not a constructor"),
+                );
+            }
+        }
+
+        let new_obj = self.create_object();
+        if let Some(func_obj) = self.get_object(co.id) {
+            let proto = func_obj.borrow().get_property_value("prototype");
+            if let Some(JsValue::Object(proto_obj)) = proto
+                && let Some(proto_rc) = self.get_object(proto_obj.id)
+            {
+                new_obj.borrow_mut().prototype = Some(proto_rc);
+            }
+        }
+        let new_obj_id = new_obj.borrow().id.unwrap();
+        let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+
+        let prev_new_target = self.new_target.take();
+        self.new_target = Some(constructor.clone());
+        let result = self.call_function(constructor, &this_val, args);
+        self.new_target = prev_new_target;
+        match result {
+            Completion::Normal(v) => {
+                if matches!(v, JsValue::Object(_)) {
+                    Completion::Normal(v)
+                } else {
+                    Completion::Normal(this_val)
+                }
+            }
+            other => other,
+        }
+    }
+
     fn get_proxy_info(&self, obj_id: u64) -> Option<(bool, Option<u64>, Option<u64>)> {
         if let Some(obj) = self.get_object(obj_id) {
             let b = obj.borrow();
@@ -5761,6 +5867,15 @@ impl Interpreter {
         } else {
             None
         };
+
+        // Validate super class: must be null or a constructor
+        if let Some(ref sv) = super_val {
+            if !matches!(sv, JsValue::Null) && !self.is_constructor(sv) {
+                return Completion::Throw(
+                    self.create_type_error("Class extends value is not a constructor or null"),
+                );
+            }
+        }
 
         // Create class environment with __super__ binding
         let class_env = Environment::new(Some(env.clone()));

@@ -653,6 +653,18 @@ impl Interpreter {
                     self.iterator_close(&iterator, JsValue::Undefined);
                     return Completion::Return(v);
                 }
+                Completion::Throw(e) => {
+                    self.iterator_close(&iterator, JsValue::Undefined);
+                    return Completion::Throw(e);
+                }
+                Completion::Break(Some(label)) => {
+                    self.iterator_close(&iterator, JsValue::Undefined);
+                    return Completion::Break(Some(label));
+                }
+                Completion::Continue(Some(label)) => {
+                    self.iterator_close(&iterator, JsValue::Undefined);
+                    return Completion::Continue(Some(label));
+                }
                 other => return other,
             }
         }

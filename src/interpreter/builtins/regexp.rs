@@ -1243,8 +1243,8 @@ impl Interpreter {
             "get flags".to_string(),
             0,
             |interp, this_val, _args| {
-                let obj_ref = match this_val {
-                    JsValue::Object(o) => o,
+                let obj_id = match this_val {
+                    JsValue::Object(o) => o.id,
                     _ => {
                         let err = interp.create_type_error(
                             "RegExp.prototype.flags requires that 'this' be an Object",
@@ -1252,15 +1252,12 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                 };
-                let obj = match interp.get_object(obj_ref.id) {
-                    Some(o) => o,
-                    None => {
-                        let err = interp.create_type_error(
-                            "RegExp.prototype.flags requires that 'this' be an Object",
-                        );
-                        return Completion::Throw(err);
-                    }
-                };
+                if interp.get_object(obj_id).is_none() {
+                    let err = interp.create_type_error(
+                        "RegExp.prototype.flags requires that 'this' be an Object",
+                    );
+                    return Completion::Throw(err);
+                }
                 let mut result = String::new();
                 let flags_to_check: &[(&str, char)] = &[
                     ("hasIndices", 'd'),
@@ -1273,7 +1270,10 @@ impl Interpreter {
                     ("sticky", 'y'),
                 ];
                 for (prop, ch) in flags_to_check {
-                    let val = obj.borrow().get_property(prop);
+                    let val = match interp.get_object_property(obj_id, prop, this_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
                     if to_boolean(&val) {
                         result.push(*ch);
                     }
@@ -1304,6 +1304,7 @@ impl Interpreter {
             ("sticky", 'y'),
             ("hasIndices", 'd'),
         ];
+        let regexp_proto_id = regexp_proto.borrow().id.unwrap();
         for &(prop_name, flag_char) in flag_props {
             let name = prop_name.to_string();
             let getter = self.create_function(JsFunction::native(
@@ -1313,18 +1314,27 @@ impl Interpreter {
                     let obj_ref = match this_val {
                         JsValue::Object(o) => o,
                         _ => {
-                            let err = interp.create_type_error(&format!(
+                            return Completion::Throw(interp.create_type_error(&format!(
                                 "RegExp.prototype.{} requires that 'this' be an Object",
                                 name
-                            ));
-                            return Completion::Throw(err);
+                            )));
                         }
                     };
                     let obj = match interp.get_object(obj_ref.id) {
                         Some(o) => o,
                         None => return Completion::Normal(JsValue::Undefined),
                     };
-                    // If this is RegExp.prototype itself (no flags property), return undefined
+                    // Check if this has [[OriginalFlags]] (is a RegExp)
+                    if obj.borrow().class_name != "RegExp" {
+                        // If this is RegExp.prototype itself, return undefined
+                        if obj_ref.id == regexp_proto_id {
+                            return Completion::Normal(JsValue::Undefined);
+                        }
+                        return Completion::Throw(interp.create_type_error(&format!(
+                            "RegExp.prototype.{} requires that 'this' be a RegExp object",
+                            name
+                        )));
+                    }
                     let flags_val = obj.borrow().get_property("flags");
                     if let JsValue::String(s) = flags_val {
                         Completion::Normal(JsValue::Boolean(s.to_rust_string().contains(flag_char)))
@@ -1391,8 +1401,83 @@ impl Interpreter {
             "RegExp".to_string(),
             2,
             move |interp, _this, args| {
-                let pattern_str = args.first().map(to_js_string).unwrap_or_default();
-                let flags_str = args.get(1).map(to_js_string).unwrap_or_default();
+                let pattern_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let flags_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+
+                // Handle RegExp argument: extract source/flags from existing RegExp
+                let (pattern_str, flags_str) = if let JsValue::Object(ref o) = pattern_arg
+                    && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().class_name == "RegExp"
+                {
+                    let src = if let JsValue::String(s) = obj.borrow().get_property("source") {
+                        s.to_rust_string()
+                    } else {
+                        String::new()
+                    };
+                    let flg = if matches!(flags_arg, JsValue::Undefined) {
+                        if let JsValue::String(s) = obj.borrow().get_property("flags") {
+                            s.to_rust_string()
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        match interp.to_string_value(&flags_arg) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    };
+                    (src, flg)
+                } else {
+                    let p = if matches!(pattern_arg, JsValue::Undefined) {
+                        String::new()
+                    } else {
+                        match interp.to_string_value(&pattern_arg) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    };
+                    let f = if matches!(flags_arg, JsValue::Undefined) {
+                        String::new()
+                    } else {
+                        match interp.to_string_value(&flags_arg) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    };
+                    (p, f)
+                };
+
+                // Validate flags: only dgimsuy allowed, no duplicates
+                let valid_flags = "dgimsuyv";
+                for c in flags_str.chars() {
+                    if !valid_flags.contains(c) {
+                        return Completion::Throw(
+                            interp.create_error("SyntaxError", &format!(
+                                "Invalid regular expression flags '{}'", flags_str
+                            )),
+                        );
+                    }
+                }
+                let mut seen = std::collections::HashSet::new();
+                for c in flags_str.chars() {
+                    if !seen.insert(c) {
+                        return Completion::Throw(
+                            interp.create_error("SyntaxError", &format!(
+                                "Invalid regular expression flags '{}'", flags_str
+                            )),
+                        );
+                    }
+                }
+
+                // u and v flags are mutually exclusive
+                if flags_str.contains('u') && flags_str.contains('v') {
+                    return Completion::Throw(
+                        interp.create_error("SyntaxError", &format!(
+                            "Invalid regular expression flags '{}'", flags_str
+                        )),
+                    );
+                }
+
                 let mut obj = JsObjectData::new();
                 obj.prototype = Some(regexp_proto_rc.clone());
                 obj.class_name = "RegExp".to_string();

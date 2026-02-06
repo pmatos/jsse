@@ -1123,7 +1123,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let source = if args.is_empty() {
+                    let source = if args.is_empty() || matches!(regexp, JsValue::Undefined) {
                         String::new()
                     } else {
                         match to_str(interp, &regexp) {

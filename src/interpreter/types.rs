@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -511,6 +511,7 @@ pub struct TypedArrayInfo {
     pub byte_offset: usize,
     pub byte_length: usize,
     pub array_length: usize,
+    pub is_detached: Rc<Cell<bool>>,
 }
 
 #[derive(Debug, Clone)]
@@ -518,6 +519,7 @@ pub struct DataViewInfo {
     pub buffer: Rc<RefCell<Vec<u8>>>,
     pub byte_offset: usize,
     pub byte_length: usize,
+    pub is_detached: Rc<Cell<bool>>,
 }
 
 pub struct JsObjectData {
@@ -541,6 +543,7 @@ pub struct JsObjectData {
     pub proxy_handler: Option<Rc<RefCell<JsObjectData>>>,
     pub proxy_revoked: bool,
     pub arraybuffer_data: Option<Rc<RefCell<Vec<u8>>>>,
+    pub arraybuffer_detached: Option<Rc<Cell<bool>>>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
     pub promise_data: Option<PromiseData>,
@@ -586,6 +589,7 @@ impl JsObjectData {
             proxy_handler: None,
             proxy_revoked: false,
             arraybuffer_data: None,
+            arraybuffer_detached: None,
             typed_array_info: None,
             data_view_info: None,
             promise_data: None,
