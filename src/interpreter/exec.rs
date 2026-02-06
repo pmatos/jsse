@@ -531,6 +531,13 @@ impl Interpreter {
                     }
                     ForInOfLeft::Pattern(pat) => {
                         if let Pattern::Identifier(name) = pat {
+                            if !env.borrow().has(name) && env.borrow().strict {
+                                return Completion::Throw(
+                                    self.create_reference_error(&format!(
+                                        "{name} is not defined"
+                                    )),
+                                );
+                            }
                             let _ = env.borrow_mut().set(name, key_val);
                         }
                     }
@@ -619,6 +626,14 @@ impl Interpreter {
                 }
                 ForInOfLeft::Pattern(pat) => {
                     if let Pattern::Identifier(name) = pat {
+                        if !env.borrow().has(name) && env.borrow().strict {
+                            self.iterator_close(&iterator, JsValue::Undefined);
+                            return Completion::Throw(
+                                self.create_reference_error(&format!(
+                                    "{name} is not defined"
+                                )),
+                            );
+                        }
                         let _ = env.borrow_mut().set(name, val);
                     } else if let Err(e) = self.bind_pattern(pat, val, BindingKind::Let, &for_env) {
                         self.iterator_close(&iterator, e.clone());
@@ -683,13 +698,12 @@ impl Interpreter {
             other => return other,
         };
         let switch_env = Environment::new(Some(env.clone()));
+        let default_idx = s.cases.iter().position(|c| c.test.is_none());
+        let a_end = default_idx.unwrap_or(s.cases.len());
+
+        // Phase 1: Search list A (cases before default) for a match
         let mut found = false;
-        let mut default_idx = None;
-        for (i, case) in s.cases.iter().enumerate() {
-            if case.test.is_none() {
-                default_idx = Some(i);
-                continue;
-            }
+        for (i, case) in s.cases[..a_end].iter().enumerate() {
             if !found {
                 let test = match self.eval_expr(case.test.as_ref().unwrap(), &switch_env) {
                     Completion::Normal(v) => v,
@@ -700,29 +714,65 @@ impl Interpreter {
                 }
             }
             if found {
-                for stmt in &case.consequent {
-                    match self.exec_statement(stmt, &switch_env) {
-                        Completion::Normal(_) => {}
-                        Completion::Break(None) => return Completion::Normal(JsValue::Undefined),
-                        other => return other,
+                // Fall through from match in A through rest of A, then default + B
+                if let Some(r) = self.exec_switch_cases(&s.cases[i..a_end], &switch_env) {
+                    return r;
+                }
+                if let Some(di) = default_idx {
+                    if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env) {
+                        return r;
                     }
                 }
+                return Completion::Normal(JsValue::Undefined);
             }
         }
-        if !found && let Some(idx) = default_idx {
-            for case in &s.cases[idx..] {
-                for stmt in &case.consequent {
-                    match self.exec_statement(stmt, &switch_env) {
-                        Completion::Normal(_) => {}
-                        Completion::Break(None) => {
-                            return Completion::Normal(JsValue::Undefined);
-                        }
-                        other => return other,
+
+        if let Some(di) = default_idx {
+            let b_start = di + 1;
+
+            // Phase 2: Search list B (cases after default) for a match
+            for (i, case) in s.cases[b_start..].iter().enumerate() {
+                if case.test.is_none() {
+                    continue;
+                }
+                let test = match self.eval_expr(case.test.as_ref().unwrap(), &switch_env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if strict_equality(&disc, &test) {
+                    if let Some(r) = self.exec_switch_cases(&s.cases[b_start + i..], &switch_env) {
+                        return r;
                     }
+                    return Completion::Normal(JsValue::Undefined);
                 }
             }
+
+            // Phase 3: No match anywhere — execute default, then fall through B
+            if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env) {
+                return r;
+            }
         }
+
         Completion::Normal(JsValue::Undefined)
+    }
+
+    fn exec_switch_cases(
+        &mut self,
+        cases: &[crate::ast::SwitchCase],
+        env: &EnvRef,
+    ) -> Option<Completion> {
+        for case in cases {
+            for stmt in &case.consequent {
+                match self.exec_statement(stmt, env) {
+                    Completion::Normal(_) => {}
+                    Completion::Break(None) => {
+                        return Some(Completion::Normal(JsValue::Undefined))
+                    }
+                    other => return Some(other),
+                }
+            }
+        }
+        None
     }
 
     pub(crate) fn add_disposable_resource(

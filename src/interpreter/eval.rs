@@ -1559,13 +1559,25 @@ impl Interpreter {
                     self.set_function_name(&rval, name);
                     rval
                 } else {
-                    let lval = env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                    let lval = match env.borrow().get(name) {
+                        Some(v) => v,
+                        None => {
+                            return Completion::Throw(
+                                self.create_reference_error(&format!("{name} is not defined")),
+                            );
+                        }
+                    };
                     match self.apply_compound_assign(op, &lval, &rval) {
                         Completion::Normal(v) => v,
                         other => return other,
                     }
                 };
                 if !env.borrow().has(name) {
+                    if env.borrow().strict {
+                        return Completion::Throw(
+                            self.create_reference_error(&format!("{name} is not defined")),
+                        );
+                    }
                     env.borrow_mut().declare(name, BindingKind::Var);
                 }
                 if let Err(e) = env.borrow_mut().set(name, final_val.clone()) {
@@ -1982,6 +1994,11 @@ impl Interpreter {
             Expression::Identifier(name) => {
                 self.set_function_name(&val, name);
                 if !env.borrow().has(name) {
+                    if env.borrow().strict {
+                        return Err(
+                            self.create_reference_error(&format!("{name} is not defined")),
+                        );
+                    }
                     env.borrow_mut().declare(name, BindingKind::Var);
                 }
                 env.borrow_mut().set(name, val)

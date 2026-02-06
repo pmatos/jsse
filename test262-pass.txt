@@ -13405,14 +13405,25 @@ test262/test/language/directive-prologue/14.1-8-s.js
 test262/test/language/directive-prologue/14.1-9-s.js
 test262/test/language/directive-prologue/func-decl-final-runtime.js
 test262/test/language/directive-prologue/func-decl-inside-func-decl-parse.js
+test262/test/language/directive-prologue/func-decl-inside-func-decl-runtime.js
 test262/test/language/directive-prologue/func-decl-no-semi-parse.js
+test262/test/language/directive-prologue/func-decl-no-semi-runtime.js
 test262/test/language/directive-prologue/func-decl-not-first-runtime.js
 test262/test/language/directive-prologue/func-decl-parse.js
+test262/test/language/directive-prologue/func-decl-runtime.js
 test262/test/language/directive-prologue/func-expr-final-runtime.js
 test262/test/language/directive-prologue/func-expr-inside-func-decl-parse.js
+test262/test/language/directive-prologue/func-expr-inside-func-decl-runtime.js
 test262/test/language/directive-prologue/func-expr-no-semi-parse.js
+test262/test/language/directive-prologue/func-expr-no-semi-runtime.js
 test262/test/language/directive-prologue/func-expr-not-first-runtime.js
 test262/test/language/directive-prologue/func-expr-parse.js
+test262/test/language/directive-prologue/func-expr-runtime.js
+test262/test/language/directive-prologue/get-accsr-inside-func-expr-runtime.js
+test262/test/language/directive-prologue/get-accsr-runtime.js
+test262/test/language/directive-prologue/set-accsr-inside-func-expr-runtime.js
+test262/test/language/directive-prologue/set-accsr-not-first-runtime.js
+test262/test/language/directive-prologue/set-accsr-runtime.js
 test262/test/language/eval-code/direct/arrow-fn-body-cntns-arguments-func-decl-arrow-func-declare-arguments-assign.js
 test262/test/language/eval-code/direct/arrow-fn-body-cntns-arguments-lex-bind-arrow-func-declare-arguments-assign.js
 test262/test/language/eval-code/direct/arrow-fn-body-cntns-arguments-var-bind-arrow-func-declare-arguments-assign.js
@@ -13846,6 +13857,7 @@ test262/test/language/expressions/arrow-function/scope-param-rest-elem-var-close
 test262/test/language/expressions/arrow-function/scope-paramsbody-var-close.js
 test262/test/language/expressions/arrow-function/statement-body-requires-braces-must-return-explicitly.js
 test262/test/language/expressions/arrow-function/static-init-await-binding.js
+test262/test/language/expressions/arrow-function/strict.js
 test262/test/language/expressions/arrow-function/syntax/arrowparameters-bindingidentifier-arguments.js
 test262/test/language/expressions/arrow-function/syntax/arrowparameters-bindingidentifier-concisebody-assignmentexpression.js
 test262/test/language/expressions/arrow-function/syntax/arrowparameters-bindingidentifier-concisebody-functionbody.js
@@ -13894,6 +13906,8 @@ test262/test/language/expressions/assignment/S11.13.1_A7_T4.js
 test262/test/language/expressions/assignment/S8.12.4_A1.js
 test262/test/language/expressions/assignment/S8.12.5_A1.js
 test262/test/language/expressions/assignment/S8.12.5_A2.js
+test262/test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval--1.js
+test262/test/language/expressions/assignment/assignment-operator-calls-putvalue-lref--rval-.js
 test262/test/language/expressions/assignment/destructuring/default-expr-throws-iterator-return-is-not-callable.js
 test262/test/language/expressions/assignment/destructuring/target-assign-throws-iterator-return-is-not-callable.js
 test262/test/language/expressions/assignment/dstr/array-elem-init-assignment.js
@@ -13936,6 +13950,7 @@ test262/test/language/expressions/assignment/dstr/array-elem-put-obj-literal-pro
 test262/test/language/expressions/assignment/dstr/array-elem-put-prop-ref-no-get.js
 test262/test/language/expressions/assignment/dstr/array-elem-put-prop-ref-user-err.js
 test262/test/language/expressions/assignment/dstr/array-elem-put-prop-ref.js
+test262/test/language/expressions/assignment/dstr/array-elem-put-unresolvable-strict.js
 test262/test/language/expressions/assignment/dstr/array-elem-target-identifier.js
 test262/test/language/expressions/assignment/dstr/array-elem-target-simple-no-strict.js
 test262/test/language/expressions/assignment/dstr/array-elem-target-yield-invalid.js
@@ -14006,6 +14021,7 @@ test262/test/language/expressions/assignment/dstr/array-rest-put-prop-ref-no-get
 test262/test/language/expressions/assignment/dstr/array-rest-put-prop-ref-user-err-iter-close-skip.js
 test262/test/language/expressions/assignment/dstr/array-rest-put-prop-ref-user-err.js
 test262/test/language/expressions/assignment/dstr/array-rest-put-prop-ref.js
+test262/test/language/expressions/assignment/dstr/array-rest-put-unresolvable-strict.js
 test262/test/language/expressions/assignment/dstr/array-rest-yield-ident-invalid.js
 test262/test/language/expressions/assignment/dstr/array-rest-yield-ident-valid.js
 test262/test/language/expressions/assignment/dstr/ident-name-prop-name-literal-break-escaped.js
@@ -14082,6 +14098,7 @@ test262/test/language/expressions/assignment/dstr/obj-id-init-simple-no-strict.j
 test262/test/language/expressions/assignment/dstr/obj-id-init-simple-strict.js
 test262/test/language/expressions/assignment/dstr/obj-id-init-yield-ident-invalid.js
 test262/test/language/expressions/assignment/dstr/obj-id-init-yield-ident-valid.js
+test262/test/language/expressions/assignment/dstr/obj-id-put-unresolvable-strict.js
 test262/test/language/expressions/assignment/dstr/obj-id-simple-no-strict.js
 test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-assignment-missing.js
 test262/test/language/expressions/assignment/dstr/obj-prop-elem-init-assignment-null.js
@@ -14126,6 +14143,7 @@ test262/test/language/expressions/assignment/dstr/obj-prop-put-order.js
 test262/test/language/expressions/assignment/dstr/obj-prop-put-prop-ref-no-get.js
 test262/test/language/expressions/assignment/dstr/obj-prop-put-prop-ref-user-err.js
 test262/test/language/expressions/assignment/dstr/obj-prop-put-prop-ref.js
+test262/test/language/expressions/assignment/dstr/obj-prop-put-unresolvable-strict.js
 test262/test/language/expressions/assignment/dstr/obj-rest-computed-property-no-strict.js
 test262/test/language/expressions/assignment/dstr/obj-rest-computed-property.js
 test262/test/language/expressions/assignment/dstr/obj-rest-descriptors.js
@@ -18862,6 +18880,9 @@ test262/test/language/expressions/comma/S11.14_A2.1_T1.js
 test262/test/language/expressions/comma/S11.14_A2.1_T2.js
 test262/test/language/expressions/comma/S11.14_A2.1_T3.js
 test262/test/language/expressions/comma/S11.14_A3.js
+test262/test/language/expressions/compound-assignment/11.13.2-1-s.js
+test262/test/language/expressions/compound-assignment/11.13.2-10-s.js
+test262/test/language/expressions/compound-assignment/11.13.2-11-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-12-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-13-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-14-s.js
@@ -18870,6 +18891,7 @@ test262/test/language/expressions/compound-assignment/11.13.2-16-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-17-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-18-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-19-s.js
+test262/test/language/expressions/compound-assignment/11.13.2-2-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-20-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-21-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-22-s.js
@@ -18890,6 +18912,7 @@ test262/test/language/expressions/compound-assignment/11.13.2-36-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-37-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-38-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-39-s.js
+test262/test/language/expressions/compound-assignment/11.13.2-4-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-40-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-41-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-42-s.js
@@ -18900,6 +18923,7 @@ test262/test/language/expressions/compound-assignment/11.13.2-46-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-47-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-48-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-49-s.js
+test262/test/language/expressions/compound-assignment/11.13.2-5-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-50-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-51-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-52-s.js
@@ -18907,6 +18931,9 @@ test262/test/language/expressions/compound-assignment/11.13.2-53-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-54-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-55-s.js
 test262/test/language/expressions/compound-assignment/11.13.2-6-1gs.js
+test262/test/language/expressions/compound-assignment/11.13.2-6-s.js
+test262/test/language/expressions/compound-assignment/11.13.2-8-s.js
+test262/test/language/expressions/compound-assignment/11.13.2-9-s.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T1.1.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T1.10.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T1.11.js
@@ -18929,6 +18956,17 @@ test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T2.6.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T2.7.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T2.8.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T2.9.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.1.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.10.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.11.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.2.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.3.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.4.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.5.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.6.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.7.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.8.js
+test262/test/language/expressions/compound-assignment/S11.13.2_A2.1_T3.9.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A3.1_T1.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A3.1_T10.js
 test262/test/language/expressions/compound-assignment/S11.13.2_A3.1_T11.js
@@ -22549,6 +22587,7 @@ test262/test/language/identifier-resolution/S10.2.2_A1_T7.js
 test262/test/language/identifier-resolution/S10.2.2_A1_T8.js
 test262/test/language/identifier-resolution/S10.2.2_A1_T9.js
 test262/test/language/identifier-resolution/S11.1.2_A1_T2.js
+test262/test/language/identifier-resolution/assign-to-global-undefined.js
 test262/test/language/identifier-resolution/unscopables.js
 test262/test/language/identifiers/other_id_continue-escaped.js
 test262/test/language/identifiers/part-digits-via-escape-hex.js
@@ -30761,6 +30800,10 @@ test262/test/language/statements/return/S12.9_A3.js
 test262/test/language/statements/return/S12.9_A4.js
 test262/test/language/statements/return/S12.9_A5.js
 test262/test/language/statements/return/line-terminators.js
+test262/test/language/statements/switch/S12.11_A1_T1.js
+test262/test/language/statements/switch/S12.11_A1_T2.js
+test262/test/language/statements/switch/S12.11_A1_T3.js
+test262/test/language/statements/switch/S12.11_A1_T4.js
 test262/test/language/statements/switch/S12.11_A3_T1.js
 test262/test/language/statements/switch/S12.11_A3_T2.js
 test262/test/language/statements/switch/S12.11_A3_T3.js
@@ -31304,8 +31347,10 @@ test262/test/language/types/object/S8.6_A2_T1.js
 test262/test/language/types/object/S8.6_A2_T2.js
 test262/test/language/types/object/S8.6_A3_T1.js
 test262/test/language/types/object/S8.6_A3_T2.js
+test262/test/language/types/reference/8.7.2-1-s.js
 test262/test/language/types/reference/8.7.2-2-s.js
 test262/test/language/types/reference/8.7.2-3-1-s.js
+test262/test/language/types/reference/8.7.2-3-a-1gs.js
 test262/test/language/types/reference/8.7.2-3-a-2gs.js
 test262/test/language/types/reference/8.7.2-3-s.js
 test262/test/language/types/reference/8.7.2-4-s.js
