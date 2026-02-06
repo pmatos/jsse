@@ -67,44 +67,8 @@ impl Interpreter {
                     && self.get_proxy_info(o.id).is_some()
                 {
                     let key = to_js_string(&lval);
-                    let target_val = self.get_proxy_target_val(o.id);
-                    let key_val = JsValue::String(JsString::from_str(&key));
-                    match self.invoke_proxy_trap(o.id, "has", vec![target_val.clone(), key_val]) {
-                        Ok(Some(v)) => {
-                            let trap_result = to_boolean(&v);
-                            if !trap_result {
-                                // Cannot report non-configurable own property as non-existent
-                                if let JsValue::Object(ref t) = target_val
-                                    && let Some(tobj) = self.get_object(t.id)
-                                {
-                                    let target_desc = tobj.borrow().get_own_property(&key);
-                                    if let Some(ref desc) = target_desc {
-                                        if desc.configurable == Some(false) {
-                                            return Completion::Throw(self.create_type_error(
-                                                "'has' on proxy: trap returned falsish for property which exists in the proxy target as non-configurable",
-                                            ));
-                                        }
-                                        if !tobj.borrow().extensible {
-                                            return Completion::Throw(self.create_type_error(
-                                                "'has' on proxy: trap returned falsish for property but the proxy target is not extensible",
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                            return Completion::Normal(JsValue::Boolean(trap_result));
-                        }
-                        Ok(None) => {
-                            // No trap, fall through to target
-                            if let JsValue::Object(ref t) = target_val
-                                && let Some(tobj) = self.get_object(t.id)
-                            {
-                                return Completion::Normal(JsValue::Boolean(
-                                    tobj.borrow().has_property(&key),
-                                ));
-                            }
-                            return Completion::Normal(JsValue::Boolean(false));
-                        }
+                    match self.proxy_has_property(o.id, &key) {
+                        Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -226,54 +190,9 @@ impl Interpreter {
                         && let Some(obj) = self.get_object(o.id)
                     {
                         // Proxy deleteProperty trap
-                        if obj.borrow().is_proxy() {
-                            let target_val = self.get_proxy_target_val(o.id);
-                            let key_val = JsValue::String(JsString::from_str(&key));
-                            match self.invoke_proxy_trap(
-                                o.id,
-                                "deleteProperty",
-                                vec![target_val.clone(), key_val],
-                            ) {
-                                Ok(Some(v)) => {
-                                    let trap_result = to_boolean(&v);
-                                    if trap_result {
-                                        if let JsValue::Object(ref t) = target_val
-                                            && let Some(tobj) = self.get_object(t.id)
-                                        {
-                                            let target_desc =
-                                                tobj.borrow().get_own_property(&key);
-                                            if let Some(ref desc) = target_desc {
-                                                if desc.configurable == Some(false) {
-                                                    return Completion::Throw(self.create_type_error(
-                                                        "'deleteProperty' on proxy: trap returned truish for property which is non-configurable in the proxy target",
-                                                    ));
-                                                }
-                                                if !tobj.borrow().extensible {
-                                                    return Completion::Throw(self.create_type_error(
-                                                        "'deleteProperty' on proxy: trap returned truish for property but the proxy target is not extensible",
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    return Completion::Normal(JsValue::Boolean(trap_result));
-                                }
-                                Ok(None) => {
-                                    // No trap, fall through to target
-                                    if let JsValue::Object(ref t) = target_val
-                                        && let Some(tobj) = self.get_object(t.id)
-                                    {
-                                        let mut tm = tobj.borrow_mut();
-                                        if let Some(desc) = tm.properties.get(&key)
-                                            && desc.configurable == Some(false)
-                                        {
-                                            return Completion::Normal(JsValue::Boolean(false));
-                                        }
-                                        tm.properties.remove(&key);
-                                        tm.property_order.retain(|k| k != &key);
-                                    }
-                                    return Completion::Normal(JsValue::Boolean(true));
-                                }
+                        if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                            match self.proxy_delete_property(o.id, &key) {
+                                Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
@@ -1576,22 +1495,10 @@ impl Interpreter {
             // Set value back
             if let JsValue::Object(ref o) = obj_val {
                 if let Some(obj) = self.get_object(o.id) {
-                    if obj.borrow().is_proxy() {
-                        let target_val = self.get_proxy_target_val(o.id);
-                        let key_val = JsValue::String(JsString::from_str(&key));
+                    if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                         let receiver = obj_val.clone();
-                        match self.invoke_proxy_trap(
-                            o.id,
-                            "set",
-                            vec![target_val, key_val, new_val.clone(), receiver],
-                        ) {
-                            Ok(Some(_)) => {}
-                            Ok(None) => {
-                                if let Some(obj) = self.get_object(o.id) {
-                                    let _ =
-                                        obj.borrow_mut().set_property_value(&key, new_val.clone());
-                                }
-                            }
+                        match self.proxy_set(o.id, &key, new_val.clone(), &receiver) {
+                            Ok(_) => {}
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
@@ -1826,70 +1733,14 @@ impl Interpreter {
                         }
                     };
                     // Proxy set trap
-                    if obj.borrow().is_proxy() {
-                        let target_val = self.get_proxy_target_val(o.id);
-                        let key_val = JsValue::String(JsString::from_str(&key));
+                    if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                         let receiver = obj_val.clone();
-                        match self.invoke_proxy_trap(
-                            o.id,
-                            "set",
-                            vec![target_val.clone(), key_val, final_val.clone(), receiver],
-                        ) {
-                            Ok(Some(v)) => {
-                                if to_boolean(&v) {
-                                    // Set trap invariant checks
-                                    if let JsValue::Object(ref t) = target_val
-                                        && let Some(tobj) = self.get_object(t.id)
-                                    {
-                                        let target_desc =
-                                            tobj.borrow().get_own_property(&key);
-                                        if let Some(ref desc) = target_desc {
-                                            if desc.configurable == Some(false) {
-                                                if desc.is_data_descriptor()
-                                                    && desc.writable == Some(false)
-                                                    && !same_value(
-                                                        &final_val,
-                                                        desc.value
-                                                            .as_ref()
-                                                            .unwrap_or(&JsValue::Undefined),
-                                                    )
-                                                {
-                                                    return Completion::Throw(self.create_type_error(
-                                                        "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable data property with a different value",
-                                                    ));
-                                                }
-                                                if desc.is_accessor_descriptor()
-                                                    && matches!(
-                                                        desc.set
-                                                            .as_ref()
-                                                            .unwrap_or(&JsValue::Undefined),
-                                                        JsValue::Undefined
-                                                    )
-                                                {
-                                                    return Completion::Throw(self.create_type_error(
-                                                        "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable accessor property without a setter",
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    return Completion::Normal(final_val);
-                                }
-                                return Completion::Normal(final_val);
-                            }
-                            Ok(None) => {
-                                // No trap, fall through to target
-                                if let JsValue::Object(ref t) = target_val
-                                    && let Some(tobj) = self.get_object(t.id)
-                                {
-                                    let success = tobj
-                                        .borrow_mut()
-                                        .set_property_value(&key, final_val.clone());
-                                    if !success && env.borrow().strict {
-                                        return Completion::Throw(self.create_type_error(
-                                            &format!("Cannot assign to read only property '{key}'"),
-                                        ));
-                                    }
+                        match self.proxy_set(o.id, &key, final_val.clone(), &receiver) {
+                            Ok(success) => {
+                                if !success && env.borrow().strict {
+                                    return Completion::Throw(self.create_type_error(
+                                        &format!("Cannot assign to read only property '{key}'"),
+                                    ));
                                 }
                                 return Completion::Normal(final_val);
                             }
@@ -2054,31 +1905,14 @@ impl Interpreter {
             && let Some(obj) = self.get_object(o.id)
         {
             // Proxy set trap
-            if obj.borrow().is_proxy() {
-                let target_val = self.get_proxy_target_val(o.id);
-                let key_val = JsValue::String(JsString::from_str(&key));
+            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                 let receiver = obj_val.clone();
-                match self.invoke_proxy_trap(
-                    o.id,
-                    "set",
-                    vec![target_val.clone(), key_val, val.clone(), receiver],
-                ) {
-                    Ok(Some(v)) => {
-                        if to_boolean(&v) {
-                            return Ok(());
-                        }
-                        if env.borrow().strict {
+                match self.proxy_set(o.id, &key, val, &receiver) {
+                    Ok(success) => {
+                        if !success && env.borrow().strict {
                             return Err(self.create_type_error(&format!(
                                 "Cannot assign to read only property '{key}'"
                             )));
-                        }
-                        return Ok(());
-                    }
-                    Ok(None) => {
-                        if let JsValue::Object(ref t) = target_val
-                            && let Some(tobj) = self.get_object(t.id)
-                        {
-                            tobj.borrow_mut().set_property_value(&key, val);
                         }
                         return Ok(());
                     }
@@ -4898,8 +4732,8 @@ impl Interpreter {
         if let JsValue::Object(o) = func_val
             && let Some(obj) = self.get_object(o.id)
         {
-            // Proxy apply trap
-            if obj.borrow().is_proxy() {
+            // Proxy apply trap (also check revoked proxy)
+            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                 let target_val = self.get_proxy_target_val(o.id);
                 let args_array = self.create_array(args.to_vec());
                 match self.invoke_proxy_trap(
@@ -5370,32 +5204,8 @@ impl Interpreter {
                     );
                 }
                 Ok(None) => {
-                    // No trap, forward to target constructor
-                    // Temporarily replace callee with target for normal eval_new path
-                    let prev_new_target = self.new_target.take();
-                    self.new_target = Some(callee_val.clone());
-                    let new_obj = self.create_object();
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(func_obj) = self.get_object(t.id)
-                    {
-                        let proto = func_obj.borrow().get_property_value("prototype");
-                        if let Some(JsValue::Object(proto_obj)) = proto
-                            && let Some(proto_rc) = self.get_object(proto_obj.id)
-                        {
-                            new_obj.borrow_mut().prototype = Some(proto_rc);
-                        }
-                    }
-                    let new_obj_id = new_obj.borrow().id.unwrap();
-                    let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
-                    let result = self.call_function(&target_val, &this_val, &evaluated_args);
-                    self.new_target = prev_new_target;
-                    return match result {
-                        Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
-                            Completion::Normal(v)
-                        }
-                        Completion::Normal(_) | Completion::Empty => Completion::Normal(this_val),
-                        other => other,
-                    };
+                    // No trap, forward to target constructor (proxy-aware)
+                    return self.construct(&target_val, &evaluated_args);
                 }
                 Err(e) => return Completion::Throw(e),
             }
@@ -5526,34 +5336,8 @@ impl Interpreter {
                     );
                 }
                 Ok(None) => {
-                    let prev_new_target = self.new_target.take();
-                    self.new_target = Some(constructor.clone());
-                    let new_obj = self.create_object();
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(func_obj) = self.get_object(t.id)
-                    {
-                        let proto = func_obj.borrow().get_property_value("prototype");
-                        if let Some(JsValue::Object(proto_obj)) = proto
-                            && let Some(proto_rc) = self.get_object(proto_obj.id)
-                        {
-                            new_obj.borrow_mut().prototype = Some(proto_rc);
-                        }
-                    }
-                    let new_obj_id = new_obj.borrow().id.unwrap();
-                    let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
-                    self.last_call_had_explicit_return = false;
-                    let result = self.call_function(&target_val, &this_val, args);
-                    let had_explicit_return = self.last_call_had_explicit_return;
-                    self.new_target = prev_new_target;
-                    return match result {
-                        Completion::Normal(v)
-                            if had_explicit_return && matches!(v, JsValue::Object(_)) =>
-                        {
-                            Completion::Normal(v)
-                        }
-                        Completion::Normal(_) => Completion::Normal(this_val),
-                        other => other,
-                    };
+                    // No trap, forward to target constructor (proxy-aware)
+                    return self.construct(&target_val, args);
                 }
                 Err(e) => return Completion::Throw(e),
             }
@@ -5966,6 +5750,574 @@ impl Interpreter {
             Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::Undefined),
             Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
             None => Completion::Normal(JsValue::Undefined),
+        }
+    }
+
+    /// Proxy-aware [[HasProperty]] - checks proxy `has` trap, recurses on target if no trap.
+    pub(crate) fn proxy_has_property(&mut self, obj_id: u64, key: &str) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            let key_val = JsValue::String(JsString::from_str(key));
+            match self.invoke_proxy_trap(obj_id, "has", vec![target_val.clone(), key_val]) {
+                Ok(Some(v)) => {
+                    let trap_result = to_boolean(&v);
+                    if !trap_result {
+                        if let JsValue::Object(ref t) = target_val
+                            && let Some(tobj) = self.get_object(t.id)
+                        {
+                            let target_desc = tobj.borrow().get_own_property(key);
+                            if let Some(ref desc) = target_desc {
+                                if desc.configurable == Some(false) {
+                                    return Err(self.create_type_error(
+                                        "'has' on proxy: trap returned falsish for property which exists in the proxy target as non-configurable",
+                                    ));
+                                }
+                                if !tobj.borrow().extensible {
+                                    return Err(self.create_type_error(
+                                        "'has' on proxy: trap returned falsish for property but the proxy target is not extensible",
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Ok(trap_result)
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_has_property(t.id, key);
+                    }
+                    Ok(false)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            Ok(obj.borrow().has_property(key))
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Proxy-aware [[Set]] - checks proxy `set` trap, recurses on target if no trap.
+    pub(crate) fn proxy_set(
+        &mut self,
+        obj_id: u64,
+        key: &str,
+        value: JsValue,
+        receiver: &JsValue,
+    ) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            let key_val = JsValue::String(JsString::from_str(key));
+            match self.invoke_proxy_trap(
+                obj_id,
+                "set",
+                vec![target_val.clone(), key_val, value.clone(), receiver.clone()],
+            ) {
+                Ok(Some(v)) => {
+                    if to_boolean(&v) {
+                        if let JsValue::Object(ref t) = target_val
+                            && let Some(tobj) = self.get_object(t.id)
+                        {
+                            let target_desc = tobj.borrow().get_own_property(key);
+                            if let Some(ref desc) = target_desc {
+                                if desc.configurable == Some(false) {
+                                    if desc.is_data_descriptor()
+                                        && desc.writable == Some(false)
+                                        && !same_value(
+                                            &value,
+                                            desc.value.as_ref().unwrap_or(&JsValue::Undefined),
+                                        )
+                                    {
+                                        return Err(self.create_type_error(
+                                            "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable data property with a different value",
+                                        ));
+                                    }
+                                    if desc.is_accessor_descriptor()
+                                        && matches!(
+                                            desc.set.as_ref().unwrap_or(&JsValue::Undefined),
+                                            JsValue::Undefined
+                                        )
+                                    {
+                                        return Err(self.create_type_error(
+                                            "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable accessor property without a setter",
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        Ok(true)
+                    } else {
+                        Ok(false)
+                    }
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_set(t.id, key, value, receiver);
+                    }
+                    Ok(false)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            Ok(obj.borrow_mut().set_property_value(key, value))
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Proxy-aware [[Delete]] - checks proxy `deleteProperty` trap, recurses on target if no trap.
+    pub(crate) fn proxy_delete_property(
+        &mut self,
+        obj_id: u64,
+        key: &str,
+    ) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            let key_val = JsValue::String(JsString::from_str(key));
+            match self.invoke_proxy_trap(
+                obj_id,
+                "deleteProperty",
+                vec![target_val.clone(), key_val],
+            ) {
+                Ok(Some(v)) => {
+                    let trap_result = to_boolean(&v);
+                    if trap_result {
+                        if let JsValue::Object(ref t) = target_val
+                            && let Some(tobj) = self.get_object(t.id)
+                        {
+                            let target_desc = tobj.borrow().get_own_property(key);
+                            if let Some(ref desc) = target_desc {
+                                if desc.configurable == Some(false) {
+                                    return Err(self.create_type_error(
+                                        "'deleteProperty' on proxy: trap returned truish for property which is non-configurable in the proxy target",
+                                    ));
+                                }
+                                if !tobj.borrow().extensible {
+                                    return Err(self.create_type_error(
+                                        "'deleteProperty' on proxy: trap returned truish for property but the proxy target is not extensible",
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Ok(trap_result)
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_delete_property(t.id, key);
+                    }
+                    Ok(true)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            let mut m = obj.borrow_mut();
+            if let Some(desc) = m.properties.get(key)
+                && desc.configurable == Some(false)
+            {
+                return Ok(false);
+            }
+            m.properties.remove(key);
+            m.property_order.retain(|k| k != key);
+            Ok(true)
+        } else {
+            Ok(true)
+        }
+    }
+
+    /// Proxy-aware [[DefineOwnProperty]] - checks proxy `defineProperty` trap, recurses on target if no trap.
+    pub(crate) fn proxy_define_own_property(
+        &mut self,
+        obj_id: u64,
+        key: String,
+        desc_val: &JsValue,
+    ) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            let key_val = JsValue::String(JsString::from_str(&key));
+            match self.invoke_proxy_trap(
+                obj_id,
+                "defineProperty",
+                vec![target_val.clone(), key_val, desc_val.clone()],
+            ) {
+                Ok(Some(v)) => {
+                    let trap_result = to_boolean(&v);
+                    if !trap_result {
+                        return Ok(false);
+                    }
+                    if let JsValue::Object(ref t) = target_val
+                        && let Some(tobj) = self.get_object(t.id)
+                    {
+                        let target_desc = tobj.borrow().get_own_property(&key);
+                        let target_extensible = tobj.borrow().extensible;
+                        let desc = self.to_property_descriptor(desc_val).ok();
+                        if let Some(ref desc) = desc {
+                            if !target_extensible && target_desc.is_none() {
+                                return Err(self.create_type_error(
+                                    "'defineProperty' on proxy: trap returned truish for adding property to the non-extensible proxy target",
+                                ));
+                            }
+                            if let Some(ref td) = target_desc {
+                                if td.configurable == Some(false) {
+                                    if desc.configurable == Some(true) {
+                                        return Err(self.create_type_error(
+                                            "'defineProperty' on proxy: trap returned truish for defining non-configurable property which is already non-configurable in the proxy target as configurable",
+                                        ));
+                                    }
+                                    if desc.is_data_descriptor() && td.is_data_descriptor()
+                                        && td.writable == Some(false)
+                                        && desc.writable == Some(true)
+                                    {
+                                        return Err(self.create_type_error(
+                                            "'defineProperty' on proxy: trap returned truish for defining non-configurable property which cannot be made writable",
+                                        ));
+                                    }
+                                }
+                            }
+                            if desc.configurable == Some(false) && target_desc.is_none() {
+                                return Err(self.create_type_error(
+                                    "'defineProperty' on proxy: trap returned truish for defining non-configurable property which does not exist on the proxy target",
+                                ));
+                            }
+                        }
+                    }
+                    Ok(true)
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_define_own_property(t.id, key, desc_val);
+                    }
+                    Ok(false)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            match self.to_property_descriptor(desc_val) {
+                Ok(desc) => Ok(obj.borrow_mut().define_own_property(key, desc)),
+                Err(Some(e)) => Err(e),
+                Err(None) => Ok(false),
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Proxy-aware [[GetOwnProperty]] - checks proxy `getOwnPropertyDescriptor` trap, recurses on target if no trap.
+    pub(crate) fn proxy_get_own_property_descriptor(
+        &mut self,
+        obj_id: u64,
+        key: &str,
+    ) -> Result<JsValue, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            let key_val = JsValue::String(JsString::from_str(key));
+            match self.invoke_proxy_trap(
+                obj_id,
+                "getOwnPropertyDescriptor",
+                vec![target_val.clone(), key_val],
+            ) {
+                Ok(Some(v)) => {
+                    if let JsValue::Object(ref t) = target_val
+                        && let Some(tobj) = self.get_object(t.id)
+                    {
+                        let target_desc = tobj.borrow().get_own_property(key);
+                        let target_extensible = tobj.borrow().extensible;
+                        if matches!(v, JsValue::Undefined) {
+                            if let Some(ref td) = target_desc {
+                                if td.configurable == Some(false) {
+                                    return Err(self.create_type_error(
+                                        "'getOwnPropertyDescriptor' on proxy: trap returned undefined for property which is non-configurable in the proxy target",
+                                    ));
+                                }
+                                if !target_extensible {
+                                    return Err(self.create_type_error(
+                                        "'getOwnPropertyDescriptor' on proxy: trap returned undefined for property which exists in the non-extensible proxy target",
+                                    ));
+                                }
+                            }
+                        } else if matches!(v, JsValue::Object(_)) {
+                            if let Some(ref td) = target_desc {
+                                if td.configurable == Some(false) {
+                                    let trap_desc = self.to_property_descriptor(&v);
+                                    if let Ok(ref trap_d) = trap_desc {
+                                        if trap_d.configurable == Some(true) {
+                                            return Err(self.create_type_error(
+                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with configurable: true for non-configurable property in the proxy target",
+                                            ));
+                                        }
+                                        if td.is_data_descriptor() && td.writable == Some(false)
+                                            && trap_d.writable == Some(true)
+                                        {
+                                            return Err(self.create_type_error(
+                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with writable: true for non-configurable non-writable property in the proxy target",
+                                            ));
+                                        }
+                                    }
+                                }
+                            } else if !target_extensible {
+                                return Err(self.create_type_error(
+                                    "'getOwnPropertyDescriptor' on proxy: trap returned descriptor for property which does not exist in the non-extensible proxy target",
+                                ));
+                            }
+                        }
+                    }
+                    Ok(v)
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_get_own_property_descriptor(t.id, key);
+                    }
+                    Ok(JsValue::Undefined)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            let desc = obj.borrow().get_own_property(key);
+            match desc {
+                Some(d) => Ok(self.from_property_descriptor(&d)),
+                None => Ok(JsValue::Undefined),
+            }
+        } else {
+            Ok(JsValue::Undefined)
+        }
+    }
+
+    /// Proxy-aware [[OwnPropertyKeys]] - checks proxy `ownKeys` trap, recurses on target if no trap.
+    /// Returns all own property keys (for getOwnPropertyNames).
+    pub(crate) fn proxy_own_keys(&mut self, obj_id: u64) -> Result<Vec<JsValue>, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            match self.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
+                Ok(Some(v)) => {
+                    self.validate_ownkeys_invariant(&v, &target_val)?;
+                    if let JsValue::Object(arr) = &v
+                        && let Some(arr_obj) = self.get_object(arr.id)
+                    {
+                        let len = match arr_obj.borrow().get_property("length") {
+                            JsValue::Number(n) => n as usize,
+                            _ => 0,
+                        };
+                        let keys: Vec<JsValue> = (0..len)
+                            .map(|i| arr_obj.borrow().get_property(&i.to_string()))
+                            .collect();
+                        Ok(keys)
+                    } else {
+                        Ok(vec![])
+                    }
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_own_keys(t.id);
+                    }
+                    Ok(vec![])
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            let b = obj.borrow();
+            Ok(b.property_order
+                .iter()
+                .map(|k| JsValue::String(JsString::from_str(k)))
+                .collect())
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    /// Proxy-aware [[GetPrototypeOf]] - checks proxy `getPrototypeOf` trap, recurses on target if no trap.
+    pub(crate) fn proxy_get_prototype_of(&mut self, obj_id: u64) -> Result<JsValue, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            match self.invoke_proxy_trap(obj_id, "getPrototypeOf", vec![target_val.clone()]) {
+                Ok(Some(v)) => {
+                    if let JsValue::Object(ref t) = target_val
+                        && let Some(tobj) = self.get_object(t.id)
+                        && !tobj.borrow().extensible
+                    {
+                        let actual_proto = {
+                            let b = tobj.borrow();
+                            if let Some(ref p) = b.prototype {
+                                if let Some(pid) = p.borrow().id {
+                                    JsValue::Object(crate::types::JsObject { id: pid })
+                                } else {
+                                    JsValue::Null
+                                }
+                            } else {
+                                JsValue::Null
+                            }
+                        };
+                        let same = match (&v, &actual_proto) {
+                            (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
+                            (JsValue::Null, JsValue::Null) => true,
+                            _ => false,
+                        };
+                        if !same {
+                            return Err(self.create_type_error(
+                                "'getPrototypeOf' on proxy: proxy target is non-extensible but the trap did not return its actual prototype",
+                            ));
+                        }
+                    }
+                    Ok(v)
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_get_prototype_of(t.id);
+                    }
+                    Ok(JsValue::Null)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            if let Some(proto) = &obj.borrow().prototype
+                && let Some(id) = proto.borrow().id
+            {
+                Ok(JsValue::Object(crate::types::JsObject { id }))
+            } else {
+                Ok(JsValue::Null)
+            }
+        } else {
+            Ok(JsValue::Null)
+        }
+    }
+
+    /// Proxy-aware [[SetPrototypeOf]] - checks proxy `setPrototypeOf` trap, recurses on target if no trap.
+    pub(crate) fn proxy_set_prototype_of(
+        &mut self,
+        obj_id: u64,
+        proto: &JsValue,
+    ) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            match self.invoke_proxy_trap(
+                obj_id,
+                "setPrototypeOf",
+                vec![target_val.clone(), proto.clone()],
+            ) {
+                Ok(Some(v)) => {
+                    if !to_boolean(&v) {
+                        return Ok(false);
+                    }
+                    if let JsValue::Object(ref t) = target_val
+                        && let Some(tobj) = self.get_object(t.id)
+                        && !tobj.borrow().extensible
+                    {
+                        let actual_proto = {
+                            let b = tobj.borrow();
+                            if let Some(ref p) = b.prototype {
+                                if let Some(pid) = p.borrow().id {
+                                    JsValue::Object(crate::types::JsObject { id: pid })
+                                } else {
+                                    JsValue::Null
+                                }
+                            } else {
+                                JsValue::Null
+                            }
+                        };
+                        let same = match (proto, &actual_proto) {
+                            (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
+                            (JsValue::Null, JsValue::Null) => true,
+                            _ => false,
+                        };
+                        if !same {
+                            return Err(self.create_type_error(
+                                "'setPrototypeOf' on proxy: trap returned truish for setting a new prototype on the non-extensible proxy target",
+                            ));
+                        }
+                    }
+                    Ok(true)
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_set_prototype_of(t.id, proto);
+                    }
+                    Ok(true)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            match proto {
+                JsValue::Null => {
+                    obj.borrow_mut().prototype = None;
+                }
+                JsValue::Object(p) => {
+                    if let Some(po) = self.get_object(p.id) {
+                        obj.borrow_mut().prototype = Some(po);
+                    }
+                }
+                _ => {}
+            }
+            Ok(true)
+        } else {
+            Ok(true)
+        }
+    }
+
+    /// Proxy-aware [[IsExtensible]] - checks proxy `isExtensible` trap, recurses on target if no trap.
+    pub(crate) fn proxy_is_extensible(&mut self, obj_id: u64) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            match self.invoke_proxy_trap(obj_id, "isExtensible", vec![target_val.clone()]) {
+                Ok(Some(v)) => {
+                    let trap_result = to_boolean(&v);
+                    if let JsValue::Object(ref t) = target_val
+                        && let Some(tobj) = self.get_object(t.id)
+                    {
+                        let target_extensible = tobj.borrow().extensible;
+                        if trap_result != target_extensible {
+                            return Err(self.create_type_error(
+                                "'isExtensible' on proxy: trap result does not reflect extensibility of proxy target",
+                            ));
+                        }
+                    }
+                    Ok(trap_result)
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_is_extensible(t.id);
+                    }
+                    Ok(false)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            Ok(obj.borrow().extensible)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Proxy-aware [[PreventExtensions]] - checks proxy `preventExtensions` trap, recurses on target if no trap.
+    pub(crate) fn proxy_prevent_extensions(&mut self, obj_id: u64) -> Result<bool, JsValue> {
+        if self.get_proxy_info(obj_id).is_some() {
+            let target_val = self.get_proxy_target_val(obj_id);
+            match self.invoke_proxy_trap(obj_id, "preventExtensions", vec![target_val.clone()]) {
+                Ok(Some(v)) => {
+                    let trap_result = to_boolean(&v);
+                    if trap_result {
+                        if let JsValue::Object(ref t) = target_val
+                            && let Some(tobj) = self.get_object(t.id)
+                            && tobj.borrow().extensible
+                        {
+                            return Err(self.create_type_error(
+                                "'preventExtensions' on proxy: trap returned truish but the proxy target is extensible",
+                            ));
+                        }
+                    }
+                    Ok(trap_result)
+                }
+                Ok(None) => {
+                    if let JsValue::Object(ref t) = target_val {
+                        return self.proxy_prevent_extensions(t.id);
+                    }
+                    Ok(false)
+                }
+                Err(e) => Err(e),
+            }
+        } else if let Some(obj) = self.get_object(obj_id) {
+            obj.borrow_mut().extensible = false;
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
@@ -6613,7 +6965,7 @@ impl Interpreter {
                     }
                 }
                 ClassElement::StaticBlock(body) => {
-                    let block_env = Environment::new(Some(env.clone()));
+                    let block_env = Environment::new_function_scope(Some(env.clone()));
                     block_env.borrow_mut().bindings.insert(
                         "this".to_string(),
                         Binding {

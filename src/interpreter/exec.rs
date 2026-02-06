@@ -264,8 +264,9 @@ impl Interpreter {
                 && decl.kind == VarKind::Var
                 && let Pattern::Identifier(ref name) = d.pattern
             {
-                if !env.borrow().bindings.contains_key(name) {
-                    env.borrow_mut().declare(name, kind);
+                let var_scope = Environment::find_var_scope(env);
+                if !var_scope.borrow().bindings.contains_key(name) {
+                    var_scope.borrow_mut().declare(name, kind);
                 }
                 continue;
             }
@@ -306,9 +307,15 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         match pat {
             Pattern::Identifier(name) => {
-                if kind != BindingKind::Var || !env.borrow().bindings.contains_key(name) {
+                if kind == BindingKind::Var {
+                    let var_scope = Environment::find_var_scope(env);
+                    if !var_scope.borrow().bindings.contains_key(name) {
+                        var_scope.borrow_mut().declare(name, kind);
+                    }
+                } else {
                     env.borrow_mut().declare(name, kind);
                 }
+                // Set through normal scope chain (handles with-objects, etc.)
                 env.borrow_mut().set(name, val)
             }
             Pattern::Assign(inner, default) => {
@@ -383,8 +390,12 @@ impl Interpreter {
                             } else {
                                 JsValue::Undefined
                             };
-                            if kind != BindingKind::Var || !env.borrow().bindings.contains_key(name)
-                            {
+                            if kind == BindingKind::Var {
+                                let var_scope = Environment::find_var_scope(env);
+                                if !var_scope.borrow().bindings.contains_key(name) {
+                                    var_scope.borrow_mut().declare(name, kind);
+                                }
+                            } else if !env.borrow().bindings.contains_key(name) {
                                 env.borrow_mut().declare(name, kind);
                             }
                             env.borrow_mut().set(name, v)?;

@@ -3004,76 +3004,12 @@ impl Interpreter {
                     {
                         // Proxy defineProperty trap
                         if obj.borrow().is_proxy() {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            let key_val = JsValue::String(JsString::from_str(&key));
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "defineProperty",
-                                vec![target_inner.clone(), key_val, desc_val.clone()],
-                            ) {
-                                Ok(Some(v)) => {
-                                    if !to_boolean(&v) {
+                            match interp.proxy_define_own_property(o.id, key, &desc_val) {
+                                Ok(success) => {
+                                    if !success {
                                         return Completion::Throw(interp.create_type_error(
-                                            "'defineProperty' on proxy: trap returned falsish",
+                                            "Cannot define property, object is not extensible or property is non-configurable",
                                         ));
-                                    }
-                                    // Invariant checks
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        let target_desc = tobj.borrow().get_own_property(&key);
-                                        let target_extensible = tobj.borrow().extensible;
-                                        let desc = interp
-                                            .to_property_descriptor(&desc_val)
-                                            .ok();
-                                        if let Some(ref desc) = desc {
-                                            if !target_extensible && target_desc.is_none() {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'defineProperty' on proxy: trap returned truish for adding property to the non-extensible proxy target",
-                                                ));
-                                            }
-                                            if let Some(ref td) = target_desc {
-                                                if td.configurable == Some(false) {
-                                                    if desc.configurable == Some(true) {
-                                                        return Completion::Throw(interp.create_type_error(
-                                                            "'defineProperty' on proxy: trap returned truish for defining non-configurable property which is already non-configurable in the proxy target as configurable",
-                                                        ));
-                                                    }
-                                                    if desc.is_data_descriptor() && td.is_data_descriptor()
-                                                        && td.writable == Some(false)
-                                                        && desc.writable == Some(true)
-                                                    {
-                                                        return Completion::Throw(interp.create_type_error(
-                                                            "'defineProperty' on proxy: trap returned truish for defining non-configurable property which cannot be made writable",
-                                                        ));
-                                                    }
-                                                }
-                                            }
-                                            if desc.configurable == Some(false) && target_desc.is_none() {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'defineProperty' on proxy: trap returned truish for defining non-configurable property which does not exist on the proxy target",
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    return Completion::Normal(target);
-                                }
-                                Ok(None) => {
-                                    // No trap, fall through to target
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        match interp.to_property_descriptor(&desc_val) {
-                                            Ok(desc) => {
-                                                if !tobj.borrow_mut().define_own_property(key, desc) {
-                                                    return Completion::Throw(interp.create_type_error(
-                                                        "Cannot define property, object is not extensible or property is non-configurable",
-                                                    ));
-                                                }
-                                            }
-                                            Err(Some(e)) => return Completion::Throw(e),
-                                            Err(None) => {}
-                                        }
                                     }
                                     return Completion::Normal(target);
                                 }
@@ -3262,104 +3198,8 @@ impl Interpreter {
                         if let Some(obj) = interp.get_object(o.id)
                             && obj.borrow().is_proxy()
                         {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            let key_val = JsValue::String(JsString::from_str(&key));
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "getOwnPropertyDescriptor",
-                                vec![target_inner.clone(), key_val],
-                            ) {
-                                Ok(Some(v)) => {
-                                    // Invariant checks
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        let target_desc = tobj.borrow().get_own_property(&key);
-                                        let target_extensible = tobj.borrow().extensible;
-                                        if matches!(v, JsValue::Undefined) {
-                                            if let Some(ref td) = target_desc {
-                                                if td.configurable == Some(false) {
-                                                    return Completion::Throw(interp.create_type_error(
-                                                        "'getOwnPropertyDescriptor' on proxy: trap returned undefined for property which is non-configurable in the proxy target",
-                                                    ));
-                                                }
-                                                if !target_extensible {
-                                                    return Completion::Throw(interp.create_type_error(
-                                                        "'getOwnPropertyDescriptor' on proxy: trap returned undefined for property which exists in the non-extensible proxy target",
-                                                    ));
-                                                }
-                                            }
-                                        } else if matches!(v, JsValue::Object(_)) {
-                                            if let Some(ref td) = target_desc {
-                                                if td.configurable == Some(false) {
-                                                    let trap_desc = interp.to_property_descriptor(&v);
-                                                    if let Ok(ref trap_d) = trap_desc {
-                                                        if trap_d.configurable == Some(true) {
-                                                            return Completion::Throw(interp.create_type_error(
-                                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with configurable: true for non-configurable property in the proxy target",
-                                                            ));
-                                                        }
-                                                        if td.is_data_descriptor() && td.writable == Some(false)
-                                                            && trap_d.writable == Some(true)
-                                                        {
-                                                            return Completion::Throw(interp.create_type_error(
-                                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with writable: true for non-configurable non-writable property in the proxy target",
-                                                            ));
-                                                        }
-                                                    }
-                                                }
-                                            } else if !target_extensible {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'getOwnPropertyDescriptor' on proxy: trap returned descriptor for property which does not exist in the non-extensible proxy target",
-                                                ));
-                                            }
-                                        }
-                                    }
-                                    return Completion::Normal(v);
-                                }
-                                Ok(None) => {
-                                    // No trap, fall through to target
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        // Proxy-of-proxy: if target is also a proxy, recurse
-                                        if tobj.borrow().is_proxy() {
-                                            let inner2 = interp.get_proxy_target_val(t.id);
-                                            let key_val2 =
-                                                JsValue::String(JsString::from_str(&key));
-                                            match interp.invoke_proxy_trap(
-                                                t.id,
-                                                "getOwnPropertyDescriptor",
-                                                vec![inner2.clone(), key_val2],
-                                            ) {
-                                                Ok(Some(v)) => return Completion::Normal(v),
-                                                Ok(None) => {
-                                                    if let JsValue::Object(ref t2) = inner2
-                                                        && let Some(tobj2) =
-                                                            interp.get_object(t2.id)
-                                                        && let Some(desc) = tobj2
-                                                            .borrow()
-                                                            .get_own_property(&key)
-                                                    {
-                                                        return Completion::Normal(
-                                                            interp.from_property_descriptor(&desc),
-                                                        );
-                                                    }
-                                                    return Completion::Normal(JsValue::Undefined);
-                                                }
-                                                Err(e) => return Completion::Throw(e),
-                                            }
-                                        }
-                                        if let Some(desc) =
-                                            tobj.borrow().get_own_property(&key)
-                                        {
-                                            return Completion::Normal(
-                                                interp.from_property_descriptor(&desc),
-                                            );
-                                        }
-                                    }
-                                    return Completion::Normal(JsValue::Undefined);
-                                }
+                            match interp.proxy_get_own_property_descriptor(o.id, &key) {
+                                Ok(v) => return Completion::Normal(v),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
@@ -3391,39 +3231,10 @@ impl Interpreter {
                     {
                         // Proxy ownKeys trap
                         if obj.borrow().is_proxy() {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "ownKeys",
-                                vec![target_inner.clone()],
-                            ) {
-                                Ok(Some(v)) => {
-                                    if let Err(e) =
-                                        interp.validate_ownkeys_invariant(&v, &target_inner)
-                                    {
-                                        return Completion::Throw(e);
-                                    }
-                                    return Completion::Normal(v);
-                                }
-                                Ok(None) => {
-                                    // No trap, fall through to target
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        let b = tobj.borrow();
-                                        let keys: Vec<JsValue> = b
-                                            .property_order
-                                            .iter()
-                                            .filter(|k| {
-                                                b.properties
-                                                    .get(*k)
-                                                    .is_some_and(|d| d.enumerable != Some(false))
-                                            })
-                                            .map(|k| JsValue::String(JsString::from_str(k)))
-                                            .collect();
-                                        let arr = interp.create_array(keys);
-                                        return Completion::Normal(arr);
-                                    }
+                            match interp.proxy_own_keys(o.id) {
+                                Ok(keys) => {
+                                    let arr = interp.create_array(keys);
+                                    return Completion::Normal(arr);
                                 }
                                 Err(e) => return Completion::Throw(e),
                             }
@@ -3492,86 +3303,8 @@ impl Interpreter {
                     {
                         // Proxy getPrototypeOf trap
                         if obj.borrow().is_proxy() {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "getPrototypeOf",
-                                vec![target_inner.clone()],
-                            ) {
-                                Ok(Some(v)) => {
-                                    // Invariant: if target is non-extensible, must return target's actual prototype
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                        && !tobj.borrow().extensible
-                                    {
-                                        let actual_proto = {
-                                            let b = tobj.borrow();
-                                            if let Some(ref p) = b.prototype {
-                                                if let Some(pid) = p.borrow().id {
-                                                    JsValue::Object(crate::types::JsObject { id: pid })
-                                                } else {
-                                                    JsValue::Null
-                                                }
-                                            } else {
-                                                JsValue::Null
-                                            }
-                                        };
-                                        let same = match (&v, &actual_proto) {
-                                            (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                                            (JsValue::Null, JsValue::Null) => true,
-                                            _ => false,
-                                        };
-                                        if !same {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "'getPrototypeOf' on proxy: proxy target is non-extensible but the trap did not return its actual prototype",
-                                            ));
-                                        }
-                                    }
-                                    return Completion::Normal(v);
-                                }
-                                Ok(None) => {
-                                    // No trap, fall through to target
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        // Proxy-of-proxy
-                                        if tobj.borrow().is_proxy() {
-                                            let inner2 = interp.get_proxy_target_val(t.id);
-                                            match interp.invoke_proxy_trap(
-                                                t.id,
-                                                "getPrototypeOf",
-                                                vec![inner2.clone()],
-                                            ) {
-                                                Ok(Some(v)) => return Completion::Normal(v),
-                                                Ok(None) => {
-                                                    if let JsValue::Object(ref t2) = inner2
-                                                        && let Some(tobj2) =
-                                                            interp.get_object(t2.id)
-                                                        && let Some(proto) =
-                                                            &tobj2.borrow().prototype
-                                                        && let Some(id) = proto.borrow().id
-                                                    {
-                                                        return Completion::Normal(
-                                                            JsValue::Object(
-                                                                crate::types::JsObject { id },
-                                                            ),
-                                                        );
-                                                    }
-                                                    return Completion::Normal(JsValue::Null);
-                                                }
-                                                Err(e) => return Completion::Throw(e),
-                                            }
-                                        }
-                                        if let Some(proto) = &tobj.borrow().prototype
-                                            && let Some(id) = proto.borrow().id
-                                        {
-                                            return Completion::Normal(JsValue::Object(
-                                                crate::types::JsObject { id },
-                                            ));
-                                        }
-                                    }
-                                    return Completion::Normal(JsValue::Null);
-                                }
+                            match interp.proxy_get_prototype_of(o.id) {
+                                Ok(v) => return Completion::Normal(v),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
@@ -3939,35 +3672,12 @@ impl Interpreter {
                     if let JsValue::Object(o) = &target
                         && let Some(obj) = interp.get_object(o.id)
                     {
-                        // Proxy ownKeys trap
+                        // Proxy ownKeys trap (getOwnPropertyNames returns all keys)
                         if obj.borrow().is_proxy() {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "ownKeys",
-                                vec![target_inner.clone()],
-                            ) {
-                                Ok(Some(v)) => {
-                                    if let Err(e) =
-                                        interp.validate_ownkeys_invariant(&v, &target_inner)
-                                    {
-                                        return Completion::Throw(e);
-                                    }
-                                    return Completion::Normal(v);
-                                }
-                                Ok(None) => {
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        let names: Vec<JsValue> = tobj
-                                            .borrow()
-                                            .property_order
-                                            .iter()
-                                            .map(|k| JsValue::String(JsString::from_str(k)))
-                                            .collect();
-                                        let arr = interp.create_array(names);
-                                        return Completion::Normal(arr);
-                                    }
+                            match interp.proxy_own_keys(o.id) {
+                                Ok(keys) => {
+                                    let arr = interp.create_array(keys);
+                                    return Completion::Normal(arr);
                                 }
                                 Err(e) => return Completion::Throw(e),
                             }
@@ -4029,40 +3739,11 @@ impl Interpreter {
                     {
                         // Proxy preventExtensions trap
                         if obj.borrow().is_proxy() {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "preventExtensions",
-                                vec![target_inner.clone()],
-                            ) {
-                                Ok(Some(v)) => {
-                                    let trap_result = to_boolean(&v);
-                                    if trap_result {
-                                        // Can only return true if target is actually non-extensible
-                                        if let JsValue::Object(ref t) = target_inner
-                                            && let Some(tobj) = interp.get_object(t.id)
-                                            && tobj.borrow().extensible
-                                        {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "'preventExtensions' on proxy: trap returned truish but the proxy target is extensible",
-                                            ));
-                                        }
-                                    }
-                                    if !trap_result {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "'preventExtensions' on proxy: trap returned falsish",
-                                        ));
-                                    }
-                                    return Completion::Normal(target);
-                                }
-                                Ok(None) => {
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        tobj.borrow_mut().extensible = false;
-                                    }
-                                    return Completion::Normal(target);
-                                }
+                            match interp.proxy_prevent_extensions(o.id) {
+                                Ok(true) => return Completion::Normal(target),
+                                Ok(false) => return Completion::Throw(interp.create_type_error(
+                                    "Object.preventExtensions returned false",
+                                )),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
@@ -4086,37 +3767,8 @@ impl Interpreter {
                     {
                         // Proxy isExtensible trap
                         if obj.borrow().is_proxy() {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "isExtensible",
-                                vec![target_inner.clone()],
-                            ) {
-                                Ok(Some(v)) => {
-                                    let trap_result = to_boolean(&v);
-                                    // Must match target's actual extensibility
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        let target_extensible = tobj.borrow().extensible;
-                                        if trap_result != target_extensible {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "'isExtensible' on proxy: trap result does not reflect extensibility of proxy target",
-                                            ));
-                                        }
-                                    }
-                                    return Completion::Normal(JsValue::Boolean(trap_result));
-                                }
-                                Ok(None) => {
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        return Completion::Normal(JsValue::Boolean(
-                                            tobj.borrow().extensible,
-                                        ));
-                                    }
-                                    return Completion::Normal(JsValue::Boolean(false));
-                                }
+                            match interp.proxy_is_extensible(o.id) {
+                                Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
@@ -4236,86 +3888,12 @@ impl Interpreter {
                     {
                         // Proxy setPrototypeOf trap
                         if obj.borrow().is_proxy() {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "setPrototypeOf",
-                                vec![target_inner.clone(), proto.clone()],
-                            ) {
-                                Ok(Some(v)) => {
-                                    if !to_boolean(&v) {
+                            match interp.proxy_set_prototype_of(o.id, &proto) {
+                                Ok(success) => {
+                                    if !success {
                                         return Completion::Throw(interp.create_type_error(
                                             "'setPrototypeOf' on proxy: trap returned falsish",
                                         ));
-                                    }
-                                    // Invariant: if target is non-extensible, proto must match target's prototype
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                        && !tobj.borrow().extensible
-                                    {
-                                        let actual_proto = {
-                                            let b = tobj.borrow();
-                                            if let Some(ref p) = b.prototype {
-                                                if let Some(pid) = p.borrow().id {
-                                                    JsValue::Object(crate::types::JsObject { id: pid })
-                                                } else {
-                                                    JsValue::Null
-                                                }
-                                            } else {
-                                                JsValue::Null
-                                            }
-                                        };
-                                        let same = match (&proto, &actual_proto) {
-                                            (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                                            (JsValue::Null, JsValue::Null) => true,
-                                            _ => false,
-                                        };
-                                        if !same {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "'setPrototypeOf' on proxy: trap returned truish for setting a new prototype on the non-extensible proxy target",
-                                            ));
-                                        }
-                                    }
-                                    return Completion::Normal(target);
-                                }
-                                Ok(None) => {
-                                    // No trap, fall through to target
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        // Proxy-of-proxy
-                                        if tobj.borrow().is_proxy() {
-                                            let inner2 = interp.get_proxy_target_val(t.id);
-                                            match interp.invoke_proxy_trap(
-                                                t.id,
-                                                "setPrototypeOf",
-                                                vec![inner2, proto.clone()],
-                                            ) {
-                                                Ok(Some(v)) => {
-                                                    if !to_boolean(&v) {
-                                                        return Completion::Throw(
-                                                            interp.create_type_error(
-                                                                "'setPrototypeOf' on proxy: trap returned falsish",
-                                                            ),
-                                                        );
-                                                    }
-                                                    return Completion::Normal(target);
-                                                }
-                                                Ok(None) => {}
-                                                Err(e) => return Completion::Throw(e),
-                                            }
-                                        }
-                                        match &proto {
-                                            JsValue::Null => {
-                                                tobj.borrow_mut().prototype = None;
-                                            }
-                                            JsValue::Object(p) => {
-                                                if let Some(po) = interp.get_object(p.id) {
-                                                    tobj.borrow_mut().prototype = Some(po);
-                                                }
-                                            }
-                                            _ => {}
-                                        }
                                     }
                                     return Completion::Normal(target);
                                 }
@@ -5107,51 +4685,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     if obj.borrow().is_proxy() {
-                        let target_inner = interp.get_proxy_target_val(o.id);
-                        let key_val = JsValue::String(JsString::from_str(&key));
-                        match interp.invoke_proxy_trap(
-                            o.id,
-                            "defineProperty",
-                            vec![target_inner.clone(), key_val, desc_val.clone()],
-                        ) {
-                            Ok(Some(v)) => {
-                                return Completion::Normal(JsValue::Boolean(to_boolean(&v)));
-                            }
-                            Ok(None) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    // Proxy-of-proxy: if target is also a proxy, recurse
-                                    if tobj.borrow().is_proxy() {
-                                        let inner2 = interp.get_proxy_target_val(t.id);
-                                        let key_val2 =
-                                            JsValue::String(JsString::from_str(&key));
-                                        match interp.invoke_proxy_trap(
-                                            t.id,
-                                            "defineProperty",
-                                            vec![inner2, key_val2, desc_val.clone()],
-                                        ) {
-                                            Ok(Some(v)) => {
-                                                return Completion::Normal(JsValue::Boolean(
-                                                    to_boolean(&v),
-                                                ));
-                                            }
-                                            Ok(None) => {}
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    match interp.to_property_descriptor(&desc_val) {
-                                        Ok(desc) => {
-                                            let result =
-                                                tobj.borrow_mut().define_own_property(key, desc);
-                                            return Completion::Normal(JsValue::Boolean(result));
-                                        }
-                                        Err(Some(e)) => return Completion::Throw(e),
-                                        Err(None) => {}
-                                    }
-                                }
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
+                        match interp.proxy_define_own_property(o.id, key, &desc_val) {
+                            Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -5187,67 +4722,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     if obj.borrow().is_proxy() {
-                        let target_inner = interp.get_proxy_target_val(o.id);
-                        let key_val = JsValue::String(JsString::from_str(&key));
-                        match interp.invoke_proxy_trap(o.id, "deleteProperty", vec![target_inner.clone(), key_val]) {
-                            Ok(Some(v)) => {
-                                let trap_result = to_boolean(&v);
-                                if trap_result {
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        let target_desc = tobj.borrow().get_own_property(&key);
-                                        if let Some(ref desc) = target_desc {
-                                            if desc.configurable == Some(false) {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'deleteProperty' on proxy: trap returned truish for property which is non-configurable in the proxy target",
-                                                ));
-                                            }
-                                            if !tobj.borrow().extensible {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'deleteProperty' on proxy: trap returned truish for property but the proxy target is not extensible",
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                                return Completion::Normal(JsValue::Boolean(trap_result));
-                            }
-                            Ok(None) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    // Proxy-of-proxy: if target is also a proxy, recurse
-                                    if tobj.borrow().is_proxy() {
-                                        let inner2 = interp.get_proxy_target_val(t.id);
-                                        let key_val2 =
-                                            JsValue::String(JsString::from_str(&key));
-                                        match interp.invoke_proxy_trap(
-                                            t.id,
-                                            "deleteProperty",
-                                            vec![inner2, key_val2],
-                                        ) {
-                                            Ok(Some(v)) => {
-                                                return Completion::Normal(JsValue::Boolean(
-                                                    to_boolean(&v),
-                                                ));
-                                            }
-                                            Ok(None) => {}
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    let mut tm = tobj.borrow_mut();
-                                    if let Some(desc) = tm.properties.get(&key)
-                                        && desc.configurable == Some(false)
-                                    {
-                                        return Completion::Normal(JsValue::Boolean(false));
-                                    }
-                                    tm.properties.remove(&key);
-                                    tm.property_order.retain(|k| k != &key);
-                                    return Completion::Normal(JsValue::Boolean(true));
-                                }
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
+                        match interp.proxy_delete_property(o.id, &key) {
+                            Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -5309,56 +4785,8 @@ impl Interpreter {
                         if let Some(obj) = interp.get_object(o.id)
                             && obj.borrow().is_proxy()
                         {
-                            let target_inner = interp.get_proxy_target_val(o.id);
-                            let key_val = JsValue::String(JsString::from_str(&key));
-                            match interp.invoke_proxy_trap(
-                                o.id,
-                                "getOwnPropertyDescriptor",
-                                vec![target_inner.clone(), key_val],
-                            ) {
-                                Ok(Some(v)) => return Completion::Normal(v),
-                                Ok(None) => {
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        // Proxy-of-proxy: if target is also a proxy, recurse
-                                        if tobj.borrow().is_proxy() {
-                                            let inner2 = interp.get_proxy_target_val(t.id);
-                                            let key_val2 =
-                                                JsValue::String(JsString::from_str(&key));
-                                            match interp.invoke_proxy_trap(
-                                                t.id,
-                                                "getOwnPropertyDescriptor",
-                                                vec![inner2.clone(), key_val2],
-                                            ) {
-                                                Ok(Some(v)) => return Completion::Normal(v),
-                                                Ok(None) => {
-                                                    if let JsValue::Object(ref t2) = inner2
-                                                        && let Some(tobj2) =
-                                                            interp.get_object(t2.id)
-                                                        && let Some(desc) = tobj2
-                                                            .borrow()
-                                                            .get_own_property(&key)
-                                                    {
-                                                        return Completion::Normal(
-                                                            interp.from_property_descriptor(&desc),
-                                                        );
-                                                    }
-                                                    return Completion::Normal(JsValue::Undefined);
-                                                }
-                                                Err(e) => return Completion::Throw(e),
-                                            }
-                                        }
-                                        if let Some(desc) =
-                                            tobj.borrow().get_own_property(&key)
-                                        {
-                                            return Completion::Normal(
-                                                interp.from_property_descriptor(&desc),
-                                            );
-                                        }
-                                    }
-                                    return Completion::Normal(JsValue::Undefined);
-                                }
+                            match interp.proxy_get_own_property_descriptor(o.id, &key) {
+                                Ok(v) => return Completion::Normal(v),
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
@@ -5390,73 +4818,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     if obj.borrow().is_proxy() {
-                        let target_inner = interp.get_proxy_target_val(o.id);
-                        match interp.invoke_proxy_trap(o.id, "getPrototypeOf", vec![target_inner.clone()]) {
-                            Ok(Some(v)) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                    && !tobj.borrow().extensible
-                                {
-                                    let actual_proto = {
-                                        let b = tobj.borrow();
-                                        if let Some(ref p) = b.prototype {
-                                            if let Some(pid) = p.borrow().id {
-                                                JsValue::Object(crate::types::JsObject { id: pid })
-                                            } else { JsValue::Null }
-                                        } else { JsValue::Null }
-                                    };
-                                    let same = match (&v, &actual_proto) {
-                                        (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                                        (JsValue::Null, JsValue::Null) => true,
-                                        _ => false,
-                                    };
-                                    if !same {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "'getPrototypeOf' on proxy: proxy target is non-extensible but the trap did not return its actual prototype",
-                                        ));
-                                    }
-                                }
-                                return Completion::Normal(v);
-                            }
-                            Ok(None) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    // Proxy-of-proxy: if target is also a proxy, recurse
-                                    if tobj.borrow().is_proxy() {
-                                        let inner2 = interp.get_proxy_target_val(t.id);
-                                        match interp.invoke_proxy_trap(
-                                            t.id,
-                                            "getPrototypeOf",
-                                            vec![inner2.clone()],
-                                        ) {
-                                            Ok(Some(v)) => return Completion::Normal(v),
-                                            Ok(None) => {
-                                                if let JsValue::Object(ref t2) = inner2
-                                                    && let Some(tobj2) = interp.get_object(t2.id)
-                                                    && let Some(proto) =
-                                                        &tobj2.borrow().prototype
-                                                    && let Some(id) = proto.borrow().id
-                                                {
-                                                    return Completion::Normal(JsValue::Object(
-                                                        crate::types::JsObject { id },
-                                                    ));
-                                                }
-                                                return Completion::Normal(JsValue::Null);
-                                            }
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    if let Some(proto) = &tobj.borrow().prototype
-                                        && let Some(id) = proto.borrow().id
-                                    {
-                                        return Completion::Normal(JsValue::Object(
-                                            crate::types::JsObject { id },
-                                        ));
-                                    }
-                                }
-                                return Completion::Normal(JsValue::Null);
-                            }
+                        match interp.proxy_get_prototype_of(o.id) {
+                            Ok(v) => return Completion::Normal(v),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -5489,66 +4852,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     if obj.borrow().is_proxy() {
-                        let target_inner = interp.get_proxy_target_val(o.id);
-                        let key_val = JsValue::String(JsString::from_str(&key));
-                        match interp.invoke_proxy_trap(o.id, "has", vec![target_inner.clone(), key_val.clone()]) {
-                            Ok(Some(v)) => {
-                                let trap_result = to_boolean(&v);
-                                if !trap_result {
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                    {
-                                        let target_desc = tobj.borrow().get_own_property(&key);
-                                        if let Some(ref desc) = target_desc {
-                                            if desc.configurable == Some(false) {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'has' on proxy: trap returned falsish for property which exists in the proxy target as non-configurable",
-                                                ));
-                                            }
-                                            if !tobj.borrow().extensible {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'has' on proxy: trap returned falsish for property but the proxy target is not extensible",
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                                return Completion::Normal(JsValue::Boolean(trap_result));
-                            }
-                            Ok(None) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    // Proxy-of-proxy: if target is also a proxy, recurse
-                                    if tobj.borrow().is_proxy() {
-                                        let inner2 = interp.get_proxy_target_val(t.id);
-                                        match interp.invoke_proxy_trap(
-                                            t.id,
-                                            "has",
-                                            vec![inner2.clone(), key_val],
-                                        ) {
-                                            Ok(Some(v)) => {
-                                                return Completion::Normal(JsValue::Boolean(
-                                                    to_boolean(&v),
-                                                ));
-                                            }
-                                            Ok(None) => {
-                                                if let JsValue::Object(ref t2) = inner2
-                                                    && let Some(tobj2) = interp.get_object(t2.id)
-                                                {
-                                                    return Completion::Normal(JsValue::Boolean(
-                                                        tobj2.borrow().has_property(&key),
-                                                    ));
-                                                }
-                                                return Completion::Normal(JsValue::Boolean(false));
-                                            }
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    return Completion::Normal(JsValue::Boolean(tobj.borrow().has_property(&key)));
-                                }
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
+                        match interp.proxy_has_property(o.id, &key) {
+                            Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -5576,54 +4881,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     if obj.borrow().is_proxy() {
-                        let target_inner = interp.get_proxy_target_val(o.id);
-                        match interp.invoke_proxy_trap(o.id, "isExtensible", vec![target_inner.clone()]) {
-                            Ok(Some(v)) => {
-                                let trap_result = to_boolean(&v);
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    if trap_result != tobj.borrow().extensible {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "'isExtensible' on proxy: trap result does not reflect extensibility of proxy target",
-                                        ));
-                                    }
-                                }
-                                return Completion::Normal(JsValue::Boolean(trap_result));
-                            }
-                            Ok(None) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    // Proxy-of-proxy
-                                    if tobj.borrow().is_proxy() {
-                                        let inner2 = interp.get_proxy_target_val(t.id);
-                                        match interp.invoke_proxy_trap(
-                                            t.id,
-                                            "isExtensible",
-                                            vec![inner2.clone()],
-                                        ) {
-                                            Ok(Some(v)) => {
-                                                return Completion::Normal(JsValue::Boolean(
-                                                    to_boolean(&v),
-                                                ));
-                                            }
-                                            Ok(None) => {
-                                                if let JsValue::Object(ref t2) = inner2
-                                                    && let Some(tobj2) = interp.get_object(t2.id)
-                                                {
-                                                    return Completion::Normal(JsValue::Boolean(
-                                                        tobj2.borrow().extensible,
-                                                    ));
-                                                }
-                                            }
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    return Completion::Normal(JsValue::Boolean(tobj.borrow().extensible));
-                                }
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
+                        match interp.proxy_is_extensible(o.id) {
+                            Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -5651,58 +4910,10 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     if obj.borrow().is_proxy() {
-                        let target_inner = interp.get_proxy_target_val(o.id);
-                        match interp.invoke_proxy_trap(o.id, "ownKeys", vec![target_inner.clone()])
-                        {
-                            Ok(Some(v)) => {
-                                if let Err(e) = interp.validate_ownkeys_invariant(&v, &target_inner)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                                return Completion::Normal(v);
-                            }
-                            Ok(None) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    // Proxy-of-proxy: if target is also a proxy, recurse
-                                    if tobj.borrow().is_proxy() {
-                                        let inner2 = interp.get_proxy_target_val(t.id);
-                                        match interp.invoke_proxy_trap(
-                                            t.id,
-                                            "ownKeys",
-                                            vec![inner2.clone()],
-                                        ) {
-                                            Ok(Some(v)) => return Completion::Normal(v),
-                                            Ok(None) => {
-                                                if let JsValue::Object(ref t2) = inner2
-                                                    && let Some(tobj2) = interp.get_object(t2.id)
-                                                {
-                                                    let keys: Vec<JsValue> = tobj2
-                                                        .borrow()
-                                                        .property_order
-                                                        .iter()
-                                                        .map(|k| {
-                                                            JsValue::String(JsString::from_str(k))
-                                                        })
-                                                        .collect();
-                                                    let arr = interp.create_array(keys);
-                                                    return Completion::Normal(arr);
-                                                }
-                                            }
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    } else {
-                                        let keys: Vec<JsValue> = tobj
-                                            .borrow()
-                                            .property_order
-                                            .iter()
-                                            .map(|k| JsValue::String(JsString::from_str(k)))
-                                            .collect();
-                                        let arr = interp.create_array(keys);
-                                        return Completion::Normal(arr);
-                                    }
-                                }
+                        match interp.proxy_own_keys(o.id) {
+                            Ok(keys) => {
+                                let arr = interp.create_array(keys);
+                                return Completion::Normal(arr);
                             }
                             Err(e) => return Completion::Throw(e),
                         }
@@ -5738,47 +4949,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     if obj.borrow().is_proxy() {
-                        let target_inner = interp.get_proxy_target_val(o.id);
-                        match interp.invoke_proxy_trap(o.id, "preventExtensions", vec![target_inner.clone()]) {
-                            Ok(Some(v)) => {
-                                let trap_result = to_boolean(&v);
-                                if trap_result {
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                        && tobj.borrow().extensible
-                                    {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "'preventExtensions' on proxy: trap returned truish but the proxy target is extensible",
-                                        ));
-                                    }
-                                }
-                                return Completion::Normal(JsValue::Boolean(trap_result));
-                            }
-                            Ok(None) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    // Proxy-of-proxy
-                                    if tobj.borrow().is_proxy() {
-                                        let inner2 = interp.get_proxy_target_val(t.id);
-                                        match interp.invoke_proxy_trap(
-                                            t.id,
-                                            "preventExtensions",
-                                            vec![inner2],
-                                        ) {
-                                            Ok(Some(v)) => {
-                                                return Completion::Normal(JsValue::Boolean(
-                                                    to_boolean(&v),
-                                                ));
-                                            }
-                                            Ok(None) => {}
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    tobj.borrow_mut().extensible = false;
-                                }
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
+                        match interp.proxy_prevent_extensions(o.id) {
+                            Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -5810,68 +4982,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                     && obj.borrow().is_proxy()
                 {
-                    let target_inner = interp.get_proxy_target_val(o.id);
-                    let key_val = JsValue::String(JsString::from_str(&key));
-                    match interp.invoke_proxy_trap(o.id, "set", vec![target_inner.clone(), key_val, value.clone(), receiver.clone()]) {
-                        Ok(Some(v)) => {
-                            let trap_result = to_boolean(&v);
-                            if trap_result {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    let target_desc = tobj.borrow().get_own_property(&key);
-                                    if let Some(ref desc) = target_desc {
-                                        if desc.configurable == Some(false) {
-                                            if desc.is_data_descriptor()
-                                                && desc.writable == Some(false)
-                                                && !same_value(&value, desc.value.as_ref().unwrap_or(&JsValue::Undefined))
-                                            {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable data property with a different value",
-                                                ));
-                                            }
-                                            if desc.is_accessor_descriptor()
-                                                && matches!(desc.set.as_ref().unwrap_or(&JsValue::Undefined), JsValue::Undefined)
-                                            {
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable accessor property without a setter",
-                                                ));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            return Completion::Normal(JsValue::Boolean(trap_result));
-                        }
-                        Ok(None) => {
-                            if let JsValue::Object(ref t) = target_inner
-                                && let Some(tobj) = interp.get_object(t.id)
-                            {
-                                // Proxy-of-proxy: if target is also a proxy, recurse
-                                if tobj.borrow().is_proxy() {
-                                    let inner2 = interp.get_proxy_target_val(t.id);
-                                    let key_val2 = JsValue::String(JsString::from_str(&key));
-                                    match interp.invoke_proxy_trap(
-                                        t.id,
-                                        "set",
-                                        vec![inner2, key_val2, value.clone(), receiver],
-                                    ) {
-                                        Ok(Some(v)) => {
-                                            return Completion::Normal(JsValue::Boolean(
-                                                to_boolean(&v),
-                                            ));
-                                        }
-                                        Ok(None) => {
-                                            // Fall through to set on inner target
-                                        }
-                                        Err(e) => return Completion::Throw(e),
-                                    }
-                                }
-                                tobj.borrow_mut().set_property_value(&key, value);
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
-                            return Completion::Normal(JsValue::Boolean(false));
-                        }
+                    match interp.proxy_set(o.id, &key, value.clone(), &receiver) {
+                        Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -5920,71 +5032,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     if obj.borrow().is_proxy() {
-                        let target_inner = interp.get_proxy_target_val(o.id);
-                        match interp.invoke_proxy_trap(o.id, "setPrototypeOf", vec![target_inner.clone(), proto.clone()]) {
-                            Ok(Some(v)) => {
-                                let trap_result = to_boolean(&v);
-                                if trap_result {
-                                    if let JsValue::Object(ref t) = target_inner
-                                        && let Some(tobj) = interp.get_object(t.id)
-                                        && !tobj.borrow().extensible
-                                    {
-                                        let actual_proto = {
-                                            let b = tobj.borrow();
-                                            if let Some(ref p) = b.prototype {
-                                                if let Some(pid) = p.borrow().id {
-                                                    JsValue::Object(crate::types::JsObject { id: pid })
-                                                } else { JsValue::Null }
-                                            } else { JsValue::Null }
-                                        };
-                                        let same = match (&proto, &actual_proto) {
-                                            (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                                            (JsValue::Null, JsValue::Null) => true,
-                                            _ => false,
-                                        };
-                                        if !same {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "'setPrototypeOf' on proxy: trap returned truish for setting a new prototype on the non-extensible proxy target",
-                                            ));
-                                        }
-                                    }
-                                }
-                                return Completion::Normal(JsValue::Boolean(trap_result));
-                            }
-                            Ok(None) => {
-                                if let JsValue::Object(ref t) = target_inner
-                                    && let Some(tobj) = interp.get_object(t.id)
-                                {
-                                    // Proxy-of-proxy
-                                    if tobj.borrow().is_proxy() {
-                                        let inner2 = interp.get_proxy_target_val(t.id);
-                                        match interp.invoke_proxy_trap(
-                                            t.id,
-                                            "setPrototypeOf",
-                                            vec![inner2, proto.clone()],
-                                        ) {
-                                            Ok(Some(v)) => {
-                                                return Completion::Normal(JsValue::Boolean(
-                                                    to_boolean(&v),
-                                                ));
-                                            }
-                                            Ok(None) => {}
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    }
-                                    match &proto {
-                                        JsValue::Null => { tobj.borrow_mut().prototype = None; }
-                                        JsValue::Object(p) => {
-                                            if let Some(po) = interp.get_object(p.id) {
-                                                tobj.borrow_mut().prototype = Some(po);
-                                            }
-                                        }
-                                        _ => return Completion::Normal(JsValue::Boolean(false)),
-                                    }
-                                    return Completion::Normal(JsValue::Boolean(true));
-                                }
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
+                        match interp.proxy_set_prototype_of(o.id, &proto) {
+                            Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
                         }
                     }

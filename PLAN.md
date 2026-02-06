@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 33,783 / 48,257 run (70.01%)
+**Current pass rate:** 33,920 / 48,257 run (70.29%)
 
 ---
 
@@ -33,14 +33,14 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Object | 93% | 3,176/3,411 |
 | Array | 78% | 2,395/3,079 |
 | String | 92% | 1,120/1,215 |
-| Function | 74% | 375/509 |
+| Function | 78% | 397/509 |
 | Iterator | 59% | 303/510 |
-| Promise | 78% | 501/639 |
+| Promise | 86% | 548/639 |
 | Map | 77% | 158/204 |
 | Set | 68% | 261/383 |
 | Date | 76% | 451/594 |
 | Reflect | 81% | 124/153 |
-| Proxy | 56% | 173/311 |
+| Proxy | 58% | 181/311 |
 | Symbol | 71% | 67/94 |
 | RegExp | 65% | 1,214/1,879 |
 | Math | 92% | 300/327 |
@@ -117,6 +117,8 @@ These features block significant numbers of tests:
 41. ~~**Rewrite assignment destructuring**~~ — ✅ Done (138 new passes, 64.82% → 65.11%). Rewrote array and object assignment destructuring to use iterator protocol (`get_iterator`/`iterator_step`/`iterator_value`) instead of direct `array_elements` access. Added `put_value_to_target` for recursive dispatch to any assignment target (identifiers, member expressions, nested patterns). Added `set_member_property` helper for member expression targets (dot, computed, private, Proxy set traps, setters). Added `iterator_close_result` for proper IteratorClose error propagation. Object destructuring now uses `get_object_property` for getter/Proxy trap invocation, supports rest (`{...r} = obj`). assignment/dstr: 120/368 (33%) → 252/368 (69%).
 
 43. ~~**Conformance batch 9: Map methods, RegExp @@replace, JSON parse/stringify, ToPrimitive**~~ — ✅ Done (+254 new passes, 69.48% → 70.01%). Map.prototype.getOrInsert/getOrInsertComputed (100% pass). RegExp[@@replace] rewritten to spec §22.2.5.8: RegExpExec, result coercion, GetSubstitution, AdvanceStringIndex (34% → 77%). JSON.parse reviver with Proxy support, ES2025 source text context, lone surrogate escaping, proxy-aware stringify (70% → 96%). ToPrimitive OrdinaryToPrimitive bug fix: error propagation and getter invocation via get_object_property (+77 bonus String passes). ToObject-before-ToPropertyKey ordering fix for computed member access. Map: 156→158/204 (77%), RegExp: 1,154→1,214/1,879 (65%), JSON: 115→159/165 (96%), String: 1,043→1,120/1,215 (92%).
+
+44. ~~**Conformance batch 10: var scoping, Promise combinators, Proxy trap forwarding**~~ — ✅ Done (+137 new passes, 70.01% → 70.29%). Fixed `var` binding in block statements to declare in var scope (function/global) instead of current block scope — affects `bind_pattern` and `exec_variable_declaration` in exec.rs (+51 passes). Promise combinators (all/allSettled/race/any) now use spec-compliant `Invoke(nextPromise, "then", ...)` instead of internal `promise_then` (+47 passes). Proxy trap forwarding for proxy-of-proxy chains: all 12 non-get traps now recurse through proxy-aware helpers instead of raw `JsObjectData` methods (+7 passes). Also fixed `Object.preventExtensions` to throw TypeError when trap returns false, and class static blocks to use function scope environments. Function: 375→397/509 (78%), Promise: 501→548/639 (86%), Proxy: 173→181/311 (58%).
 
 ---
 

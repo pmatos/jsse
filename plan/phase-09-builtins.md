@@ -198,7 +198,7 @@ Ordered roughly by dependency and importance.
 ### 9.9 Control Abstraction Objects (§27)
 - [x] **Iterator** (§27.1) — ✅ 290/510 (57%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose.
 - [x] **AsyncIteratorPrototype** (§27.1.4) — ✅ [Symbol.asyncIterator] returns this
-- [x] **Promise** (§27.2) — ✅ 364/639 tests passing (57%)
+- [x] **Promise** (§27.2) — ✅ 548/639 tests passing (86%)
   - [x] `Promise()` constructor
   - [x] `Promise.all()`, `Promise.allSettled()`, `Promise.any()`, `Promise.race()`
   - [x] `Promise.reject()`, `Promise.resolve()`
@@ -220,7 +220,7 @@ Ordered roughly by dependency and importance.
 - [x] **Reflect** (§28.1) — ✅ 124/153 passing (81%)
   - [x] `Reflect.apply()`, `.construct()`, `.defineProperty()`, `.deleteProperty()`, `.get()`, `.getOwnPropertyDescriptor()`, `.getPrototypeOf()`, `.has()`, `.isExtensible()`, `.ownKeys()`, `.preventExtensions()`, `.set()`, `.setPrototypeOf()`
   - [x] Proxy trap delegation from Reflect methods
-- [x] **Proxy** (§28.2) — ✅ 163/310 passing (53%)
+- [x] **Proxy** (§28.2) — ✅ 181/311 passing (58%)
   - [x] `Proxy()` constructor
   - [x] `Proxy.revocable()`
   - [x] All 13 proxy handler traps

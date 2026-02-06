@@ -1044,7 +1044,23 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            let _ = self.promise_then(&p, &on_fulfilled, &reject_fn_clone);
+            // Invoke(nextPromise, "then", « onFulfilled, rejectElement »)
+            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let then_fn = match self.get_object_property(p_id, "then", &p) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => {
+                    let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[e]);
+                    return Completion::Normal(cap.promise);
+                }
+                _ => JsValue::Undefined,
+            };
+            match self.call_function(&then_fn, &p, &[on_fulfilled, reject_fn_clone]) {
+                Completion::Throw(e) => {
+                    let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[e]);
+                    return Completion::Normal(cap.promise);
+                }
+                _ => {}
+            }
         }
 
         Completion::Normal(cap.promise)
@@ -1157,7 +1173,23 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            let _ = self.promise_then(&p, &on_fulfilled, &on_rejected);
+            // Invoke(nextPromise, "then", « onFulfilled, onRejected »)
+            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let then_fn = match self.get_object_property(p_id, "then", &p) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => {
+                    let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[e]);
+                    return Completion::Normal(cap.promise);
+                }
+                _ => JsValue::Undefined,
+            };
+            match self.call_function(&then_fn, &p, &[on_fulfilled, on_rejected]) {
+                Completion::Throw(e) => {
+                    let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[e]);
+                    return Completion::Normal(cap.promise);
+                }
+                _ => {}
+            }
         }
 
         Completion::Normal(cap.promise)
@@ -1201,7 +1233,23 @@ impl Interpreter {
                 }
                 _ => JsValue::Undefined,
             };
-            let _ = self.promise_then(&p, &cap.resolve, &cap.reject);
+            // Invoke(nextPromise, "then", « resolve, reject »)
+            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let then_fn = match self.get_object_property(p_id, "then", &p) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => {
+                    let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[e]);
+                    return Completion::Normal(cap.promise);
+                }
+                _ => JsValue::Undefined,
+            };
+            match self.call_function(&then_fn, &p, &[cap.resolve.clone(), cap.reject.clone()]) {
+                Completion::Throw(e) => {
+                    let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[e]);
+                    return Completion::Normal(cap.promise);
+                }
+                _ => {}
+            }
         }
 
         Completion::Normal(cap.promise)
@@ -1275,7 +1323,23 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            let _ = self.promise_then(&p, &cap.resolve, &on_rejected);
+            // Invoke(nextPromise, "then", « resolve, onRejected »)
+            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let then_fn = match self.get_object_property(p_id, "then", &p) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => {
+                    let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[e]);
+                    return Completion::Normal(cap.promise);
+                }
+                _ => JsValue::Undefined,
+            };
+            match self.call_function(&then_fn, &p, &[cap.resolve.clone(), on_rejected]) {
+                Completion::Throw(e) => {
+                    let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[e]);
+                    return Completion::Normal(cap.promise);
+                }
+                _ => {}
+            }
         }
 
         Completion::Normal(cap.promise)
