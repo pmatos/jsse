@@ -206,6 +206,7 @@ impl<'a> Parser<'a> {
             }
             Pattern::Assign(inner, _) => Self::bound_names_from_pattern(inner, names),
             Pattern::Rest(inner) => Self::bound_names_from_pattern(inner, names),
+            Pattern::MemberExpression(_) => {}
         }
     }
 
@@ -305,10 +306,24 @@ impl<'a> Parser<'a> {
             Token::Semicolon => None,
             Token::Keyword(Keyword::Var) => {
                 self.advance()?;
+                self.no_in = true;
                 let decls = self.parse_variable_declaration_list()?;
+                self.no_in = false;
                 if self.current == Token::Keyword(Keyword::In) {
                     if is_await {
                         return Err(self.error("for await...in is not valid; use for await...of"));
+                    }
+                    // var for-in: initializer only allowed for simple binding in sloppy mode (Annex B)
+                    if decls.len() != 1 {
+                        return Err(self.error("Invalid left-hand side in for-in loop"));
+                    }
+                    if decls[0].init.is_some() {
+                        let is_simple = matches!(&decls[0].pattern, Pattern::Identifier(_));
+                        if !is_simple || self.strict {
+                            return Err(self.error(
+                                "for-in loop variable declaration may not have an initializer",
+                            ));
+                        }
                     }
                     self.advance()?;
                     let right = self.parse_expression()?;
@@ -324,6 +339,11 @@ impl<'a> Parser<'a> {
                     }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
+                    if decls.len() != 1 || decls[0].init.is_some() {
+                        return Err(self.error(
+                            "for-of loop variable declaration may not have an initializer",
+                        ));
+                    }
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
@@ -350,10 +370,17 @@ impl<'a> Parser<'a> {
                     VarKind::Const
                 };
                 self.advance()?;
+                self.no_in = true;
                 let decls = self.parse_variable_declaration_list()?;
+                self.no_in = false;
                 if self.current == Token::Keyword(Keyword::In) {
                     if is_await {
                         return Err(self.error("for await...in is not valid; use for await...of"));
+                    }
+                    if decls.len() != 1 || decls[0].init.is_some() {
+                        return Err(self.error(
+                            "for-in loop variable declaration may not have an initializer",
+                        ));
                     }
                     self.advance()?;
                     let right = self.parse_expression()?;
@@ -369,6 +396,11 @@ impl<'a> Parser<'a> {
                     }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
+                    if decls.len() != 1 || decls[0].init.is_some() {
+                        return Err(self.error(
+                            "for-of loop variable declaration may not have an initializer",
+                        ));
+                    }
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
@@ -389,10 +421,16 @@ impl<'a> Parser<'a> {
                 }))
             }
             _ => {
+                self.no_in = true;
                 let expr = self.parse_expression()?;
+                self.no_in = false;
                 if self.current == Token::Keyword(Keyword::In) {
                     if is_await {
                         return Err(self.error("for await...in is not valid; use for await...of"));
+                    }
+                    // Reject assignment expressions as for-in LHS
+                    if matches!(&expr, Expression::Assign(_, _, _)) {
+                        return Err(self.error("Invalid left-hand side in for-in loop"));
                     }
                     self.advance()?;
                     let right = self.parse_expression()?;

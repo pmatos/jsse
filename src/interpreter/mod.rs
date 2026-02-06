@@ -1240,6 +1240,7 @@ impl Interpreter {
             Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
                 self.collect_pattern_exports(inner, env, module);
             }
+            Pattern::MemberExpression(_) => {}
         }
     }
 
@@ -1306,7 +1307,7 @@ impl Interpreter {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
-                    self.hoist_pattern(&d.pattern, env);
+                    self.hoist_pattern(&d.pattern, env, false);
                 }
             }
             Statement::FunctionDeclaration(f) => {
@@ -1488,6 +1489,7 @@ impl Interpreter {
             Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
                 self.get_pattern_names(inner, names);
             }
+            Pattern::MemberExpression(_) => {}
         }
     }
 

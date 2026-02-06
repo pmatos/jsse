@@ -11,7 +11,7 @@ pub enum Completion {
     Normal(JsValue),
     Return(JsValue),
     Throw(JsValue),
-    Break(Option<String>),
+    Break(Option<String>, JsValue),
     Continue(Option<String>),
     Yield(JsValue),
     Empty,
@@ -150,6 +150,23 @@ impl Environment {
                 initialized: kind == BindingKind::Var,
             },
         );
+    }
+
+    /// Like declare, but also creates a non-configurable property on the global object.
+    /// Per §9.1.1.4.17 CreateGlobalVarBinding: var declarations in global scope
+    /// create non-configurable properties on the global object.
+    pub fn declare_global_var(&mut self, name: &str) {
+        self.declare(name, BindingKind::Var);
+        if let Some(ref global_obj) = self.global_object {
+            let mut gb = global_obj.borrow_mut();
+            if !gb.properties.contains_key(name) {
+                gb.property_order.push(name.to_string());
+                gb.properties.insert(
+                    name.to_string(),
+                    PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                );
+            }
+        }
     }
 
     pub fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {

@@ -6,15 +6,20 @@ impl Interpreter {
             env.borrow_mut().strict = true;
         }
         // Hoist var and function declarations
+        let is_global = env.borrow().global_object.is_some();
         for stmt in stmts {
             match stmt {
                 Statement::Variable(decl) if decl.kind == VarKind::Var => {
                     for d in &decl.declarations {
-                        self.hoist_pattern(&d.pattern, env);
+                        self.hoist_pattern(&d.pattern, env, is_global);
                     }
                 }
                 Statement::FunctionDeclaration(f) => {
-                    env.borrow_mut().declare(&f.name, BindingKind::Var);
+                    if is_global {
+                        env.borrow_mut().declare_global_var(&f.name);
+                    } else {
+                        env.borrow_mut().declare(&f.name, BindingKind::Var);
+                    }
                     let func = JsFunction::User {
                         name: Some(f.name.clone()),
                         params: f.params.clone(),
@@ -40,24 +45,32 @@ impl Interpreter {
             match comp {
                 Completion::Normal(val) => result = Completion::Normal(val),
                 Completion::Empty => {} // keep previous result (UpdateEmpty semantics)
+                Completion::Break(label, _) => {
+                    // UpdateEmpty: break carries running completion value
+                    return Completion::Break(label, result.value_or(JsValue::Undefined));
+                }
                 other => return other,
             }
         }
         result
     }
 
-    pub(crate) fn hoist_pattern(&self, pat: &Pattern, env: &EnvRef) {
+    pub(crate) fn hoist_pattern(&self, pat: &Pattern, env: &EnvRef, is_global: bool) {
         match pat {
             Pattern::Identifier(name) => {
                 if !env.borrow().bindings.contains_key(name) {
-                    env.borrow_mut().declare(name, BindingKind::Var);
+                    if is_global {
+                        env.borrow_mut().declare_global_var(name);
+                    } else {
+                        env.borrow_mut().declare(name, BindingKind::Var);
+                    }
                 }
             }
             Pattern::Array(elems) => {
                 for elem in elems.iter().flatten() {
                     match elem {
                         ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
-                            self.hoist_pattern(p, env);
+                            self.hoist_pattern(p, env, is_global);
                         }
                     }
                 }
@@ -66,19 +79,24 @@ impl Interpreter {
                 for prop in props {
                     match prop {
                         ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
-                            self.hoist_pattern(p, env);
+                            self.hoist_pattern(p, env, is_global);
                         }
                         ObjectPatternProperty::Shorthand(name) => {
                             if !env.borrow().bindings.contains_key(name) {
-                                env.borrow_mut().declare(name, BindingKind::Var);
+                                if is_global {
+                                    env.borrow_mut().declare_global_var(name);
+                                } else {
+                                    env.borrow_mut().declare(name, BindingKind::Var);
+                                }
                             }
                         }
                     }
                 }
             }
             Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
-                self.hoist_pattern(inner, env);
+                self.hoist_pattern(inner, env, is_global);
             }
+            Pattern::MemberExpression(_) => {}
         }
     }
 
@@ -127,7 +145,7 @@ impl Interpreter {
                 };
                 Completion::Return(val)
             }
-            Statement::Break(label) => Completion::Break(label.clone()),
+            Statement::Break(label) => Completion::Break(label.clone(), JsValue::Undefined),
             Statement::Continue(label) => Completion::Continue(label.clone()),
             Statement::Throw(expr) => {
                 let val = match self.eval_expr(expr, env) {
@@ -141,8 +159,8 @@ impl Interpreter {
             Statement::Labeled(label, stmt) => {
                 let comp = self.exec_statement(stmt, env);
                 match &comp {
-                    Completion::Break(Some(l)) if l == label => {
-                        Completion::Normal(JsValue::Undefined)
+                    Completion::Break(Some(l), val) if l == label => {
+                        Completion::Normal(val.clone())
                     }
                     Completion::Continue(Some(l)) if l == label => {
                         Completion::Normal(JsValue::Undefined)
@@ -413,6 +431,7 @@ impl Interpreter {
                 Ok(())
             }
             Pattern::Rest(inner) => self.bind_pattern(inner, val, kind, env),
+            Pattern::MemberExpression(expr) => self.assign_to_expr(expr, val, env),
         }
     }
 
@@ -430,7 +449,7 @@ impl Interpreter {
                 Completion::Normal(val) => { v = val; }
                 Completion::Empty => {}
                 Completion::Continue(None) => {}
-                Completion::Break(None) => return Completion::Normal(v),
+                Completion::Break(None, _) => return Completion::Normal(v),
                 other => return other,
             }
         }
@@ -444,7 +463,7 @@ impl Interpreter {
                 Completion::Normal(val) => { v = val; }
                 Completion::Empty => {}
                 Completion::Continue(None) => {}
-                Completion::Break(None) => return Completion::Normal(v),
+                Completion::Break(None, _) => return Completion::Normal(v),
                 other => return other,
             }
             let test = match self.eval_expr(&dw.test, env) {
@@ -497,7 +516,7 @@ impl Interpreter {
                 Completion::Normal(val) => { v = val; }
                 Completion::Empty => {}
                 Completion::Continue(None) => {}
-                Completion::Break(None) => return Completion::Normal(v),
+                Completion::Break(None, _) => return Completion::Normal(v),
                 other => return other,
             }
             if let Some(update) = &f.update {
@@ -518,6 +537,11 @@ impl Interpreter {
         if obj_val.is_nullish() {
             return Completion::Normal(JsValue::Undefined);
         }
+        let obj_val = match self.to_object(&obj_val) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Completion::Throw(e),
+            _ => return Completion::Normal(JsValue::Undefined),
+        };
         let mut v = JsValue::Undefined;
         if let JsValue::Object(ref o) = obj_val
             && let Some(obj) = self.get_object(o.id)
@@ -547,22 +571,32 @@ impl Interpreter {
                         }
                     }
                     ForInOfLeft::Pattern(pat) => {
-                        if let Pattern::Identifier(name) = pat {
-                            if !env.borrow().has(name) && env.borrow().strict {
-                                return Completion::Throw(
-                                    self.create_reference_error(&format!(
-                                        "{name} is not defined"
-                                    )),
-                                );
+                        match pat {
+                            Pattern::Identifier(name) => {
+                                if !env.borrow().has(name) && env.borrow().strict {
+                                    return Completion::Throw(
+                                        self.create_reference_error(&format!(
+                                            "{name} is not defined"
+                                        )),
+                                    );
+                                }
+                                let _ = env.borrow_mut().set(name, key_val);
                             }
-                            let _ = env.borrow_mut().set(name, key_val);
+                            Pattern::MemberExpression(expr) => {
+                                if let Err(e) = self.assign_to_expr(expr, key_val, env) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
-                match self.exec_statement(&fi.body, &for_env) {
+                let result = self.exec_statement(&fi.body, &for_env);
+                match result {
                     Completion::Normal(val) => { v = val; }
+                    Completion::Empty => {}
                     Completion::Continue(None) => {}
-                    Completion::Break(None) => {
+                    Completion::Break(None, _) => {
                         return Completion::Normal(v);
                     }
                     other => return other,
@@ -646,19 +680,30 @@ impl Interpreter {
                     }
                 }
                 ForInOfLeft::Pattern(pat) => {
-                    if let Pattern::Identifier(name) = pat {
-                        if !env.borrow().has(name) && env.borrow().strict {
-                            self.iterator_close(&iterator, JsValue::Undefined);
-                            return Completion::Throw(
-                                self.create_reference_error(&format!(
-                                    "{name} is not defined"
-                                )),
-                            );
+                    match pat {
+                        Pattern::Identifier(name) => {
+                            if !env.borrow().has(name) && env.borrow().strict {
+                                self.iterator_close(&iterator, JsValue::Undefined);
+                                return Completion::Throw(
+                                    self.create_reference_error(&format!(
+                                        "{name} is not defined"
+                                    )),
+                                );
+                            }
+                            let _ = env.borrow_mut().set(name, val);
                         }
-                        let _ = env.borrow_mut().set(name, val);
-                    } else if let Err(e) = self.bind_pattern(pat, val, BindingKind::Let, &for_env) {
-                        self.iterator_close(&iterator, e.clone());
-                        return Completion::Throw(e);
+                        Pattern::MemberExpression(expr) => {
+                            if let Err(e) = self.assign_to_expr(expr, val, env) {
+                                self.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                        }
+                        _ => {
+                            if let Err(e) = self.bind_pattern(pat, val, BindingKind::Let, &for_env) {
+                                self.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                        }
                     }
                 }
             }
@@ -668,7 +713,7 @@ impl Interpreter {
                 Completion::Normal(val) => { v = val; }
                 Completion::Empty => {}
                 Completion::Continue(None) => {}
-                Completion::Break(None) => {
+                Completion::Break(None, _) => {
                     self.iterator_close(&iterator, JsValue::Undefined);
                     return Completion::Normal(v);
                 }
@@ -680,9 +725,9 @@ impl Interpreter {
                     self.iterator_close(&iterator, JsValue::Undefined);
                     return Completion::Throw(e);
                 }
-                Completion::Break(Some(label)) => {
+                Completion::Break(Some(label), val) => {
                     self.iterator_close(&iterator, JsValue::Undefined);
-                    return Completion::Break(Some(label));
+                    return Completion::Break(Some(label), val);
                 }
                 Completion::Continue(Some(label)) => {
                     self.iterator_close(&iterator, JsValue::Undefined);
@@ -805,7 +850,7 @@ impl Interpreter {
                         *v = val;
                     }
                     Completion::Empty => {}
-                    Completion::Break(None) => {
+                    Completion::Break(None, _) => {
                         return Some(Completion::Normal(v.clone()))
                     }
                     other => return Some(other),

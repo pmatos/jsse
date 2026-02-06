@@ -109,6 +109,7 @@ pub enum Pattern {
     Object(Vec<ObjectPatternProperty>),
     Assign(Box<Pattern>, Box<Expression>),
     Rest(Box<Pattern>),
+    MemberExpression(Box<Expression>),
 }
 
 #[derive(Clone, Debug)]

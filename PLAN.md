@@ -30,18 +30,18 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
-| Object | 84% | 2,857/3,411 |
-| Array | 69% | 2,110/3,079 |
-| String | 73% | 886/1,215 |
-| Function | 65% | 332/509 |
+| Object | 90% | 3,076/3,411 |
+| Array | 75% | 2,306/3,079 |
+| String | 84% | 1,015/1,215 |
+| Function | 73% | 369/509 |
 | Iterator | 57% | 290/510 |
-| Promise | 57% | 364/639 |
+| Promise | 73% | 466/639 |
 | Map | 76% | 156/204 |
 | Set | 68% | 261/383 |
 | Date | 51% | 305/594 |
 | Reflect | 81% | 124/153 |
 | Proxy | 53% | 163/310 |
-| Symbol | 28% | 26/94 |
+| Symbol | 71% | 67/94 |
 | Math | 92% | 300/327 |
 | WeakRef | 76% | 22/29 |
 | FinalizationRegistry | 72% | 34/47 |

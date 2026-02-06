@@ -624,6 +624,7 @@ fn collect_pattern_vars(
         Pattern::Rest(inner) => {
             collect_pattern_vars(inner, kind, scope_depth, local_vars, ctx);
         }
+        Pattern::MemberExpression(_) => {}
     }
 }
 

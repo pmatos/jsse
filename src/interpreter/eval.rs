@@ -291,7 +291,57 @@ impl Interpreter {
                     }
                     Completion::Normal(JsValue::Boolean(true))
                 }
-                _ => Completion::Normal(JsValue::Boolean(true)),
+                Expression::Identifier(name) => {
+                    // Per §13.5.1.2: delete on a resolved binding reference
+                    // In strict mode, this is a SyntaxError (handled at parse time)
+                    // In sloppy mode:
+                    //   - var/let/const bindings are non-configurable → return false
+                    //   - global object configurable properties → delete and return true
+                    //   - unresolvable → return true
+
+                    // Check non-global environments first — these are always non-configurable
+                    let mut current = Some(env.clone());
+                    let global_env = self.global_env.clone();
+                    while let Some(ref e) = current {
+                        if std::rc::Rc::ptr_eq(e, &global_env) {
+                            break;
+                        }
+                        if e.borrow().bindings.contains_key(name) {
+                            return Completion::Normal(JsValue::Boolean(false));
+                        }
+                        let next = e.borrow().parent.clone();
+                        current = next;
+                    }
+
+                    // At global level — check global object property descriptor
+                    let global_obj = self.global_env.borrow().global_object.clone();
+                    if let Some(ref global) = global_obj {
+                        let gb = global.borrow();
+                        if let Some(desc) = gb.properties.get(name) {
+                            if desc.configurable == Some(false) {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
+                            drop(gb);
+                            global.borrow_mut().properties.remove(name);
+                            global.borrow_mut().property_order.retain(|k| k != name);
+                            self.global_env.borrow_mut().bindings.remove(name);
+                            return Completion::Normal(JsValue::Boolean(true));
+                        }
+                    }
+                    // Check if it's a binding in the global env (var declaration not on global object)
+                    if self.global_env.borrow().bindings.contains_key(name) {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                    // Unresolvable reference — return true per spec
+                    Completion::Normal(JsValue::Boolean(true))
+                }
+                _ => {
+                    // Evaluate the expression for side effects, then return true
+                    match self.eval_expr(expr, env) {
+                        Completion::Normal(_) => Completion::Normal(JsValue::Boolean(true)),
+                        other => other,
+                    }
+                }
             },
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 let mut result = JsValue::Undefined;
@@ -1512,6 +1562,45 @@ impl Interpreter {
             Completion::Normal(if prefix { new_val } else { old_val })
         } else {
             Completion::Normal(JsValue::Number(f64::NAN))
+        }
+    }
+
+    pub(crate) fn assign_to_expr(
+        &mut self,
+        expr: &Expression,
+        value: JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        match expr {
+            Expression::Member(obj_expr, prop) => {
+                let obj_val = match self.eval_expr(obj_expr, env) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => return Ok(()),
+                };
+                let key = match prop {
+                    MemberProperty::Dot(name) => name.clone(),
+                    MemberProperty::Computed(cexpr) => {
+                        let v = match self.eval_expr(cexpr, env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => return Ok(()),
+                        };
+                        match self.to_property_key(&v) {
+                            Ok(s) => s,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    MemberProperty::Private(_) => return Ok(()),
+                };
+                if let JsValue::Object(ref o) = obj_val {
+                    if let Some(obj) = self.get_object(o.id) {
+                        obj.borrow_mut().set_property_value(&key, value);
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 

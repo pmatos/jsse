@@ -113,8 +113,13 @@ impl<'a> Parser<'a> {
         let expr = self.parse_nullish_coalescing()?;
         if self.current == Token::Question {
             self.advance()?;
+            // ConditionalExpression[In]: consequent is AssignmentExpression[+In]
+            let saved_no_in = self.no_in;
+            self.no_in = false;
             let consequent = self.parse_assignment_expression()?;
+            self.no_in = saved_no_in;
             self.eat(&Token::Colon)?;
+            // alternate is AssignmentExpression[?In]
             let alternate = self.parse_assignment_expression()?;
             Ok(Expression::Conditional(
                 Box::new(expr),
@@ -228,7 +233,7 @@ impl<'a> Parser<'a> {
                 Token::LessThanEqual => BinaryOp::LtEq,
                 Token::GreaterThanEqual => BinaryOp::GtEq,
                 Token::Keyword(Keyword::Instanceof) => BinaryOp::Instanceof,
-                Token::Keyword(Keyword::In) => BinaryOp::In,
+                Token::Keyword(Keyword::In) if !self.no_in => BinaryOp::In,
                 _ => break,
             };
             self.advance()?;
@@ -758,6 +763,8 @@ impl<'a> Parser<'a> {
             Token::LeftParen => {
                 let paren_start = self.current_token_start;
                 self.advance()?;
+                let saved_no_in = self.no_in;
+                self.no_in = false;
                 // Could be: parenthesized expression, arrow params, or empty arrow ()=>
                 if self.current == Token::RightParen {
                     // () => ...
@@ -817,6 +824,7 @@ impl<'a> Parser<'a> {
                         exprs.push(self.parse_assignment_expression()?);
                     }
                     self.eat(&Token::RightParen)?;
+                    self.no_in = saved_no_in;
                     if self.current == Token::Arrow && !self.prev_line_terminator {
                         self.advance()?;
                         let params: Vec<Pattern> = exprs
@@ -852,6 +860,7 @@ impl<'a> Parser<'a> {
                     return Ok(Expression::Sequence(exprs));
                 }
                 self.eat(&Token::RightParen)?;
+                self.no_in = saved_no_in;
                 if Self::has_cover_initialized_name(&expr) {
                     return Err(self.error("Invalid shorthand property initializer"));
                 }
@@ -871,6 +880,8 @@ impl<'a> Parser<'a> {
 
     fn parse_array_literal(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // [
+        let saved_no_in = self.no_in;
+        self.no_in = false;
         let mut elements = Vec::new();
         while self.current != Token::RightBracket {
             if self.current == Token::Comma {
@@ -890,6 +901,7 @@ impl<'a> Parser<'a> {
             }
         }
         self.eat(&Token::RightBracket)?;
+        self.no_in = saved_no_in;
         Ok(Expression::Array(elements))
     }
 
@@ -909,6 +921,8 @@ impl<'a> Parser<'a> {
 
     fn parse_object_literal(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // {
+        let saved_no_in = self.no_in;
+        self.no_in = false;
         let mut props = Vec::new();
         while self.current != Token::RightBrace {
             if self.current == Token::Ellipsis {
@@ -951,6 +965,7 @@ impl<'a> Parser<'a> {
                 has_proto = true;
             }
         }
+        self.no_in = saved_no_in;
         Ok(Expression::Object(props))
     }
 

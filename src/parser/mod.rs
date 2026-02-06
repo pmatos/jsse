@@ -53,6 +53,7 @@ pub struct Parser<'a> {
     in_formal_parameters: bool,
     in_block_or_function: bool,
     in_switch_case: bool,
+    no_in: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -91,6 +92,7 @@ impl<'a> Parser<'a> {
             in_formal_parameters: false,
             in_block_or_function: false,
             in_switch_case: false,
+            no_in: false,
         })
     }
 
@@ -286,6 +288,7 @@ impl<'a> Parser<'a> {
                 }
             }
             Pattern::Assign(p, _) | Pattern::Rest(p) => Self::collect_bound_names(p, names),
+            Pattern::MemberExpression(_) => {}
         }
     }
 
@@ -618,6 +621,7 @@ impl<'a> Parser<'a> {
             Pattern::Rest(inner) => {
                 self.collect_pattern_names(inner, names);
             }
+            Pattern::MemberExpression(_) => {}
         }
     }
 
@@ -671,26 +675,51 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
             Ok(Pattern::Assign(Box::new(pat), right))
         }
         Expression::Array(elements) => {
-            let pats = elements
-                .into_iter()
-                .map(|e| {
-                    e.map(|e| {
+            let mut pats = Vec::new();
+            let mut saw_rest = false;
+            for e in elements {
+                if saw_rest {
+                    return Err(ParseError {
+                        message: "Rest element must be last element".to_string(),
+                    });
+                }
+                let pat = e
+                    .map(|e| {
                         if let Expression::Spread(inner) = e {
+                            if let Expression::Assign(AssignOp::Assign, _, _) = *inner {
+                                return Err(ParseError {
+                                    message: "Rest element may not have a default initializer"
+                                        .to_string(),
+                                });
+                            }
+                            saw_rest = true;
                             expr_to_pattern(*inner).map(ArrayPatternElement::Rest)
                         } else {
                             expr_to_pattern(e).map(ArrayPatternElement::Pattern)
                         }
                     })
-                    .transpose()
-                })
-                .collect::<Result<_, _>>()?;
+                    .transpose()?;
+                if saw_rest && pat.is_none() {
+                    return Err(ParseError {
+                        message: "Rest element must be last element".to_string(),
+                    });
+                }
+                pats.push(pat);
+            }
             Ok(Pattern::Array(pats))
         }
         Expression::Object(props) => {
             let mut pat_props = Vec::new();
+            let mut saw_rest = false;
             for prop in props {
+                if saw_rest {
+                    return Err(ParseError {
+                        message: "Rest element must be last element".to_string(),
+                    });
+                }
                 if let PropertyKind::Init = prop.kind {
                     if let Expression::Spread(inner) = prop.value {
+                        saw_rest = true;
                         let pat = expr_to_pattern(*inner)?;
                         pat_props.push(ObjectPatternProperty::Rest(pat));
                     } else if prop.shorthand {
@@ -724,6 +753,9 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
         Expression::Spread(inner) => {
             let pat = expr_to_pattern(*inner)?;
             Ok(Pattern::Rest(Box::new(pat)))
+        }
+        Expression::Member(_, _) => {
+            Ok(Pattern::MemberExpression(Box::new(expr)))
         }
         _ => Err(ParseError {
             message: "Invalid destructuring target".to_string(),
