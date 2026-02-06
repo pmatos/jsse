@@ -14,11 +14,25 @@ pub enum Completion {
     Break(Option<String>),
     Continue(Option<String>),
     Yield(JsValue),
+    Empty,
 }
 
 impl Completion {
     pub(crate) fn is_abrupt(&self) -> bool {
-        !matches!(self, Completion::Normal(_))
+        !matches!(self, Completion::Normal(_) | Completion::Empty)
+    }
+    pub(crate) fn update_empty(self, val: JsValue) -> Completion {
+        match self {
+            Completion::Empty => Completion::Normal(val),
+            other => other,
+        }
+    }
+    pub(crate) fn value_or(&self, default: JsValue) -> JsValue {
+        match self {
+            Completion::Normal(v) => v.clone(),
+            Completion::Empty => default,
+            _ => default,
+        }
     }
 }
 
@@ -69,6 +83,7 @@ pub struct Environment {
     pub strict: bool,
     pub(crate) with_object: Option<WithObject>,
     pub(crate) dispose_stack: Option<Vec<DisposableResource>>,
+    pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -122,6 +137,7 @@ impl Environment {
             strict,
             with_object: None,
             dispose_stack: None,
+            global_object: None,
         }))
     }
 
@@ -151,6 +167,13 @@ impl Environment {
                     "Assignment to constant variable.",
                 )));
             }
+            if binding.kind == BindingKind::Var {
+                if let Some(ref global_obj) = self.global_object {
+                    global_obj
+                        .borrow_mut()
+                        .set_property_value(name, value.clone());
+                }
+            }
             binding.value = value;
             binding.initialized = true;
             Ok(())
@@ -158,6 +181,11 @@ impl Environment {
             parent.borrow_mut().set(name, value)
         } else {
             // Global implicit declaration (sloppy mode)
+            if let Some(ref global_obj) = self.global_object {
+                global_obj
+                    .borrow_mut()
+                    .set_property_value(name, value.clone());
+            }
             self.bindings.insert(
                 name.to_string(),
                 Binding {
@@ -202,6 +230,13 @@ impl Environment {
             Some(binding.value.clone())
         } else if let Some(parent) = &self.parent {
             parent.borrow().get(name)
+        } else if let Some(ref global_obj) = self.global_object {
+            let obj = global_obj.borrow();
+            if obj.has_property(name) {
+                Some(obj.get_property(name))
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -218,6 +253,8 @@ impl Environment {
             true
         } else if let Some(parent) = &self.parent {
             parent.borrow().has(name)
+        } else if let Some(ref global_obj) = self.global_object {
+            global_obj.borrow().has_property(name)
         } else {
             false
         }

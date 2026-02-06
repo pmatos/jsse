@@ -1500,7 +1500,7 @@ impl Interpreter {
             });
             str_obj
                 .borrow_mut()
-                .insert_value("prototype".to_string(), proto_val.clone());
+                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val.clone(), false, false, false));
             proto
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), str_val.clone());

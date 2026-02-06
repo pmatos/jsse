@@ -1409,8 +1409,10 @@ impl Interpreter {
                 Ok(pair) => pair,
                 Err(e) => return Completion::Throw(e),
             };
-            if let Err(e) = env.borrow_mut().set(name, new_val.clone()) {
-                return Completion::Throw(e);
+            if let Err(_e) = env.borrow_mut().set(name, new_val.clone()) {
+                return Completion::Throw(
+                    self.create_type_error("Assignment to constant variable."),
+                );
             }
             Completion::Normal(if prefix { new_val } else { old_val })
         } else if let Expression::Member(obj_expr, prop) = arg {
@@ -1543,7 +1545,11 @@ impl Interpreter {
                 other => return other,
             };
             if let Expression::Identifier(name) = left {
-                let _ = env.borrow_mut().set(name, rval.clone());
+                if let Err(_e) = env.borrow_mut().set(name, rval.clone()) {
+                    return Completion::Throw(
+                        self.create_type_error("Assignment to constant variable."),
+                    );
+                }
             }
             return Completion::Normal(rval);
         }
@@ -1580,8 +1586,10 @@ impl Interpreter {
                     }
                     env.borrow_mut().declare(name, BindingKind::Var);
                 }
-                if let Err(e) = env.borrow_mut().set(name, final_val.clone()) {
-                    return Completion::Throw(e);
+                if let Err(_e) = env.borrow_mut().set(name, final_val.clone()) {
+                    return Completion::Throw(
+                        self.create_type_error("Assignment to constant variable."),
+                    );
                 }
                 Completion::Normal(final_val)
             }
@@ -2281,7 +2289,22 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
-            return self.call_function(&super_ctor, &this_val, &arg_vals);
+            let result = self.call_function(&super_ctor, &this_val, &arg_vals);
+            // Per spec §13.3.7.1 step 6: BindThisValue(result)
+            // If parent constructor returned an object, rebind this to it
+            if let Completion::Normal(ref v) = result {
+                if matches!(v, JsValue::Object(_)) {
+                    env.borrow_mut().bindings.insert(
+                        "this".to_string(),
+                        crate::interpreter::types::Binding {
+                            value: v.clone(),
+                            kind: crate::interpreter::types::BindingKind::Const,
+                            initialized: true,
+                        },
+                    );
+                }
+            }
+            return result;
         }
 
         // Handle member calls: obj.method()
@@ -2558,7 +2581,7 @@ impl Interpreter {
                 });
                 Completion::Normal(self.create_iter_result_object(v, true))
             }
-            Completion::Normal(_) => {
+            Completion::Normal(_) | Completion::Empty => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                     body,
                     func_env,
@@ -4754,7 +4777,15 @@ impl Interpreter {
             let callable = obj.borrow().callable.clone();
             if let Some(func) = callable {
                 return match func {
-                    JsFunction::Native(_, _, f, _) => f(self, _this_val, args),
+                    JsFunction::Native(_, _, f, _) => {
+                        let saved_this = self.last_call_this_value.take();
+                        let result = f(self, _this_val, args);
+                        // Restore so nested calls inside native functions
+                        // don't corrupt the outer eval_new/construct state
+                        self.last_call_this_value = saved_this;
+                        self.last_call_had_explicit_return = true;
+                        result
+                    }
                     JsFunction::User {
                         params,
                         body,
@@ -5011,8 +5042,17 @@ impl Interpreter {
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                         }
                         let result = self.exec_statements(&body, &func_env);
+                        self.last_call_this_value =
+                            func_env.borrow().get("this");
                         match result {
-                            Completion::Return(v) | Completion::Normal(v) => Completion::Normal(v),
+                            Completion::Return(v) => {
+                                self.last_call_had_explicit_return = true;
+                                Completion::Normal(v)
+                            }
+                            Completion::Normal(_) | Completion::Empty => {
+                                self.last_call_had_explicit_return = false;
+                                Completion::Normal(result.value_or(JsValue::Undefined))
+                            }
                             Completion::Yield(_) => Completion::Normal(JsValue::Undefined),
                             other => other,
                         }
@@ -5136,7 +5176,7 @@ impl Interpreter {
                         Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
                             Completion::Normal(v)
                         }
-                        Completion::Normal(_) => Completion::Normal(this_val),
+                        Completion::Normal(_) | Completion::Empty => Completion::Normal(this_val),
                         other => other,
                     };
                 }
@@ -5226,16 +5266,17 @@ impl Interpreter {
         }
         let prev_new_target = self.new_target.take();
         self.new_target = Some(callee_val.clone());
+        self.last_call_had_explicit_return = false;
+        self.last_call_this_value = None;
         let result = self.call_function(&callee_val, &this_val, &evaluated_args);
+        let had_explicit_return = self.last_call_had_explicit_return;
+        let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
         self.new_target = prev_new_target;
         match result {
-            Completion::Normal(v) => {
-                if matches!(v, JsValue::Object(_)) {
-                    Completion::Normal(v)
-                } else {
-                    Completion::Normal(this_val)
-                }
+            Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                Completion::Normal(v)
             }
+            Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
             other => other,
         }
     }
@@ -5283,10 +5324,14 @@ impl Interpreter {
                     }
                     let new_obj_id = new_obj.borrow().id.unwrap();
                     let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+                    self.last_call_had_explicit_return = false;
                     let result = self.call_function(&target_val, &this_val, args);
+                    let had_explicit_return = self.last_call_had_explicit_return;
                     self.new_target = prev_new_target;
                     return match result {
-                        Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
+                        Completion::Normal(v)
+                            if had_explicit_return && matches!(v, JsValue::Object(_)) =>
+                        {
                             Completion::Normal(v)
                         }
                         Completion::Normal(_) => Completion::Normal(this_val),
@@ -5332,16 +5377,17 @@ impl Interpreter {
 
         let prev_new_target = self.new_target.take();
         self.new_target = Some(constructor.clone());
+        self.last_call_had_explicit_return = false;
+        self.last_call_this_value = None;
         let result = self.call_function(constructor, &this_val, args);
+        let had_explicit_return = self.last_call_had_explicit_return;
+        let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
         self.new_target = prev_new_target;
         match result {
-            Completion::Normal(v) => {
-                if matches!(v, JsValue::Object(_)) {
-                    Completion::Normal(v)
-                } else {
-                    Completion::Normal(this_val)
-                }
+            Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                Completion::Normal(v)
             }
+            Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
             other => other,
         }
     }
@@ -5545,14 +5591,14 @@ impl Interpreter {
         };
         let proto_val = ctor_data.borrow().get_property("prototype");
         let JsValue::Object(proto_ref) = &proto_val else {
-            return Completion::Throw(JsValue::String(JsString::from_str(
-                "Function has non-object prototype in instanceof check",
-            )));
+            return Completion::Throw(
+                self.create_type_error("Function has non-object prototype in instanceof check"),
+            );
         };
         let Some(proto_data) = self.get_object(proto_ref.id) else {
-            return Completion::Throw(JsValue::String(JsString::from_str(
-                "Function has non-object prototype in instanceof check",
-            )));
+            return Completion::Throw(
+                self.create_type_error("Function has non-object prototype in instanceof check"),
+            );
         };
         let JsValue::Object(lhs) = obj else {
             return Completion::Normal(JsValue::Boolean(false));
@@ -5966,6 +6012,14 @@ impl Interpreter {
         };
 
         let ctor_val = self.create_function(ctor_func);
+
+        // Bind class name as immutable binding in class_env (spec §15.7.14 step 2.e)
+        if !name.is_empty() {
+            class_env
+                .borrow_mut()
+                .declare(name, BindingKind::Const);
+            let _ = class_env.borrow_mut().set(name, ctor_val.clone());
+        }
 
         // Get the prototype object that was auto-created by create_function
         let proto_obj = if let JsValue::Object(ref o) = ctor_val {
@@ -6589,6 +6643,9 @@ impl Interpreter {
         match result {
             Completion::Return(v) | Completion::Normal(v) => {
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);
+            }
+            Completion::Empty => {
+                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[JsValue::Undefined]);
             }
             Completion::Throw(e) => {
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);

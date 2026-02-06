@@ -292,7 +292,7 @@ impl Interpreter {
             });
             sym_obj
                 .borrow_mut()
-                .insert_value("prototype".to_string(), proto_val);
+                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
             // Set constructor on prototype
             let ctor_val = sym_val.clone();
             proto
@@ -531,7 +531,7 @@ impl Interpreter {
             });
             num_obj
                 .borrow_mut()
-                .insert_value("prototype".to_string(), proto_val);
+                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
             proto
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), num_val);
@@ -612,7 +612,7 @@ impl Interpreter {
             });
             bool_obj
                 .borrow_mut()
-                .insert_value("prototype".to_string(), proto_val);
+                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
             proto
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), bool_val);

@@ -964,7 +964,7 @@ impl Interpreter {
                 id: proto.borrow().id.unwrap(),
             });
             obj.borrow_mut()
-                .insert_value("prototype".to_string(), proto_val);
+                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
         }
 
         // Date.prototype.constructor

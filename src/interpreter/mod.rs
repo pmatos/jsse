@@ -40,6 +40,7 @@ pub struct Interpreter {
     finalization_registry_prototype: Option<Rc<RefCell<JsObjectData>>>,
     date_prototype: Option<Rc<RefCell<JsObjectData>>>,
     generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    function_prototype: Option<Rc<RefCell<JsObjectData>>>,
     generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     async_generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -75,6 +76,8 @@ pub struct Interpreter {
     template_cache: HashMap<usize, u64>,
     module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
+    last_call_had_explicit_return: bool,
+    last_call_this_value: Option<JsValue>,
 }
 
 pub struct LoadedModule {
@@ -128,6 +131,7 @@ impl Interpreter {
             finalization_registry_prototype: None,
             date_prototype: None,
             generator_prototype: None,
+            function_prototype: None,
             generator_function_prototype: None,
             async_iterator_prototype: None,
             async_generator_prototype: None,
@@ -163,6 +167,8 @@ impl Interpreter {
             template_cache: HashMap::new(),
             module_registry: HashMap::new(),
             current_module_path: None,
+            last_call_had_explicit_return: false,
+            last_call_this_value: None,
         };
         interp.setup_globals();
         interp
@@ -373,7 +379,22 @@ impl Interpreter {
                 .clone()
                 .or(self.object_prototype.clone())
         } else {
-            self.object_prototype.clone()
+            // Look up Function.prototype dynamically to ensure identity matches
+            let fp = self.global_env.borrow().get("Function").and_then(|fv| {
+                if let JsValue::Object(fo) = fv {
+                    self.get_object(fo.id).and_then(|fd| {
+                        let pv = fd.borrow().get_property("prototype");
+                        if let JsValue::Object(pr) = pv {
+                            self.get_object(pr.id)
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                }
+            });
+            fp.or(self.object_prototype.clone())
         };
         obj_data.callable = Some(func);
         obj_data.class_name = if is_async_gen {
@@ -412,7 +433,7 @@ impl Interpreter {
             }
             let proto_id = proto.borrow().id.unwrap();
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-            obj_data.insert_value("prototype".to_string(), proto_val.clone());
+            obj_data.insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val.clone(), true, false, false));
         }
         let obj = Rc::new(RefCell::new(obj_data));
         let func_id = self.allocate_object_slot(obj.clone());

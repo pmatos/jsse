@@ -33,16 +33,17 @@ impl Interpreter {
             }
         }
 
-        let mut result = JsValue::Undefined;
+        let mut result = Completion::Empty;
         for stmt in stmts {
             self.maybe_gc();
             let comp = self.exec_statement(stmt, env);
             match comp {
-                Completion::Normal(val) => result = val,
+                Completion::Normal(val) => result = Completion::Normal(val),
+                Completion::Empty => {} // keep previous result (UpdateEmpty semantics)
                 other => return other,
             }
         }
-        Completion::Normal(result)
+        result
     }
 
     pub(crate) fn hoist_pattern(&self, pat: &Pattern, env: &EnvRef) {
@@ -83,14 +84,17 @@ impl Interpreter {
 
     pub(crate) fn exec_statement(&mut self, stmt: &Statement, env: &EnvRef) -> Completion {
         match stmt {
-            Statement::Empty => Completion::Normal(JsValue::Undefined),
+            Statement::Empty => Completion::Empty,
             Statement::Expression(expr) => self.eval_expr(expr, env),
             Statement::Block(stmts) => {
                 let block_env = Environment::new(Some(env.clone()));
                 let result = self.exec_statements(stmts, &block_env);
                 self.dispose_resources(&block_env, result)
             }
-            Statement::Variable(decl) => self.exec_variable_declaration(decl, env),
+            Statement::Variable(decl) => {
+                let r = self.exec_variable_declaration(decl, env);
+                if r.is_abrupt() { r } else { Completion::Empty }
+            }
             Statement::If(if_stmt) => {
                 let test = self.eval_expr(&if_stmt.test, env);
                 let test = match test {
@@ -99,8 +103,10 @@ impl Interpreter {
                 };
                 if to_boolean(&test) {
                     self.exec_statement(&if_stmt.consequent, env)
+                        .update_empty(JsValue::Undefined)
                 } else if let Some(alt) = &if_stmt.alternate {
                     self.exec_statement(alt, env)
+                        .update_empty(JsValue::Undefined)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
@@ -178,6 +184,7 @@ impl Interpreter {
                                 unscopables: unscopables_data,
                             }),
                             dispose_stack: None,
+                            global_object: None,
                         }));
                         self.exec_statement(body, &with_env)
                     } else {
@@ -187,8 +194,8 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
-            Statement::Debugger => Completion::Normal(JsValue::Undefined),
-            Statement::FunctionDeclaration(_) => Completion::Normal(JsValue::Undefined), // hoisted
+            Statement::Debugger => Completion::Empty,
+            Statement::FunctionDeclaration(_) => Completion::Empty, // hoisted
             Statement::ClassDeclaration(cd) => {
                 let class_val = self.eval_class(
                     &cd.name,
@@ -201,7 +208,7 @@ impl Interpreter {
                     Completion::Normal(val) => {
                         env.borrow_mut().declare(&cd.name, BindingKind::Let);
                         let _ = env.borrow_mut().set(&cd.name, val);
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Empty
                     }
                     other => other,
                 }
@@ -410,6 +417,7 @@ impl Interpreter {
     }
 
     fn exec_while(&mut self, w: &WhileStatement, env: &EnvRef) -> Completion {
+        let mut v = JsValue::Undefined;
         loop {
             let test = match self.eval_expr(&w.test, env) {
                 Completion::Normal(v) => v,
@@ -419,19 +427,24 @@ impl Interpreter {
                 break;
             }
             match self.exec_statement(&w.body, env) {
-                Completion::Normal(_) | Completion::Continue(None) => {}
-                Completion::Break(None) => break,
+                Completion::Normal(val) => { v = val; }
+                Completion::Empty => {}
+                Completion::Continue(None) => {}
+                Completion::Break(None) => return Completion::Normal(v),
                 other => return other,
             }
         }
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(v)
     }
 
     fn exec_do_while(&mut self, dw: &DoWhileStatement, env: &EnvRef) -> Completion {
+        let mut v = JsValue::Undefined;
         loop {
             match self.exec_statement(&dw.body, env) {
-                Completion::Normal(_) | Completion::Continue(None) => {}
-                Completion::Break(None) => break,
+                Completion::Normal(val) => { v = val; }
+                Completion::Empty => {}
+                Completion::Continue(None) => {}
+                Completion::Break(None) => return Completion::Normal(v),
                 other => return other,
             }
             let test = match self.eval_expr(&dw.test, env) {
@@ -442,7 +455,7 @@ impl Interpreter {
                 break;
             }
         }
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(v)
     }
 
     fn exec_for(&mut self, f: &ForStatement, env: &EnvRef) -> Completion {
@@ -469,6 +482,7 @@ impl Interpreter {
                 }
             }
         }
+        let mut v = JsValue::Undefined;
         loop {
             if let Some(test) = &f.test {
                 let val = match self.eval_expr(test, &for_env) {
@@ -480,8 +494,10 @@ impl Interpreter {
                 }
             }
             match self.exec_statement(&f.body, &for_env) {
-                Completion::Normal(_) | Completion::Continue(None) => {}
-                Completion::Break(None) => break,
+                Completion::Normal(val) => { v = val; }
+                Completion::Empty => {}
+                Completion::Continue(None) => {}
+                Completion::Break(None) => return Completion::Normal(v),
                 other => return other,
             }
             if let Some(update) = &f.update {
@@ -491,7 +507,7 @@ impl Interpreter {
                 }
             }
         }
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(v)
     }
 
     fn exec_for_in(&mut self, fi: &ForInStatement, env: &EnvRef) -> Completion {
@@ -502,6 +518,7 @@ impl Interpreter {
         if obj_val.is_nullish() {
             return Completion::Normal(JsValue::Undefined);
         }
+        let mut v = JsValue::Undefined;
         if let JsValue::Object(ref o) = obj_val
             && let Some(obj) = self.get_object(o.id)
         {
@@ -543,13 +560,16 @@ impl Interpreter {
                     }
                 }
                 match self.exec_statement(&fi.body, &for_env) {
-                    Completion::Normal(_) | Completion::Continue(None) => {}
-                    Completion::Break(None) => break,
+                    Completion::Normal(val) => { v = val; }
+                    Completion::Continue(None) => {}
+                    Completion::Break(None) => {
+                        return Completion::Normal(v);
+                    }
                     other => return other,
                 }
             }
         }
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(v)
     }
 
     fn exec_for_of(&mut self, fo: &ForOfStatement, env: &EnvRef) -> Completion {
@@ -570,6 +590,7 @@ impl Interpreter {
             }
         };
 
+        let mut v = JsValue::Undefined;
         loop {
             let step_result = match self.iterator_next(&iterator) {
                 Ok(v) => v,
@@ -644,10 +665,12 @@ impl Interpreter {
             let body_result = self.exec_statement(&fo.body, &for_env);
             let body_result = self.dispose_resources(&for_env, body_result);
             match body_result {
-                Completion::Normal(_) | Completion::Continue(None) => {}
+                Completion::Normal(val) => { v = val; }
+                Completion::Empty => {}
+                Completion::Continue(None) => {}
                 Completion::Break(None) => {
                     self.iterator_close(&iterator, JsValue::Undefined);
-                    break;
+                    return Completion::Normal(v);
                 }
                 Completion::Return(v) => {
                     self.iterator_close(&iterator, JsValue::Undefined);
@@ -668,7 +691,7 @@ impl Interpreter {
                 other => return other,
             }
         }
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(v)
     }
 
     fn exec_try(&mut self, t: &TryStatement, env: &EnvRef) -> Completion {
@@ -701,7 +724,7 @@ impl Interpreter {
                 return fin_result;
             }
         }
-        result
+        result.update_empty(JsValue::Undefined)
     }
 
     fn exec_switch(&mut self, s: &SwitchStatement, env: &EnvRef) -> Completion {
@@ -712,6 +735,7 @@ impl Interpreter {
         let switch_env = Environment::new(Some(env.clone()));
         let default_idx = s.cases.iter().position(|c| c.test.is_none());
         let a_end = default_idx.unwrap_or(s.cases.len());
+        let mut v = JsValue::Undefined;
 
         // Phase 1: Search list A (cases before default) for a match
         let mut found = false;
@@ -727,15 +751,15 @@ impl Interpreter {
             }
             if found {
                 // Fall through from match in A through rest of A, then default + B
-                if let Some(r) = self.exec_switch_cases(&s.cases[i..a_end], &switch_env) {
+                if let Some(r) = self.exec_switch_cases(&s.cases[i..a_end], &switch_env, &mut v) {
                     return r;
                 }
                 if let Some(di) = default_idx {
-                    if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env) {
+                    if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v) {
                         return r;
                     }
                 }
-                return Completion::Normal(JsValue::Undefined);
+                return Completion::Normal(v);
             }
         }
 
@@ -752,33 +776,37 @@ impl Interpreter {
                     other => return other,
                 };
                 if strict_equality(&disc, &test) {
-                    if let Some(r) = self.exec_switch_cases(&s.cases[b_start + i..], &switch_env) {
+                    if let Some(r) = self.exec_switch_cases(&s.cases[b_start + i..], &switch_env, &mut v) {
                         return r;
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(v);
                 }
             }
 
             // Phase 3: No match anywhere — execute default, then fall through B
-            if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env) {
+            if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v) {
                 return r;
             }
         }
 
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(v)
     }
 
     fn exec_switch_cases(
         &mut self,
         cases: &[crate::ast::SwitchCase],
         env: &EnvRef,
+        v: &mut JsValue,
     ) -> Option<Completion> {
         for case in cases {
             for stmt in &case.consequent {
                 match self.exec_statement(stmt, env) {
-                    Completion::Normal(_) => {}
+                    Completion::Normal(val) => {
+                        *v = val;
+                    }
+                    Completion::Empty => {}
                     Completion::Break(None) => {
-                        return Some(Completion::Normal(JsValue::Undefined))
+                        return Some(Completion::Normal(v.clone()))
                     }
                     other => return Some(other),
                 }

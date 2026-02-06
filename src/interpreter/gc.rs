@@ -42,6 +42,7 @@ impl Interpreter {
             &self.set_iterator_prototype,
             &self.date_prototype,
             &self.generator_prototype,
+            &self.function_prototype,
             &self.generator_function_prototype,
             &self.async_iterator_prototype,
             &self.async_generator_prototype,
