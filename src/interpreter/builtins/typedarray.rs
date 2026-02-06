@@ -1779,7 +1779,7 @@ impl Interpreter {
             a.class_name = "Array".to_string();
             a.prototype = self.array_prototype.clone();
             a.array_elements = Some(elems);
-            a.insert_value("length".to_string(), JsValue::Number(len as f64));
+            a.insert_builtin("length".to_string(), JsValue::Number(len as f64));
         }
         arr
     }

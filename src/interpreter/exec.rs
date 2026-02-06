@@ -26,7 +26,7 @@ impl Interpreter {
                         body: f.body.clone(),
                         closure: env.clone(),
                         is_arrow: false,
-                        is_strict: Self::is_strict_mode_body(&f.body),
+                        is_strict: Self::is_strict_mode_body(&f.body) || env.borrow().strict,
                         is_generator: f.is_generator,
                         is_async: f.is_async,
                         source_text: f.source_text.clone(),

@@ -28,7 +28,7 @@ impl Interpreter {
         ));
         ds_proto
             .borrow_mut()
-            .insert_value("dispose".to_string(), dispose_fn.clone());
+            .insert_builtin("dispose".to_string(), dispose_fn.clone());
 
         // Symbol.dispose = dispose
         if let Some(key) = self.get_symbol_key("dispose") {
@@ -141,7 +141,7 @@ impl Interpreter {
         ));
         ds_proto
             .borrow_mut()
-            .insert_value("use".to_string(), use_fn);
+            .insert_builtin("use".to_string(), use_fn);
 
         // adopt(value, onDispose)
         let adopt_fn = self.create_function(JsFunction::native(
@@ -206,7 +206,7 @@ impl Interpreter {
         ));
         ds_proto
             .borrow_mut()
-            .insert_value("adopt".to_string(), adopt_fn);
+            .insert_builtin("adopt".to_string(), adopt_fn);
 
         // defer(onDispose)
         let defer_fn = self.create_function(JsFunction::native(
@@ -256,7 +256,7 @@ impl Interpreter {
         ));
         ds_proto
             .borrow_mut()
-            .insert_value("defer".to_string(), defer_fn);
+            .insert_builtin("defer".to_string(), defer_fn);
 
         // move()
         let move_fn = self.create_function(JsFunction::native(
@@ -315,7 +315,7 @@ impl Interpreter {
         ));
         ds_proto
             .borrow_mut()
-            .insert_value("move".to_string(), move_fn);
+            .insert_builtin("move".to_string(), move_fn);
 
         // Set constructor property on prototype
         let ds_proto_clone = ds_proto.clone();
@@ -455,7 +455,7 @@ impl Interpreter {
         ));
         ads_proto
             .borrow_mut()
-            .insert_value("disposeAsync".to_string(), dispose_async_fn.clone());
+            .insert_builtin("disposeAsync".to_string(), dispose_async_fn.clone());
 
         // Symbol.asyncDispose = disposeAsync
         if let Some(key) = self.get_symbol_key("asyncDispose") {
@@ -570,7 +570,7 @@ impl Interpreter {
         ));
         ads_proto
             .borrow_mut()
-            .insert_value("use".to_string(), use_fn);
+            .insert_builtin("use".to_string(), use_fn);
 
         // adopt(value, onDispose)
         let adopt_fn = self.create_function(JsFunction::native(
@@ -634,7 +634,7 @@ impl Interpreter {
         ));
         ads_proto
             .borrow_mut()
-            .insert_value("adopt".to_string(), adopt_fn);
+            .insert_builtin("adopt".to_string(), adopt_fn);
 
         // defer(onDispose)
         let defer_fn = self.create_function(JsFunction::native(
@@ -684,7 +684,7 @@ impl Interpreter {
         ));
         ads_proto
             .borrow_mut()
-            .insert_value("defer".to_string(), defer_fn);
+            .insert_builtin("defer".to_string(), defer_fn);
 
         // move()
         let move_fn = self.create_function(JsFunction::native(
@@ -741,7 +741,7 @@ impl Interpreter {
         ));
         ads_proto
             .borrow_mut()
-            .insert_value("move".to_string(), move_fn);
+            .insert_builtin("move".to_string(), move_fn);
 
         // Constructor
         let ads_proto_clone = ads_proto.clone();

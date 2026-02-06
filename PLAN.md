@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 32,615 / 48,257 run (67.59%)
+**Current pass rate:** 32,893 / 48,257 run (68.16%)
 
 ---
 
@@ -30,12 +30,12 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
-| Object | 90% | 3,076/3,411 |
-| Array | 75% | 2,306/3,079 |
-| String | 84% | 1,015/1,215 |
-| Function | 73% | 369/509 |
-| Iterator | 57% | 290/510 |
-| Promise | 73% | 466/639 |
+| Object | 92% | 3,121/3,411 |
+| Array | 76% | 2,342/3,079 |
+| String | 84% | 1,024/1,215 |
+| Function | 74% | 375/509 |
+| Iterator | 59% | 303/510 |
+| Promise | 73% | 467/639 |
 | Map | 76% | 156/204 |
 | Set | 68% | 261/383 |
 | Date | 51% | 305/594 |
@@ -102,6 +102,8 @@ These features block significant numbers of tests:
 34. ~~**ES Modules**~~ — ✅ Done (684 new passes, 64.16% → 64.52%). Full ES module support: import/export declarations, dynamic import(), import.meta, top-level await, module namespace objects with live bindings, circular dependency detection, duplicate export detection, re-export live binding resolution. module-code: 518/737 (70%), import: 120/162 (74%), dynamic-import: ~60%.
 35. ~~**TypedArray.prototype.with()**~~ — ✅ Done (13 new passes, 64.52% → 64.54%). ES2023 immutable update method that creates a copy with a single element replaced. Proper coercion order (index then value), BigInt TypedArray support, valueOf error propagation. TypedArray: 786/1,438 (55%).
 36. ~~**Array.prototype.toLocaleString + Object.prototype.toLocaleString + TypedArray.prototype.toLocaleString**~~ — ✅ Done (48 new passes, 64.54% → 64.64%). Implemented per ECMA-262 §23.1.3.32: ToObject(this), LengthOfArrayLike, comma separator, skip undefined/null elements, Invoke toLocaleString on others with no arguments. Added Object.prototype.toLocaleString as base (calls this.toString). Added TypedArray.prototype.toLocaleString with ValidateTypedArray checks. Array/toLocaleString: 8/12 (67%), Object/toLocaleString: 11/12 (92%), TypedArray/toLocaleString: passing.
+
+42. ~~**Conformance batch 5: Property descriptors, strict mode, String exotic**~~ — ✅ Done (133 new passes, 67.89% → 68.16%). String exotic objects (§10.4.3): wrapper .length and indexed character access with correct descriptors. Built-in method enumerability: bulk insert_value→insert_builtin for all prototype/static methods. Global NaN/Infinity/undefined made non-writable/non-configurable. `in` operator: symbol key support and TypeError for non-object RHS. Strict mode inheritance for nested functions/arrows. Sloppy this wrapping (ToObject for primitive this). from_property_descriptor always includes get/set for accessors. define_own_property checks array_elements for existing properties. Object: 3,076→3,121 (92%), Array: 2,306→2,342 (76%), String: 1,015→1,024 (84%).
 
 37. ~~**Symbol.species accessor**~~ — ✅ Done (27 new passes, 64.64% → 64.70%). Added `[Symbol.species]` getter to Array, ArrayBuffer, Map, Set, Promise, RegExp constructors. Simple getter returning `this`. All 29 direct tests now pass. See `plan/symbol-species.md`.
 

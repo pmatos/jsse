@@ -139,7 +139,7 @@ impl Interpreter {
                     body: f.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
-                    is_strict: Self::is_strict_mode_body(&f.body),
+                    is_strict: Self::is_strict_mode_body(&f.body) || env.borrow().strict,
                     is_generator: f.is_generator,
                     is_async: f.is_async,
                     source_text: f.source_text.clone(),
@@ -159,7 +159,7 @@ impl Interpreter {
                     body: body_stmts.clone(),
                     closure: env.clone(),
                     is_arrow: true,
-                    is_strict: Self::is_strict_mode_body(&body_stmts),
+                    is_strict: Self::is_strict_mode_body(&body_stmts) || env.borrow().strict,
                     is_generator: false,
                     is_async: af.is_async,
                     source_text: af.source_text.clone(),
@@ -1355,14 +1355,16 @@ impl Interpreter {
             BinaryOp::In => {
                 if let JsValue::Object(o) = &right {
                     if let Some(obj) = self.get_object(o.id) {
-                        let key = to_js_string(left);
+                        let key = to_property_key_string(left);
                         let obj_ref = obj.borrow();
                         Completion::Normal(JsValue::Boolean(obj_ref.has_property(&key)))
                     } else {
                         Completion::Normal(JsValue::Boolean(false))
                     }
                 } else {
-                    Completion::Normal(JsValue::Boolean(false))
+                    Completion::Throw(self.create_type_error(
+                        "Cannot use 'in' operator to search for a property in a non-object",
+                    ))
                 }
             }
             BinaryOp::Instanceof => {
@@ -5082,14 +5084,20 @@ impl Interpreter {
                         }
                         // Arrow functions inherit `this` and `arguments` from closure
                         if !is_arrow {
-                            let effective_this = if !is_strict
-                                && !closure_strict
-                                && matches!(_this_val, JsValue::Undefined | JsValue::Null)
-                            {
-                                self.global_env
-                                    .borrow()
-                                    .get("this")
-                                    .unwrap_or(_this_val.clone())
+                            let effective_this = if !is_strict && !closure_strict {
+                                if matches!(_this_val, JsValue::Undefined | JsValue::Null) {
+                                    self.global_env
+                                        .borrow()
+                                        .get("this")
+                                        .unwrap_or(_this_val.clone())
+                                } else if !matches!(_this_val, JsValue::Object(_)) {
+                                    match self.to_object(_this_val) {
+                                        Completion::Normal(v) => v,
+                                        _ => _this_val.clone(),
+                                    }
+                                } else {
+                                    _this_val.clone()
+                                }
                             } else {
                                 _this_val.clone()
                             };

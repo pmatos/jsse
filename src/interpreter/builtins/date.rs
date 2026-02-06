@@ -1078,11 +1078,11 @@ impl Interpreter {
             if let Some(proto) = error_proto {
                 o.prototype = Some(proto);
             }
-            o.insert_value(
+            o.insert_builtin(
                 "message".to_string(),
                 JsValue::String(JsString::from_str(msg)),
             );
-            o.insert_value(
+            o.insert_builtin(
                 "name".to_string(),
                 JsValue::String(JsString::from_str(name)),
             );

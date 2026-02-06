@@ -2291,10 +2291,10 @@ impl Interpreter {
             && let Some(obj) = self.get_object(o.id)
         {
             obj.borrow_mut()
-                .insert_value("isArray".to_string(), is_array_fn);
+                .insert_builtin("isArray".to_string(), is_array_fn);
             obj.borrow_mut()
-                .insert_value("from".to_string(), array_from);
-            obj.borrow_mut().insert_value("of".to_string(), array_of);
+                .insert_builtin("from".to_string(), array_from);
+            obj.borrow_mut().insert_builtin("of".to_string(), array_of);
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });

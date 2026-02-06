@@ -270,25 +270,25 @@ impl Interpreter {
 
     fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
         let result = self.create_object();
+        let is_accessor = desc.get.is_some() || desc.set.is_some();
         {
             let mut r = result.borrow_mut();
-            if let Some(ref val) = desc.value {
-                r.insert_value("value".to_string(), val.clone());
-            }
-            if let Some(w) = desc.writable {
-                r.insert_value("writable".to_string(), JsValue::Boolean(w));
+            if is_accessor {
+                r.insert_value("get".to_string(), desc.get.clone().unwrap_or(JsValue::Undefined));
+                r.insert_value("set".to_string(), desc.set.clone().unwrap_or(JsValue::Undefined));
+            } else {
+                if let Some(ref val) = desc.value {
+                    r.insert_value("value".to_string(), val.clone());
+                }
+                if let Some(w) = desc.writable {
+                    r.insert_value("writable".to_string(), JsValue::Boolean(w));
+                }
             }
             if let Some(e) = desc.enumerable {
                 r.insert_value("enumerable".to_string(), JsValue::Boolean(e));
             }
             if let Some(c) = desc.configurable {
                 r.insert_value("configurable".to_string(), JsValue::Boolean(c));
-            }
-            if let Some(ref g) = desc.get {
-                r.insert_value("get".to_string(), g.clone());
-            }
-            if let Some(ref s) = desc.set {
-                r.insert_value("set".to_string(), s.clone());
             }
         }
         let id = result.borrow().id.unwrap();
@@ -1523,7 +1523,7 @@ impl Interpreter {
                     body: func.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
-                    is_strict: Self::is_strict_mode_body(&func.body),
+                    is_strict: Self::is_strict_mode_body(&func.body) || env.borrow().strict,
                     is_generator: func.is_generator,
                     is_async: func.is_async,
                     source_text: func.source_text.clone(),

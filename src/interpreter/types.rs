@@ -657,6 +657,25 @@ impl JsObjectData {
         self.proxy_target.is_some()
     }
 
+    fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
+        if let Some(JsValue::String(ref s)) = self.primitive_value {
+            if self.class_name == "String" {
+                let units = &s.code_units;
+                if key == "length" {
+                    return Some(JsValue::Number(units.len() as f64));
+                }
+                if let Ok(idx) = key.parse::<usize>() {
+                    if idx < units.len() {
+                        return Some(JsValue::String(
+                            crate::types::JsString { code_units: vec![units[idx]] },
+                        ));
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn get_property(&self, key: &str) -> JsValue {
         // Module namespace: look up live binding from environment
         if let Some(ref ns_data) = self.module_namespace {
@@ -693,6 +712,9 @@ impl JsObjectData {
                 return typed_array_get_index(ta, idx);
             }
             return JsValue::Undefined;
+        }
+        if let Some(val) = self.string_exotic_value(key) {
+            return val;
         }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property(key);
@@ -739,6 +761,35 @@ impl JsObjectData {
             }
             return None;
         }
+        if let Some(JsValue::String(ref s)) = self.primitive_value {
+            if self.class_name == "String" {
+                let units = &s.code_units;
+                if key == "length" {
+                    return Some(PropertyDescriptor {
+                        value: Some(JsValue::Number(units.len() as f64)),
+                        writable: Some(false),
+                        enumerable: Some(false),
+                        configurable: Some(false),
+                        get: None,
+                        set: None,
+                    });
+                }
+                if let Ok(idx) = key.parse::<usize>() {
+                    if idx < units.len() {
+                        return Some(PropertyDescriptor {
+                            value: Some(JsValue::String(
+                                crate::types::JsString { code_units: vec![units[idx]] },
+                            )),
+                            writable: Some(false),
+                            enumerable: Some(true),
+                            configurable: Some(false),
+                            get: None,
+                            set: None,
+                        });
+                    }
+                }
+            }
+        }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property_descriptor(key);
         }
@@ -750,12 +801,37 @@ impl JsObjectData {
     }
 
     pub fn has_own_property(&self, key: &str) -> bool {
-        self.properties.contains_key(key)
+        if self.properties.contains_key(key) {
+            return true;
+        }
+        if let Some(JsValue::String(ref s)) = self.primitive_value {
+            if self.class_name == "String" {
+                if key == "length" {
+                    return true;
+                }
+                if let Ok(idx) = key.parse::<usize>() {
+                    return idx < s.code_units.len();
+                }
+            }
+        }
+        false
     }
 
     pub fn enumerable_keys_with_proto(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut keys = Vec::new();
+        // String exotic: indices come first (they are enumerable)
+        if let Some(JsValue::String(ref s)) = self.primitive_value {
+            if self.class_name == "String" {
+                let utf16_len = s.code_units.len();
+                for i in 0..utf16_len {
+                    let k = i.to_string();
+                    if seen.insert(k.clone()) {
+                        keys.push(k);
+                    }
+                }
+            }
+        }
         // Own enumerable properties (in insertion order)
         for k in &self.property_order {
             if let Some(desc) = self.properties.get(k)
@@ -777,7 +853,7 @@ impl JsObjectData {
     }
 
     pub fn has_property(&self, key: &str) -> bool {
-        if self.properties.contains_key(key) {
+        if self.has_own_property(key) {
             return true;
         }
         if let Some(proto) = &self.prototype {
@@ -787,7 +863,28 @@ impl JsObjectData {
     }
 
     pub fn define_own_property(&mut self, key: String, desc: PropertyDescriptor) -> bool {
-        if let Some(current) = self.properties.get(&key).cloned() {
+        // Check array_elements for existing array index properties
+        let current_from_array = if self.properties.get(&key).is_none() {
+            if let Some(ref elems) = self.array_elements
+                && let Ok(idx) = key.parse::<usize>()
+                && idx < elems.len()
+            {
+                Some(PropertyDescriptor {
+                    value: Some(elems[idx].clone()),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(current) = self.properties.get(&key).cloned().or(current_from_array) {
             // §10.1.6.3 step 2: if every field of desc is absent, return true
             if desc.value.is_none()
                 && desc.writable.is_none()
@@ -940,6 +1037,9 @@ impl JsObjectData {
                 }
             };
 
+            if !self.property_order.contains(&key) {
+                self.property_order.push(key.clone());
+            }
             self.properties.insert(key, merged);
         } else {
             if !self.extensible {

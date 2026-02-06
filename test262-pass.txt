@@ -422,6 +422,7 @@ test262/test/built-ins/Array/Symbol.species/return-value.js
 test262/test/built-ins/Array/Symbol.species/symbol-species-name.js
 test262/test/built-ins/Array/Symbol.species/symbol-species.js
 test262/test/built-ins/Array/constructor.js
+test262/test/built-ins/Array/from/Array.from-descriptor.js
 test262/test/built-ins/Array/from/Array.from-name.js
 test262/test/built-ins/Array/from/Array.from_arity.js
 test262/test/built-ins/Array/from/array-like-has-length-but-no-indexes-with-values.js
@@ -478,6 +479,7 @@ test262/test/built-ins/Array/isArray/15.4.3.2-1-9.js
 test262/test/built-ins/Array/isArray/15.4.3.2-2-1.js
 test262/test/built-ins/Array/isArray/15.4.3.2-2-2.js
 test262/test/built-ins/Array/isArray/15.4.3.2-2-3.js
+test262/test/built-ins/Array/isArray/descriptor.js
 test262/test/built-ins/Array/isArray/name.js
 test262/test/built-ins/Array/isArray/not-a-constructor.js
 test262/test/built-ins/Array/length.js
@@ -502,6 +504,7 @@ test262/test/built-ins/Array/of/does-not-use-set-for-indices.js
 test262/test/built-ins/Array/of/length.js
 test262/test/built-ins/Array/of/name.js
 test262/test/built-ins/Array/of/not-a-constructor.js
+test262/test/built-ins/Array/of/of.js
 test262/test/built-ins/Array/of/return-a-new-array-object.js
 test262/test/built-ins/Array/prop-desc.js
 test262/test/built-ins/Array/property-cast-boolean-primitive.js
@@ -614,6 +617,8 @@ test262/test/built-ins/Array/prototype/every/15.4.4.16-1-3.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-1-4.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-1-5.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-1-6.js
+test262/test/built-ins/Array/prototype/every/15.4.4.16-1-7.js
+test262/test/built-ins/Array/prototype/every/15.4.4.16-1-8.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-1-9.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-2-1.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-2-10.js
@@ -622,6 +627,7 @@ test262/test/built-ins/Array/prototype/every/15.4.4.16-2-12.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-2-13.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-2-14.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-2-17.js
+test262/test/built-ins/Array/prototype/every/15.4.4.16-2-18.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-2-19.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-2-2.js
 test262/test/built-ins/Array/prototype/every/15.4.4.16-2-3.js
@@ -810,6 +816,8 @@ test262/test/built-ins/Array/prototype/filter/15.4.4.20-1-3.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-1-4.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-1-5.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-1-6.js
+test262/test/built-ins/Array/prototype/filter/15.4.4.20-1-7.js
+test262/test/built-ins/Array/prototype/filter/15.4.4.20-1-8.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-1-9.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-10-1.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-10-2.js
@@ -822,6 +830,7 @@ test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-12.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-13.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-14.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-17.js
+test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-18.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-19.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-2.js
 test262/test/built-ins/Array/prototype/filter/15.4.4.20-2-3.js
@@ -1101,6 +1110,8 @@ test262/test/built-ins/Array/prototype/forEach/15.4.4.18-1-3.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-1-4.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-1-5.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-1-6.js
+test262/test/built-ins/Array/prototype/forEach/15.4.4.18-1-7.js
+test262/test/built-ins/Array/prototype/forEach/15.4.4.18-1-8.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-1-9.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-1.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-10.js
@@ -1109,6 +1120,7 @@ test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-12.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-13.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-14.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-17.js
+test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-18.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-19.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-2.js
 test262/test/built-ins/Array/prototype/forEach/15.4.4.18-2-3.js
@@ -1279,6 +1291,8 @@ test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-3.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-4.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-5.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-6.js
+test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-7.js
+test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-8.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-9.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-10-2.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-1.js
@@ -1288,6 +1302,7 @@ test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-12.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-13.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-14.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-17.js
+test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-18.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-19.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-2.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-3.js
@@ -1466,6 +1481,8 @@ test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-3.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-4.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-5.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-6.js
+test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-7.js
+test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-8.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-9.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-1.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-10.js
@@ -1474,6 +1491,7 @@ test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-12.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-13.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-14.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-17.js
+test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-18.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-19.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-2.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-3.js
@@ -1626,6 +1644,8 @@ test262/test/built-ins/Array/prototype/map/15.4.4.19-1-3.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-1-4.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-1-5.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-1-6.js
+test262/test/built-ins/Array/prototype/map/15.4.4.19-1-7.js
+test262/test/built-ins/Array/prototype/map/15.4.4.19-1-8.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-1-9.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-2-1.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-2-10.js
@@ -1634,6 +1654,7 @@ test262/test/built-ins/Array/prototype/map/15.4.4.19-2-12.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-2-13.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-2-14.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-2-17.js
+test262/test/built-ins/Array/prototype/map/15.4.4.19-2-18.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-2-19.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-2-2.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-2-3.js
@@ -1826,6 +1847,8 @@ test262/test/built-ins/Array/prototype/reduce/15.4.4.21-1-3.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-1-4.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-1-5.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-1-6.js
+test262/test/built-ins/Array/prototype/reduce/15.4.4.21-1-7.js
+test262/test/built-ins/Array/prototype/reduce/15.4.4.21-1-8.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-1-9.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-10-1.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-10-2.js
@@ -1842,6 +1865,7 @@ test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-12.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-13.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-14.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-17.js
+test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-18.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-19.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-2.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-2-3.js
@@ -1925,6 +1949,7 @@ test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-22.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-25.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-26.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-27.js
+test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-28.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-29.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-3.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-30.js
@@ -1978,6 +2003,7 @@ test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-22.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-25.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-26.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-27.js
+test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-28.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-29.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-3.js
 test262/test/built-ins/Array/prototype/reduce/15.4.4.21-9-c-i-30.js
@@ -2040,6 +2066,8 @@ test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-1-3.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-1-4.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-1-5.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-1-6.js
+test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-1-7.js
+test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-1-8.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-1-9.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-10-1.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-10-2.js
@@ -2056,6 +2084,7 @@ test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-12.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-13.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-14.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-17.js
+test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-18.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-19.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-2.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-2-3.js
@@ -2135,6 +2164,7 @@ test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-22.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-25.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-26.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-27.js
+test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-28.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-29.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-3.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-8-b-iii-1-31.js
@@ -2185,6 +2215,7 @@ test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-22.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-25.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-26.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-27.js
+test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-28.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-29.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-3.js
 test262/test/built-ins/Array/prototype/reduceRight/15.4.4.22-9-c-i-31.js
@@ -2326,6 +2357,8 @@ test262/test/built-ins/Array/prototype/some/15.4.4.17-1-3.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-1-4.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-1-5.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-1-6.js
+test262/test/built-ins/Array/prototype/some/15.4.4.17-1-7.js
+test262/test/built-ins/Array/prototype/some/15.4.4.17-1-8.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-1-9.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-2-1.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-2-10.js
@@ -2334,6 +2367,7 @@ test262/test/built-ins/Array/prototype/some/15.4.4.17-2-12.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-2-13.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-2-14.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-2-17.js
+test262/test/built-ins/Array/prototype/some/15.4.4.17-2-18.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-2-19.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-2-2.js
 test262/test/built-ins/Array/prototype/some/15.4.4.17-2-3.js
@@ -2785,16 +2819,19 @@ test262/test/built-ins/AsyncDisposableStack/prototype/Symbol.asyncDispose.js
 test262/test/built-ins/AsyncDisposableStack/prototype/adopt/length.js
 test262/test/built-ins/AsyncDisposableStack/prototype/adopt/name.js
 test262/test/built-ins/AsyncDisposableStack/prototype/adopt/not-a-constructor.js
+test262/test/built-ins/AsyncDisposableStack/prototype/adopt/prop-desc.js
 test262/test/built-ins/AsyncDisposableStack/prototype/adopt/this-does-not-have-internal-asyncdisposablestate-throws.js
 test262/test/built-ins/AsyncDisposableStack/prototype/adopt/this-not-object-throws.js
 test262/test/built-ins/AsyncDisposableStack/prototype/defer/length.js
 test262/test/built-ins/AsyncDisposableStack/prototype/defer/name.js
 test262/test/built-ins/AsyncDisposableStack/prototype/defer/not-a-constructor.js
+test262/test/built-ins/AsyncDisposableStack/prototype/defer/prop-desc.js
 test262/test/built-ins/AsyncDisposableStack/prototype/defer/this-does-not-have-internal-asyncdisposablestate-throws.js
 test262/test/built-ins/AsyncDisposableStack/prototype/defer/this-not-object-throws.js
 test262/test/built-ins/AsyncDisposableStack/prototype/disposeAsync/length.js
 test262/test/built-ins/AsyncDisposableStack/prototype/disposeAsync/name.js
 test262/test/built-ins/AsyncDisposableStack/prototype/disposeAsync/not-a-constructor.js
+test262/test/built-ins/AsyncDisposableStack/prototype/disposeAsync/prop-desc.js
 test262/test/built-ins/AsyncDisposableStack/prototype/disposeAsync/this-not-object-rejects.js
 test262/test/built-ins/AsyncDisposableStack/prototype/disposed/does-not-have-asyncdisposablestate-internal-slot.js
 test262/test/built-ins/AsyncDisposableStack/prototype/disposed/length.js
@@ -2803,11 +2840,13 @@ test262/test/built-ins/AsyncDisposableStack/prototype/disposed/this-not-object-t
 test262/test/built-ins/AsyncDisposableStack/prototype/move/length.js
 test262/test/built-ins/AsyncDisposableStack/prototype/move/name.js
 test262/test/built-ins/AsyncDisposableStack/prototype/move/not-a-constructor.js
+test262/test/built-ins/AsyncDisposableStack/prototype/move/prop-desc.js
 test262/test/built-ins/AsyncDisposableStack/prototype/move/this-not-object-throws.js
 test262/test/built-ins/AsyncDisposableStack/prototype/proto.js
 test262/test/built-ins/AsyncDisposableStack/prototype/use/length.js
 test262/test/built-ins/AsyncDisposableStack/prototype/use/name.js
 test262/test/built-ins/AsyncDisposableStack/prototype/use/not-a-constructor.js
+test262/test/built-ins/AsyncDisposableStack/prototype/use/prop-desc.js
 test262/test/built-ins/AsyncDisposableStack/prototype/use/this-not-object-throws.js
 test262/test/built-ins/AsyncDisposableStack/prototype/use/throws-if-value-not-object.js
 test262/test/built-ins/AsyncFromSyncIteratorPrototype/next/absent-value-not-passed.js
@@ -3636,6 +3675,7 @@ test262/test/built-ins/DisposableStack/prototype/adopt/allows-any-value.js
 test262/test/built-ins/DisposableStack/prototype/adopt/length.js
 test262/test/built-ins/DisposableStack/prototype/adopt/name.js
 test262/test/built-ins/DisposableStack/prototype/adopt/not-a-constructor.js
+test262/test/built-ins/DisposableStack/prototype/adopt/prop-desc.js
 test262/test/built-ins/DisposableStack/prototype/adopt/puts-value-onDispose-on-top-of-stack.js
 test262/test/built-ins/DisposableStack/prototype/adopt/returns-value.js
 test262/test/built-ins/DisposableStack/prototype/adopt/this-does-not-have-internal-disposablestate-throws.js
@@ -3646,6 +3686,7 @@ test262/test/built-ins/DisposableStack/prototype/defer/adds-onDispose.js
 test262/test/built-ins/DisposableStack/prototype/defer/length.js
 test262/test/built-ins/DisposableStack/prototype/defer/name.js
 test262/test/built-ins/DisposableStack/prototype/defer/not-a-constructor.js
+test262/test/built-ins/DisposableStack/prototype/defer/prop-desc.js
 test262/test/built-ins/DisposableStack/prototype/defer/puts-onDispose-on-top-of-stack.js
 test262/test/built-ins/DisposableStack/prototype/defer/returns-undefined.js
 test262/test/built-ins/DisposableStack/prototype/defer/this-does-not-have-internal-disposablestate-throws.js
@@ -3657,6 +3698,7 @@ test262/test/built-ins/DisposableStack/prototype/dispose/does-not-throw-if-alrea
 test262/test/built-ins/DisposableStack/prototype/dispose/length.js
 test262/test/built-ins/DisposableStack/prototype/dispose/name.js
 test262/test/built-ins/DisposableStack/prototype/dispose/not-a-constructor.js
+test262/test/built-ins/DisposableStack/prototype/dispose/prop-desc.js
 test262/test/built-ins/DisposableStack/prototype/dispose/returns-undefined.js
 test262/test/built-ins/DisposableStack/prototype/dispose/sets-state-to-disposed.js
 test262/test/built-ins/DisposableStack/prototype/dispose/this-not-object-throws.js
@@ -3672,6 +3714,7 @@ test262/test/built-ins/DisposableStack/prototype/move/does-not-dispose-resources
 test262/test/built-ins/DisposableStack/prototype/move/length.js
 test262/test/built-ins/DisposableStack/prototype/move/name.js
 test262/test/built-ins/DisposableStack/prototype/move/not-a-constructor.js
+test262/test/built-ins/DisposableStack/prototype/move/prop-desc.js
 test262/test/built-ins/DisposableStack/prototype/move/returns-new-disposablestack-that-is-still-pending.js
 test262/test/built-ins/DisposableStack/prototype/move/returns-new-disposablestack.js
 test262/test/built-ins/DisposableStack/prototype/move/sets-state-to-disposed.js
@@ -3685,6 +3728,7 @@ test262/test/built-ins/DisposableStack/prototype/use/allows-undefined-value.js
 test262/test/built-ins/DisposableStack/prototype/use/length.js
 test262/test/built-ins/DisposableStack/prototype/use/name.js
 test262/test/built-ins/DisposableStack/prototype/use/not-a-constructor.js
+test262/test/built-ins/DisposableStack/prototype/use/prop-desc.js
 test262/test/built-ins/DisposableStack/prototype/use/puts-value-on-top-of-stack.js
 test262/test/built-ins/DisposableStack/prototype/use/returns-value.js
 test262/test/built-ins/DisposableStack/prototype/use/this-not-object-throws.js
@@ -3936,6 +3980,9 @@ test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A3_T6.js
 test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A3_T7.js
 test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A3_T8.js
 test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A3_T9.js
+test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A5_T1.js
+test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A5_T2.js
+test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A5_T3.js
 test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A5_T4.js
 test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A5_T5.js
 test262/test/built-ins/Function/prototype/apply/S15.3.4.3_A5_T6.js
@@ -4061,6 +4108,9 @@ test262/test/built-ins/Function/prototype/call/S15.3.4.4_A3_T6.js
 test262/test/built-ins/Function/prototype/call/S15.3.4.4_A3_T7.js
 test262/test/built-ins/Function/prototype/call/S15.3.4.4_A3_T8.js
 test262/test/built-ins/Function/prototype/call/S15.3.4.4_A3_T9.js
+test262/test/built-ins/Function/prototype/call/S15.3.4.4_A5_T1.js
+test262/test/built-ins/Function/prototype/call/S15.3.4.4_A5_T2.js
+test262/test/built-ins/Function/prototype/call/S15.3.4.4_A5_T3.js
 test262/test/built-ins/Function/prototype/call/S15.3.4.4_A5_T4.js
 test262/test/built-ins/Function/prototype/call/S15.3.4.4_A5_T5.js
 test262/test/built-ins/Function/prototype/call/S15.3.4.4_A5_T6.js
@@ -4211,8 +4261,11 @@ test262/test/built-ins/GeneratorPrototype/throw/try-finally-following-finally.js
 test262/test/built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-finally.js
 test262/test/built-ins/GeneratorPrototype/throw/try-finally-nested-try-catch-within-inner-try.js
 test262/test/built-ins/GeneratorPrototype/throw/try-finally-within-finally.js
+test262/test/built-ins/Infinity/15.1.1.2-0.js
 test262/test/built-ins/Infinity/S15.1.1.2_A1.js
+test262/test/built-ins/Infinity/S15.1.1.2_A3_T2.js
 test262/test/built-ins/Infinity/S15.1.1.2_A4.js
+test262/test/built-ins/Infinity/prop-desc.js
 test262/test/built-ins/Iterator/concat/fresh-iterator-result.js
 test262/test/built-ins/Iterator/concat/get-value-after-done.js
 test262/test/built-ins/Iterator/concat/inner-iterator-created-in-order.js
@@ -5099,8 +5152,11 @@ test262/test/built-ins/Math/trunc/not-a-constructor.js
 test262/test/built-ins/Math/trunc/prop-desc.js
 test262/test/built-ins/Math/trunc/trunc-sampleTests.js
 test262/test/built-ins/Math/trunc/trunc-specialVals.js
+test262/test/built-ins/NaN/15.1.1.1-0.js
 test262/test/built-ins/NaN/S15.1.1.1_A1.js
+test262/test/built-ins/NaN/S15.1.1.1_A3_T2.js
 test262/test/built-ins/NaN/S15.1.1.1_A4.js
+test262/test/built-ins/NaN/prop-desc.js
 test262/test/built-ins/NativeErrors/EvalError/constructor.js
 test262/test/built-ins/NativeErrors/EvalError/instance-proto.js
 test262/test/built-ins/NativeErrors/EvalError/is-a-constructor.js
@@ -5269,6 +5325,7 @@ test262/test/built-ins/Number/isFinite/length.js
 test262/test/built-ins/Number/isFinite/name.js
 test262/test/built-ins/Number/isFinite/nan.js
 test262/test/built-ins/Number/isFinite/not-a-constructor.js
+test262/test/built-ins/Number/isFinite/prop-desc.js
 test262/test/built-ins/Number/isInteger/arg-is-not-number.js
 test262/test/built-ins/Number/isInteger/infinity.js
 test262/test/built-ins/Number/isInteger/integers.js
@@ -5277,12 +5334,14 @@ test262/test/built-ins/Number/isInteger/name.js
 test262/test/built-ins/Number/isInteger/nan.js
 test262/test/built-ins/Number/isInteger/non-integers.js
 test262/test/built-ins/Number/isInteger/not-a-constructor.js
+test262/test/built-ins/Number/isInteger/prop-desc.js
 test262/test/built-ins/Number/isNaN/arg-is-not-number.js
 test262/test/built-ins/Number/isNaN/length.js
 test262/test/built-ins/Number/isNaN/name.js
 test262/test/built-ins/Number/isNaN/nan.js
 test262/test/built-ins/Number/isNaN/not-a-constructor.js
 test262/test/built-ins/Number/isNaN/not-nan.js
+test262/test/built-ins/Number/isNaN/prop-desc.js
 test262/test/built-ins/Number/isSafeInteger/arg-is-not-number.js
 test262/test/built-ins/Number/isSafeInteger/infinity.js
 test262/test/built-ins/Number/isSafeInteger/length.js
@@ -5291,8 +5350,11 @@ test262/test/built-ins/Number/isSafeInteger/nan.js
 test262/test/built-ins/Number/isSafeInteger/not-a-constructor.js
 test262/test/built-ins/Number/isSafeInteger/not-integer.js
 test262/test/built-ins/Number/isSafeInteger/not-safe-integer.js
+test262/test/built-ins/Number/isSafeInteger/prop-desc.js
 test262/test/built-ins/Number/isSafeInteger/safe-integers.js
+test262/test/built-ins/Number/parseFloat.js
 test262/test/built-ins/Number/parseFloat/not-a-constructor.js
+test262/test/built-ins/Number/parseInt.js
 test262/test/built-ins/Number/parseInt/not-a-constructor.js
 test262/test/built-ins/Number/prop-desc.js
 test262/test/built-ins/Number/prototype/15.7.3.1-2.js
@@ -5548,6 +5610,7 @@ test262/test/built-ins/Object/assign/Target-Object.js
 test262/test/built-ins/Object/assign/Target-String.js
 test262/test/built-ins/Object/assign/Target-Symbol.js
 test262/test/built-ins/Object/assign/Target-Undefined.js
+test262/test/built-ins/Object/assign/assign-descriptor.js
 test262/test/built-ins/Object/assign/assign-length.js
 test262/test/built-ins/Object/assign/invoked-as-ctor.js
 test262/test/built-ins/Object/assign/name.js
@@ -5797,6 +5860,7 @@ test262/test/built-ins/Object/create/15.2.3.5-4-308.js
 test262/test/built-ins/Object/create/15.2.3.5-4-309.js
 test262/test/built-ins/Object/create/15.2.3.5-4-31.js
 test262/test/built-ins/Object/create/15.2.3.5-4-310.js
+test262/test/built-ins/Object/create/15.2.3.5-4-311.js
 test262/test/built-ins/Object/create/15.2.3.5-4-312.js
 test262/test/built-ins/Object/create/15.2.3.5-4-313.js
 test262/test/built-ins/Object/create/15.2.3.5-4-314.js
@@ -6918,6 +6982,7 @@ test262/test/built-ins/Object/defineProperty/15.2.3.6-4-202.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-203.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-204.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-205.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-206.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-207.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-208.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-209.js
@@ -6973,6 +7038,9 @@ test262/test/built-ins/Object/defineProperty/15.2.3.6-4-250.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-251.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-252.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-253.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-254.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-255.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-256.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-257.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-258.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-259.js
@@ -7431,9 +7499,22 @@ test262/test/built-ins/Object/defineProperty/15.2.3.6-4-594.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-595.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-596.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-597.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-598.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-599.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-6.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-60.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-600.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-601.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-602.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-603.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-604.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-605.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-606.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-607.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-608.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-609.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-61.js
+test262/test/built-ins/Object/defineProperty/15.2.3.6-4-610.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-611.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-612.js
 test262/test/built-ins/Object/defineProperty/15.2.3.6-4-613.js
@@ -7531,10 +7612,14 @@ test262/test/built-ins/Object/defineProperty/property-description-must-be-an-obj
 test262/test/built-ins/Object/defineProperty/property-description-must-be-an-object-not-true.js
 test262/test/built-ins/Object/defineProperty/property-description-must-be-an-object-not-undefined.js
 test262/test/built-ins/Object/defineProperty/redefine-length-with-various-values-and-configurable-true.js
+test262/test/built-ins/Object/defineProperty/symbol-data-property-configurable.js
+test262/test/built-ins/Object/defineProperty/symbol-data-property-default-non-strict.js
+test262/test/built-ins/Object/defineProperty/symbol-data-property-writable.js
 test262/test/built-ins/Object/entries/exception-during-enumeration.js
 test262/test/built-ins/Object/entries/exception-not-object-coercible.js
 test262/test/built-ins/Object/entries/function-length.js
 test262/test/built-ins/Object/entries/function-name.js
+test262/test/built-ins/Object/entries/function-property-descriptor.js
 test262/test/built-ins/Object/entries/getter-adding-key.js
 test262/test/built-ins/Object/entries/inherited-properties-omitted.js
 test262/test/built-ins/Object/entries/not-a-constructor.js
@@ -7598,7 +7683,8 @@ test262/test/built-ins/Object/fromEntries/length.js
 test262/test/built-ins/Object/fromEntries/name.js
 test262/test/built-ins/Object/fromEntries/not-a-constructor.js
 test262/test/built-ins/Object/fromEntries/prototype.js
-test262/test/built-ins/Object/fromEntries/simple-properties.js
+test262/test/built-ins/Object/fromEntries/string-entry-object-succeeds.js
+test262/test/built-ins/Object/fromEntries/string-entry-string-object-succeeds.js
 test262/test/built-ins/Object/fromEntries/uses-define-semantics.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-0-1.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-1-1.js
@@ -7705,6 +7791,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-135.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-136.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-138.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-139.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-14.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-140.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-141.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-142.js
@@ -7715,6 +7802,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-146.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-147.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-148.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-149.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-15.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-150.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-151.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-152.js
@@ -7724,6 +7812,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-156.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-157.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-158.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-159.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-16.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-160.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-161.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-162.js
@@ -7733,6 +7822,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-166.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-167.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-168.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-169.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-17.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-170.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-171.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-172.js
@@ -7741,6 +7831,10 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-174.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-175.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-176.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-177.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-178.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-179.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-18.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-180.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-182.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-183.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-184.js
@@ -7749,6 +7843,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-186.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-187.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-188.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-189.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-19.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-190.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-191.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-193.js
@@ -7759,6 +7854,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-197.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-198.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-199.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-2.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-20.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-200.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-201.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-202.js
@@ -7769,6 +7865,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-206.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-207.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-208.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-209.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-21.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-210.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-211.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-212.js
@@ -7779,6 +7876,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-216.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-217.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-218.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-219.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-22.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-220.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-221.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-222.js
@@ -7789,6 +7887,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-226.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-227.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-228.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-229.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-23.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-230.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-231.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-232.js
@@ -7799,6 +7898,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-236.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-237.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-238.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-239.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-24.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-240.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-241.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-242.js
@@ -7808,6 +7908,10 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-245.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-246.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-247.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-248.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-249.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-25.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-250.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-26.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-27.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-28.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-29.js
@@ -7846,6 +7950,7 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-58.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-59.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-6.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-60.js
+test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-61.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-62.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-63.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-64.js
@@ -7889,9 +7994,9 @@ test262/test/built-ins/Object/getOwnPropertyDescriptor/not-a-constructor.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/primitive-symbol.js
 test262/test/built-ins/Object/getOwnPropertyDescriptors/function-length.js
 test262/test/built-ins/Object/getOwnPropertyDescriptors/function-name.js
+test262/test/built-ins/Object/getOwnPropertyDescriptors/function-property-descriptor.js
 test262/test/built-ins/Object/getOwnPropertyDescriptors/normal-object.js
 test262/test/built-ins/Object/getOwnPropertyDescriptors/not-a-constructor.js
-test262/test/built-ins/Object/getOwnPropertyDescriptors/tamper-with-object-keys.js
 test262/test/built-ins/Object/getOwnPropertyNames/15.2.3.4-0-1.js
 test262/test/built-ins/Object/getOwnPropertyNames/15.2.3.4-0-2.js
 test262/test/built-ins/Object/getOwnPropertyNames/15.2.3.4-1-4.js
@@ -7966,14 +8071,13 @@ test262/test/built-ins/Object/getPrototypeOf/not-a-constructor.js
 test262/test/built-ins/Object/groupBy/callback-arg.js
 test262/test/built-ins/Object/groupBy/callback-throws.js
 test262/test/built-ins/Object/groupBy/emptyList.js
-test262/test/built-ins/Object/groupBy/evenOdd.js
 test262/test/built-ins/Object/groupBy/invalid-callback.js
 test262/test/built-ins/Object/groupBy/invalid-iterable.js
 test262/test/built-ins/Object/groupBy/iterator-next-throws.js
 test262/test/built-ins/Object/groupBy/length.js
 test262/test/built-ins/Object/groupBy/name.js
 test262/test/built-ins/Object/groupBy/null-prototype.js
-test262/test/built-ins/Object/groupBy/string.js
+test262/test/built-ins/Object/hasOwn/descriptor.js
 test262/test/built-ins/Object/hasOwn/hasown.js
 test262/test/built-ins/Object/hasOwn/hasown_inherited_exists.js
 test262/test/built-ins/Object/hasOwn/hasown_inherited_getter.js
@@ -8047,6 +8151,7 @@ test262/test/built-ins/Object/is/not-same-value-x-y-string.js
 test262/test/built-ins/Object/is/not-same-value-x-y-symbol.js
 test262/test/built-ins/Object/is/not-same-value-x-y-type.js
 test262/test/built-ins/Object/is/not-same-value-x-y-undefined.js
+test262/test/built-ins/Object/is/object-is.js
 test262/test/built-ins/Object/is/same-value-x-y-boolean.js
 test262/test/built-ins/Object/is/same-value-x-y-empty.js
 test262/test/built-ins/Object/is/same-value-x-y-null.js
@@ -8544,6 +8649,7 @@ test262/test/built-ins/Object/setPrototypeOf/length.js
 test262/test/built-ins/Object/setPrototypeOf/name.js
 test262/test/built-ins/Object/setPrototypeOf/not-a-constructor.js
 test262/test/built-ins/Object/setPrototypeOf/o-not-obj.js
+test262/test/built-ins/Object/setPrototypeOf/property-descriptor.js
 test262/test/built-ins/Object/setPrototypeOf/set-error.js
 test262/test/built-ins/Object/setPrototypeOf/success.js
 test262/test/built-ins/Object/symbol_object-returns-fresh-symbol.js
@@ -8551,6 +8657,7 @@ test262/test/built-ins/Object/values/exception-during-enumeration.js
 test262/test/built-ins/Object/values/exception-not-object-coercible.js
 test262/test/built-ins/Object/values/function-length.js
 test262/test/built-ins/Object/values/function-name.js
+test262/test/built-ins/Object/values/function-property-descriptor.js
 test262/test/built-ins/Object/values/getter-adding-key.js
 test262/test/built-ins/Object/values/inherited-properties-omitted.js
 test262/test/built-ins/Object/values/not-a-constructor.js
@@ -9025,6 +9132,7 @@ test262/test/built-ins/Promise/withResolvers/ctx-non-ctor.js
 test262/test/built-ins/Promise/withResolvers/ctx-non-object.js
 test262/test/built-ins/Promise/withResolvers/promise.js
 test262/test/built-ins/Promise/withResolvers/resolvers.js
+test262/test/built-ins/Promise/withResolvers/result.js
 test262/test/built-ins/Proxy/apply/call-parameters.js
 test262/test/built-ins/Proxy/apply/call-result.js
 test262/test/built-ins/Proxy/apply/return-abrupt.js
@@ -9248,6 +9356,7 @@ test262/test/built-ins/Reflect/getOwnPropertyDescriptor/length.js
 test262/test/built-ins/Reflect/getOwnPropertyDescriptor/name.js
 test262/test/built-ins/Reflect/getOwnPropertyDescriptor/not-a-constructor.js
 test262/test/built-ins/Reflect/getOwnPropertyDescriptor/return-abrupt-from-result.js
+test262/test/built-ins/Reflect/getOwnPropertyDescriptor/return-from-accessor-descriptor.js
 test262/test/built-ins/Reflect/getOwnPropertyDescriptor/return-from-data-descriptor.js
 test262/test/built-ins/Reflect/getOwnPropertyDescriptor/symbol-property.js
 test262/test/built-ins/Reflect/getOwnPropertyDescriptor/target-is-not-object-throws.js
@@ -10891,6 +11000,9 @@ test262/test/built-ins/String/S15.5.2.1_A3.js
 test262/test/built-ins/String/S15.5.3_A1.js
 test262/test/built-ins/String/S15.5.3_A2_T1.js
 test262/test/built-ins/String/S15.5.3_A2_T2.js
+test262/test/built-ins/String/S15.5.5.1_A1.js
+test262/test/built-ins/String/S15.5.5.1_A2.js
+test262/test/built-ins/String/S15.5.5.1_A5.js
 test262/test/built-ins/String/S15.5.5_A1_T1.js
 test262/test/built-ins/String/S15.5.5_A1_T2.js
 test262/test/built-ins/String/S15.5.5_A2_T1.js
@@ -10920,6 +11032,7 @@ test262/test/built-ins/String/fromCharCode/S15.5.3.2_A4.js
 test262/test/built-ins/String/fromCharCode/name.js
 test262/test/built-ins/String/fromCharCode/not-a-constructor.js
 test262/test/built-ins/String/fromCodePoint/arguments-is-empty.js
+test262/test/built-ins/String/fromCodePoint/fromCodePoint.js
 test262/test/built-ins/String/fromCodePoint/length.js
 test262/test/built-ins/String/fromCodePoint/name.js
 test262/test/built-ins/String/fromCodePoint/not-a-constructor.js
@@ -11395,6 +11508,7 @@ test262/test/built-ins/String/prototype/slice/S15.5.4.13_A2_T3.js
 test262/test/built-ins/String/prototype/slice/S15.5.4.13_A2_T4.js
 test262/test/built-ins/String/prototype/slice/S15.5.4.13_A2_T5.js
 test262/test/built-ins/String/prototype/slice/S15.5.4.13_A2_T6.js
+test262/test/built-ins/String/prototype/slice/S15.5.4.13_A2_T7.js
 test262/test/built-ins/String/prototype/slice/S15.5.4.13_A2_T8.js
 test262/test/built-ins/String/prototype/slice/S15.5.4.13_A2_T9.js
 test262/test/built-ins/String/prototype/slice/S15.5.4.13_A3_T1.js
@@ -11450,7 +11564,9 @@ test262/test/built-ins/String/prototype/split/call-split-h-instance-is-string-he
 test262/test/built-ins/String/prototype/split/call-split-hello-instance-is-string-hello.js
 test262/test/built-ins/String/prototype/split/call-split-hellothere-instance-is-string-hello.js
 test262/test/built-ins/String/prototype/split/call-split-instance-is-empty-string-object.js
+test262/test/built-ins/String/prototype/split/call-split-instance-is-string-one-1-two-2-four-4.js
 test262/test/built-ins/String/prototype/split/call-split-instance-is-string-one-two-three-four-five.js
+test262/test/built-ins/String/prototype/split/call-split-instance-is-string-one-two-three.js
 test262/test/built-ins/String/prototype/split/call-split-instance-is-string.js
 test262/test/built-ins/String/prototype/split/call-split-l-0-instance-is-string-hello.js
 test262/test/built-ins/String/prototype/split/call-split-l-1-instance-is-string-hello.js
@@ -11547,6 +11663,8 @@ test262/test/built-ins/String/prototype/substring/S15.5.4.15_A2_T3.js
 test262/test/built-ins/String/prototype/substring/S15.5.4.15_A2_T4.js
 test262/test/built-ins/String/prototype/substring/S15.5.4.15_A2_T5.js
 test262/test/built-ins/String/prototype/substring/S15.5.4.15_A2_T6.js
+test262/test/built-ins/String/prototype/substring/S15.5.4.15_A2_T7.js
+test262/test/built-ins/String/prototype/substring/S15.5.4.15_A2_T8.js
 test262/test/built-ins/String/prototype/substring/S15.5.4.15_A2_T9.js
 test262/test/built-ins/String/prototype/substring/S15.5.4.15_A3_T1.js
 test262/test/built-ins/String/prototype/substring/S15.5.4.15_A3_T10.js
@@ -12778,14 +12896,12 @@ test262/test/built-ins/TypedArray/prototype/subarray/results-with-same-length.js
 test262/test/built-ins/TypedArray/prototype/subarray/speciesctor-get-species-use-default-ctor.js
 test262/test/built-ins/TypedArray/prototype/subarray/this-is-not-object.js
 test262/test/built-ins/TypedArray/prototype/subarray/this-is-not-typedarray-instance.js
-test262/test/built-ins/TypedArray/prototype/toLocaleString/BigInt/calls-tolocalestring-from-each-value.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/BigInt/detached-buffer.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/BigInt/empty-instance-returns-empty-string.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/BigInt/get-length-uses-internal-arraylength.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/BigInt/return-abrupt-from-firstelement-tolocalestring.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/BigInt/return-abrupt-from-nextelement-tolocalestring.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/BigInt/return-result.js
-test262/test/built-ins/TypedArray/prototype/toLocaleString/calls-tolocalestring-from-each-value.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/detached-buffer.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/empty-instance-returns-empty-string.js
 test262/test/built-ins/TypedArray/prototype/toLocaleString/get-length-uses-internal-arraylength.js
@@ -13702,8 +13818,12 @@ test262/test/built-ins/parseInt/S15.1.2.2_A9.5.js
 test262/test/built-ins/parseInt/S15.1.2.2_A9.6.js
 test262/test/built-ins/parseInt/not-a-constructor.js
 test262/test/built-ins/parseInt/prop-desc.js
+test262/test/built-ins/undefined/15.1.1.3-0.js
+test262/test/built-ins/undefined/15.1.1.3-2.js
 test262/test/built-ins/undefined/S15.1.1.3_A1.js
+test262/test/built-ins/undefined/S15.1.1.3_A3_T2.js
 test262/test/built-ins/undefined/S15.1.1.3_A4.js
+test262/test/built-ins/undefined/prop-desc.js
 test262/test/language/arguments-object/10.5-1gs.js
 test262/test/language/arguments-object/10.5-7-b-2-s.js
 test262/test/language/arguments-object/10.5-7-b-3-s.js
@@ -13717,8 +13837,12 @@ test262/test/language/arguments-object/10.6-12-2.js
 test262/test/language/arguments-object/10.6-13-a-1.js
 test262/test/language/arguments-object/10.6-13-a-2.js
 test262/test/language/arguments-object/10.6-13-a-3.js
+test262/test/language/arguments-object/10.6-13-c-1-s.js
 test262/test/language/arguments-object/10.6-13-c-2-s.js
+test262/test/language/arguments-object/10.6-13-c-3-s.js
 test262/test/language/arguments-object/10.6-14-c-1-s.js
+test262/test/language/arguments-object/10.6-14-c-4-s.js
+test262/test/language/arguments-object/10.6-2gs.js
 test262/test/language/arguments-object/10.6-5-1.js
 test262/test/language/arguments-object/10.6-6-1.js
 test262/test/language/arguments-object/10.6-6-2.js
@@ -14781,8 +14905,10 @@ test262/test/language/expressions/assignment/11.13.1-1-s.js
 test262/test/language/expressions/assignment/11.13.1-2-s.js
 test262/test/language/expressions/assignment/11.13.1-3-s.js
 test262/test/language/expressions/assignment/11.13.1-4-14-s.js
+test262/test/language/expressions/assignment/11.13.1-4-27-s.js
 test262/test/language/expressions/assignment/11.13.1-4-28gs.js
 test262/test/language/expressions/assignment/11.13.1-4-29gs.js
+test262/test/language/expressions/assignment/11.13.1-4-3-s.js
 test262/test/language/expressions/assignment/11.13.1-4-6-s.js
 test262/test/language/expressions/assignment/8.12.5-3-b_1.js
 test262/test/language/expressions/assignment/8.12.5-3-b_2.js
@@ -20188,6 +20314,7 @@ test262/test/language/expressions/delete/11.4.1-4.a-16.js
 test262/test/language/expressions/delete/11.4.1-4.a-17.js
 test262/test/language/expressions/delete/11.4.1-4.a-2.js
 test262/test/language/expressions/delete/11.4.1-4.a-3.js
+test262/test/language/expressions/delete/11.4.1-4.a-4.js
 test262/test/language/expressions/delete/11.4.1-4.a-5.js
 test262/test/language/expressions/delete/11.4.1-4.a-7.js
 test262/test/language/expressions/delete/11.4.1-4.a-8.js
@@ -21360,6 +21487,7 @@ test262/test/language/expressions/in/S11.8.7_A2.4_T1.js
 test262/test/language/expressions/in/S11.8.7_A2.4_T2.js
 test262/test/language/expressions/in/S11.8.7_A2.4_T3.js
 test262/test/language/expressions/in/S11.8.7_A2.4_T4.js
+test262/test/language/expressions/in/S11.8.7_A3.js
 test262/test/language/expressions/in/S11.8.7_A4.js
 test262/test/language/expressions/in/S8.12.6_A1.js
 test262/test/language/expressions/in/S8.12.6_A2_T1.js
@@ -22911,6 +23039,7 @@ test262/test/language/expressions/property-accessors/S11.2.1_A1.2.js
 test262/test/language/expressions/property-accessors/S11.2.1_A2.js
 test262/test/language/expressions/property-accessors/S11.2.1_A3_T1.js
 test262/test/language/expressions/property-accessors/S11.2.1_A3_T2.js
+test262/test/language/expressions/property-accessors/S11.2.1_A3_T3.js
 test262/test/language/expressions/property-accessors/S11.2.1_A3_T4.js
 test262/test/language/expressions/property-accessors/S11.2.1_A3_T5.js
 test262/test/language/expressions/property-accessors/S11.2.1_A4_T1.js
@@ -23298,6 +23427,7 @@ test262/test/language/expressions/yield/star-rhs-iter-thrw-thrw-invoke.js
 test262/test/language/expressions/yield/star-string.js
 test262/test/language/expressions/yield/then-return.js
 test262/test/language/expressions/yield/within-for.js
+test262/test/language/function-code/10.4.3-1-1-s.js
 test262/test/language/function-code/10.4.3-1-10-s.js
 test262/test/language/function-code/10.4.3-1-100-s.js
 test262/test/language/function-code/10.4.3-1-100gs.js
@@ -23318,6 +23448,7 @@ test262/test/language/function-code/10.4.3-1-17gs.js
 test262/test/language/function-code/10.4.3-1-18gs.js
 test262/test/language/function-code/10.4.3-1-19-s.js
 test262/test/language/function-code/10.4.3-1-19gs.js
+test262/test/language/function-code/10.4.3-1-2-s.js
 test262/test/language/function-code/10.4.3-1-20-s.js
 test262/test/language/function-code/10.4.3-1-20gs.js
 test262/test/language/function-code/10.4.3-1-21-s.js
@@ -23359,6 +23490,7 @@ test262/test/language/function-code/10.4.3-1-38-s.js
 test262/test/language/function-code/10.4.3-1-38gs.js
 test262/test/language/function-code/10.4.3-1-39-s.js
 test262/test/language/function-code/10.4.3-1-39gs.js
+test262/test/language/function-code/10.4.3-1-4-s.js
 test262/test/language/function-code/10.4.3-1-40-s.js
 test262/test/language/function-code/10.4.3-1-40gs.js
 test262/test/language/function-code/10.4.3-1-41-s.js
@@ -32622,6 +32754,7 @@ test262/test/language/types/number/S8.5_A7.js
 test262/test/language/types/number/S8.5_A8.js
 test262/test/language/types/number/S8.5_A9.js
 test262/test/language/types/object/S8.6.1_A1.js
+test262/test/language/types/object/S8.6.1_A2.js
 test262/test/language/types/object/S8.6.1_A3.js
 test262/test/language/types/object/S8.6.2_A1.js
 test262/test/language/types/object/S8.6.2_A2.js

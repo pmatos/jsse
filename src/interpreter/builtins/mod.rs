@@ -26,7 +26,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            console.borrow_mut().insert_value("log".to_string(), log_fn);
+            console.borrow_mut().insert_builtin("log".to_string(), log_fn);
         }
         let console_val = JsValue::Object(crate::types::JsObject { id: console_id });
         self.global_env
@@ -64,7 +64,7 @@ impl Interpreter {
             ));
             dollar_262
                 .borrow_mut()
-                .insert_value("detachArrayBuffer".to_string(), detach_fn);
+                .insert_builtin("detachArrayBuffer".to_string(), detach_fn);
             let gc_fn = self.create_function(JsFunction::native(
                 "gc".to_string(),
                 0,
@@ -75,7 +75,7 @@ impl Interpreter {
             ));
             dollar_262
                 .borrow_mut()
-                .insert_value("gc".to_string(), gc_fn);
+                .insert_builtin("gc".to_string(), gc_fn);
             let dollar_262_val =
                 JsValue::Object(crate::types::JsObject { id: dollar_262.borrow().id.unwrap() });
             self.global_env
@@ -258,9 +258,9 @@ impl Interpreter {
                                     o.prototype = Some(ep.clone());
                                 }
                                 if !matches!(msg, JsValue::Undefined) {
-                                    o.insert_value("message".to_string(), msg);
+                                    o.insert_builtin("message".to_string(), msg);
                                 }
-                                o.insert_value(
+                                o.insert_builtin(
                                     "name".to_string(),
                                     JsValue::String(JsString::from_str("Test262Error")),
                                 );
@@ -275,9 +275,9 @@ impl Interpreter {
                                 o.prototype = Some(ep.clone());
                             }
                             if !matches!(msg, JsValue::Undefined) {
-                                o.insert_value("message".to_string(), msg);
+                                o.insert_builtin("message".to_string(), msg);
                             }
-                            o.insert_value(
+                            o.insert_builtin(
                                 "name".to_string(),
                                 JsValue::String(JsString::from_str("Test262Error")),
                             );
@@ -953,10 +953,10 @@ impl Interpreter {
                     "MIN_SAFE_INTEGER".to_string(),
                     PropertyDescriptor::data(JsValue::Number(-9007199254740991.0), false, false, false),
                 );
-                n.insert_value("isFinite".to_string(), is_finite_fn);
-                n.insert_value("isNaN".to_string(), is_nan_fn);
-                n.insert_value("isInteger".to_string(), is_integer_fn);
-                n.insert_value("isSafeInteger".to_string(), is_safe_fn);
+                n.insert_builtin("isFinite".to_string(), is_finite_fn);
+                n.insert_builtin("isNaN".to_string(), is_nan_fn);
+                n.insert_builtin("isInteger".to_string(), is_integer_fn);
+                n.insert_builtin("isSafeInteger".to_string(), is_safe_fn);
             }
         }
 
@@ -1056,10 +1056,10 @@ impl Interpreter {
             {
                 let mut n = num_obj.borrow_mut();
                 if let Some(pi) = parse_int {
-                    n.insert_value("parseInt".to_string(), pi);
+                    n.insert_builtin("parseInt".to_string(), pi);
                 }
                 if let Some(pf) = parse_float {
-                    n.insert_value("parseFloat".to_string(), pf);
+                    n.insert_builtin("parseFloat".to_string(), pf);
                 }
             }
         }
@@ -2194,7 +2194,7 @@ impl Interpreter {
                 }
                 let obj = interp.create_object();
                 obj.borrow_mut().prototype = None;
-                obj.borrow_mut().insert_value(
+                obj.borrow_mut().insert_builtin(
                     "rawJSON".to_string(),
                     JsValue::String(JsString::from_str(&text)),
                 );
@@ -2293,9 +2293,9 @@ impl Interpreter {
                 ));
                 if let Some(obj) = self.get_object(o.id) {
                     obj.borrow_mut()
-                        .insert_value("fromCharCode".to_string(), from_char_code);
+                        .insert_builtin("fromCharCode".to_string(), from_char_code);
                     obj.borrow_mut()
-                        .insert_value("fromCodePoint".to_string(), from_code_point);
+                        .insert_builtin("fromCodePoint".to_string(), from_code_point);
                 }
             }
         }
@@ -2360,9 +2360,13 @@ impl Interpreter {
                 .collect()
         };
         for (name, val) in vals {
+            let (writable, configurable) = match name.as_str() {
+                "NaN" | "Infinity" | "undefined" => (false, false),
+                _ => (true, true),
+            };
             global_obj.borrow_mut().insert_property(
                 name,
-                PropertyDescriptor::data(val, true, false, true),
+                PropertyDescriptor::data(val, writable, false, configurable),
             );
         }
         // Also set globalThis on itself
@@ -2992,7 +2996,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("defineProperty".to_string(), define_property_fn);
+                .insert_builtin("defineProperty".to_string(), define_property_fn);
 
             // Add Object.getOwnPropertyDescriptor
             let get_own_prop_desc_fn = self.create_function(JsFunction::native(
@@ -3132,7 +3136,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("getOwnPropertyDescriptor".to_string(), get_own_prop_desc_fn);
+                .insert_builtin("getOwnPropertyDescriptor".to_string(), get_own_prop_desc_fn);
 
             // Add Object.keys
             let keys_fn = self.create_function(JsFunction::native(
@@ -3206,7 +3210,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("keys".to_string(), keys_fn);
+                .insert_builtin("keys".to_string(), keys_fn);
 
             // Add Object.freeze
             let freeze_fn = self.create_function(JsFunction::native(
@@ -3231,7 +3235,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("freeze".to_string(), freeze_fn);
+                .insert_builtin("freeze".to_string(), freeze_fn);
 
             // Add Object.getPrototypeOf
             let get_proto_fn = self.create_function(JsFunction::native(
@@ -3340,7 +3344,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("getPrototypeOf".to_string(), get_proto_fn);
+                .insert_builtin("getPrototypeOf".to_string(), get_proto_fn);
 
             // Add Object.create
             let create_fn = self.create_function(JsFunction::native(
@@ -3428,7 +3432,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("create".to_string(), create_fn);
+                .insert_builtin("create".to_string(), create_fn);
 
             // Object.entries
             let entries_fn = self.create_function(JsFunction::native(
@@ -3473,7 +3477,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("entries".to_string(), entries_fn);
+                .insert_builtin("entries".to_string(), entries_fn);
 
             // Object.values
             let values_fn = self.create_function(JsFunction::native(
@@ -3517,7 +3521,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("values".to_string(), values_fn);
+                .insert_builtin("values".to_string(), values_fn);
 
             // Object.assign
             let assign_fn = self.create_function(JsFunction::native(
@@ -3598,7 +3602,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("assign".to_string(), assign_fn);
+                .insert_builtin("assign".to_string(), assign_fn);
 
             // Object.groupBy
             let group_by_fn = self.create_function(JsFunction::native(
@@ -3647,14 +3651,14 @@ impl Interpreter {
                                 let len_val = arr.borrow().get_property("length");
                                 let len = to_number(&len_val) as usize;
                                 arr.borrow_mut()
-                                    .insert_value(len.to_string(), value);
-                                arr.borrow_mut().insert_value(
+                                    .insert_builtin(len.to_string(), value);
+                                arr.borrow_mut().insert_builtin(
                                     "length".to_string(),
                                     JsValue::Number((len + 1) as f64),
                                 );
                             } else {
                                 let new_arr = interp.create_array(vec![value]);
-                                obj.borrow_mut().insert_value(key_str, new_arr);
+                                obj.borrow_mut().insert_builtin(key_str, new_arr);
                             }
                         }
                         k += 1;
@@ -3664,7 +3668,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("groupBy".to_string(), group_by_fn);
+                .insert_builtin("groupBy".to_string(), group_by_fn);
 
             // Object.is
             let is_fn = self.create_function(JsFunction::native(
@@ -3680,7 +3684,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(result))
                 },
             ));
-            obj_func.borrow_mut().insert_value("is".to_string(), is_fn);
+            obj_func.borrow_mut().insert_builtin("is".to_string(), is_fn);
 
             // Object.getOwnPropertyNames
             let gopn_fn = self.create_function(JsFunction::native(
@@ -3738,7 +3742,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("getOwnPropertyNames".to_string(), gopn_fn);
+                .insert_builtin("getOwnPropertyNames".to_string(), gopn_fn);
 
             // Object.getOwnPropertySymbols
             let gops_fn = self.create_function(JsFunction::native(
@@ -3768,7 +3772,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("getOwnPropertySymbols".to_string(), gops_fn);
+                .insert_builtin("getOwnPropertySymbols".to_string(), gops_fn);
 
             // Object.preventExtensions
             let pe_fn = self.create_function(JsFunction::native(
@@ -3825,7 +3829,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("preventExtensions".to_string(), pe_fn);
+                .insert_builtin("preventExtensions".to_string(), pe_fn);
 
             // Object.isExtensible
             let ie_fn = self.create_function(JsFunction::native(
@@ -3879,7 +3883,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("isExtensible".to_string(), ie_fn);
+                .insert_builtin("isExtensible".to_string(), ie_fn);
 
             // Object.isFrozen
             let frozen_fn = self.create_function(JsFunction::native(
@@ -3905,7 +3909,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("isFrozen".to_string(), frozen_fn);
+                .insert_builtin("isFrozen".to_string(), frozen_fn);
 
             // Object.isSealed
             let sealed_fn = self.create_function(JsFunction::native(
@@ -3931,7 +3935,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("isSealed".to_string(), sealed_fn);
+                .insert_builtin("isSealed".to_string(), sealed_fn);
 
             // Object.seal
             let seal_fn = self.create_function(JsFunction::native(
@@ -3953,7 +3957,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("seal".to_string(), seal_fn);
+                .insert_builtin("seal".to_string(), seal_fn);
 
             // Object.hasOwn
             let has_own_fn = self.create_function(JsFunction::native(
@@ -3974,7 +3978,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("hasOwn".to_string(), has_own_fn);
+                .insert_builtin("hasOwn".to_string(), has_own_fn);
 
             // Object.setPrototypeOf
             let set_proto_fn = self.create_function(JsFunction::native(
@@ -4091,7 +4095,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("setPrototypeOf".to_string(), set_proto_fn);
+                .insert_builtin("setPrototypeOf".to_string(), set_proto_fn);
 
             // Object.defineProperties
             let def_props_fn = self.create_function(JsFunction::native(
@@ -4153,7 +4157,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("defineProperties".to_string(), def_props_fn);
+                .insert_builtin("defineProperties".to_string(), def_props_fn);
 
             // Object.getOwnPropertyDescriptors
             let get_descs_fn = self.create_function(JsFunction::native(
@@ -4173,21 +4177,21 @@ impl Interpreter {
                                 if let Some(ref v) = d.value {
                                     desc_result
                                         .borrow_mut()
-                                        .insert_value("value".to_string(), v.clone());
+                                        .insert_builtin("value".to_string(), v.clone());
                                 }
                                 if let Some(w) = d.writable {
                                     desc_result
                                         .borrow_mut()
-                                        .insert_value("writable".to_string(), JsValue::Boolean(w));
+                                        .insert_builtin("writable".to_string(), JsValue::Boolean(w));
                                 }
                                 if let Some(e) = d.enumerable {
-                                    desc_result.borrow_mut().insert_value(
+                                    desc_result.borrow_mut().insert_builtin(
                                         "enumerable".to_string(),
                                         JsValue::Boolean(e),
                                     );
                                 }
                                 if let Some(c) = d.configurable {
-                                    desc_result.borrow_mut().insert_value(
+                                    desc_result.borrow_mut().insert_builtin(
                                         "configurable".to_string(),
                                         JsValue::Boolean(c),
                                     );
@@ -4195,16 +4199,16 @@ impl Interpreter {
                                 if let Some(ref g) = d.get {
                                     desc_result
                                         .borrow_mut()
-                                        .insert_value("get".to_string(), g.clone());
+                                        .insert_builtin("get".to_string(), g.clone());
                                 }
                                 if let Some(ref s) = d.set {
                                     desc_result
                                         .borrow_mut()
-                                        .insert_value("set".to_string(), s.clone());
+                                        .insert_builtin("set".to_string(), s.clone());
                                 }
                                 let did = desc_result.borrow().id.unwrap();
                                 let dval = JsValue::Object(crate::types::JsObject { id: did });
-                                result.borrow_mut().insert_value(key, dval);
+                                result.borrow_mut().insert_builtin(key, dval);
                             }
                         }
                         let id = result.borrow().id.unwrap();
@@ -4215,7 +4219,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("getOwnPropertyDescriptors".to_string(), get_descs_fn);
+                .insert_builtin("getOwnPropertyDescriptors".to_string(), get_descs_fn);
 
             // Object.fromEntries
             let from_entries_fn = self.create_function(JsFunction::native(
@@ -4241,7 +4245,7 @@ impl Interpreter {
                             {
                                 let k = to_js_string(&e_obj.borrow().get_property("0"));
                                 let v = e_obj.borrow().get_property("1");
-                                obj.borrow_mut().insert_value(k, v);
+                                obj.borrow_mut().insert_builtin(k, v);
                             }
                         }
                     }
@@ -4251,7 +4255,7 @@ impl Interpreter {
             ));
             obj_func
                 .borrow_mut()
-                .insert_value("fromEntries".to_string(), from_entries_fn);
+                .insert_builtin("fromEntries".to_string(), from_entries_fn);
         }
     }
 
@@ -4383,7 +4387,7 @@ impl Interpreter {
         ));
         wrapper
             .borrow_mut()
-            .insert_value("next".to_string(), next_fn);
+            .insert_builtin("next".to_string(), next_fn);
 
         let sync_for_return = sync_iter.clone();
         let return_fn = self.create_function(JsFunction::native(
@@ -4426,7 +4430,7 @@ impl Interpreter {
         ));
         wrapper
             .borrow_mut()
-            .insert_value("return".to_string(), return_fn);
+            .insert_builtin("return".to_string(), return_fn);
 
         let sync_for_throw = sync_iter;
         let throw_fn = self.create_function(JsFunction::native(
@@ -4462,7 +4466,7 @@ impl Interpreter {
         ));
         wrapper
             .borrow_mut()
-            .insert_value("throw".to_string(), throw_fn);
+            .insert_builtin("throw".to_string(), throw_fn);
 
         let id = wrapper.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })
@@ -5886,17 +5890,17 @@ impl Interpreter {
                     let result = interp.create_object();
                     result
                         .borrow_mut()
-                        .insert_value("proxy".to_string(), proxy_val);
+                        .insert_builtin("proxy".to_string(), proxy_val);
                     result
                         .borrow_mut()
-                        .insert_value("revoke".to_string(), revoke_fn);
+                        .insert_builtin("revoke".to_string(), revoke_fn);
                     let result_id = result.borrow().id.unwrap();
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
                 },
             ));
             proxy_func_obj
                 .borrow_mut()
-                .insert_value("revocable".to_string(), revocable_fn);
+                .insert_builtin("revocable".to_string(), revocable_fn);
         }
 
         self.global_env

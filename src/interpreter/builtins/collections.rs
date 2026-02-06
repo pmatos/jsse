@@ -657,8 +657,8 @@ impl Interpreter {
                                         if let Some(arr) = interp.get_object(arr_id) {
                                             let len_val = arr.borrow().get_property("length");
                                             let len = to_number(&len_val) as usize;
-                                            arr.borrow_mut().insert_value(len.to_string(), value);
-                                            arr.borrow_mut().insert_value(
+                                            arr.borrow_mut().insert_builtin(len.to_string(), value);
+                                            arr.borrow_mut().insert_builtin(
                                                 "length".to_string(),
                                                 JsValue::Number((len + 1) as f64),
                                             );
@@ -684,7 +684,7 @@ impl Interpreter {
             ));
             ctor_obj
                 .borrow_mut()
-                .insert_value("groupBy".to_string(), group_by_fn);
+                .insert_builtin("groupBy".to_string(), group_by_fn);
         }
 
         self.global_env

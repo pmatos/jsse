@@ -352,7 +352,7 @@ fn get_last_index(interp: &Interpreter, obj_id: u64) -> f64 {
 fn set_last_index(interp: &Interpreter, obj_id: u64, val: f64) {
     if let Some(obj) = interp.get_object(obj_id) {
         obj.borrow_mut()
-            .insert_value("lastIndex".to_string(), JsValue::Number(val));
+            .insert_builtin("lastIndex".to_string(), JsValue::Number(val));
     }
 }
 
@@ -1536,7 +1536,7 @@ impl Interpreter {
         if let JsValue::Object(ref o) = regexp_ctor
             && let Some(obj) = self.get_object(o.id)
         {
-            obj.borrow_mut().insert_value(
+            obj.borrow_mut().insert_builtin(
                 "prototype".to_string(),
                 JsValue::Object(crate::types::JsObject {
                     id: regexp_proto.borrow().id.unwrap(),

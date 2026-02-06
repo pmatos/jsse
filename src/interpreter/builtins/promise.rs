@@ -579,13 +579,13 @@ impl Interpreter {
                         let result = interp.create_object();
                         result
                             .borrow_mut()
-                            .insert_builtin("promise".to_string(), cap.promise);
+                            .insert_value("promise".to_string(), cap.promise);
                         result
                             .borrow_mut()
-                            .insert_builtin("resolve".to_string(), cap.resolve);
+                            .insert_value("resolve".to_string(), cap.resolve);
                         result
                             .borrow_mut()
-                            .insert_builtin("reject".to_string(), cap.reject);
+                            .insert_value("reject".to_string(), cap.reject);
                         let id = result.borrow().id.unwrap();
                         Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                     }
