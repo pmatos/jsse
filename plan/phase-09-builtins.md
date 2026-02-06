@@ -93,14 +93,14 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Number/` (335), `built-ins/BigInt/` (75), `built-ins/Math/` (327), `built-ins/Date/` (594)
 
 ### 9.4 Text Processing (§22)
-- [x] **String** (§22.1) — 38% pass rate (457/1,215 tests)
+- [x] **String** (§22.1) — 92% pass rate (1,120/1,215 tests)
   - [x] `String()` constructor (spec-compliant ToString via ToPrimitive, Symbol coercion)
   - [x] `String.fromCharCode()`, `String.fromCodePoint()`, `String.raw()`
   - [x] `String.prototype` methods: `at`, `charAt`, `charCodeAt`, `codePointAt`, `concat`, `endsWith`, `includes`, `indexOf`, `lastIndexOf`, `match`, `matchAll`, `padEnd`, `padStart`, `repeat`, `replace`, `replaceAll`, `search`, `slice`, `split`, `startsWith`, `substring`, `toLowerCase`, `toLocaleLowerCase`, `toLocaleUpperCase`, `toString`, `toUpperCase`, `trim`, `trimEnd`, `trimStart`, `valueOf`, `normalize`, `localeCompare`, `isWellFormed`, `toWellFormed`
   - [x] RequireObjectCoercible on `this` for all methods, UTF-16 code unit indexing, proper argument coercion via ToPrimitive
   - [ ] `String.prototype[@@iterator]`
   - [ ] String HTML methods (Annex B): `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup`
-- [x] **RegExp** (§22.2) — 1,101/1,879 (58.6%)
+- [x] **RegExp** (§22.2) — 1,214/1,879 (64.6%)
   - [x] `RegExp()` constructor
   - [x] `RegExp.prototype.exec()` (TypeError for non-object `this`)
   - [x] `RegExp.prototype.test()` (TypeError for non-object `this`)
@@ -146,10 +146,11 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Array/` (3,079), `built-ins/ArrayIteratorPrototype/` (27), `built-ins/TypedArray/` (1,438), `built-ins/TypedArrayConstructors/` (736), `built-ins/Uint8Array/` (68)
 
 ### 9.6 Keyed Collections (§24) — **NOT IMPLEMENTED, 587 tests**
-- [ ] **Map** (§24.1) — 0% (0/204 tests)
-  - [ ] `Map()` constructor
-  - [ ] `Map.prototype`: `clear`, `delete`, `entries`, `forEach`, `get`, `has`, `keys`, `set`, `size`, `values`, `[@@iterator]`, `[@@toStringTag]`
-  - [ ] `Map.groupBy()`
+- [x] **Map** (§24.1) — 77% (158/204 tests)
+  - [x] `Map()` constructor
+  - [x] `Map.prototype`: `clear`, `delete`, `entries`, `forEach`, `get`, `has`, `keys`, `set`, `size`, `values`, `[@@iterator]`, `[@@toStringTag]`
+  - [x] `Map.groupBy()`
+  - [x] `Map.prototype.getOrInsert()`, `Map.prototype.getOrInsertComputed()`
 - [ ] **Set** (§24.2) — 0% (0/383 tests)
   - [ ] `Set()` constructor
   - [ ] `Set.prototype`: `add`, `clear`, `delete`, `difference`, `entries`, `forEach`, `has`, `intersection`, `isDisjointFrom`, `isSubsetOf`, `isSupersetOf`, `keys`, `size`, `symmetricDifference`, `union`, `values`, `[@@iterator]`, `[@@toStringTag]`

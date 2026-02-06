@@ -984,24 +984,23 @@ impl Interpreter {
                     ["valueOf", "toString"]
                 };
                 for method_name in &methods {
-                    let method = if let Some(obj) = self.get_object(o.id) {
-                        let desc = obj.borrow().get_property_descriptor(method_name);
-                        desc.and_then(|d| d.value)
-                    } else {
-                        None
+                    let method_val = match self.get_object_property(o.id, method_name, val) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => JsValue::Undefined,
                     };
-                    if let Some(func) = method
-                        && let JsValue::Object(fo) = &func
+                    if let JsValue::Object(fo) = &method_val
                         && self
                             .get_object(fo.id)
                             .map(|o| o.borrow().callable.is_some())
                             .unwrap_or(false)
                     {
-                        let result = self.call_function(&func, val, &[]);
+                        let result = self.call_function(&method_val, val, &[]);
                         match result {
                             Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
                                 return Ok(v);
                             }
+                            Completion::Throw(e) => return Err(e),
                             _ => {}
                         }
                     }
@@ -1542,6 +1541,13 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
+                    // ToObject(base) must precede ToPropertyKey(prop) per spec
+                    if matches!(&obj_val, JsValue::Null | JsValue::Undefined) {
+                        let err = self.create_type_error(&format!(
+                            "Cannot read properties of {obj_val} (reading property)"
+                        ));
+                        return Completion::Throw(err);
+                    }
                     match self.to_property_key(&v) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
@@ -5999,20 +6005,32 @@ impl Interpreter {
                 ))),
             };
         }
-        let key = match prop {
-            MemberProperty::Dot(name) => name.clone(),
+        // For computed properties, evaluate the expression but defer ToPropertyKey
+        // until after we check that the base is not null/undefined (spec: ToObject
+        // precedes ToPropertyKey per §6.2.5.5 GetValue step 3.a vs 3.c.i).
+        let (key, computed_raw) = match prop {
+            MemberProperty::Dot(name) => (name.clone(), None),
             MemberProperty::Computed(expr) => {
                 let v = match self.eval_expr(expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                match self.to_property_key(&v) {
+                // Check for null/undefined base before ToPropertyKey (skip for super)
+                if !matches!(obj, Expression::Super) && matches!(&obj_val, JsValue::Null | JsValue::Undefined) {
+                    let err = self.create_type_error(&format!(
+                        "Cannot read properties of {obj_val} (reading property)"
+                    ));
+                    return Completion::Throw(err);
+                }
+                let key = match self.to_property_key(&v) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
-                }
+                };
+                (key, Some(()))
             }
             MemberProperty::Private(_) => unreachable!(),
         };
+        let _ = computed_raw;
         // super.x - look up on [[Prototype]] of HomeObject
         if matches!(obj, Expression::Super) {
             let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);

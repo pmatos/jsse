@@ -2204,22 +2204,22 @@ impl Interpreter {
                 let replacer_arg = args.get(1).cloned();
                 let space_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
 
-                // Process space argument
+                // Process space argument per spec (ToNumber for Number objects, ToString for String objects)
                 let mut space_val = space_arg;
-                // Unwrap wrapper objects
-                if let JsValue::Object(o) = &space_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let cn = obj.borrow().class_name.clone();
-                    let pv = obj.borrow().primitive_value.clone();
-                    if cn == "Number" {
-                        if let Some(p) = pv {
-                            space_val = JsValue::Number(to_number(&p));
+                if let JsValue::Object(o) = &space_val {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let cn = obj.borrow().class_name.clone();
+                        if cn == "Number" {
+                            match interp.to_number_value(&space_val) {
+                                Ok(n) => space_val = JsValue::Number(n),
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else if cn == "String" {
+                            match interp.to_string_value(&space_val) {
+                                Ok(s) => space_val = JsValue::String(JsString::from_str(&s)),
+                                Err(e) => return Completion::Throw(e),
+                            }
                         }
-                    } else if cn == "String"
-                        && let Some(p) = pv
-                    {
-                        space_val = p;
                     }
                 }
                 let gap = match &space_val {
@@ -2255,30 +2255,51 @@ impl Interpreter {
             "parse".to_string(),
             2,
             |interp, _this, args: &[JsValue]| {
-                let s = args.first().map(to_js_string).unwrap_or_default();
+                let raw = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&raw) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let reviver = args.get(1).cloned();
-                let result = json_parse_value(interp, &s);
-                match result {
-                    Completion::Normal(parsed) => {
-                        if let Some(JsValue::Object(rev_obj)) = &reviver
-                            && let Some(obj) = interp.get_object(rev_obj.id)
-                            && obj.borrow().callable.is_some()
-                        {
+
+                let has_reviver = if let Some(JsValue::Object(rev_obj)) = &reviver {
+                    interp.get_object(rev_obj.id)
+                        .map(|o| o.borrow().callable.is_some())
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if has_reviver {
+                    let (result, smap) = json_parse_value_with_source(interp, &s);
+                    match result {
+                        Completion::Normal(parsed) => {
                             let wrapper = interp.create_object();
-                            wrapper.borrow_mut().insert_value("".to_string(), parsed);
+                            let wrapper_id = wrapper.borrow().id.unwrap();
+                            wrapper.borrow_mut().insert_value("".to_string(), parsed.clone());
+                            // Store source text for top-level primitive
+                            let source_map = if is_json_primitive(&parsed) {
+                                let mut sm = smap;
+                                sm.insert((wrapper_id, "".to_string()), s.trim().to_string());
+                                Some(sm)
+                            } else {
+                                Some(smap)
+                            };
                             let wrapper_val = JsValue::Object(crate::types::JsObject {
-                                id: wrapper.borrow().id.unwrap(),
+                                id: wrapper_id,
                             });
-                            return json_internalize(
+                            json_internalize(
                                 interp,
                                 &wrapper_val,
                                 "",
                                 reviver.as_ref().unwrap(),
-                            );
+                                &source_map,
+                            )
                         }
-                        Completion::Normal(parsed)
+                        other => other,
                     }
-                    other => other,
+                } else {
+                    json_parse_value(interp, &s)
                 }
             },
         ));
@@ -2286,7 +2307,11 @@ impl Interpreter {
             "rawJSON".to_string(),
             1,
             |interp, _this, args: &[JsValue]| {
-                let text = args.first().map(to_js_string).unwrap_or_default();
+                let raw = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let text = match interp.to_string_value(&raw) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 // Reject empty, leading/trailing whitespace
                 if text.is_empty() {
                     let err = interp.create_error(

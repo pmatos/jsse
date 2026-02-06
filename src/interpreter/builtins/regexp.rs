@@ -356,6 +356,202 @@ fn set_last_index(interp: &Interpreter, obj_id: u64, val: f64) {
     }
 }
 
+fn set_last_index_strict(interp: &mut Interpreter, obj_id: u64, val: f64) -> Result<(), JsValue> {
+    if let Some(obj) = interp.get_object(obj_id) {
+        let success = obj
+            .borrow_mut()
+            .set_property_value("lastIndex", JsValue::Number(val));
+        if !success {
+            return Err(
+                interp.create_type_error("Cannot set property 'lastIndex' which is not writable"),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn regexp_exec_abstract(
+    interp: &mut Interpreter,
+    rx_id: u64,
+    s: &str,
+) -> Completion {
+    let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+    let exec_val = match interp.get_object_property(rx_id, "exec", &rx_val) {
+        Completion::Normal(v) => v,
+        other => return other,
+    };
+    if interp.is_callable(&exec_val) {
+        let result = interp.call_function(
+            &exec_val,
+            &rx_val,
+            &[JsValue::String(JsString::from_str(s))],
+        );
+        match result {
+            Completion::Normal(ref v) => {
+                if matches!(v, JsValue::Object(_)) || matches!(v, JsValue::Null) {
+                    result
+                } else {
+                    Completion::Throw(
+                        interp.create_type_error("RegExp exec method returned something other than an Object or null"),
+                    )
+                }
+            }
+            other => other,
+        }
+    } else {
+        let (source, flags) = if let Some(obj) = interp.get_object(rx_id) {
+            let src = if let JsValue::String(s) = obj.borrow().get_property("source") {
+                s.to_rust_string()
+            } else {
+                String::new()
+            };
+            let fl = if let JsValue::String(s) = obj.borrow().get_property("flags") {
+                s.to_rust_string()
+            } else {
+                String::new()
+            };
+            (src, fl)
+        } else {
+            return Completion::Normal(JsValue::Null);
+        };
+        regexp_exec_raw(interp, rx_id, &source, &flags, s)
+    }
+}
+
+fn advance_string_index(s: &str, index: usize, unicode: bool) -> usize {
+    if !unicode {
+        return index + 1;
+    }
+    if index >= s.len() {
+        return index + 1;
+    }
+    let mut chars = s[index..].chars();
+    if let Some(c) = chars.next() {
+        index + c.len_utf8()
+    } else {
+        index + 1
+    }
+}
+
+fn get_substitution(
+    interp: &mut Interpreter,
+    matched: &str,
+    s: &str,
+    position: usize,
+    captures: &[JsValue],
+    named_captures: &JsValue,
+    replacement: &str,
+) -> Result<String, JsValue> {
+    let tail_pos = position + matched.len();
+    let mut result = String::new();
+    let bytes = replacement.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let m = captures.len();
+    while i < len {
+        if bytes[i] == b'$' && i + 1 < len {
+            match bytes[i + 1] {
+                b'$' => {
+                    result.push('$');
+                    i += 2;
+                }
+                b'&' => {
+                    result.push_str(matched);
+                    i += 2;
+                }
+                b'`' => {
+                    if position > 0 && position <= s.len() {
+                        result.push_str(&s[..position]);
+                    }
+                    i += 2;
+                }
+                b'\'' => {
+                    if tail_pos < s.len() {
+                        result.push_str(&s[tail_pos..]);
+                    }
+                    i += 2;
+                }
+                c if c.is_ascii_digit() => {
+                    let d1 = (c - b'0') as usize;
+                    // Try two-digit reference first
+                    if i + 2 < len && bytes[i + 2].is_ascii_digit() {
+                        let d2 = (bytes[i + 2] - b'0') as usize;
+                        let nn = d1 * 10 + d2;
+                        if nn >= 1 && nn <= m {
+                            let cap = &captures[nn - 1];
+                            if !cap.is_undefined() {
+                                let cap_s = interp.to_string_value(cap)?;
+                                result.push_str(&cap_s);
+                            }
+                            i += 3;
+                            continue;
+                        }
+                    }
+                    // Single-digit reference
+                    if d1 >= 1 && d1 <= m {
+                        let cap = &captures[d1 - 1];
+                        if !cap.is_undefined() {
+                            let cap_s = interp.to_string_value(cap)?;
+                            result.push_str(&cap_s);
+                        }
+                    } else {
+                        result.push('$');
+                        result.push(c as char);
+                    }
+                    i += 2;
+                }
+                b'<' => {
+                    if matches!(named_captures, JsValue::Undefined) {
+                        result.push('$');
+                        result.push('<');
+                        i += 2;
+                    } else {
+                        let start = i + 2;
+                        if let Some(end_pos) = replacement[start..].find('>') {
+                            let group_name = &replacement[start..start + end_pos];
+                            let nc_obj = match named_captures {
+                                JsValue::Object(o) => o.id,
+                                _ => {
+                                    result.push('$');
+                                    result.push('<');
+                                    i += 2;
+                                    continue;
+                                }
+                            };
+                            let capture = match interp.get_object_property(
+                                nc_obj,
+                                group_name,
+                                named_captures,
+                            ) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Err(e),
+                                _ => JsValue::Undefined,
+                            };
+                            if !capture.is_undefined() {
+                                let cap_str = interp.to_string_value(&capture)?;
+                                result.push_str(&cap_str);
+                            }
+                            i = start + end_pos + 1;
+                        } else {
+                            result.push('$');
+                            result.push('<');
+                            i += 2;
+                        }
+                    }
+                }
+                _ => {
+                    result.push('$');
+                    i += 1;
+                }
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    Ok(result)
+}
+
 fn regexp_exec_raw(
     interp: &mut Interpreter,
     this_id: u64,
@@ -371,7 +567,9 @@ fn regexp_exec_raw(
         let li = get_last_index(interp, this_id);
         let li_int = li as i64;
         if li_int < 0 || li_int as usize > input.len() {
-            set_last_index(interp, this_id, 0.0);
+            if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
+                return Completion::Throw(e);
+            }
             return Completion::Normal(JsValue::Null);
         }
         li_int as usize
@@ -388,7 +586,9 @@ fn regexp_exec_raw(
         Some(c) => c,
         None => {
             if global || sticky {
-                set_last_index(interp, this_id, 0.0);
+                if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
+                    return Completion::Throw(e);
+                }
             }
             return Completion::Normal(JsValue::Null);
         }
@@ -399,12 +599,16 @@ fn regexp_exec_raw(
     let match_end = last_index + full_match.end;
 
     if sticky && full_match.start != 0 {
-        set_last_index(interp, this_id, 0.0);
+        if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
+            return Completion::Throw(e);
+        }
         return Completion::Normal(JsValue::Null);
     }
 
     if global || sticky {
-        set_last_index(interp, this_id, match_end as f64);
+        if let Err(e) = set_last_index_strict(interp, this_id, match_end as f64) {
+            return Completion::Throw(e);
+        }
     }
 
     let mut elements: Vec<JsValue> = Vec::new();
@@ -513,91 +717,6 @@ fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<String> {
     })
 }
 
-fn apply_replacement_pattern(
-    template: &str,
-    matched: &str,
-    captures: &[String],
-    position: usize,
-    input: &str,
-    named_groups: Option<&std::collections::HashMap<String, String>>,
-) -> String {
-    let mut result = String::new();
-    let bytes = template.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-    while i < len {
-        if bytes[i] == b'$' && i + 1 < len {
-            match bytes[i + 1] {
-                b'$' => {
-                    result.push('$');
-                    i += 2;
-                }
-                b'&' => {
-                    result.push_str(matched);
-                    i += 2;
-                }
-                b'`' => {
-                    result.push_str(&input[..position]);
-                    i += 2;
-                }
-                b'\'' => {
-                    let end = position + matched.len();
-                    if end < input.len() {
-                        result.push_str(&input[end..]);
-                    }
-                    i += 2;
-                }
-                c if c.is_ascii_digit() => {
-                    let d1 = (c - b'0') as usize;
-                    // Check for two-digit reference
-                    if i + 2 < len && bytes[i + 2].is_ascii_digit() {
-                        let d2 = (bytes[i + 2] - b'0') as usize;
-                        let nn = d1 * 10 + d2;
-                        if nn >= 1 && nn <= captures.len() {
-                            result.push_str(&captures[nn - 1]);
-                            i += 3;
-                            continue;
-                        }
-                    }
-                    if d1 >= 1 && d1 <= captures.len() {
-                        result.push_str(&captures[d1 - 1]);
-                    } else {
-                        result.push('$');
-                        result.push(c as char);
-                    }
-                    i += 2;
-                }
-                b'<' => {
-                    if let Some(groups) = named_groups {
-                        let start = i + 2;
-                        if let Some(end_pos) = template[start..].find('>') {
-                            let name = &template[start..start + end_pos];
-                            if let Some(val) = groups.get(name) {
-                                result.push_str(val);
-                            }
-                            i = start + end_pos + 1;
-                        } else {
-                            result.push('$');
-                            i += 1;
-                        }
-                    } else {
-                        result.push('$');
-                        result.push('<');
-                        i += 2;
-                    }
-                }
-                _ => {
-                    result.push('$');
-                    i += 1;
-                }
-            }
-        } else {
-            result.push(bytes[i] as char);
-            i += 1;
-        }
-    }
-    result
-}
 
 impl Interpreter {
     pub(crate) fn setup_regexp(&mut self) {
@@ -789,131 +908,256 @@ impl Interpreter {
             "[Symbol.replace]".to_string(),
             2,
             |interp, this_val, args| {
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let s = match interp.to_string_value(&arg) {
+                // 1. Let rx be the this value.
+                // 2. If Type(rx) is not Object, throw a TypeError.
+                let rx_id = match this_val {
+                    JsValue::Object(o) => o.id,
+                    _ => {
+                        let err = interp.create_type_error(
+                            "RegExp.prototype[@@replace] requires that 'this' be an Object",
+                        );
+                        return Completion::Throw(err);
+                    }
+                };
+
+                // 3. Let S be ? ToString(string).
+                let string_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let s = match interp.to_string_value(&string_arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
+                let length_s = s.len();
+
+                // 5. Let functionalReplace be IsCallable(replaceValue).
                 let replace_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let (source, flags, obj_id) = match extract_source_flags(interp, this_val) {
-                    Some(v) => v,
-                    None => return Completion::Normal(JsValue::String(JsString::from_str(&s))),
-                };
-                let global = flags.contains('g');
-                let func_replacer = if let JsValue::Object(ref o) = replace_value {
-                    interp
-                        .get_object(o.id)
-                        .map(|obj| obj.borrow().callable.is_some())
-                        .unwrap_or(false)
+                let functional_replace = interp.is_callable(&replace_value);
+
+                // 6. If functionalReplace is false, set replaceValue to ? ToString(replaceValue).
+                let replace_str = if !functional_replace {
+                    match interp.to_string_value(&replace_value) {
+                        Ok(s) => Some(s),
+                        Err(e) => return Completion::Throw(e),
+                    }
                 } else {
-                    false
+                    None
                 };
 
+                // 7. Let flags be ? ToString(? Get(rx, "flags")).
+                let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                let flags = match interp.to_string_value(&flags_val) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
+
+                // 8. Let global be (flags contains "g").
+                let global = flags.contains('g');
+                let mut full_unicode = false;
+
+                // 9. If global is true, then
                 if global {
-                    set_last_index(interp, obj_id, 0.0);
+                    // a. Let fullUnicode be (flags contains "u" or "v").
+                    full_unicode = flags.contains('u') || flags.contains('v');
+                    // b. Perform ? Set(rx, "lastIndex", +0𝔽, true).
+                    match set_last_index_strict(interp, rx_id, 0.0) {
+                        Ok(()) => {}
+                        Err(e) => return Completion::Throw(e),
+                    }
                 }
 
-                let mut results: Vec<(usize, usize, String)> = Vec::new();
+                // 10-11. Collect results
+                let mut results: Vec<JsValue> = Vec::new();
                 loop {
-                    let exec_result = regexp_exec_raw(interp, obj_id, &source, &flags, &s);
-                    match exec_result {
+                    // 11a. Let result be ? RegExpExec(rx, S).
+                    let result = regexp_exec_abstract(interp, rx_id, &s);
+                    match result {
                         Completion::Normal(JsValue::Null) => break,
-                        Completion::Normal(JsValue::Object(ref o)) => {
-                            if let Some(arr) = interp.get_object(o.id) {
-                                let matched_val = arr.borrow().get_property("0");
-                                let matched = to_js_string(&matched_val);
-                                let index_val = arr.borrow().get_property("index");
-                                let position = to_number(&index_val) as usize;
+                        Completion::Normal(ref result_val) if matches!(result_val, JsValue::Object(_)) => {
+                            let result_obj = result_val.clone();
+                            results.push(result_obj.clone());
 
-                                let mut captures: Vec<String> = Vec::new();
-                                let length_val = arr.borrow().get_property("length");
-                                let n_captures = to_number(&length_val) as usize;
-                                for i in 1..n_captures {
-                                    let cap = arr.borrow().get_property(&i.to_string());
-                                    captures.push(to_js_string(&cap));
-                                }
-
-                                let groups_val = arr.borrow().get_property("groups");
-                                let mut named_groups: Option<
-                                    std::collections::HashMap<String, String>,
-                                > = None;
-                                if let JsValue::Object(ref go) = groups_val {
-                                    if let Some(gobj) = interp.get_object(go.id) {
-                                        let mut map = std::collections::HashMap::new();
-                                        for (key, pd) in &gobj.borrow().properties {
-                                            if let Some(ref val) = pd.value {
-                                                map.insert(key.clone(), to_js_string(val));
-                                            }
-                                        }
-                                        named_groups = Some(map);
-                                    }
-                                }
-
-                                let replacement = if func_replacer {
-                                    let mut call_args = vec![matched_val.clone()];
-                                    for cap in &captures {
-                                        call_args.push(JsValue::String(JsString::from_str(cap)));
-                                    }
-                                    call_args.push(JsValue::Number(position as f64));
-                                    call_args.push(JsValue::String(JsString::from_str(&s)));
-                                    if !matches!(groups_val, JsValue::Undefined) {
-                                        call_args.push(groups_val.clone());
-                                    }
-                                    let r = interp.call_function(
-                                        &replace_value,
-                                        &JsValue::Undefined,
-                                        &call_args,
-                                    );
-                                    match r {
-                                        Completion::Normal(v) => to_js_string(&v),
-                                        other => return other,
-                                    }
-                                } else {
-                                    let template = match interp.to_string_value(&replace_value) {
-                                        Ok(s) => s,
-                                        Err(e) => return Completion::Throw(e),
-                                    };
-                                    apply_replacement_pattern(
-                                        &template,
-                                        &matched,
-                                        &captures,
-                                        position,
-                                        &s,
-                                        named_groups.as_ref(),
-                                    )
-                                };
-
-                                results.push((position, matched.len(), replacement));
-
-                                if matched.is_empty() {
-                                    let li = get_last_index(interp, obj_id);
-                                    set_last_index(interp, obj_id, li + 1.0);
-                                }
-                            } else {
+                            if !global {
                                 break;
                             }
+
+                            // For global: check if match is empty and advance
+                            let result_id = if let JsValue::Object(ref o) = result_obj { o.id } else { unreachable!() };
+                            let matched_val = match interp.get_object_property(result_id, "0", &result_obj) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            let match_str = match interp.to_string_value(&matched_val) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if match_str.is_empty() {
+                                // a. Let thisIndex be ? ToLength(? Get(rx, "lastIndex")).
+                                let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                                let li_val = match interp.get_object_property(rx_id, "lastIndex", &rx_val) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                                let li_num = match interp.to_number_value(&li_val) {
+                                    Ok(n) => n,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                let this_index = {
+                                    let n = if li_num.is_nan() || li_num <= 0.0 { 0.0 } else { li_num.min(9007199254740991.0).floor() };
+                                    n as usize
+                                };
+                                let next_index = advance_string_index(&s, this_index, full_unicode);
+                                match set_last_index_strict(interp, rx_id, next_index as f64) {
+                                    Ok(()) => {}
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
                         }
+                        Completion::Normal(_) => break,
                         other => return other,
-                    }
-                    if !global {
-                        break;
                     }
                 }
 
-                // Build result string
-                let mut output = String::new();
-                let mut last_end = 0;
-                for (pos, match_len, replacement) in &results {
-                    if *pos >= last_end {
-                        output.push_str(&s[last_end..*pos]);
+                // 14. For each element result of results, do
+                let mut accumulated_result = String::new();
+                let mut next_source_position: usize = 0;
+
+                for result_val in &results {
+                    let result_id = if let JsValue::Object(o) = result_val { o.id } else { continue };
+
+                    // a. Let nCaptures be ? ToLength(? Get(result, "length")).
+                    let len_val = match interp.get_object_property(result_id, "length", result_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let n_captures = {
+                        let n = match interp.to_number_value(&len_val) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let len = if n.is_nan() || n <= 0.0 { 0.0 } else { n.min(9007199254740991.0).floor() };
+                        (len as usize).max(1) // at least 1
+                    };
+                    // nCaptures = max(nCaptures - 1, 0) — number of capture groups
+                    let n_cap = if n_captures > 0 { n_captures - 1 } else { 0 };
+
+                    // d. Let matched be ? ToString(? Get(result, "0")).
+                    let matched_val = match interp.get_object_property(result_id, "0", result_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let matched = match interp.to_string_value(&matched_val) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let match_length = matched.len();
+
+                    // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
+                    let index_val = match interp.get_object_property(result_id, "index", result_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let position = {
+                        let n = match interp.to_number_value(&index_val) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let int = to_integer_or_infinity(n);
+                        int.max(0.0).min(length_s as f64) as usize
+                    };
+
+                    // g-i. Get captures
+                    let mut captures: Vec<JsValue> = Vec::new();
+                    for n in 1..=n_cap {
+                        let cap_n = match interp.get_object_property(result_id, &n.to_string(), result_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if !cap_n.is_undefined() {
+                            let cap_str = match interp.to_string_value(&cap_n) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            captures.push(JsValue::String(JsString::from_str(&cap_str)));
+                        } else {
+                            captures.push(JsValue::Undefined);
+                        }
                     }
-                    output.push_str(replacement);
-                    last_end = pos + match_len;
+
+                    // j. Let namedCaptures be ? Get(result, "groups").
+                    let named_captures = match interp.get_object_property(result_id, "groups", result_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+
+                    let replacement = if functional_replace {
+                        // k. If functionalReplace is true, then
+                        let mut replacer_args: Vec<JsValue> = Vec::new();
+                        replacer_args.push(JsValue::String(JsString::from_str(&matched)));
+                        for cap in &captures {
+                            replacer_args.push(cap.clone());
+                        }
+                        replacer_args.push(JsValue::Number(position as f64));
+                        replacer_args.push(JsValue::String(JsString::from_str(&s)));
+                        if !named_captures.is_undefined() {
+                            replacer_args.push(named_captures.clone());
+                        }
+                        let repl_val = interp.call_function(
+                            &replace_value,
+                            &JsValue::Undefined,
+                            &replacer_args,
+                        );
+                        match repl_val {
+                            Completion::Normal(v) => {
+                                match interp.to_string_value(&v) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                            other => return other,
+                        }
+                    } else {
+                        // l. Else (string replace)
+                        let template = replace_str.as_ref().unwrap();
+                        let named_captures_obj = if !named_captures.is_undefined() {
+                            // i. Set namedCaptures to ? ToObject(namedCaptures).
+                            match interp.to_object(&named_captures) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        match get_substitution(
+                            interp,
+                            &matched,
+                            &s,
+                            position,
+                            &captures,
+                            &named_captures_obj,
+                            template,
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    };
+
+                    // p. If position >= nextSourcePosition, then
+                    if position >= next_source_position {
+                        accumulated_result.push_str(&s[next_source_position..position]);
+                        accumulated_result.push_str(&replacement);
+                        next_source_position = position + match_length;
+                    }
                 }
-                if last_end < s.len() {
-                    output.push_str(&s[last_end..]);
+
+                // 15. Return accumulatedResult + remainder of S.
+                if next_source_position < length_s {
+                    accumulated_result.push_str(&s[next_source_position..]);
                 }
-                Completion::Normal(JsValue::String(JsString::from_str(&output)))
+                Completion::Normal(JsValue::String(JsString::from_str(&accumulated_result)))
             },
         ));
         if let Some(key) = get_symbol_key(self, "replace") {
