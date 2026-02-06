@@ -759,7 +759,7 @@ impl Interpreter {
         match val {
             JsValue::Symbol(s) => Ok(s.to_property_key()),
             JsValue::Object(_) => {
-                let prim = self.to_primitive(val, "string");
+                let prim = self.to_primitive(val, "string")?;
                 if let JsValue::Symbol(s) = &prim {
                     return Ok(s.to_property_key());
                 }
@@ -944,7 +944,7 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> JsValue {
+    pub(crate) fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> Result<JsValue, JsValue> {
         match val {
             JsValue::Object(o) => {
                 // §7.1.1 Step 2-3: Check @@toPrimitive
@@ -964,16 +964,16 @@ impl Interpreter {
                         let hint = JsValue::String(JsString::from_str(preferred_type));
                         let result = self.call_function(&exotic_to_prim, val, &[hint]);
                         match result {
-                            Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => return v,
+                            Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => return Ok(v),
                             Completion::Normal(_) => {
-                                return self
-                                    .create_type_error("@@toPrimitive must return a primitive");
+                                return Err(self
+                                    .create_type_error("@@toPrimitive must return a primitive"));
                             }
-                            Completion::Throw(e) => return e,
+                            Completion::Throw(e) => return Err(e),
                             _ => {}
                         }
                     } else {
-                        return self.create_type_error("@@toPrimitive is not callable");
+                        return Err(self.create_type_error("@@toPrimitive is not callable"));
                     }
                 }
 
@@ -1000,7 +1000,7 @@ impl Interpreter {
                         let result = self.call_function(&func, val, &[]);
                         match result {
                             Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
-                                return v;
+                                return Ok(v);
                             }
                             _ => {}
                         }
@@ -1010,17 +1010,19 @@ impl Interpreter {
                 if let Some(obj) = self.get_object(o.id)
                     && let Some(pv) = obj.borrow().primitive_value.clone()
                 {
-                    return pv;
+                    return Ok(pv);
                 }
-                JsValue::String(JsString::from_str("[object Object]"))
+                Err(self.create_type_error("Cannot convert object to primitive value"))
             }
-            _ => val.clone(),
+            _ => Ok(val.clone()),
         }
     }
 
     pub(crate) fn to_number_coerce(&mut self, val: &JsValue) -> f64 {
-        let prim = self.to_primitive(val, "number");
-        to_number(&prim)
+        match self.to_primitive(val, "number") {
+            Ok(prim) => to_number(&prim),
+            Err(_) => f64::NAN,
+        }
     }
 
     // §7.1.17 ToString — calls ToPrimitive for objects
@@ -1036,7 +1038,7 @@ impl Interpreter {
             }
             JsValue::BigInt(n) => Ok(n.value.to_string()),
             JsValue::Object(_) => {
-                let prim = self.to_primitive(val, "string");
+                let prim = self.to_primitive(val, "string")?;
                 self.to_string_value(&prim)
             }
         }
@@ -1046,7 +1048,7 @@ impl Interpreter {
     pub(crate) fn to_number_value(&mut self, val: &JsValue) -> Result<f64, JsValue> {
         match val {
             JsValue::Object(_) => {
-                let prim = self.to_primitive(val, "number");
+                let prim = self.to_primitive(val, "number")?;
                 self.to_number_value(&prim)
             }
             JsValue::Symbol(_) => {
@@ -1109,21 +1111,27 @@ impl Interpreter {
         if matches!(left, JsValue::Object(_))
             && (right.is_string() || right.is_number() || right.is_symbol() || right.is_bigint())
         {
-            let lprim = self.to_primitive(left, "default");
+            let lprim = match self.to_primitive(left, "default") {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
             return self.abstract_equality(&lprim, right);
         }
         if matches!(right, JsValue::Object(_))
             && (left.is_string() || left.is_number() || left.is_symbol() || left.is_bigint())
         {
-            let rprim = self.to_primitive(right, "default");
+            let rprim = match self.to_primitive(right, "default") {
+                Ok(v) => v,
+                Err(_) => return false,
+            };
             return self.abstract_equality(left, &rprim);
         }
         false
     }
 
     fn abstract_relational(&mut self, left: &JsValue, right: &JsValue) -> Option<bool> {
-        let lprim = self.to_primitive(left, "number");
-        let rprim = self.to_primitive(right, "number");
+        let lprim = self.to_primitive(left, "number").unwrap_or(JsValue::Undefined);
+        let rprim = self.to_primitive(right, "number").unwrap_or(JsValue::Undefined);
         if is_string(&lprim) && is_string(&rprim) {
             let ls = to_js_string(&lprim);
             let rs = to_js_string(&rprim);
@@ -1197,8 +1205,14 @@ impl Interpreter {
     fn eval_binary(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
         match op {
             BinaryOp::Add => {
-                let lprim = self.to_primitive(left, "default");
-                let rprim = self.to_primitive(right, "default");
+                let lprim = match self.to_primitive(left, "default") {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let rprim = match self.to_primitive(right, "default") {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 if is_string(&lprim) || is_string(&rprim) {
                     let ls = to_js_string(&lprim);
                     let rs = to_js_string(&rprim);
@@ -1219,8 +1233,14 @@ impl Interpreter {
                 }
             }
             BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Exp => {
-                let lprim = self.to_primitive(left, "number");
-                let rprim = self.to_primitive(right, "number");
+                let lprim = match self.to_primitive(left, "number") {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let rprim = match self.to_primitive(right, "number") {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
                     match op {
                         BinaryOp::Sub => Completion::Normal(JsValue::BigInt(JsBigInt {
@@ -1291,8 +1311,14 @@ impl Interpreter {
                 self.abstract_relational(left, right) == Some(false),
             )),
             BinaryOp::LShift | BinaryOp::RShift | BinaryOp::URShift => {
-                let lprim = self.to_primitive(left, "number");
-                let rprim = self.to_primitive(right, "number");
+                let lprim = match self.to_primitive(left, "number") {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let rprim = match self.to_primitive(right, "number") {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 if lprim.is_bigint() || rprim.is_bigint() {
                     if op == BinaryOp::URShift {
                         return Completion::Throw(self.create_type_error(
@@ -1326,8 +1352,14 @@ impl Interpreter {
                 }
             }
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                let lprim = self.to_primitive(left, "number");
-                let rprim = self.to_primitive(right, "number");
+                let lprim = match self.to_primitive(left, "number") {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let rprim = match self.to_primitive(right, "number") {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
                     Completion::Normal(JsValue::BigInt(JsBigInt {
                         value: match op {
@@ -1416,7 +1448,7 @@ impl Interpreter {
     ) -> Result<(JsValue, JsValue), JsValue> {
         // ToNumeric: ToPrimitive(number) then check for BigInt
         let numeric = if matches!(raw_val, JsValue::Object(_)) {
-            self.to_primitive(raw_val, "number")
+            self.to_primitive(raw_val, "number")?
         } else {
             raw_val.clone()
         };
@@ -2586,6 +2618,18 @@ impl Interpreter {
                 (val, JsValue::Undefined)
             }
         };
+
+        // Direct eval: callee is bare `eval` identifier and resolves to built-in eval
+        if matches!(callee, Expression::Identifier(n) if n == "eval") {
+            if self.is_builtin_eval(&func_val) {
+                let evaluated_args = match self.eval_spread_args(args, env) {
+                    Ok(args) => args,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let caller_strict = env.borrow().strict;
+                return self.perform_eval(&evaluated_args, caller_strict, true, env);
+            }
+        }
 
         let evaluated_args = match self.eval_spread_args(args, env) {
             Ok(args) => args,
@@ -5148,7 +5192,7 @@ impl Interpreter {
                             }
                             Completion::Normal(_) | Completion::Empty => {
                                 self.last_call_had_explicit_return = false;
-                                Completion::Normal(result.value_or(JsValue::Undefined))
+                                Completion::Normal(JsValue::Undefined)
                             }
                             Completion::Yield(_) => Completion::Normal(JsValue::Undefined),
                             other => other,
@@ -5186,6 +5230,76 @@ impl Interpreter {
             }
         }
         Ok(evaluated)
+    }
+
+    fn is_builtin_eval(&self, val: &JsValue) -> bool {
+        if let JsValue::Object(o) = val
+            && let Some(obj) = self.get_object(o.id)
+        {
+            if let Some(ref func) = obj.borrow().callable {
+                return matches!(func, JsFunction::Native(name, _, _, _) if name == "eval");
+            }
+        }
+        false
+    }
+
+    pub(crate) fn perform_eval(
+        &mut self,
+        args: &[JsValue],
+        caller_strict: bool,
+        direct: bool,
+        caller_env: &EnvRef,
+    ) -> Completion {
+        let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+        if !matches!(&arg, JsValue::String(_)) {
+            return Completion::Normal(arg);
+        }
+        let code = to_js_string(&arg);
+        let mut p = match parser::Parser::new(&code) {
+            Ok(p) => p,
+            Err(_) => {
+                return Completion::Throw(
+                    self.create_error("SyntaxError", "Invalid eval source"),
+                );
+            }
+        };
+        if caller_strict {
+            p.set_strict(true);
+        }
+        let program = match p.parse_program() {
+            Ok(prog) => prog,
+            Err(e) => {
+                return Completion::Throw(
+                    self.create_error("SyntaxError", &format!("{}", e)),
+                );
+            }
+        };
+        let eval_code_strict = program.body.first().is_some_and(|s| {
+            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+        });
+        let is_strict = caller_strict || eval_code_strict;
+        let env = if is_strict {
+            let new_env = Environment::new_function_scope(if direct {
+                Some(caller_env.clone())
+            } else {
+                Some(self.global_env.clone())
+            });
+            new_env.borrow_mut().strict = true;
+            new_env
+        } else if direct {
+            caller_env.clone()
+        } else {
+            self.global_env.clone()
+        };
+        let mut last = Completion::Empty;
+        for stmt in &program.body {
+            match self.exec_statement(stmt, &env) {
+                Completion::Normal(v) => last = Completion::Normal(v),
+                Completion::Empty => {}
+                other => return other,
+            }
+        }
+        last.update_empty(JsValue::Undefined)
     }
 
     fn eval_new(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
@@ -5992,7 +6106,7 @@ impl Interpreter {
     }
 
     fn eval_array_literal(&mut self, elements: &[Option<Expression>], env: &EnvRef) -> Completion {
-        let mut values = Vec::new();
+        let mut items: Vec<Option<JsValue>> = Vec::new();
         for elem in elements {
             match elem {
                 Some(Expression::Spread(inner)) => {
@@ -6001,7 +6115,11 @@ impl Interpreter {
                         other => return other,
                     };
                     match self.iterate_to_vec(&val) {
-                        Ok(items) => values.extend(items),
+                        Ok(spread_items) => {
+                            for item in spread_items {
+                                items.push(Some(item));
+                            }
+                        }
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -6010,12 +6128,12 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    values.push(val);
+                    items.push(Some(val));
                 }
-                None => values.push(JsValue::Undefined),
+                None => items.push(None), // elision — no own property
             }
         }
-        Completion::Normal(self.create_array(values))
+        Completion::Normal(self.create_array_with_holes(items))
     }
 
     pub(crate) fn eval_class(

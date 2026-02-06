@@ -259,6 +259,7 @@ pub struct Lexer<'a> {
     line: u32,
     column: u32,
     pub strict: bool,
+    pub last_string_has_escape: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -274,6 +275,7 @@ impl<'a> Lexer<'a> {
             line: 1,
             column: 0,
             strict: false,
+            last_string_has_escape: false,
         }
     }
 
@@ -384,14 +386,19 @@ impl<'a> Lexer<'a> {
 
     fn read_string(&mut self, quote: char) -> Result<String, LexError> {
         let mut s = String::new();
+        let mut has_escape = false;
         loop {
             match self.advance() {
                 None => return Err(self.error("Unterminated string literal")),
-                Some(ch) if ch == quote => return Ok(s),
+                Some(ch) if ch == quote => {
+                    self.last_string_has_escape = has_escape;
+                    return Ok(s);
+                }
                 Some(ch) if Self::is_line_terminator(ch) => {
                     return Err(self.error("Unterminated string literal"));
                 }
                 Some('\\') => {
+                    has_escape = true;
                     let esc = self.read_escape_sequence()?;
                     s.push_str(&esc);
                 }

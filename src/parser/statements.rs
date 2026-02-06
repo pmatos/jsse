@@ -39,6 +39,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
+        if self.strict && matches!(&self.current, Token::Keyword(Keyword::Function)) {
+            return Err(self.error(
+                "In strict mode code, functions can only be declared at top level or inside a block",
+            ));
+        }
         if matches!(
             &self.current,
             Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const)

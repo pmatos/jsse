@@ -374,6 +374,17 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("finally".to_string(), finally_fn);
 
+        // @@toStringTag
+        proto.borrow_mut().insert_property(
+            "Symbol(Symbol.toStringTag)".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("Promise")),
+                false,
+                false,
+                true,
+            ),
+        );
+
         // Promise constructor
         let _promise_proto = self.promise_prototype.clone();
         let ctor = self.create_function(JsFunction::constructor(

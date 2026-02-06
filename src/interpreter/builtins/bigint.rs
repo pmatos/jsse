@@ -161,7 +161,10 @@ impl Interpreter {
                         }
                     }
                     JsValue::Object(_) => {
-                        let prim = interp.to_primitive(&val, "number");
+                        let prim = match interp.to_primitive(&val, "number") {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let args = [prim];
                         let bigint_fn = interp.global_env.borrow().get("BigInt");
                         if let Some(bigint_fn) = bigint_fn {

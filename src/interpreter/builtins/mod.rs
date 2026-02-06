@@ -370,11 +370,14 @@ impl Interpreter {
 
             // Set constructor on the per-type prototype
             {
-                let env = self.global_env.borrow();
-                if let Some(ctor_val) = env.get(name) {
+                let ctor_val = {
+                    let env = self.global_env.borrow();
+                    env.get(name)
+                };
+                if let Some(ctor_val) = ctor_val {
                     native_proto
                         .borrow_mut()
-                        .insert_builtin("constructor".to_string(), ctor_val);
+                        .insert_builtin("constructor".to_string(), ctor_val.clone());
                 }
             }
             // Set constructor's .prototype to the per-type prototype
@@ -1846,6 +1849,38 @@ impl Interpreter {
             }
         }
 
+        // Set NativeError constructors' [[Prototype]] to %Error% (spec §20.5.6.1)
+        // Must happen after the Function.prototype retroactive fix above
+        {
+            let error_ctor_obj = {
+                let env = self.global_env.borrow();
+                env.get("Error").and_then(|v| {
+                    if let JsValue::Object(o) = &v {
+                        self.get_object(o.id)
+                    } else {
+                        None
+                    }
+                })
+            };
+            if let Some(err_data) = error_ctor_obj {
+                for name in [
+                    "SyntaxError",
+                    "TypeError",
+                    "ReferenceError",
+                    "RangeError",
+                    "URIError",
+                    "EvalError",
+                ] {
+                    let ctor_val = self.global_env.borrow().get(name);
+                    if let Some(JsValue::Object(o)) = ctor_val {
+                        if let Some(ctor_obj) = self.get_object(o.id) {
+                            ctor_obj.borrow_mut().prototype = Some(err_data.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         // %AsyncFunction.prototype%
         // Per spec, this should inherit from Function.prototype
         {
@@ -3027,7 +3062,10 @@ impl Interpreter {
                                     && obj.borrow().class_name == "Array"
                                 {
                                     if let Some(ref new_len_val) = desc.value {
-                                        let new_num = interp.to_number_coerce(new_len_val);
+                                        let new_num = match interp.to_number_value(new_len_val) {
+                                            Ok(n) => n,
+                                            Err(e) => return Completion::Throw(e),
+                                        };
                                         let new_len = new_num as u32;
                                         if (new_len as f64) != new_num
                                             || new_num < 0.0
@@ -3117,19 +3155,30 @@ impl Interpreter {
                                     }
                                 }
                                 let is_array = obj.borrow().class_name == "Array";
-                                let key_for_len = if is_array { Some(key.clone()) } else { None };
-                                if !obj.borrow_mut().define_own_property(key, desc) {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot define property, object is not extensible or property is non-configurable",
-                                    ));
-                                }
-                                // §10.4.2.1 step 3: if array and key is valid index >= length, update length
-                                if let Some(ref k) = key_for_len {
-                                    if let Ok(idx) = k.parse::<u32>() {
-                                        let old_len = match obj.borrow().get_property("length") {
+                                // §10.4.2.1 step 3: array index property
+                                if is_array {
+                                    if let Ok(idx) = key.parse::<u32>() {
+                                        let b = obj.borrow();
+                                        let old_len = match b.get_property("length") {
                                             JsValue::Number(n) => n as u32,
                                             _ => 0,
                                         };
+                                        let len_not_writable = b.properties.get("length")
+                                            .map(|d| d.writable == Some(false))
+                                            .unwrap_or(false);
+                                        drop(b);
+                                        // §10.4.2.1 step 3.a: reject if index >= old_len and length is non-writable
+                                        if idx >= old_len && len_not_writable {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot define property on array: index >= length and length is not writable",
+                                            ));
+                                        }
+                                        if !obj.borrow_mut().define_own_property(key.clone(), desc) {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot define property, object is not extensible or property is non-configurable",
+                                            ));
+                                        }
+                                        // §10.4.2.1 step 3.e: update length if index >= old_len
                                         if idx >= old_len {
                                             let new_len = idx + 1;
                                             obj.borrow_mut().properties.insert(
@@ -3137,6 +3186,18 @@ impl Interpreter {
                                                 PropertyDescriptor::data(JsValue::Number(new_len as f64), true, false, false),
                                             );
                                         }
+                                    } else {
+                                        if !obj.borrow_mut().define_own_property(key, desc) {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot define property, object is not extensible or property is non-configurable",
+                                            ));
+                                        }
+                                    }
+                                } else {
+                                    if !obj.borrow_mut().define_own_property(key, desc) {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Cannot define property, object is not extensible or property is non-configurable",
+                                        ));
                                     }
                                 }
                             }
@@ -3395,6 +3456,12 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    // ES6 §19.1.2.9: Let obj = ? ToObject(O)
+                    if matches!(target, JsValue::Null | JsValue::Undefined) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Cannot convert undefined or null to object",
+                        ));
+                    }
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
                     {
@@ -6254,9 +6321,57 @@ impl Interpreter {
                         };
                         return Completion::Normal(JsValue::String(JsString::from_str(&s)));
                     }
-                    let cn = obj.borrow().class_name.clone();
+                    // Check @@toStringTag (spec 20.1.3.6 steps 14-17)
+                    let tag_key = "Symbol(Symbol.toStringTag)".to_string();
+                    let tag_result =
+                        interp.get_object_property(o.id, &tag_key, &this_val);
+                    if let Completion::Normal(ref tag_val) = tag_result {
+                        if let JsValue::String(s) = tag_val {
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                &format!("[object {}]", s.to_string()),
+                            )));
+                        }
+                    }
+                    // builtinTag per spec: based on internal slots
+                    let builtin_tag = {
+                        let ob = obj.borrow();
+                        if ob.class_name == "Array" {
+                            "Array"
+                        } else if ob.class_name == "Arguments" {
+                            "Arguments"
+                        } else if ob.callable.is_some() {
+                            "Function"
+                        } else if ob.class_name == "Error"
+                            || ob.class_name == "TypeError"
+                            || ob.class_name == "RangeError"
+                            || ob.class_name == "ReferenceError"
+                            || ob.class_name == "SyntaxError"
+                            || ob.class_name == "URIError"
+                            || ob.class_name == "EvalError"
+                        {
+                            "Error"
+                        } else if ob.class_name == "Boolean"
+                            && ob.primitive_value.is_some()
+                        {
+                            "Boolean"
+                        } else if ob.class_name == "Number"
+                            && ob.primitive_value.is_some()
+                        {
+                            "Number"
+                        } else if ob.class_name == "String"
+                            && ob.primitive_value.is_some()
+                        {
+                            "String"
+                        } else if ob.class_name == "Date" {
+                            "Date"
+                        } else if ob.class_name == "RegExp" {
+                            "RegExp"
+                        } else {
+                            "Object"
+                        }
+                    };
                     return Completion::Normal(JsValue::String(JsString::from_str(&format!(
-                        "[object {cn}]"
+                        "[object {builtin_tag}]"
                     ))));
                 }
                 let tag = match this_val {

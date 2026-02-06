@@ -608,6 +608,7 @@ impl<'a> Parser<'a> {
                         let name = name.clone();
                         self.advance()?;
                         if self.current == Token::Arrow && !self.prev_line_terminator {
+                            self.check_strict_binding_identifier(&name)?;
                             self.advance()?;
                             let prev_async = self.in_async;
                             self.in_async = true;
@@ -648,6 +649,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 // Arrow function: (ident) => or ident =>
                 if self.current == Token::Arrow && !self.prev_line_terminator {
+                    self.check_strict_binding_identifier(&name)?;
                     self.advance()?;
                     let body = if self.current == Token::LeftBrace {
                         let (stmts, _) = self.parse_arrow_function_body(false)?;
@@ -725,6 +727,7 @@ impl<'a> Parser<'a> {
             }
             Token::StringLiteral(s) => {
                 let s = s.clone();
+                self.last_string_literal_has_escape = self.lexer.last_string_has_escape;
                 self.advance()?;
                 Ok(Expression::Literal(Literal::String(s)))
             }
@@ -831,6 +834,10 @@ impl<'a> Parser<'a> {
                             .into_iter()
                             .map(expr_to_pattern)
                             .collect::<Result<_, _>>()?;
+                        if self.strict {
+                            self.check_strict_params(&params)?;
+                        }
+                        self.check_duplicate_params_strict(&params)?;
                         let body = if self.current == Token::LeftBrace {
                             ArrowBody::Block(self.parse_arrow_function_body(false)?.0)
                         } else {
@@ -1163,6 +1170,9 @@ impl<'a> Parser<'a> {
                     "Illegal 'use strict' directive in function with non-simple parameter list",
                 ));
             }
+            if body_strict {
+                self.check_strict_params(&params)?;
+            }
             if body_strict || self.strict {
                 self.check_duplicate_params_strict(&params)?;
             }
@@ -1217,6 +1227,9 @@ impl<'a> Parser<'a> {
                 "Illegal 'use strict' directive in function with non-simple parameter list",
             ));
         }
+        if body_strict {
+            self.check_strict_params(&params)?;
+        }
         if body_strict || self.strict || is_generator || !Self::is_simple_parameter_list(&params) {
             self.check_duplicate_params_strict(&params)?;
         }
@@ -1260,6 +1273,9 @@ impl<'a> Parser<'a> {
             return Err(self.error(
                 "Illegal 'use strict' directive in function with non-simple parameter list",
             ));
+        }
+        if body_strict {
+            self.check_strict_params(&params)?;
         }
         self.check_duplicate_params_strict(&params)?;
         let source_text = Some(self.source_since(source_start));
@@ -1348,6 +1364,10 @@ impl<'a> Parser<'a> {
                     .into_iter()
                     .map(expr_to_pattern)
                     .collect::<Result<_, _>>()?;
+                if self.strict {
+                    self.check_strict_params(&params)?;
+                }
+                self.check_duplicate_params_strict(&params)?;
                 let prev_async = self.in_async;
                 self.in_async = true;
                 let body = if self.current == Token::LeftBrace {

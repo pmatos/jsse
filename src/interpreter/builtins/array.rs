@@ -2347,4 +2347,35 @@ impl Interpreter {
         let id = self.allocate_object_slot(obj);
         JsValue::Object(crate::types::JsObject { id })
     }
+
+    pub(crate) fn create_array_with_holes(&mut self, items: Vec<Option<JsValue>>) -> JsValue {
+        let len = items.len();
+        let mut obj_data = JsObjectData::new();
+        obj_data.prototype = self
+            .array_prototype
+            .clone()
+            .or(self.object_prototype.clone());
+        obj_data.class_name = "Array".to_string();
+        let mut array_elements = Vec::with_capacity(len);
+        for (i, item) in items.into_iter().enumerate() {
+            match item {
+                Some(v) => {
+                    obj_data.insert_value(i.to_string(), v.clone());
+                    array_elements.push(v);
+                }
+                None => {
+                    // Elision: no own property, but fill array_elements with undefined for indexing
+                    array_elements.push(JsValue::Undefined);
+                }
+            }
+        }
+        obj_data.insert_property(
+            "length".to_string(),
+            PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
+        );
+        obj_data.array_elements = Some(array_elements);
+        let obj = Rc::new(RefCell::new(obj_data));
+        let id = self.allocate_object_slot(obj);
+        JsValue::Object(crate::types::JsObject { id })
+    }
 }

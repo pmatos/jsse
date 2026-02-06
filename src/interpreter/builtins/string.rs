@@ -284,9 +284,11 @@ impl Interpreter {
                     if search_len == 0 {
                         return Completion::Normal(JsValue::Boolean(true));
                     }
-                    for i in pos..=s_len.saturating_sub(search_len) {
-                        if s_units[i..i + search_len] == search_units[..] {
-                            return Completion::Normal(JsValue::Boolean(true));
+                    if search_len <= s_len {
+                        for i in pos..=s_len - search_len {
+                            if s_units[i..i + search_len] == search_units[..] {
+                                return Completion::Normal(JsValue::Boolean(true));
+                            }
                         }
                     }
                     Completion::Normal(JsValue::Boolean(false))
@@ -833,8 +835,8 @@ impl Interpreter {
                         let mut pos = None;
                         if search_len == 0 {
                             pos = Some(0);
-                        } else {
-                            for i in 0..=s_len.saturating_sub(search_len) {
+                        } else if search_len <= s_len {
+                            for i in 0..=s_len - search_len {
                                 if s_units[i..i + search_len] == search_units[..] {
                                     pos = Some(i);
                                     break;
@@ -879,8 +881,8 @@ impl Interpreter {
                         let mut match_pos = None;
                         if search_len == 0 {
                             match_pos = Some(0);
-                        } else {
-                            for i in 0..=s_len.saturating_sub(search_len) {
+                        } else if search_len <= s_len {
+                            for i in 0..=s_len - search_len {
                                 if s_units[i..i + search_len] == search_units[..] {
                                     match_pos = Some(i);
                                     break;

@@ -202,6 +202,9 @@ impl<'a> Parser<'a> {
                 "Illegal 'use strict' directive in function with non-simple parameter list",
             ));
         }
+        if body_strict {
+            self.check_strict_params(&params)?;
+        }
         if body_strict
             || self.strict
             || is_async
@@ -578,6 +581,9 @@ impl<'a> Parser<'a> {
                 "Illegal 'use strict' directive in function with non-simple parameter list",
             ));
         }
+        if body_strict {
+            self.check_strict_params(&params)?;
+        }
         if body_strict
             || self.strict
             || is_async
@@ -670,7 +676,7 @@ impl<'a> Parser<'a> {
             let stmt = self.parse_statement_or_declaration()?;
 
             if in_directive_prologue {
-                if let Some(directive) = Self::is_directive_prologue(&stmt) {
+                if let Some(directive) = self.is_directive_prologue(&stmt) {
                     if directive == "use strict" {
                         self.set_strict(true);
                         has_use_strict_directive = true;

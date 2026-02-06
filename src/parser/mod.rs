@@ -54,6 +54,7 @@ pub struct Parser<'a> {
     in_block_or_function: bool,
     in_switch_case: bool,
     no_in: bool,
+    pub last_string_literal_has_escape: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -93,6 +94,7 @@ impl<'a> Parser<'a> {
             in_block_or_function: false,
             in_switch_case: false,
             no_in: false,
+            last_string_literal_has_escape: false,
         })
     }
 
@@ -167,7 +169,7 @@ impl<'a> Parser<'a> {
         self.source[start..self.prev_token_end].to_string()
     }
 
-    fn set_strict(&mut self, strict: bool) {
+    pub fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
         self.lexer.strict = strict;
     }
@@ -320,6 +322,27 @@ impl<'a> Parser<'a> {
     fn check_strict_identifier(&self, name: &str) -> Result<(), ParseError> {
         if self.strict && Self::is_strict_reserved_word(name) {
             return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
+        }
+        Ok(())
+    }
+
+    fn check_strict_params(&self, params: &[Pattern]) -> Result<(), ParseError> {
+        let mut names = Vec::new();
+        for p in params {
+            Self::collect_bound_names(p, &mut names);
+        }
+        for name in &names {
+            if name == "eval" || name == "arguments" {
+                return Err(self.error(format!(
+                    "'{}' can't be used as a parameter name in strict mode",
+                    name
+                )));
+            }
+            if Self::is_strict_reserved_word(name) {
+                return Err(self.error(format!(
+                    "Unexpected strict mode reserved word '{name}'"
+                )));
+            }
         }
         Ok(())
     }
@@ -478,9 +501,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn is_directive_prologue(stmt: &Statement) -> Option<&str> {
+    fn is_directive_prologue<'b>(&self, stmt: &'b Statement) -> Option<&'b str> {
         match stmt {
-            Statement::Expression(Expression::Literal(Literal::String(s))) => Some(s.as_str()),
+            Statement::Expression(Expression::Literal(Literal::String(s))) => {
+                if self.last_string_literal_has_escape {
+                    None
+                } else {
+                    Some(s.as_str())
+                }
+            }
             _ => None,
         }
     }
@@ -493,7 +522,7 @@ impl<'a> Parser<'a> {
             let stmt = self.parse_statement_or_declaration()?;
 
             if in_directive_prologue {
-                if let Some(directive) = Self::is_directive_prologue(&stmt) {
+                if let Some(directive) = self.is_directive_prologue(&stmt) {
                     if directive == "use strict" {
                         self.set_strict(true);
                     }
