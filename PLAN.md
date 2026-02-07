@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 34,934 / 48,257 run (72.39%)
+**Current pass rate:** 35,220 / 48,257 run (72.98%)
 
 ---
 
@@ -123,6 +123,8 @@ These features block significant numbers of tests:
 45. ~~**Conformance batch 11: iterator protocol, DataView/ArrayBuffer prototype, function name inference**~~ — ✅ Done (+783 new passes, 70.29% → 71.91%). Three orthogonal fixes: (1) Iterator protocol in `bind_pattern`: IteratorClose after array destructuring, `iterator_value()` now uses `get_object_property()` for getter invocation, elision error propagation, object rest pattern getter invocation (+~400 passes). (2) DataView/ArrayBuffer prototype chain: constructor `.prototype` now points to the real prototype object with methods installed, matching Map/Set pattern (+~160 passes, DataView: 52%, ArrayBuffer: 45%, TypedArray: 66%). (3) IsAnonymousFunctionDefinition check: added `is_anonymous_function_definition()` to guard `set_function_name()` calls — comma expressions, parenthesized expressions no longer incorrectly infer names (+~220 passes). Array: 2,395→2,496/3,079 (81%), Iterator: 303→316/510 (62%).
 
 46. ~~**Conformance batch 12: Set methods, Iterator helpers, TypedArray internals**~~ — ✅ Done (+231 new passes, 71.91% → 72.39%). Three orthogonal fixes: (1) Set new methods spec compliance: GetSetRecord with getter-aware property access, spec-compliant iterator protocol, correct observable operation ordering, iterator close on early termination, live iteration for mutation visibility. Set: 261→365/383 (95%). (2) Iterator helper method fixes: getter-aware iterator protocol throughout, GetIteratorFlattenable for flatMap, IteratorCloseAll with reverse ordering, zip/zipKeyed complete rewrite with spec-compliant mode/padding/strict handling, null-prototype result objects for zipKeyed, proper argument validation order for take/drop. Iterator: 316→436/510 (85%). (3) TypedArray internal methods: CanonicalNumericIndexString (§7.1.4.1), IsValidIntegerIndex (§10.4.5.14), TypedArray [[Get]]/[[Set]]/[[Delete]]/[[HasProperty]]/[[DefineOwnProperty]] per spec, ToNumber/ToBigInt coercion before index check, buffer-arg constructor to_index() fixes. TypedArrayConstructors: 405→498/736 (67%).
+
+47. ~~**Conformance batch 13: delete-private early error, numeric separators, function .length**~~ — ✅ Done (+286 new passes, 72.39% → 72.98%). Three orthogonal fixes: (1) Delete private name early error: `delete obj.#x` and `delete (obj.#x)` now produce SyntaxError per spec Static Semantics early error rules for UnaryExpression. Parser-only change in expressions.rs (+192 passes). (2) Numeric separator validation: reject invalid `_` placements in numeric literals — double underscores, trailing underscore, leading after prefix, adjacent to `.` or `e`/`E`. Lexer-only change (+25 passes). (3) Function `.length` stops counting at first default/rest parameter per §9.2.6 SetFunctionLength, and async non-generator functions no longer get `.prototype` property since they are not constructable (+69 passes).
 
 ---
 

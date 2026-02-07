@@ -508,25 +508,40 @@ impl<'a> Lexer<'a> {
                 Some(c) if c.is_ascii_digit() => {
                     return self.read_legacy_octal_or_decimal(s);
                 }
+                Some('_') => {
+                    return Err(self.error("Numeric separator cannot appear after leading 0"));
+                }
                 _ => {}
             }
         }
 
         // Decimal
-        self.read_decimal_digits(&mut s);
+        self.read_decimal_digits(&mut s)?;
 
         if self.peek() == Some('.') {
+            if s.ends_with('_') {
+                return Err(self.error("Numeric separator cannot appear adjacent to '.'"));
+            }
             s.push('.');
             self.advance();
-            self.read_decimal_digits(&mut s);
+            if self.peek() == Some('_') {
+                return Err(self.error("Numeric separator cannot appear adjacent to '.'"));
+            }
+            self.read_decimal_digits(&mut s)?;
         }
 
         if self.peek().is_some_and(|c| c == 'e' || c == 'E') {
+            if s.ends_with('_') {
+                return Err(self.error("Numeric separator cannot appear adjacent to exponent"));
+            }
             s.push(self.advance().unwrap());
             if self.peek().is_some_and(|c| c == '+' || c == '-') {
                 s.push(self.advance().unwrap());
             }
-            self.read_decimal_digits(&mut s);
+            if self.peek() == Some('_') {
+                return Err(self.error("Numeric separator cannot appear adjacent to exponent"));
+            }
+            self.read_decimal_digits(&mut s)?;
         }
 
         if self.peek() == Some('n') {
@@ -542,26 +557,54 @@ impl<'a> Lexer<'a> {
         Ok(Token::NumericLiteral(val))
     }
 
-    fn read_decimal_digits(&mut self, s: &mut String) {
+    fn read_decimal_digits(&mut self, s: &mut String) -> Result<(), LexError> {
+        let mut last_was_underscore = false;
         while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() || ch == '_' {
+            if ch.is_ascii_digit() {
+                last_was_underscore = false;
+                s.push(ch);
+                self.advance();
+            } else if ch == '_' {
+                if last_was_underscore {
+                    return Err(self.error("Numeric separator must be exactly one underscore"));
+                }
+                last_was_underscore = true;
                 s.push(ch);
                 self.advance();
             } else {
                 break;
             }
         }
+        if last_was_underscore {
+            return Err(self.error("Trailing numeric separator"));
+        }
+        Ok(())
     }
 
     fn read_hex_literal(&mut self, mut s: String) -> Result<Token, LexError> {
         s.push(self.advance().unwrap()); // x/X
+        if self.peek() == Some('_') {
+            return Err(self.error("Numeric separator cannot appear after prefix"));
+        }
+        let mut last_was_underscore = false;
         while let Some(ch) = self.peek() {
-            if ch.is_ascii_hexdigit() || ch == '_' {
+            if ch.is_ascii_hexdigit() {
+                last_was_underscore = false;
+                s.push(ch);
+                self.advance();
+            } else if ch == '_' {
+                if last_was_underscore {
+                    return Err(self.error("Numeric separator must be exactly one underscore"));
+                }
+                last_was_underscore = true;
                 s.push(ch);
                 self.advance();
             } else {
                 break;
             }
+        }
+        if last_was_underscore {
+            return Err(self.error("Trailing numeric separator"));
         }
         if self.peek() == Some('n') {
             self.advance();
@@ -576,13 +619,28 @@ impl<'a> Lexer<'a> {
 
     fn read_octal_literal(&mut self, mut s: String) -> Result<Token, LexError> {
         s.push(self.advance().unwrap()); // o/O
+        if self.peek() == Some('_') {
+            return Err(self.error("Numeric separator cannot appear after prefix"));
+        }
+        let mut last_was_underscore = false;
         while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() && ch < '8' || ch == '_' {
+            if ch.is_ascii_digit() && ch < '8' {
+                last_was_underscore = false;
+                s.push(ch);
+                self.advance();
+            } else if ch == '_' {
+                if last_was_underscore {
+                    return Err(self.error("Numeric separator must be exactly one underscore"));
+                }
+                last_was_underscore = true;
                 s.push(ch);
                 self.advance();
             } else {
                 break;
             }
+        }
+        if last_was_underscore {
+            return Err(self.error("Trailing numeric separator"));
         }
         if self.peek() == Some('n') {
             self.advance();
@@ -622,14 +680,14 @@ impl<'a> Lexer<'a> {
             if self.peek() == Some('.') {
                 s.push('.');
                 self.advance();
-                self.read_decimal_digits(&mut s);
+                self.read_decimal_digits(&mut s)?;
             }
             if self.peek().is_some_and(|c| c == 'e' || c == 'E') {
                 s.push(self.advance().unwrap());
                 if self.peek().is_some_and(|c| c == '+' || c == '-') {
                     s.push(self.advance().unwrap());
                 }
-                self.read_decimal_digits(&mut s);
+                self.read_decimal_digits(&mut s)?;
             }
             let val: f64 = s
                 .parse()
@@ -640,13 +698,28 @@ impl<'a> Lexer<'a> {
 
     fn read_binary_literal(&mut self, mut s: String) -> Result<Token, LexError> {
         s.push(self.advance().unwrap()); // b/B
+        if self.peek() == Some('_') {
+            return Err(self.error("Numeric separator cannot appear after prefix"));
+        }
+        let mut last_was_underscore = false;
         while let Some(ch) = self.peek() {
-            if ch == '0' || ch == '1' || ch == '_' {
+            if ch == '0' || ch == '1' {
+                last_was_underscore = false;
+                s.push(ch);
+                self.advance();
+            } else if ch == '_' {
+                if last_was_underscore {
+                    return Err(self.error("Numeric separator must be exactly one underscore"));
+                }
+                last_was_underscore = true;
                 s.push(ch);
                 self.advance();
             } else {
                 break;
             }
+        }
+        if last_was_underscore {
+            return Err(self.error("Trailing numeric separator"));
         }
         if self.peek() == Some('n') {
             self.advance();

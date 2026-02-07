@@ -313,6 +313,9 @@ impl<'a> Parser<'a> {
                 if self.strict && matches!(&expr, Expression::Identifier(_)) {
                     return Err(self.error("Delete of an unqualified identifier in strict mode"));
                 }
+                if matches!(&expr, Expression::Member(_, MemberProperty::Private(_))) {
+                    return Err(self.error("Applying the 'delete' operator to a private name is not allowed"));
+                }
                 Ok(Expression::Delete(Box::new(expr)))
             }
             Token::Keyword(Keyword::Void) => {

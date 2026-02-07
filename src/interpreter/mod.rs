@@ -359,7 +359,7 @@ impl Interpreter {
                 let n = name.clone().unwrap_or_default();
                 let len = params
                     .iter()
-                    .filter(|p| !matches!(p, Pattern::Rest(_)))
+                    .take_while(|p| !matches!(p, Pattern::Assign(..) | Pattern::Rest(_)))
                     .count();
                 (n, len)
             }
@@ -420,7 +420,9 @@ impl Interpreter {
             ),
         );
         let is_constructable = match &obj_data.callable {
-            Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
+            Some(JsFunction::User {
+                is_arrow, is_async, is_generator, ..
+            }) => !is_arrow && !(*is_async && !*is_generator),
             Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
             None => false,
         };
