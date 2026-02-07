@@ -7297,6 +7297,9 @@ impl Interpreter {
                             .declare("__home_object__", BindingKind::Const);
                         let _ = closure.borrow_mut().set("__home_object__", obj_val.clone());
                     }
+                    // Methods must not have own caller/arguments (spec §15.4)
+                    func_obj.borrow_mut().properties.remove("caller");
+                    func_obj.borrow_mut().properties.remove("arguments");
                 }
             }
         }

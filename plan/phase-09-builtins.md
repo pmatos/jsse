@@ -41,7 +41,7 @@ Ordered roughly by dependency and importance.
   - [x] `Object.prototype.toLocaleString()`, `Object.prototype.toString()`, `Object.prototype.valueOf()`
   - [ ] `Object.prototype.__proto__` (Annex B)
   - [x] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__` (Annex B)
-- [x] **Function** (§20.2) — 65% pass rate (332/509 tests)
+- [x] **Function** (§20.2) — 85% pass rate (432/509 tests)
   - [x] `Function()` constructor (dynamic function creation)
   - [x] `Function.prototype.apply()`, `.bind()`, `.call()`
   - [x] `Function.prototype.toString()`
@@ -81,7 +81,7 @@ Ordered roughly by dependency and importance.
 - [x] **Math** (§21.3)
   - [x] All constants: `E`, `LN10`, `LN2`, `LOG10E`, `LOG2E`, `PI`, `SQRT1_2`, `SQRT2`
   - [x] Most methods: `abs`, `acos`, `acosh`, `asin`, `asinh`, `atan`, `atanh`, `atan2`, `cbrt`, `ceil`, `clz32`, `cos`, `cosh`, `exp`, `expm1`, `floor`, `fround`, `hypot`, `imul`, `log`, `log1p`, `log10`, `log2`, `max`, `min`, `pow`, `random`, `round`, `sign`, `sin`, `sinh`, `sqrt`, `tan`, `tanh`, `trunc`
-  - [ ] `f16round`, `sumPrecise`
+  - [x] `f16round`, `sumPrecise`
   - [x] `Math[@@toStringTag]` = `"Math"`
 - [ ] **Date** (§21.4) — **NOT IMPLEMENTED, 594 tests**
   - [ ] `Date()` constructor (multiple overloads)
@@ -140,7 +140,7 @@ Ordered roughly by dependency and importance.
   - [x] `TypedArray.from()`, `TypedArray.of()`
   - [x] Prototype methods: `at`, `set`, `subarray`, `slice`, `copyWithin`, `fill`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `every`, `some`, `reverse`, `sort`, `join`, `toString`, `toReversed`, `toSorted`, `with`, `entries`, `keys`, `values`
   - [x] Buffer, byteOffset, byteLength, length getters
-  - [ ] `Uint8Array.fromBase64()`, `Uint8Array.fromHex()`, `.toBase64()`, `.toHex()`, `.setFromBase64()`, `.setFromHex()`
+  - [x] `Uint8Array.fromBase64()`, `Uint8Array.fromHex()`, `.toBase64()`, `.toHex()`, `.setFromBase64()`, `.setFromHex()`
   - [ ] `Float16Array` (not yet implemented)
 
 **Tests:** `built-ins/Array/` (3,079), `built-ins/ArrayIteratorPrototype/` (27), `built-ins/TypedArray/` (1,438), `built-ins/TypedArrayConstructors/` (736), `built-ins/Uint8Array/` (68)
@@ -251,6 +251,6 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Temporal/` (4,482) — can be deferred
 
 ### 9.14 ThrowTypeError (§10.2.4)
-- [ ] `%ThrowTypeError%` intrinsic function
+- [x] `%ThrowTypeError%` intrinsic function — ✅ 13/14 passing (93%)
 
 **Tests:** `built-ins/ThrowTypeError/` (14)

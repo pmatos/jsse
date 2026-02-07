@@ -8,6 +8,7 @@ impl Interpreter {
         self.setup_arraybuffer();
         self.setup_typed_array_base_prototype();
         self.setup_typed_array_constructors();
+        self.setup_uint8array_base64_hex();
         self.setup_dataview();
     }
 
@@ -2606,6 +2607,215 @@ impl Interpreter {
         }
     }
 
+    fn setup_uint8array_base64_hex(&mut self) {
+        // Get Uint8Array constructor from global env
+        let uint8_ctor = self.global_env.borrow().get("Uint8Array").unwrap();
+        let uint8_proto = self.uint8array_prototype.clone().unwrap();
+
+        // --- Static methods on Uint8Array constructor ---
+
+        // Uint8Array.fromBase64(string [, options])
+        let from_base64_fn = self.create_function(JsFunction::native(
+            "fromBase64".to_string(),
+            1,
+            |interp, _this, args| {
+                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(input, JsValue::String(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("fromBase64 requires a string argument"),
+                    );
+                }
+                let input_str = to_js_string(&input);
+
+                let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let (alphabet, last_chunk) = match parse_base64_options(interp, &opts) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+
+                let result = decode_base64(&input_str, &alphabet, &last_chunk, None);
+                if let Some(msg) = result.error {
+                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                }
+                create_uint8array_from_bytes(interp, &result.bytes)
+            },
+        ));
+
+        // Uint8Array.fromHex(string)
+        let from_hex_fn = self.create_function(JsFunction::native(
+            "fromHex".to_string(),
+            1,
+            |interp, _this, args| {
+                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(input, JsValue::String(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("fromHex requires a string argument"),
+                    );
+                }
+                let input_str = to_js_string(&input);
+
+                let result = decode_hex(&input_str, None);
+                if let Some(msg) = result.error {
+                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                }
+                create_uint8array_from_bytes(interp, &result.bytes)
+            },
+        ));
+
+        if let JsValue::Object(o) = &uint8_ctor {
+            if let Some(obj) = self.get_object(o.id) {
+                obj.borrow_mut()
+                    .insert_builtin("fromBase64".to_string(), from_base64_fn);
+                obj.borrow_mut()
+                    .insert_builtin("fromHex".to_string(), from_hex_fn);
+            }
+        }
+
+        // --- Instance methods on Uint8Array.prototype ---
+
+        // toHex()
+        let to_hex_fn = self.create_function(JsFunction::native(
+            "toHex".to_string(),
+            0,
+            |interp, this_val, _args| {
+                let ta = match validate_uint8array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+                let buf = ta.buffer.borrow();
+                let start = ta.byte_offset;
+                let end = start + ta.byte_length;
+                let mut result = String::with_capacity(ta.byte_length * 2);
+                for &b in &buf[start..end] {
+                    result.push_str(&format!("{:02x}", b));
+                }
+                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+            },
+        ));
+        uint8_proto
+            .borrow_mut()
+            .insert_builtin("toHex".to_string(), to_hex_fn);
+
+        // toBase64([options])
+        let to_base64_fn = self.create_function(JsFunction::native(
+            "toBase64".to_string(),
+            0,
+            |interp, this_val, args| {
+                let ta = match validate_uint8array_no_detach_check(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+
+                let opts = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let (alphabet, omit_padding) = match parse_to_base64_options(interp, &opts) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+
+                if let Err(c) = check_detached(interp, &ta) {
+                    return c;
+                }
+
+                let buf = ta.buffer.borrow();
+                let start = ta.byte_offset;
+                let end = start + ta.byte_length;
+                let data = &buf[start..end];
+
+                let result = encode_base64(data, &alphabet, omit_padding);
+                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+            },
+        ));
+        uint8_proto
+            .borrow_mut()
+            .insert_builtin("toBase64".to_string(), to_base64_fn);
+
+        // setFromHex(string)
+        let set_from_hex_fn = self.create_function(JsFunction::native(
+            "setFromHex".to_string(),
+            1,
+            |interp, this_val, args| {
+                let ta = match validate_uint8array(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+
+                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(input, JsValue::String(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("setFromHex requires a string argument"),
+                    );
+                }
+                let input_str = to_js_string(&input);
+
+                let max_bytes = ta.array_length;
+                let result = decode_hex(&input_str, Some(max_bytes));
+                let written = result.bytes.len();
+                {
+                    let mut buf = ta.buffer.borrow_mut();
+                    let start = ta.byte_offset;
+                    for (idx, &b) in result.bytes.iter().enumerate() {
+                        buf[start + idx] = b;
+                    }
+                }
+                if let Some(msg) = result.error {
+                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                }
+                make_read_written_result(interp, result.read, written)
+            },
+        ));
+        uint8_proto
+            .borrow_mut()
+            .insert_builtin("setFromHex".to_string(), set_from_hex_fn);
+
+        // setFromBase64(string [, options])
+        let set_from_base64_fn = self.create_function(JsFunction::native(
+            "setFromBase64".to_string(),
+            1,
+            |interp, this_val, args| {
+                let ta = match validate_uint8array_no_detach_check(interp, this_val) {
+                    Ok(ta) => ta,
+                    Err(c) => return c,
+                };
+
+                let input = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(input, JsValue::String(_)) {
+                    return Completion::Throw(
+                        interp.create_type_error("setFromBase64 requires a string argument"),
+                    );
+                }
+                let input_str = to_js_string(&input);
+
+                let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let (alphabet, last_chunk) = match parse_base64_options(interp, &opts) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+
+                if let Err(c) = check_detached(interp, &ta) {
+                    return c;
+                }
+
+                let max_bytes = ta.array_length;
+                let result = decode_base64(&input_str, &alphabet, &last_chunk, Some(max_bytes));
+                let written = result.bytes.len();
+                {
+                    let mut buf = ta.buffer.borrow_mut();
+                    let start = ta.byte_offset;
+                    for (idx, &b) in result.bytes.iter().enumerate() {
+                        buf[start + idx] = b;
+                    }
+                }
+                if let Some(msg) = result.error {
+                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                }
+                make_read_written_result(interp, result.read, written)
+            },
+        ));
+        uint8_proto
+            .borrow_mut()
+            .insert_builtin("setFromBase64".to_string(), set_from_base64_fn);
+    }
+
     fn create_typed_array_from_length(
         &mut self,
         kind: TypedArrayKind,
@@ -3366,4 +3576,609 @@ fn strict_eq(x: &JsValue, y: &JsValue) -> bool {
         (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
         _ => false,
     }
+}
+
+fn validate_uint8array(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+) -> Result<TypedArrayInfo, Completion> {
+    if let JsValue::Object(o) = this_val {
+        if let Some(obj) = interp.get_object(o.id) {
+            let obj_ref = obj.borrow();
+            if let Some(ref ta) = obj_ref.typed_array_info {
+                if !matches!(ta.kind, TypedArrayKind::Uint8) {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("not a Uint8Array"),
+                    ));
+                }
+                if ta.is_detached.get() {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("typed array is detached"),
+                    ));
+                }
+                return Ok(ta.clone());
+            }
+        }
+    }
+    Err(Completion::Throw(
+        interp.create_type_error("not a Uint8Array"),
+    ))
+}
+
+fn validate_uint8array_no_detach_check(
+    interp: &mut Interpreter,
+    this_val: &JsValue,
+) -> Result<TypedArrayInfo, Completion> {
+    if let JsValue::Object(o) = this_val {
+        if let Some(obj) = interp.get_object(o.id) {
+            let obj_ref = obj.borrow();
+            if let Some(ref ta) = obj_ref.typed_array_info {
+                if !matches!(ta.kind, TypedArrayKind::Uint8) {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("not a Uint8Array"),
+                    ));
+                }
+                return Ok(ta.clone());
+            }
+        }
+    }
+    Err(Completion::Throw(
+        interp.create_type_error("not a Uint8Array"),
+    ))
+}
+
+fn check_detached(interp: &mut Interpreter, ta: &TypedArrayInfo) -> Result<(), Completion> {
+    if ta.is_detached.get() {
+        Err(Completion::Throw(
+            interp.create_type_error("typed array is detached"),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn parse_base64_options(
+    interp: &mut Interpreter,
+    opts: &JsValue,
+) -> Result<(String, String), Completion> {
+    let mut alphabet = "base64".to_string();
+    let mut last_chunk = "loose".to_string();
+
+    if !matches!(opts, JsValue::Undefined | JsValue::Null) {
+        if let JsValue::Object(o) = opts {
+            let alpha_val = match interp.get_object_property(o.id, "alphabet", opts) {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            if !matches!(alpha_val, JsValue::Undefined) {
+                if !matches!(alpha_val, JsValue::String(_)) {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("alphabet must be a string"),
+                    ));
+                }
+                let s = to_js_string(&alpha_val);
+                if s != "base64" && s != "base64url" {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("expected alphabet to be either \"base64\" or \"base64url\""),
+                    ));
+                }
+                alphabet = s;
+            }
+
+            let lch_val = match interp.get_object_property(o.id, "lastChunkHandling", opts) {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            if !matches!(lch_val, JsValue::Undefined) {
+                if !matches!(lch_val, JsValue::String(_)) {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("lastChunkHandling must be a string"),
+                    ));
+                }
+                let s = to_js_string(&lch_val);
+                if s != "loose" && s != "strict" && s != "stop-before-partial" {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("expected lastChunkHandling to be either \"loose\", \"strict\", or \"stop-before-partial\""),
+                    ));
+                }
+                last_chunk = s;
+            }
+        }
+    }
+    Ok((alphabet, last_chunk))
+}
+
+fn parse_to_base64_options(
+    interp: &mut Interpreter,
+    opts: &JsValue,
+) -> Result<(String, bool), Completion> {
+    let mut alphabet = "base64".to_string();
+    let mut omit_padding = false;
+
+    if !matches!(opts, JsValue::Undefined | JsValue::Null) {
+        if let JsValue::Object(o) = opts {
+            let alpha_val = match interp.get_object_property(o.id, "alphabet", opts) {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            if !matches!(alpha_val, JsValue::Undefined) {
+                if !matches!(alpha_val, JsValue::String(_)) {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("alphabet must be a string"),
+                    ));
+                }
+                let s = to_js_string(&alpha_val);
+                if s != "base64" && s != "base64url" {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("expected alphabet to be either \"base64\" or \"base64url\""),
+                    ));
+                }
+                alphabet = s;
+            }
+
+            let omit_val = match interp.get_object_property(o.id, "omitPadding", opts) {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            omit_padding = to_boolean(&omit_val);
+        }
+    }
+    Ok((alphabet, omit_padding))
+}
+
+fn base64_char_value(c: char, alphabet: &str) -> Option<u8> {
+    match c {
+        'A'..='Z' => Some(c as u8 - b'A'),
+        'a'..='z' => Some(c as u8 - b'a' + 26),
+        '0'..='9' => Some(c as u8 - b'0' + 52),
+        '+' if alphabet == "base64" => Some(62),
+        '/' if alphabet == "base64" => Some(63),
+        '-' if alphabet == "base64url" => Some(62),
+        '_' if alphabet == "base64url" => Some(63),
+        _ => None,
+    }
+}
+
+fn is_base64_whitespace(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' ')
+}
+
+// Decode base64 with full spec compliance.
+// Returns (decoded_bytes, chars_read_from_original_input)
+// max_bytes: if Some, stop decoding when output would exceed this many bytes
+// Result of FromBase64/FromHex spec algorithm
+struct DecodeResult {
+    bytes: Vec<u8>,
+    read: usize, // chars read from original input
+    error: Option<String>,
+}
+
+fn decode_base64(
+    input: &str,
+    alphabet: &str,
+    last_chunk_handling: &str,
+    max_bytes: Option<usize>,
+) -> DecodeResult {
+    let max = max_bytes.unwrap_or(usize::MAX);
+    if max == 0 {
+        return DecodeResult { bytes: Vec::new(), read: 0, error: None };
+    }
+
+    let chars: Vec<char> = input.chars().collect();
+
+    // Strip whitespace, tracking original positions (byte position in original string)
+    let mut cleaned: Vec<(char, usize)> = Vec::new();
+    for (i, &c) in chars.iter().enumerate() {
+        if is_base64_whitespace(c) {
+            continue;
+        }
+        cleaned.push((c, i));
+    }
+
+    let mut output = Vec::new();
+    let mut i = 0; // index into cleaned
+
+    while i < cleaned.len() {
+        let chunk_start = i;
+        let _chunk_start_output_len = output.len();
+
+        // Collect data chars for this chunk
+        let mut chunk: Vec<u8> = Vec::new();
+        let mut padding_count = 0;
+        let mut saw_padding = false;
+
+        while i < cleaned.len() && chunk.len() + padding_count < 4 {
+            let (c, _) = cleaned[i];
+            if c == '=' {
+                saw_padding = true;
+                padding_count += 1;
+                i += 1;
+            } else if saw_padding {
+                // data char after padding within a 4-char group: error
+                break;
+            } else if let Some(val) = base64_char_value(c, alphabet) {
+                chunk.push(val);
+                i += 1;
+            } else {
+                // invalid character
+                let read = if chunk_start > 0 {
+                    cleaned[chunk_start - 1].1 + 1
+                } else {
+                    0
+                };
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some(format!("invalid character {}", c)),
+                };
+            }
+        }
+
+        let group_len = chunk.len() + padding_count;
+        if group_len == 0 {
+            break;
+        }
+
+        // Complete 4-char group (no padding)
+        if chunk.len() == 4 && padding_count == 0 {
+            if output.len() + 3 > max {
+                i = chunk_start;
+                break;
+            }
+            let b0 = (chunk[0] << 2) | (chunk[1] >> 4);
+            let b1 = ((chunk[1] & 0x0F) << 4) | (chunk[2] >> 2);
+            let b2 = ((chunk[2] & 0x03) << 6) | chunk[3];
+            output.push(b0);
+            output.push(b1);
+            output.push(b2);
+            // If we've reached maxLength, stop immediately
+            if output.len() >= max {
+                break;
+            }
+            continue;
+        }
+
+        // Padded 4-char group: 2 data + 2 pad
+        if chunk.len() == 2 && padding_count == 2 && group_len == 4 {
+            // Check for excess data/padding after this padded chunk BEFORE decoding
+            if i < cleaned.len() {
+                let read = if chunk_start > 0 {
+                    cleaned[chunk_start - 1].1 + 1
+                } else {
+                    0
+                };
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some("unexpected data after padding".to_string()),
+                };
+            }
+            if output.len() + 1 > max {
+                i = chunk_start;
+                break;
+            }
+            if last_chunk_handling == "strict" && (chunk[1] & 0x0F) != 0 {
+                let read = if chunk_start > 0 {
+                    cleaned[chunk_start - 1].1 + 1
+                } else {
+                    0
+                };
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some("non-zero padding bits".to_string()),
+                };
+            }
+            let b0 = (chunk[0] << 2) | (chunk[1] >> 4);
+            output.push(b0);
+            if output.len() >= max {
+                break;
+            }
+            continue;
+        }
+
+        // Padded 4-char group: 3 data + 1 pad
+        if chunk.len() == 3 && padding_count == 1 && group_len == 4 {
+            // Check for excess data after padded chunk BEFORE decoding
+            if i < cleaned.len() {
+                let read = if chunk_start > 0 {
+                    cleaned[chunk_start - 1].1 + 1
+                } else {
+                    0
+                };
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some("unexpected data after padding".to_string()),
+                };
+            }
+            if output.len() + 2 > max {
+                i = chunk_start;
+                break;
+            }
+            if last_chunk_handling == "strict" && (chunk[2] & 0x03) != 0 {
+                let read = if chunk_start > 0 {
+                    cleaned[chunk_start - 1].1 + 1
+                } else {
+                    0
+                };
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some("non-zero padding bits".to_string()),
+                };
+            }
+            let b0 = (chunk[0] << 2) | (chunk[1] >> 4);
+            let b1 = ((chunk[1] & 0x0F) << 4) | (chunk[2] >> 2);
+            output.push(b0);
+            output.push(b1);
+            if output.len() >= max {
+                break;
+            }
+            continue;
+        }
+
+        // Incomplete group (less than 4 chars total, end of input)
+        // This includes: partial padding cases like "Zg=" (2 data + 1 pad = 3)
+        // and unpadded partials like "Zg" (2 data, 0 pad = 2)
+
+        if saw_padding {
+            // Incomplete group with padding didn't complete to 4 chars.
+            // Only allow stop-before-partial backup for 2+ data chars
+            // (incomplete but potentially valid padding like "AA=").
+            // With 0 or 1 data chars, padding is always invalid.
+            if chunk.len() >= 2 && last_chunk_handling == "stop-before-partial" {
+                i = chunk_start;
+                break;
+            }
+
+            let read = if chunk_start > 0 {
+                cleaned[chunk_start - 1].1 + 1
+            } else {
+                0
+            };
+            return DecodeResult {
+                bytes: output,
+                read,
+                error: Some("invalid padding".to_string()),
+            };
+        }
+
+        // Unpadded partial chunk at end: 1, 2, or 3 data chars
+        if chunk.len() == 1 {
+            if last_chunk_handling == "stop-before-partial" {
+                i = chunk_start;
+                break;
+            }
+            let read = if chunk_start > 0 {
+                cleaned[chunk_start - 1].1 + 1
+            } else {
+                0
+            };
+            return DecodeResult {
+                bytes: output,
+                read,
+                error: Some("incomplete chunk".to_string()),
+            };
+        }
+
+        if chunk.len() == 2 {
+            if last_chunk_handling == "stop-before-partial" {
+                i = chunk_start;
+                break;
+            }
+            if last_chunk_handling == "strict" {
+                let read = if chunk_start > 0 {
+                    cleaned[chunk_start - 1].1 + 1
+                } else {
+                    0
+                };
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some("missing padding".to_string()),
+                };
+            }
+            // loose: decode
+            if output.len() + 1 > max {
+                i = chunk_start;
+                break;
+            }
+            let b0 = (chunk[0] << 2) | (chunk[1] >> 4);
+            output.push(b0);
+            continue;
+        }
+
+        if chunk.len() == 3 {
+            if last_chunk_handling == "stop-before-partial" {
+                i = chunk_start;
+                break;
+            }
+            if last_chunk_handling == "strict" {
+                let read = if chunk_start > 0 {
+                    cleaned[chunk_start - 1].1 + 1
+                } else {
+                    0
+                };
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some("missing padding".to_string()),
+                };
+            }
+            // loose: decode
+            if output.len() + 2 > max {
+                i = chunk_start;
+                break;
+            }
+            let b0 = (chunk[0] << 2) | (chunk[1] >> 4);
+            let b1 = ((chunk[1] & 0x0F) << 4) | (chunk[2] >> 2);
+            output.push(b0);
+            output.push(b1);
+            continue;
+        }
+    }
+
+    // Calculate chars read from original input
+    let chars_read = if i > 0 && i <= cleaned.len() {
+        cleaned[i - 1].1 + 1
+    } else if i == 0 {
+        0
+    } else {
+        chars.len()
+    };
+
+    DecodeResult { bytes: output, read: chars_read, error: None }
+}
+
+fn decode_hex(input: &str, max_bytes: Option<usize>) -> DecodeResult {
+    let chars: Vec<char> = input.chars().collect();
+    let max = max_bytes.unwrap_or(usize::MAX);
+
+    // Check odd length first (before maxLength check per spec)
+    if chars.len() % 2 != 0 {
+        return DecodeResult {
+            bytes: Vec::new(),
+            read: 0,
+            error: Some("hex string must have an even number of characters".to_string()),
+        };
+    }
+
+    let mut output = Vec::new();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if output.len() >= max {
+            break;
+        }
+        let hi = match hex_digit(chars[i]) {
+            Some(v) => v,
+            None => {
+                let read = output.len() * 2;
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some(format!("invalid hex character: {}", chars[i])),
+                };
+            }
+        };
+        let lo = match hex_digit(chars[i + 1]) {
+            Some(v) => v,
+            None => {
+                let read = output.len() * 2;
+                return DecodeResult {
+                    bytes: output,
+                    read,
+                    error: Some(format!("invalid hex character: {}", chars[i + 1])),
+                };
+            }
+        };
+        output.push((hi << 4) | lo);
+        i += 2;
+    }
+
+    let read = output.len() * 2;
+    DecodeResult { bytes: output, read, error: None }
+}
+
+fn hex_digit(c: char) -> Option<u8> {
+    match c {
+        '0'..='9' => Some(c as u8 - b'0'),
+        'a'..='f' => Some(c as u8 - b'a' + 10),
+        'A'..='F' => Some(c as u8 - b'A' + 10),
+        _ => None,
+    }
+}
+
+const BASE64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const BASE64URL_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+fn encode_base64(data: &[u8], alphabet: &str, omit_padding: bool) -> String {
+    let table = if alphabet == "base64url" {
+        BASE64URL_CHARS
+    } else {
+        BASE64_CHARS
+    };
+
+    let mut result = String::new();
+    let chunks = data.chunks(3);
+
+    for chunk in chunks {
+        match chunk.len() {
+            3 => {
+                let b0 = chunk[0];
+                let b1 = chunk[1];
+                let b2 = chunk[2];
+                result.push(table[(b0 >> 2) as usize] as char);
+                result.push(table[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+                result.push(table[(((b1 & 0x0F) << 2) | (b2 >> 6)) as usize] as char);
+                result.push(table[(b2 & 0x3F) as usize] as char);
+            }
+            2 => {
+                let b0 = chunk[0];
+                let b1 = chunk[1];
+                result.push(table[(b0 >> 2) as usize] as char);
+                result.push(table[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+                result.push(table[((b1 & 0x0F) << 2) as usize] as char);
+                if !omit_padding {
+                    result.push('=');
+                }
+            }
+            1 => {
+                let b0 = chunk[0];
+                result.push(table[(b0 >> 2) as usize] as char);
+                result.push(table[((b0 & 0x03) << 4) as usize] as char);
+                if !omit_padding {
+                    result.push('=');
+                    result.push('=');
+                }
+            }
+            _ => {}
+        }
+    }
+    result
+}
+
+fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Completion {
+    let len = bytes.len();
+    let buf = bytes.to_vec();
+    let buf_rc = Rc::new(RefCell::new(buf));
+    let detached = Rc::new(Cell::new(false));
+    let ta_info = TypedArrayInfo {
+        kind: TypedArrayKind::Uint8,
+        buffer: buf_rc.clone(),
+        byte_offset: 0,
+        byte_length: len,
+        array_length: len,
+        is_detached: detached.clone(),
+    };
+    let ab_obj = interp.create_object();
+    {
+        let mut ab = ab_obj.borrow_mut();
+        ab.class_name = "ArrayBuffer".to_string();
+        ab.prototype = interp.arraybuffer_prototype.clone();
+        ab.arraybuffer_data = Some(buf_rc);
+        ab.arraybuffer_detached = Some(detached);
+    }
+    let ab_id = ab_obj.borrow().id.unwrap();
+    let buf_val = JsValue::Object(JsObject { id: ab_id });
+
+    let proto = interp.uint8array_prototype.clone().unwrap();
+    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
+    let id = result.borrow().id.unwrap();
+    Completion::Normal(JsValue::Object(JsObject { id }))
+}
+
+fn make_read_written_result(
+    interp: &mut Interpreter,
+    read: usize,
+    written: usize,
+) -> Completion {
+    let obj = interp.create_object();
+    obj.borrow_mut()
+        .set_property_value("read", JsValue::Number(read as f64));
+    obj.borrow_mut()
+        .set_property_value("written", JsValue::Number(written as f64));
+    let id = obj.borrow().id.unwrap();
+    Completion::Normal(JsValue::Object(JsObject { id }))
 }

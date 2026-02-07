@@ -76,6 +76,7 @@ pub struct Interpreter {
     template_cache: HashMap<usize, u64>,
     module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
+    throw_type_error: Option<JsValue>,
     last_call_had_explicit_return: bool,
     last_call_this_value: Option<JsValue>,
 }
@@ -167,6 +168,7 @@ impl Interpreter {
             template_cache: HashMap::new(),
             module_registry: HashMap::new(),
             current_module_path: None,
+            throw_type_error: None,
             last_call_had_explicit_return: false,
             last_call_this_value: None,
         };
@@ -419,6 +421,20 @@ impl Interpreter {
                 true,
             ),
         );
+        // Annex B: sloppy non-arrow, non-generator, non-async functions get
+        // own caller/arguments = null to shadow the ThrowTypeError accessor
+        if let Some(JsFunction::User { is_strict, is_arrow, is_generator, is_async, .. }) = &obj_data.callable {
+            if !*is_strict && !*is_arrow && !*is_generator && !*is_async {
+                obj_data.insert_property(
+                    "caller".to_string(),
+                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                );
+                obj_data.insert_property(
+                    "arguments".to_string(),
+                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                );
+            }
+        }
         let is_constructable = match &obj_data.callable {
             Some(JsFunction::User {
                 is_arrow, is_async, is_generator, ..
@@ -493,7 +509,7 @@ impl Interpreter {
         &mut self,
         args: &[JsValue],
         callee: JsValue,
-        is_strict: bool,
+        _is_strict: bool,
         func_env: Option<&EnvRef>,
         param_names: &[String],
     ) -> JsValue {
@@ -530,8 +546,8 @@ impl Interpreter {
                 );
             }
 
-            if !is_strict {
-                // Non-strict: callee is a writable, non-enumerable, configurable data property
+            if let Some(env) = func_env {
+                // Mapped (sloppy + simple params): callee is a data property
                 o.define_own_property(
                     "callee".to_string(),
                     PropertyDescriptor {
@@ -544,14 +560,12 @@ impl Interpreter {
                     },
                 );
 
-                if let Some(env) = func_env {
-                    let mut map = HashMap::new();
-                    for (i, name) in param_names.iter().enumerate() {
-                        map.insert(i.to_string(), (env.clone(), name.clone()));
-                    }
-                    if !map.is_empty() {
-                        o.parameter_map = Some(map);
-                    }
+                let mut map = HashMap::new();
+                for (i, name) in param_names.iter().enumerate() {
+                    map.insert(i.to_string(), (env.clone(), name.clone()));
+                }
+                if !map.is_empty() {
+                    o.parameter_map = Some(map);
                 }
             }
         }
@@ -559,9 +573,12 @@ impl Interpreter {
         let result_id = obj.borrow().id.unwrap();
         let result = JsValue::Object(crate::types::JsObject { id: result_id });
 
-        if is_strict {
-            // Strict: callee is an accessor that throws TypeError on get/set
-            let thrower = self.create_thrower_function();
+        // Unmapped (strict OR non-simple params): callee is a throw accessor
+        if func_env.is_none() {
+            let thrower = self
+                .throw_type_error
+                .clone()
+                .unwrap_or_else(|| self.create_thrower_function());
             if let JsValue::Object(ref o) = result
                 && let Some(obj_rc) = self.get_object(o.id)
             {

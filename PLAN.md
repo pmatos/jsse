@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 35,220 / 48,257 run (72.98%)
+**Current pass rate:** 35,353 / 48,257 run (73.26%)
 
 ---
 
@@ -33,7 +33,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Object | 93% | 3,176/3,411 |
 | Array | 81% | 2,496/3,079 |
 | String | 92% | 1,120/1,215 |
-| Function | 78% | 397/509 |
+| Function | 85% | 432/509 |
 | Iterator | 85% | 436/510 |
 | Promise | 86% | 548/639 |
 | Map | 77% | 158/204 |
@@ -43,7 +43,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Proxy | 58% | 181/311 |
 | Symbol | 71% | 67/94 |
 | RegExp | 65% | 1,214/1,879 |
-| Math | 92% | 300/327 |
+| Math | 97% | 316/327 |
 | WeakRef | 76% | 22/29 |
 | FinalizationRegistry | 72% | 34/47 |
 
@@ -125,6 +125,8 @@ These features block significant numbers of tests:
 46. ~~**Conformance batch 12: Set methods, Iterator helpers, TypedArray internals**~~ — ✅ Done (+231 new passes, 71.91% → 72.39%). Three orthogonal fixes: (1) Set new methods spec compliance: GetSetRecord with getter-aware property access, spec-compliant iterator protocol, correct observable operation ordering, iterator close on early termination, live iteration for mutation visibility. Set: 261→365/383 (95%). (2) Iterator helper method fixes: getter-aware iterator protocol throughout, GetIteratorFlattenable for flatMap, IteratorCloseAll with reverse ordering, zip/zipKeyed complete rewrite with spec-compliant mode/padding/strict handling, null-prototype result objects for zipKeyed, proper argument validation order for take/drop. Iterator: 316→436/510 (85%). (3) TypedArray internal methods: CanonicalNumericIndexString (§7.1.4.1), IsValidIntegerIndex (§10.4.5.14), TypedArray [[Get]]/[[Set]]/[[Delete]]/[[HasProperty]]/[[DefineOwnProperty]] per spec, ToNumber/ToBigInt coercion before index check, buffer-arg constructor to_index() fixes. TypedArrayConstructors: 405→498/736 (67%).
 
 47. ~~**Conformance batch 13: delete-private early error, numeric separators, function .length**~~ — ✅ Done (+286 new passes, 72.39% → 72.98%). Three orthogonal fixes: (1) Delete private name early error: `delete obj.#x` and `delete (obj.#x)` now produce SyntaxError per spec Static Semantics early error rules for UnaryExpression. Parser-only change in expressions.rs (+192 passes). (2) Numeric separator validation: reject invalid `_` placements in numeric literals — double underscores, trailing underscore, leading after prefix, adjacent to `.` or `e`/`E`. Lexer-only change (+25 passes). (3) Function `.length` stops counting at first default/rest parameter per §9.2.6 SetFunctionLength, and async non-generator functions no longer get `.prototype` property since they are not constructable (+69 passes).
+
+48. ~~**Conformance batch 14: ThrowTypeError intrinsic, Uint8Array base64/hex, Math.f16round/sumPrecise**~~ — ✅ Done (+133 new passes, 72.98% → 73.26%). Three orthogonal features: (1) %ThrowTypeError% intrinsic (§10.2.4): shared frozen function that throws TypeError, wired into strict arguments callee/caller accessors and Function.prototype.caller/arguments poison pills. Sloppy non-arrow/non-generator/non-async functions get own `caller`/`arguments` = null to shadow prototype accessor (Annex B). Method definitions strip these properties. ThrowTypeError: 6→13/14 (93%), Function: 397→432/509 (85%). (2) Uint8Array base64/hex methods (ES2025): fromBase64, fromHex, toBase64, toHex, setFromBase64, setFromHex with alphabet options, lastChunkHandling modes, whitespace stripping, proper error reporting. Uint8Array: 8→66/68 (97%). (3) Math.f16round (IEEE 754 binary16 conversion with manual bit manipulation) and Math.sumPrecise (BigInt exact arithmetic summation with iterator protocol). Math: 300→316/327 (97%).
 
 ---
 
