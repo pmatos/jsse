@@ -390,7 +390,13 @@ impl Interpreter {
                 let mut values = Vec::new();
                 loop {
                     match interp.iterator_step_direct(&iter, &next_method) {
-                        Ok(Some(result)) => values.push(interp.iterator_value(&result)),
+                        Ok(Some(result)) => match interp.iterator_value(&result) {
+                            Ok(v) => values.push(v),
+                            Err(e) => {
+                                interp.iterator_close(&iter, JsValue::Undefined);
+                                return Completion::Throw(e);
+                            }
+                        },
                         Ok(None) => break,
                         Err(e) => {
                             interp.iterator_close(&iter, JsValue::Undefined);
@@ -426,7 +432,10 @@ impl Interpreter {
                 loop {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
-                            let value = interp.iterator_value(&result);
+                            let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             if let Completion::Throw(e) = interp.call_function(
                                 &callback,
                                 &JsValue::Undefined,
@@ -471,7 +480,10 @@ impl Interpreter {
                 loop {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
-                            let value = interp.iterator_value(&result);
+                            let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             match interp.call_function(
                                 &predicate,
                                 &JsValue::Undefined,
@@ -524,7 +536,10 @@ impl Interpreter {
                 loop {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
-                            let value = interp.iterator_value(&result);
+                            let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             match interp.call_function(
                                 &predicate,
                                 &JsValue::Undefined,
@@ -577,7 +592,10 @@ impl Interpreter {
                 loop {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
-                            let value = interp.iterator_value(&result);
+                            let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             match interp.call_function(
                                 &predicate,
                                 &JsValue::Undefined,
@@ -634,7 +652,10 @@ impl Interpreter {
                 } else {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
-                            accumulator = interp.iterator_value(&result);
+                            accumulator = match interp.iterator_value(&result) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             counter = 1.0;
                         }
                         Ok(None) => {
@@ -651,7 +672,10 @@ impl Interpreter {
                 loop {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
-                            let value = interp.iterator_value(&result);
+                            let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             match interp.call_function(
                                 &reducer,
                                 &JsValue::Undefined,
@@ -720,7 +744,10 @@ impl Interpreter {
                         }
                         match interp.iterator_step_direct(&iter, &next_method) {
                             Ok(Some(result)) => {
-                                let value = interp.iterator_value(&result);
+                                let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                 let mapped = interp.call_function(
                                     &mapper,
                                     &JsValue::Undefined,
@@ -819,7 +846,10 @@ impl Interpreter {
                         loop {
                             match interp.iterator_step_direct(&iter, &next_method) {
                                 Ok(Some(result)) => {
-                                    let value = interp.iterator_value(&result);
+                                    let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                     let test_result = interp.call_function(
                                         &pred,
                                         &JsValue::Undefined,
@@ -936,7 +966,10 @@ impl Interpreter {
                         state_next.borrow_mut().2 = remaining - 1.0;
                         match interp.iterator_step_direct(&iter, &next_method) {
                             Ok(Some(result)) => {
-                                let value = interp.iterator_value(&result);
+                                let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                 // If we just took the last one, close
                                 if remaining - 1.0 <= 0.0 {
                                     state_next.borrow_mut().3 = false;
@@ -1052,7 +1085,10 @@ impl Interpreter {
                         }
                         match interp.iterator_step_direct(&iter, &next_method) {
                             Ok(Some(result)) => {
-                                let value = interp.iterator_value(&result);
+                                let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                 Completion::Normal(interp.create_iter_result_object(value, false))
                             }
                             Ok(None) => {
@@ -1171,7 +1207,10 @@ impl Interpreter {
                             if let (Some(ii), Some(in_next)) = (&inner_iter, &inner_next) {
                                 match interp.iterator_step_direct(ii, in_next) {
                                     Ok(Some(result)) => {
-                                        let value = interp.iterator_value(&result);
+                                        let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                         return Completion::Normal(
                                             interp.create_iter_result_object(value, false),
                                         );
@@ -1193,7 +1232,10 @@ impl Interpreter {
                             // Get next from outer
                             match interp.iterator_step_direct(&outer_iter, &outer_next) {
                                 Ok(Some(result)) => {
-                                    let value = interp.iterator_value(&result);
+                                    let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                     let mapped = interp.call_function(
                                         &mapper,
                                         &JsValue::Undefined,
@@ -1504,7 +1546,10 @@ impl Interpreter {
                             if let (Some(ci), Some(cn)) = (cur_iter, cur_next) {
                                 match interp.iterator_step_direct(ci, cn) {
                                     Ok(Some(result)) => {
-                                        let value = interp.iterator_value(&result);
+                                        let value = match interp.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                         return Completion::Normal(
                                             interp.create_iter_result_object(value, false),
                                         );
@@ -1681,7 +1726,10 @@ impl Interpreter {
                 loop {
                     match interp.iterator_step_direct(&iter_of_iterables, &iter_next) {
                         Ok(Some(result)) => {
-                            let iterable = interp.iterator_value(&result);
+                            let iterable = match interp.iterator_value(&result) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             match interp.get_iterator(&iterable) {
                                 Ok(it) => {
                                     let nm = if let JsValue::Object(io) = &it {
@@ -1726,7 +1774,15 @@ impl Interpreter {
                             };
                             loop {
                                 match interp.iterator_step_direct(&pad_iter, &pad_next) {
-                                    Ok(Some(result)) => pads.push(interp.iterator_value(&result)),
+                                    Ok(Some(result)) => match interp.iterator_value(&result) {
+                                        Ok(v) => pads.push(v),
+                                        Err(e) => {
+                                            for (it, _) in &iters {
+                                                interp.iterator_close(it, JsValue::Undefined);
+                                            }
+                                            return Completion::Throw(e);
+                                        }
+                                    },
                                     Ok(None) => break,
                                     Err(e) => {
                                         for (it, _) in &iters {
@@ -1788,9 +1844,10 @@ impl Interpreter {
                             }
                             all_done = false;
                             match interp.iterator_step_direct(it, nm) {
-                                Ok(Some(result)) => {
-                                    values.push(interp.iterator_value(&result));
-                                }
+                                Ok(Some(result)) => match interp.iterator_value(&result) {
+                                    Ok(v) => values.push(v),
+                                    Err(e) => return Completion::Throw(e),
+                                },
                                 Ok(None) => {
                                     any_done = true;
                                     new_exhausted[i] = true;
@@ -2070,9 +2127,10 @@ impl Interpreter {
                             }
                             all_done = false;
                             match interp.iterator_step_direct(it, nm) {
-                                Ok(Some(result)) => {
-                                    values.push((keys[i].clone(), interp.iterator_value(&result)));
-                                }
+                                Ok(Some(result)) => match interp.iterator_value(&result) {
+                                    Ok(v) => values.push((keys[i].clone(), v)),
+                                    Err(e) => return Completion::Throw(e),
+                                },
                                 Ok(None) => {
                                     any_done = true;
                                     new_exhausted[i] = true;

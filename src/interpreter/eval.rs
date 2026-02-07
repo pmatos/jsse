@@ -1598,7 +1598,9 @@ impl Interpreter {
         match left {
             Expression::Identifier(name) => {
                 let final_val = if op == AssignOp::Assign {
-                    self.set_function_name(&rval, name);
+                    if right.is_anonymous_function_definition() {
+                        self.set_function_name(&rval, name);
+                    }
                     rval
                 } else {
                     let lval = match env.borrow().get(name) {
@@ -1963,7 +1965,6 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         match target {
             Expression::Identifier(name) => {
-                self.set_function_name(&val, name);
                 if !env.borrow().has(name) {
                     if env.borrow().strict {
                         return Err(
@@ -2027,9 +2028,10 @@ impl Interpreter {
                     if !done {
                         loop {
                             match self.iterator_step(&iterator) {
-                                Ok(Some(result)) => {
-                                    rest.push(self.iterator_value(&result));
-                                }
+                                Ok(Some(result)) => match self.iterator_value(&result) {
+                                    Ok(v) => rest.push(v),
+                                    Err(e) => { done = true; error = Some(e); break; }
+                                },
                                 Ok(None) => {
                                     done = true;
                                     break;
@@ -2064,7 +2066,10 @@ impl Interpreter {
                         JsValue::Undefined
                     } else {
                         match self.iterator_step(&iterator) {
-                            Ok(Some(result)) => self.iterator_value(&result),
+                            Ok(Some(result)) => match self.iterator_value(&result) {
+                                Ok(v) => v,
+                                Err(e) => { done = true; error = Some(e); break; }
+                            },
                             Ok(None) => {
                                 done = true;
                                 JsValue::Undefined
@@ -2082,7 +2087,9 @@ impl Interpreter {
                             match self.eval_expr(default, env) {
                                 Completion::Normal(v) => {
                                     if let Expression::Identifier(name) = target {
-                                        self.set_function_name(&v, name);
+                                        if default.is_anonymous_function_definition() {
+                                            self.set_function_name(&v, name);
+                                        }
                                     }
                                     v
                                 }
@@ -2221,7 +2228,9 @@ impl Interpreter {
                             match self.eval_expr(default, env) {
                                 Completion::Normal(v) => {
                                     if let Expression::Identifier(name) = target {
-                                        self.set_function_name(&v, name);
+                                        if default.is_anonymous_function_definition() {
+                                            self.set_function_name(&v, name);
+                                        }
                                     }
                                     v
                                 }
@@ -2687,7 +2696,10 @@ impl Interpreter {
             match result {
                 Ok(iter_result) => {
                     let done = self.iterator_complete(&iter_result);
-                    let value = self.iterator_value(&iter_result);
+                    let value = match self.iterator_value(&iter_result) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
                     if done {
                         if let Some(ref bind) = binding {
                             use crate::interpreter::generator_transform::SentValueBindingKind;
@@ -2923,7 +2935,10 @@ impl Interpreter {
                         };
 
                         let done = self.iterator_complete(&iter_result);
-                        let value = self.iterator_value(&iter_result);
+                        let value = match self.iterator_value(&iter_result) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
 
                         if done {
                             use crate::interpreter::generator_transform::SentValueBindingKind;
@@ -3246,7 +3261,10 @@ impl Interpreter {
                 match self.iterator_return(&iterator, &value) {
                     Ok(Some(iter_result)) => {
                         let done = self.iterator_complete(&iter_result);
-                        let result_value = self.iterator_value(&iter_result);
+                        let result_value = match self.iterator_value(&iter_result) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         if done {
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineGenerator {
@@ -3393,7 +3411,10 @@ impl Interpreter {
                 match self.iterator_throw(&iterator, &exception) {
                     Ok(Some(iter_result)) => {
                         let done = self.iterator_complete(&iter_result);
-                        let result_value = self.iterator_value(&iter_result);
+                        let result_value = match self.iterator_value(&iter_result) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         if done {
                             use crate::interpreter::generator_transform::SentValueBindingKind;
                             if let Some(ref bind) = binding {
@@ -3606,7 +3627,10 @@ impl Interpreter {
             match result {
                 Ok(iter_result) => {
                     let done = self.iterator_complete(&iter_result);
-                    let value = self.iterator_value(&iter_result);
+                    let value = match self.iterator_value(&iter_result) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
                     if done {
                         if let Some(ref bind) = binding {
                             use crate::interpreter::generator_transform::SentValueBindingKind;
@@ -3981,7 +4005,14 @@ impl Interpreter {
                         };
 
                         let done = self.iterator_complete(&awaited_result);
-                        let value = self.iterator_value(&awaited_result);
+                        let value = match self.iterator_value(&awaited_result) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                self.drain_microtasks();
+                                return Completion::Normal(promise.clone());
+                            }
+                        };
 
                         if done {
                             if let Some(binding) = sent_value_binding {
@@ -7088,7 +7119,9 @@ impl Interpreter {
                             }
                         }
                     } else {
-                        self.set_function_name(&value, &key);
+                        if prop.value.is_anonymous_function_definition() {
+                            self.set_function_name(&value, &key);
+                        }
                         obj_data.insert_value(key, value);
                     }
                 }

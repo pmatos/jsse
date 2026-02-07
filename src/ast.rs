@@ -432,6 +432,19 @@ pub struct ClassProperty {
     pub computed: bool,
 }
 
+impl Expression {
+    /// Per spec §13.2.1.2 — returns true only for function/class/arrow
+    /// expressions that have no binding name of their own.
+    pub fn is_anonymous_function_definition(&self) -> bool {
+        match self {
+            Expression::Function(f) => f.name.as_ref().map_or(true, |n| n.is_empty()),
+            Expression::ArrowFunction(_) => true,
+            Expression::Class(c) => c.name.as_ref().map_or(true, |n| n.is_empty()),
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TemplateLiteral {
     pub quasis: Vec<Option<String>>,

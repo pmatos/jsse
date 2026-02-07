@@ -252,9 +252,18 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
+        // Wire ArrayBuffer.prototype to the proto object with all the methods
+        let ab_proto_val = {
+            let id = ab_proto.borrow().id.unwrap();
+            JsValue::Object(crate::types::JsObject { id })
+        };
         if let JsValue::Object(o) = &ctor
             && let Some(obj) = self.get_object(o.id)
         {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(ab_proto_val, false, false, false),
+            );
             obj.borrow_mut()
                 .insert_builtin("isView".to_string(), is_view_fn);
 
@@ -276,6 +285,10 @@ impl Interpreter {
                 },
             );
         }
+        ab_proto.borrow_mut().insert_property(
+            "constructor".to_string(),
+            PropertyDescriptor::data(ctor.clone(), true, false, true),
+        );
 
         self.global_env
             .borrow_mut()
@@ -3224,6 +3237,24 @@ impl Interpreter {
                 ))
             },
         ));
+
+        // Wire DataView.prototype to the proto object with all the methods
+        let dv_proto_val = {
+            let id = dv_proto.borrow().id.unwrap();
+            JsValue::Object(crate::types::JsObject { id })
+        };
+        if let JsValue::Object(o) = &ctor
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(dv_proto_val, false, false, false),
+            );
+        }
+        dv_proto.borrow_mut().insert_property(
+            "constructor".to_string(),
+            PropertyDescriptor::data(ctor.clone(), true, false, true),
+        );
 
         self.global_env
             .borrow_mut()

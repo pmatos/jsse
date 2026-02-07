@@ -3609,7 +3609,10 @@ impl Interpreter {
                             Ok(None) => break,
                             Err(e) => return Completion::Throw(e),
                         };
-                        let value = interp.iterator_value(&next);
+                        let value = match interp.iterator_value(&next) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let key_val = match interp.call_function(
                             &callback,
                             &JsValue::Undefined,
@@ -4356,13 +4359,16 @@ impl Interpreter {
         true
     }
 
-    pub(crate) fn iterator_value(&self, result: &JsValue) -> JsValue {
-        if let JsValue::Object(o) = result
-            && let Some(obj) = self.get_object(o.id)
-        {
-            return obj.borrow().get_property("value");
+    pub(crate) fn iterator_value(&mut self, result: &JsValue) -> Result<JsValue, JsValue> {
+        if let JsValue::Object(o) = result {
+            match self.get_object_property(o.id, "value", result) {
+                Completion::Normal(v) => Ok(v),
+                Completion::Throw(e) => Err(e),
+                _ => Ok(JsValue::Undefined),
+            }
+        } else {
+            Ok(JsValue::Undefined)
         }
-        JsValue::Undefined
     }
 
     pub(crate) fn iterator_step(&mut self, iterator: &JsValue) -> Result<Option<JsValue>, JsValue> {
@@ -4539,7 +4545,7 @@ impl Interpreter {
         let mut values = Vec::new();
         loop {
             match self.iterator_step(&iterator)? {
-                Some(result) => values.push(self.iterator_value(&result)),
+                Some(result) => values.push(self.iterator_value(&result)?),
                 None => break,
             }
         }

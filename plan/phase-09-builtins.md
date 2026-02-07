@@ -124,7 +124,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/String/` (1,215), `built-ins/RegExp/` (1,879), `built-ins/StringIteratorPrototype/` (7), `built-ins/RegExpStringIteratorPrototype/` (17)
 
 ### 9.5 Indexed Collections (§23)
-- [x] **Array** (§23.1) — 67% pass rate (2,050/3,079 tests)
+- [x] **Array** (§23.1) — 81% pass rate (2,496/3,079 tests)
   - [x] `Array()` constructor
   - [x] `Array.from()`, `Array.isArray()`, `Array.of()`
   - [x] `Array.prototype` methods: `at`, `concat`, `copyWithin`, `entries`, `every`, `fill`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `flat`, `flatMap`, `forEach`, `includes`, `indexOf`, `join`, `keys`, `lastIndexOf`, `map`, `pop`, `push`, `reduce`, `reduceRight`, `reverse`, `shift`, `slice`, `some`, `sort`, `splice`, `toReversed`, `toSorted`, `toSpliced`, `toString`, `unshift`, `values`, `with`
@@ -133,7 +133,7 @@ Ordered roughly by dependency and importance.
   - [ ] `toLocaleString`, `[@@unscopables]`
   - [ ] Array species (`@@species`)
   - [ ] Array groupBy
-- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (786/1,438 = 55%, 323/736 constructors = 43.9%)
+- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (947/1,438 = 65.9%, 323/736 constructors = 43.9%)
   - [x] `%TypedArray%` intrinsic (abstract base) with shared prototype methods
   - [x] `%TypedArray%` constructor wiring: `.prototype`, `.constructor`, `@@species`, prototype chain inheritance
   - [x] All concrete constructors: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`
@@ -164,7 +164,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Map/` (204), `built-ins/MapIteratorPrototype/` (11), `built-ins/Set/` (383), `built-ins/SetIteratorPrototype/` (11), `built-ins/WeakMap/` (141), `built-ins/WeakSet/` (85)
 
 ### 9.7 Structured Data (§25)
-- [x] **ArrayBuffer** (§25.1) — **IMPLEMENTED** (34/196 = 17.4%)
+- [x] **ArrayBuffer** (§25.1) — **IMPLEMENTED** (89/196 = 45.4%)
   - [x] `ArrayBuffer()` constructor
   - [x] `ArrayBuffer.isView()`
   - [x] `ArrayBuffer.prototype`: `byteLength`, `slice`
@@ -172,7 +172,7 @@ Ordered roughly by dependency and importance.
 - [ ] **SharedArrayBuffer** (§25.2)
   - [ ] `SharedArrayBuffer()` constructor
   - [ ] `grow`, `growable`, `byteLength`, `maxByteLength`, `slice`
-- [x] **DataView** (§25.3) — **IMPLEMENTED** (126/561 = 22.5%)
+- [x] **DataView** (§25.3) — **IMPLEMENTED** (293/561 = 52.2%)
   - [x] `DataView()` constructor
   - [x] All get/set methods for each numeric type (Int8 through BigUint64, with endianness)
 - [ ] **Atomics** (§25.4)
@@ -196,7 +196,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/WeakRef/` (22/29), `built-ins/FinalizationRegistry/` (34/47)
 
 ### 9.9 Control Abstraction Objects (§27)
-- [x] **Iterator** (§27.1) — ✅ 290/510 (57%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose.
+- [x] **Iterator** (§27.1) — ✅ 316/510 (62%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose.
 - [x] **AsyncIteratorPrototype** (§27.1.4) — ✅ [Symbol.asyncIterator] returns this
 - [x] **Promise** (§27.2) — ✅ 548/639 tests passing (86%)
   - [x] `Promise()` constructor

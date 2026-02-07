@@ -279,7 +279,9 @@ impl Interpreter {
                 JsValue::Undefined
             };
             if let Pattern::Identifier(ref name) = d.pattern {
-                self.set_function_name(&val, name);
+                if d.init.as_ref().is_some_and(|e| e.is_anonymous_function_definition()) {
+                    self.set_function_name(&val, name);
+                }
             }
             if is_using {
                 let hint = if decl.kind == VarKind::AwaitUsing {
@@ -329,43 +331,80 @@ impl Interpreter {
                     val
                 };
                 if let Pattern::Identifier(ref name) = **inner {
-                    self.set_function_name(&v, name);
+                    if default.is_anonymous_function_definition() {
+                        self.set_function_name(&v, name);
+                    }
                 }
                 self.bind_pattern(inner, v, kind, env)
             }
             Pattern::Array(elements) => {
                 let iterator = self.get_iterator(&val)?;
+                let mut done = false;
+                let mut error: Option<JsValue> = None;
                 for elem in elements {
                     if let Some(elem) = elem {
                         match elem {
                             ArrayPatternElement::Pattern(p) => {
-                                let item = match self.iterator_step(&iterator) {
-                                    Ok(Some(result)) => self.iterator_value(&result),
-                                    Ok(None) => JsValue::Undefined,
-                                    Err(e) => return Err(e),
+                                let item = if done {
+                                    JsValue::Undefined
+                                } else {
+                                    match self.iterator_step(&iterator) {
+                                        Ok(Some(result)) => match self.iterator_value(&result) {
+                                            Ok(v) => v,
+                                            Err(e) => { done = true; error = Some(e); break; }
+                                        },
+                                        Ok(None) => { done = true; JsValue::Undefined }
+                                        Err(e) => { done = true; error = Some(e); break; }
+                                    }
                                 };
-                                self.bind_pattern(p, item, kind, env)?;
+                                if let Err(e) = self.bind_pattern(p, item, kind, env) {
+                                    error = Some(e);
+                                    break;
+                                }
                             }
                             ArrayPatternElement::Rest(p) => {
                                 let mut rest = Vec::new();
-                                loop {
-                                    match self.iterator_step(&iterator) {
-                                        Ok(Some(result)) => {
-                                            rest.push(self.iterator_value(&result));
+                                if !done {
+                                    loop {
+                                        match self.iterator_step(&iterator) {
+                                            Ok(Some(result)) => match self.iterator_value(&result) {
+                                                Ok(v) => rest.push(v),
+                                                Err(e) => { done = true; error = Some(e); break; }
+                                            },
+                                            Ok(None) => { done = true; break; }
+                                            Err(e) => { done = true; error = Some(e); break; }
                                         }
-                                        Ok(None) => break,
-                                        Err(e) => return Err(e),
                                     }
                                 }
-                                let arr = self.create_array(rest);
-                                self.bind_pattern(p, arr, kind, env)?;
+                                if error.is_none() {
+                                    let arr = self.create_array(rest);
+                                    if let Err(e) = self.bind_pattern(p, arr, kind, env) {
+                                        error = Some(e);
+                                    }
+                                }
                                 break;
                             }
                         }
                     } else {
                         // Elision — skip one iterator step
-                        let _ = self.iterator_step(&iterator);
+                        if !done {
+                            match self.iterator_step(&iterator) {
+                                Ok(None) => { done = true; }
+                                Ok(Some(_)) => {}
+                                Err(e) => { done = true; error = Some(e); break; }
+                            }
+                        }
                     }
+                }
+                if !done {
+                    if let Some(err) = error {
+                        let _ = self.iterator_close_result(&iterator);
+                        return Err(err);
+                    }
+                    return self.iterator_close_result(&iterator);
+                }
+                if let Some(err) = error {
+                    return Err(err);
                 }
                 Ok(())
             }
@@ -431,19 +470,23 @@ impl Interpreter {
                         }
                         ObjectPatternProperty::Rest(pat) => {
                             let rest_obj = self.create_object();
-                            if let JsValue::Object(o) = &obj_val
-                                && let Some(src) = self.get_object(o.id)
-                            {
-                                let src = src.borrow();
-                                for key in &src.property_order {
-                                    if !excluded_keys.contains(key)
-                                        && let Some(desc) = src.properties.get(key)
-                                        && desc.enumerable.unwrap_or(true)
-                                    {
-                                        rest_obj.borrow_mut().insert_value(
-                                            key.clone(),
-                                            desc.value.clone().unwrap_or(JsValue::Undefined),
-                                        );
+                            if let JsValue::Object(o) = &obj_val {
+                                if let Some(src) = self.get_object(o.id) {
+                                    let keys: Vec<String> = src.borrow().property_order.clone();
+                                    for key in &keys {
+                                        if !excluded_keys.contains(key) {
+                                            let desc = src.borrow().get_own_property(key);
+                                            if let Some(ref d) = desc
+                                                && d.enumerable.unwrap_or(true)
+                                            {
+                                                let v = match self.get_object_property(o.id, key, &obj_val) {
+                                                    Completion::Normal(v) => v,
+                                                    Completion::Throw(e) => return Err(e),
+                                                    _ => JsValue::Undefined,
+                                                };
+                                                rest_obj.borrow_mut().insert_value(key.clone(), v);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -688,7 +731,13 @@ impl Interpreter {
             if self.iterator_complete(&step_result) {
                 break;
             }
-            let val = self.iterator_value(&step_result);
+            let val = match self.iterator_value(&step_result) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.iterator_close(&iterator, e.clone());
+                    return Completion::Throw(e);
+                }
+            };
 
             let for_env = Environment::new(Some(env.clone()));
             match &fo.left {

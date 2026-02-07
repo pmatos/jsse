@@ -610,7 +610,10 @@ impl Interpreter {
                             Ok(None) => break,
                             Err(e) => return Completion::Throw(e),
                         };
-                        let value = interp.iterator_value(&next);
+                        let value = match interp.iterator_value(&next) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
 
                         // Call callback with (value, index)
                         let key_val = match interp.call_function(

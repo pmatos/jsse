@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 33,920 / 48,257 run (70.29%)
+**Current pass rate:** 34,703 / 48,257 run (71.91%)
 
 ---
 
@@ -31,10 +31,10 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
 | Object | 93% | 3,176/3,411 |
-| Array | 78% | 2,395/3,079 |
+| Array | 81% | 2,496/3,079 |
 | String | 92% | 1,120/1,215 |
 | Function | 78% | 397/509 |
-| Iterator | 59% | 303/510 |
+| Iterator | 62% | 316/510 |
 | Promise | 86% | 548/639 |
 | Map | 77% | 158/204 |
 | Set | 68% | 261/383 |
@@ -119,6 +119,8 @@ These features block significant numbers of tests:
 43. ~~**Conformance batch 9: Map methods, RegExp @@replace, JSON parse/stringify, ToPrimitive**~~ — ✅ Done (+254 new passes, 69.48% → 70.01%). Map.prototype.getOrInsert/getOrInsertComputed (100% pass). RegExp[@@replace] rewritten to spec §22.2.5.8: RegExpExec, result coercion, GetSubstitution, AdvanceStringIndex (34% → 77%). JSON.parse reviver with Proxy support, ES2025 source text context, lone surrogate escaping, proxy-aware stringify (70% → 96%). ToPrimitive OrdinaryToPrimitive bug fix: error propagation and getter invocation via get_object_property (+77 bonus String passes). ToObject-before-ToPropertyKey ordering fix for computed member access. Map: 156→158/204 (77%), RegExp: 1,154→1,214/1,879 (65%), JSON: 115→159/165 (96%), String: 1,043→1,120/1,215 (92%).
 
 44. ~~**Conformance batch 10: var scoping, Promise combinators, Proxy trap forwarding**~~ — ✅ Done (+137 new passes, 70.01% → 70.29%). Fixed `var` binding in block statements to declare in var scope (function/global) instead of current block scope — affects `bind_pattern` and `exec_variable_declaration` in exec.rs (+51 passes). Promise combinators (all/allSettled/race/any) now use spec-compliant `Invoke(nextPromise, "then", ...)` instead of internal `promise_then` (+47 passes). Proxy trap forwarding for proxy-of-proxy chains: all 12 non-get traps now recurse through proxy-aware helpers instead of raw `JsObjectData` methods (+7 passes). Also fixed `Object.preventExtensions` to throw TypeError when trap returns false, and class static blocks to use function scope environments. Function: 375→397/509 (78%), Promise: 501→548/639 (86%), Proxy: 173→181/311 (58%).
+
+45. ~~**Conformance batch 11: iterator protocol, DataView/ArrayBuffer prototype, function name inference**~~ — ✅ Done (+783 new passes, 70.29% → 71.91%). Three orthogonal fixes: (1) Iterator protocol in `bind_pattern`: IteratorClose after array destructuring, `iterator_value()` now uses `get_object_property()` for getter invocation, elision error propagation, object rest pattern getter invocation (+~400 passes). (2) DataView/ArrayBuffer prototype chain: constructor `.prototype` now points to the real prototype object with methods installed, matching Map/Set pattern (+~160 passes, DataView: 52%, ArrayBuffer: 45%, TypedArray: 66%). (3) IsAnonymousFunctionDefinition check: added `is_anonymous_function_definition()` to guard `set_function_name()` calls — comma expressions, parenthesized expressions no longer incorrectly infer names (+~220 passes). Array: 2,395→2,496/3,079 (81%), Iterator: 303→316/510 (62%).
 
 ---
 
