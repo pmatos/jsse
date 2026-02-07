@@ -196,6 +196,18 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
+                        // TypedArray: §10.4.5.4 [[Delete]]
+                        {
+                            let obj_ref = obj.borrow();
+                            if let Some(ref ta) = obj_ref.typed_array_info {
+                                if let Some(index) = canonical_numeric_index_string(&key) {
+                                    if is_valid_integer_index(ta, index) {
+                                        return Completion::Normal(JsValue::Boolean(false));
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(true));
+                                }
+                            }
+                        }
                         let mut obj_mut = obj.borrow_mut();
                         if let Some(desc) = obj_mut.properties.get(&key)
                             && desc.configurable == Some(false)
@@ -773,19 +785,16 @@ impl Interpreter {
         false
     }
 
-    fn canonical_numeric_index_string(s: &str) -> Option<f64> {
-        if s == "-0" {
-            return Some(-0.0_f64);
-        }
-        let n: f64 = s.parse().ok()?;
-        if format!("{n}") == s { Some(n) } else { None }
-    }
-
-    fn to_index(&mut self, val: &JsValue) -> Completion {
+    pub(crate) fn to_index(&mut self, val: &JsValue) -> Completion {
         if val.is_undefined() {
             return Completion::Normal(JsValue::Number(0.0));
         }
-        let integer_index = to_number(val);
+        // §7.1.22 ToIndex: Let integerIndex be ! ToIntegerOrInfinity(value).
+        // ToIntegerOrInfinity calls ToNumber (which invokes ToPrimitive for objects)
+        let integer_index = match self.to_number_value(val) {
+            Ok(n) => n,
+            Err(e) => return Completion::Throw(e),
+        };
         let integer_index = if integer_index.is_nan() {
             0.0
         } else {
@@ -976,6 +985,38 @@ impl Interpreter {
                 Err(self.create_type_error("Cannot convert a BigInt value to a number"))
             }
             _ => Ok(to_number(val)),
+        }
+    }
+
+    // §7.1.13 ToBigInt
+    pub(crate) fn to_bigint_value(&mut self, val: &JsValue) -> Result<JsValue, JsValue> {
+        let prim = match val {
+            JsValue::Object(_) => self.to_primitive(val, "number")?,
+            _ => val.clone(),
+        };
+        match &prim {
+            JsValue::BigInt(_) => Ok(prim),
+            JsValue::Boolean(b) => Ok(JsValue::BigInt(crate::types::JsBigInt {
+                value: if *b { num_bigint::BigInt::from(1) } else { num_bigint::BigInt::from(0) },
+            })),
+            JsValue::String(s) => {
+                let text = s.to_rust_string();
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    return Err(self.create_error("SyntaxError",
+                        &format!("Cannot convert \"{}\" to a BigInt", text)));
+                }
+                match trimmed.parse::<num_bigint::BigInt>() {
+                    Ok(n) => Ok(JsValue::BigInt(crate::types::JsBigInt { value: n })),
+                    Err(_) => Err(self.create_error("SyntaxError",
+                        &format!("Cannot convert \"{}\" to a BigInt", text))),
+                }
+            }
+            JsValue::Undefined => Err(self.create_type_error("Cannot convert undefined to a BigInt")),
+            JsValue::Null => Err(self.create_type_error("Cannot convert null to a BigInt")),
+            JsValue::Number(_) => Err(self.create_type_error("Cannot convert a Number to a BigInt")),
+            JsValue::Symbol(_) => Err(self.create_type_error("Cannot convert a Symbol to a BigInt")),
+            _ => Err(self.create_type_error("Cannot convert to BigInt")),
         }
     }
 
@@ -1542,6 +1583,27 @@ impl Interpreter {
                 };
                 if let JsValue::Object(ref o) = obj_val {
                     if let Some(obj) = self.get_object(o.id) {
+                        // TypedArray [[Set]]
+                        let is_ta = obj.borrow().typed_array_info.is_some();
+                        if is_ta {
+                            if let Some(index) = canonical_numeric_index_string(&key) {
+                                let is_bigint = obj.borrow().typed_array_info.as_ref()
+                                    .map(|ta| ta.kind.is_bigint()).unwrap_or(false);
+                                let num_val = if is_bigint {
+                                    self.to_bigint_value(&value)?
+                                } else {
+                                    JsValue::Number(self.to_number_value(&value)?)
+                                };
+                                let obj_ref = obj.borrow();
+                                let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                                if is_valid_integer_index(ta, index) {
+                                    let ta_clone = ta.clone();
+                                    drop(obj_ref);
+                                    typed_array_set_index(&ta_clone, index as usize, &num_val);
+                                }
+                                return Ok(());
+                            }
+                        }
                         obj.borrow_mut().set_property_value(&key, value);
                     }
                 }
@@ -1774,6 +1836,36 @@ impl Interpreter {
                         }
                         return Completion::Normal(final_val);
                     }
+                    // TypedArray [[Set]]: ToNumber/ToBigInt before index check
+                    {
+                        let is_ta = obj.borrow().typed_array_info.is_some();
+                        if is_ta {
+                            if let Some(index) = canonical_numeric_index_string(&key) {
+                                let is_bigint = obj.borrow().typed_array_info.as_ref()
+                                    .map(|ta| ta.kind.is_bigint()).unwrap_or(false);
+                                // Convert value first (may throw)
+                                let num_val = if is_bigint {
+                                    match self.to_bigint_value(&final_val) {
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                } else {
+                                    match self.to_number_value(&final_val) {
+                                        Ok(n) => JsValue::Number(n),
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                };
+                                let obj_ref = obj.borrow();
+                                let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                                if is_valid_integer_index(ta, index) {
+                                    let ta_clone = ta.clone();
+                                    drop(obj_ref);
+                                    typed_array_set_index(&ta_clone, index as usize, &num_val);
+                                }
+                                return Completion::Normal(final_val);
+                            }
+                        }
+                    }
                     let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
                     if !success && env.borrow().strict {
                         return Completion::Throw(self.create_type_error(&format!(
@@ -1946,6 +2038,27 @@ impl Interpreter {
                     )));
                 }
                 return Ok(());
+            }
+            // TypedArray [[Set]]
+            let is_ta = obj.borrow().typed_array_info.is_some();
+            if is_ta {
+                if let Some(index) = canonical_numeric_index_string(&key) {
+                    let is_bigint = obj.borrow().typed_array_info.as_ref()
+                        .map(|ta| ta.kind.is_bigint()).unwrap_or(false);
+                    let num_val = if is_bigint {
+                        self.to_bigint_value(&val)?
+                    } else {
+                        JsValue::Number(self.to_number_value(&val)?)
+                    };
+                    let obj_ref = obj.borrow();
+                    let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                    if is_valid_integer_index(ta, index) {
+                        let ta_clone = ta.clone();
+                        drop(obj_ref);
+                        typed_array_set_index(&ta_clone, index as usize, &num_val);
+                    }
+                    return Ok(());
+                }
             }
             let success = obj.borrow_mut().set_property_value(&key, val);
             if !success && env.borrow().strict {
@@ -5890,6 +6003,27 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // TypedArray [[Set]]
+            let is_ta = obj.borrow().typed_array_info.is_some();
+            if is_ta {
+                if let Some(index) = canonical_numeric_index_string(key) {
+                    let is_bigint = obj.borrow().typed_array_info.as_ref()
+                        .map(|ta| ta.kind.is_bigint()).unwrap_or(false);
+                    let num_val = if is_bigint {
+                        self.to_bigint_value(&value)?
+                    } else {
+                        JsValue::Number(self.to_number_value(&value)?)
+                    };
+                    let obj_ref = obj.borrow();
+                    let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                    if is_valid_integer_index(ta, index) {
+                        let ta_clone = ta.clone();
+                        drop(obj_ref);
+                        typed_array_set_index(&ta_clone, index as usize, &num_val);
+                    }
+                    return Ok(true);
+                }
+            }
             Ok(obj.borrow_mut().set_property_value(key, value))
         } else {
             Ok(false)

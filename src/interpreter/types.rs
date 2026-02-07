@@ -734,13 +734,13 @@ impl JsObjectData {
         {
             return elems[idx].clone();
         }
-        if let Some(ref ta) = self.typed_array_info
-            && let Ok(idx) = key.parse::<usize>()
-        {
-            if idx < ta.array_length {
-                return typed_array_get_index(ta, idx);
+        if let Some(ref ta) = self.typed_array_info {
+            if let Some(index) = canonical_numeric_index_string(key) {
+                if is_valid_integer_index(ta, index) {
+                    return typed_array_get_index(ta, index as usize);
+                }
+                return JsValue::Undefined;
             }
-            return JsValue::Undefined;
         }
         if let Some(val) = self.string_exotic_value(key) {
             return val;
@@ -775,20 +775,20 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info
-            && let Ok(idx) = key.parse::<usize>()
-        {
-            if idx < ta.array_length {
-                return Some(PropertyDescriptor {
-                    value: Some(typed_array_get_index(ta, idx)),
-                    writable: Some(true),
-                    enumerable: Some(true),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                });
+        if let Some(ref ta) = self.typed_array_info {
+            if let Some(index) = canonical_numeric_index_string(key) {
+                if is_valid_integer_index(ta, index) {
+                    return Some(PropertyDescriptor {
+                        value: Some(typed_array_get_index(ta, index as usize)),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(false),
+                        get: None,
+                        set: None,
+                    });
+                }
+                return None;
             }
-            return None;
         }
         if let Some(JsValue::String(ref s)) = self.primitive_value {
             if self.class_name == "String" {
@@ -829,6 +829,22 @@ impl JsObjectData {
         if let Some(desc) = self.properties.get(key) {
             return Some(desc.clone());
         }
+        // TypedArray: §10.4.5.1
+        if let Some(ref ta) = self.typed_array_info {
+            if let Some(index) = canonical_numeric_index_string(key) {
+                if is_valid_integer_index(ta, index) {
+                    return Some(PropertyDescriptor {
+                        value: Some(typed_array_get_index(ta, index as usize)),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        get: None,
+                        set: None,
+                    });
+                }
+                return None;
+            }
+        }
         // String exotic: §10.4.3.1
         if let Some(JsValue::String(ref s)) = self.primitive_value {
             if self.class_name == "String" {
@@ -859,6 +875,12 @@ impl JsObjectData {
     pub fn has_own_property(&self, key: &str) -> bool {
         if self.properties.contains_key(key) {
             return true;
+        }
+        // TypedArray: §10.4.5.2
+        if let Some(ref ta) = self.typed_array_info {
+            if let Some(index) = canonical_numeric_index_string(key) {
+                return is_valid_integer_index(ta, index);
+            }
         }
         if let Some(JsValue::String(ref s)) = self.primitive_value {
             if self.class_name == "String" {
@@ -919,6 +941,33 @@ impl JsObjectData {
     }
 
     pub fn define_own_property(&mut self, key: String, desc: PropertyDescriptor) -> bool {
+        // TypedArray: §10.4.5.3 [[DefineOwnProperty]]
+        if self.typed_array_info.is_some() {
+            if let Some(index) = canonical_numeric_index_string(&key) {
+                let ta = self.typed_array_info.as_ref().unwrap();
+                if !is_valid_integer_index(ta, index) {
+                    return false;
+                }
+                // If accessor descriptor, reject
+                if desc.get.is_some() || desc.set.is_some() {
+                    return false;
+                }
+                if desc.configurable == Some(false) {
+                    return false;
+                }
+                if desc.enumerable == Some(false) {
+                    return false;
+                }
+                if desc.writable == Some(false) {
+                    return false;
+                }
+                if let Some(ref value) = desc.value {
+                    let ta_clone = ta.clone();
+                    typed_array_set_index(&ta_clone, index as usize, value);
+                }
+                return true;
+            }
+        }
         // Check array_elements for existing array index properties
         let current_from_array = if self.properties.get(&key).is_none() {
             if let Some(ref elems) = self.array_elements
@@ -1132,11 +1181,14 @@ impl JsObjectData {
     }
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
-        if let Some(ref ta) = self.typed_array_info
-            && let Ok(idx) = key.parse::<usize>()
-        {
-            let ta_clone = ta.clone();
-            return typed_array_set_index(&ta_clone, idx, &value);
+        if let Some(ref ta) = self.typed_array_info {
+            if let Some(index) = canonical_numeric_index_string(key) {
+                if is_valid_integer_index(ta, index) {
+                    let ta_clone = ta.clone();
+                    return typed_array_set_index(&ta_clone, index as usize, &value);
+                }
+                return false;
+            }
         }
         if let Some(ref map) = self.parameter_map
             && let Some((env_ref, param_name)) = map.get(key)
@@ -1188,6 +1240,35 @@ impl JsObjectData {
     pub fn get_property_value(&self, key: &str) -> Option<JsValue> {
         self.properties.get(key).and_then(|d| d.value.clone())
     }
+}
+
+// §7.1.4.1 CanonicalNumericIndexString
+pub(crate) fn canonical_numeric_index_string(key: &str) -> Option<f64> {
+    if key == "-0" {
+        return Some(-0.0_f64);
+    }
+    let n: f64 = key.parse().ok()?;
+    if crate::types::number_ops::to_string(n) == key { Some(n) } else { None }
+}
+
+// §10.4.5.14 IsValidIntegerIndex
+pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
+    if ta.is_detached.get() {
+        return false;
+    }
+    if index.is_nan() || index.is_infinite() {
+        return false;
+    }
+    if index != index.trunc() {
+        return false;
+    }
+    if index.is_sign_negative() && index == 0.0 {
+        return false; // -0
+    }
+    if index < 0.0 || index >= ta.array_length as f64 {
+        return false;
+    }
+    true
 }
 
 pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {

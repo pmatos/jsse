@@ -1064,6 +1064,142 @@ impl Interpreter {
 
         // ES2025 Set methods
 
+        // Spec-compliant GetSetRecord: uses get_object_property for getters/proxies
+        fn spec_get_set_record(
+            interp: &mut Interpreter,
+            obj: &JsValue,
+        ) -> Result<SetRecord, JsValue> {
+            let o_id = match obj {
+                JsValue::Object(o) => o.id,
+                _ => return Err(interp.create_type_error("GetSetRecord requires an object")),
+            };
+
+            // Get size via property access (invokes getters)
+            let raw_size = match interp.get_object_property(o_id, "size", obj) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            let size = interp.to_number_coerce(&raw_size);
+            if size.is_nan() {
+                return Err(interp.create_type_error("Set-like size is not a number"));
+            }
+            if size < 0.0 {
+                return Err(interp.create_range_error("Set-like size is negative"));
+            }
+            let size = size.trunc();
+
+            // Get has via property access (invokes getters)
+            let has = match interp.get_object_property(o_id, "has", obj) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            if !interp.is_callable(&has) {
+                return Err(
+                    interp.create_type_error("Set-like object must have a callable has method")
+                );
+            }
+
+            // Get keys via property access (invokes getters)
+            let keys = match interp.get_object_property(o_id, "keys", obj) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            if !interp.is_callable(&keys) {
+                return Err(
+                    interp.create_type_error("Set-like object must have a callable keys method")
+                );
+            }
+
+            Ok(SetRecord { has, keys, size })
+        }
+
+        // Get iterator record: call keys(), read next once
+        fn get_keys_iterator(
+            interp: &mut Interpreter,
+            keys_fn: &JsValue,
+            other: &JsValue,
+        ) -> Result<(JsValue, JsValue), Completion> {
+            let keys_iter = match interp.call_function(keys_fn, other, &[]) {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            if !matches!(&keys_iter, JsValue::Object(_)) {
+                return Err(Completion::Throw(
+                    interp.create_type_error("keys() must return an object"),
+                ));
+            }
+            let iter_id = match &keys_iter {
+                JsValue::Object(io) => io.id,
+                _ => unreachable!(),
+            };
+            // Read next ONCE (per spec GetIterator)
+            let next_fn = match interp.get_object_property(iter_id, "next", &keys_iter) {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            Ok((keys_iter, next_fn))
+        }
+
+        // Spec-compliant IteratorStepValue: uses get_object_property for done/value
+        fn iter_step_value(
+            interp: &mut Interpreter,
+            keys_iter: &JsValue,
+            next_fn: &JsValue,
+        ) -> Result<Option<JsValue>, Completion> {
+            let next_result = match interp.call_function(next_fn, keys_iter, &[]) {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let result_id = match &next_result {
+                JsValue::Object(ro) => ro.id,
+                _ => {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("Iterator result is not an object"),
+                    ))
+                }
+            };
+            let done = match interp.get_object_property(result_id, "done", &next_result) {
+                Completion::Normal(v) => to_boolean(&v),
+                other => return Err(other),
+            };
+            if done {
+                return Ok(None);
+            }
+            let value = match interp.get_object_property(result_id, "value", &next_result) {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            Ok(Some(value))
+        }
+
+        fn canonicalize_key(val: JsValue) -> JsValue {
+            if let JsValue::Number(n) = &val {
+                if *n == 0.0 && n.is_sign_negative() {
+                    return JsValue::Number(0.0);
+                }
+            }
+            val
+        }
+
+        fn set_data_has(entries: &[Option<JsValue>], val: &JsValue) -> bool {
+            entries.iter().flatten().any(|e| same_value_zero(e, val))
+        }
+
+        fn make_result_set(
+            interp: &mut Interpreter,
+            entries: Vec<Option<JsValue>>,
+        ) -> Completion {
+            let new_obj = interp.create_object();
+            new_obj.borrow_mut().prototype = interp.set_prototype.clone();
+            new_obj.borrow_mut().class_name = "Set".to_string();
+            new_obj.borrow_mut().set_data = Some(entries);
+            let id = new_obj.borrow().id.unwrap();
+            Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+        }
+
         // Set.prototype.union
         let union_fn = self.create_function(JsFunction::native(
             "union".to_string(),
@@ -1071,64 +1207,36 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().set_data.is_some()
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
-                        let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let other_rec = match get_set_record(interp, &other) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let new_obj = interp.create_object();
-                        new_obj.borrow_mut().prototype = interp.set_prototype.clone();
-                        new_obj.borrow_mut().class_name = "Set".to_string();
-                        let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                        for entry in entries.iter().flatten() {
-                            new_entries.push(Some(entry.clone()));
-                        }
-                        // Iterate other's keys
-                        let keys_iter = match interp.call_function(&other_rec.keys, &other, &[]) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        loop {
-                            let next_fn = if let JsValue::Object(io) = &keys_iter {
-                                if let Some(iter_obj) = interp.get_object(io.id) {
-                                    iter_obj.borrow().get_property("next")
-                                } else {
-                                    JsValue::Undefined
-                                }
-                            } else {
-                                JsValue::Undefined
-                            };
-                            let next_result = match interp.call_function(&next_fn, &keys_iter, &[])
-                            {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            let (done, value) = extract_iter_result(interp, &next_result);
-                            if done {
-                                break;
-                            }
-                            let mut val = value;
-                            if let JsValue::Number(n) = &val
-                                && *n == 0.0
-                                && n.is_sign_negative()
-                            {
-                                val = JsValue::Number(0.0);
-                            }
-                            let exists = new_entries
-                                .iter()
-                                .flatten()
-                                .any(|e| same_value_zero(e, &val));
-                            if !exists {
-                                new_entries.push(Some(val));
-                            }
-                        }
-                        new_obj.borrow_mut().set_data = Some(new_entries);
-                        let id = new_obj.borrow().id.unwrap();
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
+                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other_rec = match spec_get_set_record(interp, &other) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    // Copy this's entries AFTER GetSetRecord (side-effects may mutate this)
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                    for entry in entries.iter().flatten() {
+                        new_entries.push(Some(entry.clone()));
                     }
+                    let (keys_iter, next_fn) =
+                        match get_keys_iterator(interp, &other_rec.keys, &other) {
+                            Ok(r) => r,
+                            Err(c) => return c,
+                        };
+                    loop {
+                        let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(c) => return c,
+                        };
+                        let val = canonicalize_key(value);
+                        if !set_data_has(&new_entries, &val) {
+                            new_entries.push(Some(val));
+                        }
+                    }
+                    return make_result_set(interp, new_entries);
                 }
                 let err = interp.create_type_error("Set.prototype.union requires a Set");
                 Completion::Throw(err)
@@ -1145,97 +1253,54 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().set_data.is_some()
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
-                        let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let other_rec = match get_set_record(interp, &other) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let new_obj = interp.create_object();
-                        new_obj.borrow_mut().prototype = interp.set_prototype.clone();
-                        new_obj.borrow_mut().class_name = "Set".to_string();
-                        let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                        let this_size = entries.iter().filter(|e| e.is_some()).count();
+                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other_rec = match spec_get_set_record(interp, &other) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                    // Re-read entries after GetSetRecord (side-effects may mutate this)
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let this_size = entries.iter().filter(|e| e.is_some()).count();
 
-                        if this_size as f64 <= other_rec.size {
-                            for entry in entries.iter().flatten() {
-                                let has_result = match interp.call_function(
-                                    &other_rec.has,
-                                    &other,
-                                    &[entry.clone()],
-                                ) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                if matches!(has_result, JsValue::Boolean(true))
-                                    || (!matches!(has_result, JsValue::Boolean(false))
-                                        && !has_result.is_undefined()
-                                        && !has_result.is_null()
-                                        && !matches!(has_result, JsValue::Number(n) if n == 0.0))
-                                {
-                                    let mut val = entry.clone();
-                                    if let JsValue::Number(n) = &val
-                                        && *n == 0.0
-                                        && n.is_sign_negative()
-                                    {
-                                        val = JsValue::Number(0.0);
-                                    }
-                                    new_entries.push(Some(val));
-                                }
-                            }
-                        } else {
-                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[])
-                            {
+                    if this_size as f64 <= other_rec.size {
+                        for entry in entries.iter().flatten() {
+                            let has_result = match interp.call_function(
+                                &other_rec.has,
+                                &other,
+                                &[entry.clone()],
+                            ) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            loop {
-                                let next_fn = if let JsValue::Object(io) = &keys_iter {
-                                    if let Some(iter_obj) = interp.get_object(io.id) {
-                                        iter_obj.borrow().get_property("next")
-                                    } else {
-                                        JsValue::Undefined
-                                    }
-                                } else {
-                                    JsValue::Undefined
-                                };
-                                let next_result =
-                                    match interp.call_function(&next_fn, &keys_iter, &[]) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
-                                    };
-                                let (done, value) = extract_iter_result(interp, &next_result);
-                                if done {
-                                    break;
-                                }
-                                // Re-read entries from this set since it may have changed
-                                let current = obj.borrow().set_data.clone().unwrap_or_default();
-                                let in_this =
-                                    current.iter().flatten().any(|e| same_value_zero(e, &value));
-                                if in_this {
-                                    let mut val = value;
-                                    if let JsValue::Number(n) = &val
-                                        && *n == 0.0
-                                        && n.is_sign_negative()
-                                    {
-                                        val = JsValue::Number(0.0);
-                                    }
-                                    if !new_entries
-                                        .iter()
-                                        .flatten()
-                                        .any(|e| same_value_zero(e, &val))
-                                    {
-                                        new_entries.push(Some(val));
-                                    }
+                            if to_boolean(&has_result) {
+                                new_entries.push(Some(canonicalize_key(entry.clone())));
+                            }
+                        }
+                    } else {
+                        let (keys_iter, next_fn) =
+                            match get_keys_iterator(interp, &other_rec.keys, &other) {
+                                Ok(r) => r,
+                                Err(c) => return c,
+                            };
+                        loop {
+                            let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                                Ok(Some(v)) => v,
+                                Ok(None) => break,
+                                Err(c) => return c,
+                            };
+                            let current = obj.borrow().set_data.clone().unwrap_or_default();
+                            if set_data_has(&current, &value) {
+                                let val = canonicalize_key(value);
+                                if !set_data_has(&new_entries, &val) {
+                                    new_entries.push(Some(val));
                                 }
                             }
                         }
-                        new_obj.borrow_mut().set_data = Some(new_entries);
-                        let id = new_obj.borrow().id.unwrap();
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                     }
+                    return make_result_set(interp, new_entries);
                 }
                 let err = interp.create_type_error("Set.prototype.intersection requires a Set");
                 Completion::Throw(err)
@@ -1252,78 +1317,56 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().set_data.is_some()
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
-                        let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let other_rec = match get_set_record(interp, &other) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let new_obj = interp.create_object();
-                        new_obj.borrow_mut().prototype = interp.set_prototype.clone();
-                        new_obj.borrow_mut().class_name = "Set".to_string();
-                        let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                        let this_size = entries.iter().filter(|e| e.is_some()).count();
+                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other_rec = match spec_get_set_record(interp, &other) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    // Re-read entries after GetSetRecord
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let this_size = entries.iter().filter(|e| e.is_some()).count();
+                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
 
-                        if this_size as f64 <= other_rec.size {
-                            for entry in entries.iter().flatten() {
-                                let has_result = match interp.call_function(
-                                    &other_rec.has,
-                                    &other,
-                                    &[entry.clone()],
-                                ) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                let is_true = matches!(has_result, JsValue::Boolean(true));
-                                if !is_true {
-                                    new_entries.push(Some(entry.clone()));
-                                }
-                            }
-                        } else {
-                            // Copy all, then remove
-                            for entry in entries.iter().flatten() {
-                                new_entries.push(Some(entry.clone()));
-                            }
-                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[])
-                            {
+                    if this_size as f64 <= other_rec.size {
+                        for entry in entries.iter().flatten() {
+                            let has_result = match interp.call_function(
+                                &other_rec.has,
+                                &other,
+                                &[entry.clone()],
+                            ) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            loop {
-                                let next_fn = if let JsValue::Object(io) = &keys_iter {
-                                    if let Some(iter_obj) = interp.get_object(io.id) {
-                                        iter_obj.borrow().get_property("next")
-                                    } else {
-                                        JsValue::Undefined
-                                    }
-                                } else {
-                                    JsValue::Undefined
-                                };
-                                let next_result =
-                                    match interp.call_function(&next_fn, &keys_iter, &[]) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
-                                    };
-                                let (done, value) = extract_iter_result(interp, &next_result);
-                                if done {
+                            if !to_boolean(&has_result) {
+                                new_entries.push(Some(entry.clone()));
+                            }
+                        }
+                    } else {
+                        for entry in entries.iter().flatten() {
+                            new_entries.push(Some(entry.clone()));
+                        }
+                        let (keys_iter, next_fn) =
+                            match get_keys_iterator(interp, &other_rec.keys, &other) {
+                                Ok(r) => r,
+                                Err(c) => return c,
+                            };
+                        loop {
+                            let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                                Ok(Some(v)) => v,
+                                Ok(None) => break,
+                                Err(c) => return c,
+                            };
+                            for entry in new_entries.iter_mut() {
+                                if entry.as_ref().is_some_and(|e| same_value_zero(e, &value)) {
+                                    *entry = None;
                                     break;
-                                }
-                                for entry in new_entries.iter_mut() {
-                                    let matches =
-                                        entry.as_ref().is_some_and(|e| same_value_zero(e, &value));
-                                    if matches {
-                                        *entry = None;
-                                        break;
-                                    }
                                 }
                             }
                         }
-                        new_obj.borrow_mut().set_data = Some(new_entries);
-                        let id = new_obj.borrow().id.unwrap();
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                     }
+                    return make_result_set(interp, new_entries);
                 }
                 let err = interp.create_type_error("Set.prototype.difference requires a Set");
                 Completion::Throw(err)
@@ -1340,73 +1383,46 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().set_data.is_some()
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
-                        let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let other_rec = match get_set_record(interp, &other) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let new_obj = interp.create_object();
-                        new_obj.borrow_mut().prototype = interp.set_prototype.clone();
-                        new_obj.borrow_mut().class_name = "Set".to_string();
-                        let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                        for entry in entries.iter().flatten() {
-                            new_entries.push(Some(entry.clone()));
-                        }
-                        let keys_iter = match interp.call_function(&other_rec.keys, &other, &[]) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        loop {
-                            let next_fn = if let JsValue::Object(io) = &keys_iter {
-                                if let Some(iter_obj) = interp.get_object(io.id) {
-                                    iter_obj.borrow().get_property("next")
-                                } else {
-                                    JsValue::Undefined
-                                }
-                            } else {
-                                JsValue::Undefined
-                            };
-                            let next_result = match interp.call_function(&next_fn, &keys_iter, &[])
-                            {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            let (done, value) = extract_iter_result(interp, &next_result);
-                            if done {
-                                break;
-                            }
-                            let mut val = value;
-                            if let JsValue::Number(n) = &val
-                                && *n == 0.0
-                                && n.is_sign_negative()
-                            {
-                                val = JsValue::Number(0.0);
-                            }
-                            // Re-read this set data
-                            let current = obj.borrow().set_data.clone().unwrap_or_default();
-                            let in_this =
-                                current.iter().flatten().any(|e| same_value_zero(e, &val));
-                            if in_this {
-                                // Remove from result
-                                for entry in new_entries.iter_mut() {
-                                    let matches =
-                                        entry.as_ref().is_some_and(|e| same_value_zero(e, &val));
-                                    if matches {
-                                        *entry = None;
-                                        break;
-                                    }
-                                }
-                            } else {
-                                new_entries.push(Some(val));
-                            }
-                        }
-                        new_obj.borrow_mut().set_data = Some(new_entries);
-                        let id = new_obj.borrow().id.unwrap();
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
+                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other_rec = match spec_get_set_record(interp, &other) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    // Copy this's entries AFTER GetSetRecord
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                    for entry in entries.iter().flatten() {
+                        new_entries.push(Some(entry.clone()));
                     }
+                    let (keys_iter, next_fn) =
+                        match get_keys_iterator(interp, &other_rec.keys, &other) {
+                            Ok(r) => r,
+                            Err(c) => return c,
+                        };
+                    loop {
+                        let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(c) => return c,
+                        };
+                        let val = canonicalize_key(value);
+                        // Check against live O.[[SetData]]
+                        let current = obj.borrow().set_data.clone().unwrap_or_default();
+                        let in_this = set_data_has(&current, &val);
+                        if in_this {
+                            for entry in new_entries.iter_mut() {
+                                if entry.as_ref().is_some_and(|e| same_value_zero(e, &val)) {
+                                    *entry = None;
+                                    break;
+                                }
+                            }
+                        } else if !set_data_has(&new_entries, &val) {
+                            new_entries.push(Some(val));
+                        }
+                    }
+                    return make_result_set(interp, new_entries);
                 }
                 let err =
                     interp.create_type_error("Set.prototype.symmetricDifference requires a Set");
@@ -1424,34 +1440,45 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().set_data.is_some()
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
-                        let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let other_rec = match get_set_record(interp, &other) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
+                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other_rec = match spec_get_set_record(interp, &other) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let this_size = entries.iter().filter(|e| e.is_some()).count();
+                    if this_size as f64 > other_rec.size {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                    // Iterate live set data (re-read each iteration for mutation support)
+                    let mut i = 0;
+                    loop {
+                        let entry = {
+                            let borrowed = obj.borrow();
+                            let data = borrowed.set_data.as_ref().unwrap();
+                            if i >= data.len() {
+                                break;
+                            }
+                            data[i].clone()
                         };
-                        let this_size = entries.iter().filter(|e| e.is_some()).count();
-                        if this_size as f64 > other_rec.size {
-                            return Completion::Normal(JsValue::Boolean(false));
-                        }
-                        for entry in entries.iter().flatten() {
+                        i += 1;
+                        if let Some(e) = entry {
                             let has_result = match interp.call_function(
                                 &other_rec.has,
                                 &other,
-                                &[entry.clone()],
+                                &[e],
                             ) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            let is_true = matches!(has_result, JsValue::Boolean(true));
-                            if !is_true {
+                            if !to_boolean(&has_result) {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
                         }
-                        return Completion::Normal(JsValue::Boolean(true));
                     }
+                    return Completion::Normal(JsValue::Boolean(true));
                 }
                 let err = interp.create_type_error("Set.prototype.isSubsetOf requires a Set");
                 Completion::Throw(err)
@@ -1468,50 +1495,36 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().set_data.is_some()
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
-                        let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let other_rec = match get_set_record(interp, &other) {
+                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other_rec = match spec_get_set_record(interp, &other) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let this_size = entries.iter().filter(|e| e.is_some()).count();
+                    if (this_size as f64) < other_rec.size {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                    let (keys_iter, next_fn) =
+                        match get_keys_iterator(interp, &other_rec.keys, &other) {
                             Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
+                            Err(c) => return c,
                         };
-                        let this_size = entries.iter().filter(|e| e.is_some()).count();
-                        if (this_size as f64) < other_rec.size {
+                    loop {
+                        let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(c) => return c,
+                        };
+                        let current = obj.borrow().set_data.clone().unwrap_or_default();
+                        if !set_data_has(&current, &value) {
+                            interp.iterator_close(&keys_iter, JsValue::Undefined);
                             return Completion::Normal(JsValue::Boolean(false));
                         }
-                        let keys_iter = match interp.call_function(&other_rec.keys, &other, &[]) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        loop {
-                            let next_fn = if let JsValue::Object(io) = &keys_iter {
-                                if let Some(iter_obj) = interp.get_object(io.id) {
-                                    iter_obj.borrow().get_property("next")
-                                } else {
-                                    JsValue::Undefined
-                                }
-                            } else {
-                                JsValue::Undefined
-                            };
-                            let next_result = match interp.call_function(&next_fn, &keys_iter, &[])
-                            {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            let (done, value) = extract_iter_result(interp, &next_result);
-                            if done {
-                                break;
-                            }
-                            let current = obj.borrow().set_data.clone().unwrap_or_default();
-                            let in_this =
-                                current.iter().flatten().any(|e| same_value_zero(e, &value));
-                            if !in_this {
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
-                        }
-                        return Completion::Normal(JsValue::Boolean(true));
                     }
+                    return Completion::Normal(JsValue::Boolean(true));
                 }
                 let err = interp.create_type_error("Set.prototype.isSupersetOf requires a Set");
                 Completion::Throw(err)
@@ -1528,65 +1541,62 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().set_data.is_some()
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
-                        let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let other_rec = match get_set_record(interp, &other) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let this_size = entries.iter().filter(|e| e.is_some()).count();
-                        if this_size as f64 <= other_rec.size {
-                            for entry in entries.iter().flatten() {
+                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other_rec = match spec_get_set_record(interp, &other) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let this_size = entries.iter().filter(|e| e.is_some()).count();
+                    if this_size as f64 <= other_rec.size {
+                        // Iterate live set data (re-read each iteration for mutation support)
+                        let mut i = 0;
+                        loop {
+                            let entry = {
+                                let borrowed = obj.borrow();
+                                let data = borrowed.set_data.as_ref().unwrap();
+                                if i >= data.len() {
+                                    break;
+                                }
+                                data[i].clone()
+                            };
+                            i += 1;
+                            if let Some(e) = entry {
                                 let has_result = match interp.call_function(
                                     &other_rec.has,
                                     &other,
-                                    &[entry.clone()],
+                                    &[e],
                                 ) {
                                     Completion::Normal(v) => v,
                                     other => return other,
                                 };
-                                let is_true = matches!(has_result, JsValue::Boolean(true));
-                                if is_true {
-                                    return Completion::Normal(JsValue::Boolean(false));
-                                }
-                            }
-                        } else {
-                            let keys_iter = match interp.call_function(&other_rec.keys, &other, &[])
-                            {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            loop {
-                                let next_fn = if let JsValue::Object(io) = &keys_iter {
-                                    if let Some(iter_obj) = interp.get_object(io.id) {
-                                        iter_obj.borrow().get_property("next")
-                                    } else {
-                                        JsValue::Undefined
-                                    }
-                                } else {
-                                    JsValue::Undefined
-                                };
-                                let next_result =
-                                    match interp.call_function(&next_fn, &keys_iter, &[]) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
-                                    };
-                                let (done, value) = extract_iter_result(interp, &next_result);
-                                if done {
-                                    break;
-                                }
-                                let current = obj.borrow().set_data.clone().unwrap_or_default();
-                                let in_this =
-                                    current.iter().flatten().any(|e| same_value_zero(e, &value));
-                                if in_this {
+                                if to_boolean(&has_result) {
                                     return Completion::Normal(JsValue::Boolean(false));
                                 }
                             }
                         }
-                        return Completion::Normal(JsValue::Boolean(true));
+                    } else {
+                        let (keys_iter, next_fn) =
+                            match get_keys_iterator(interp, &other_rec.keys, &other) {
+                                Ok(r) => r,
+                                Err(c) => return c,
+                            };
+                        loop {
+                            let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                                Ok(Some(v)) => v,
+                                Ok(None) => break,
+                                Err(c) => return c,
+                            };
+                            let current = obj.borrow().set_data.clone().unwrap_or_default();
+                            if set_data_has(&current, &value) {
+                                interp.iterator_close(&keys_iter, JsValue::Undefined);
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
+                        }
                     }
+                    return Completion::Normal(JsValue::Boolean(true));
                 }
                 let err = interp.create_type_error("Set.prototype.isDisjointFrom requires a Set");
                 Completion::Throw(err)

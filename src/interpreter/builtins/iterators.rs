@@ -1,5 +1,230 @@
 use super::super::*;
 
+// GetIteratorDirect that uses get_object_property (invokes getters/Proxy traps)
+fn get_iterator_direct_getter(interp: &mut Interpreter, obj: &JsValue) -> Result<(JsValue, JsValue), JsValue> {
+    match obj {
+        JsValue::Object(o) => {
+            let next_method = match interp.get_object_property(o.id, "next", obj) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            Ok((obj.clone(), next_method))
+        }
+        _ => Err(interp.create_type_error("Iterator is not an object")),
+    }
+}
+
+// IteratorClose that uses get_object_property for .return (invokes getters)
+fn iterator_close_getter(interp: &mut Interpreter, iterator: &JsValue) -> Result<(), JsValue> {
+    if let JsValue::Object(io) = iterator {
+        let return_method = match interp.get_object_property(io.id, "return", iterator) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(()),
+        };
+        if matches!(return_method, JsValue::Undefined | JsValue::Null) {
+            return Ok(());
+        }
+        match interp.call_function(&return_method, iterator, &[]) {
+            Completion::Normal(inner_result) => {
+                if !matches!(inner_result, JsValue::Object(_)) {
+                    return Err(interp.create_type_error("Iterator result is not an object"));
+                }
+                Ok(())
+            }
+            Completion::Throw(e) => Err(e),
+            _ => Ok(()),
+        }
+    } else {
+        Ok(())
+    }
+}
+
+// GetIteratorFlattenable(obj, primitiveHandling) per spec
+// primitiveHandling is either "reject-primitives" or "iterate-strings"
+fn get_iterator_flattenable(interp: &mut Interpreter, obj: &JsValue, reject_primitives: bool) -> Result<(JsValue, JsValue), JsValue> {
+    if !matches!(obj, JsValue::Object(_)) {
+        if reject_primitives {
+            return Err(interp.create_type_error("Iterator.prototype.flatMap mapper returned a non-object"));
+        }
+        // For strings in iterate-strings mode, we'd handle it, but flatMap uses reject-primitives
+        return Err(interp.create_type_error("value is not an object"));
+    }
+
+    // Get @@iterator method
+    let sym_key = interp.get_symbol_iterator_key();
+    let iter_method = if let JsValue::Object(o) = obj {
+        if let Some(ref key) = sym_key {
+            match interp.get_object_property(o.id, key, obj) {
+                Completion::Normal(v) => Some(v),
+                Completion::Throw(e) => return Err(e),
+                _ => Some(JsValue::Undefined),
+            }
+        } else {
+            Some(JsValue::Undefined)
+        }
+    } else {
+        Some(JsValue::Undefined)
+    };
+
+    if let Some(method) = iter_method {
+        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+            // Has @@iterator - check it's callable and call it
+            if let JsValue::Object(mo) = &method {
+                if !interp.get_object(mo.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false) {
+                    return Err(interp.create_type_error("Symbol.iterator is not a function"));
+                }
+            } else {
+                return Err(interp.create_type_error("Symbol.iterator is not a function"));
+            }
+            let iter_obj = match interp.call_function(&method, obj, &[]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Err(interp.create_type_error("Symbol.iterator did not return a value")),
+            };
+            if !matches!(iter_obj, JsValue::Object(_)) {
+                return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
+            }
+            return get_iterator_direct_getter(interp, &iter_obj);
+        }
+    }
+
+    // @@iterator is null/undefined: use obj as iterator directly
+    get_iterator_direct_getter(interp, obj)
+}
+
+// GetIterator(obj, sync) using getter-aware property access for @@iterator
+fn get_iterator_getter(interp: &mut Interpreter, obj: &JsValue) -> Result<(JsValue, JsValue), JsValue> {
+    let sym_key = interp.get_symbol_iterator_key();
+    let method = match obj {
+        JsValue::Object(o) => {
+            if let Some(ref key) = sym_key {
+                match interp.get_object_property(o.id, key, obj) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
+                }
+            } else {
+                return Err(interp.create_type_error("is not iterable"));
+            }
+        }
+        JsValue::String(_) => {
+            // For strings, use the string prototype's @@iterator
+            return match interp.get_iterator(obj) {
+                Ok(iter) => get_iterator_direct_getter(interp, &iter),
+                Err(e) => Err(e),
+            };
+        }
+        _ => return Err(interp.create_type_error("is not iterable")),
+    };
+    if matches!(method, JsValue::Undefined | JsValue::Null) {
+        return Err(interp.create_type_error("is not iterable"));
+    }
+    // Call the method
+    let iterator = match interp.call_function(&method, obj, &[]) {
+        Completion::Normal(v) => v,
+        Completion::Throw(e) => return Err(e),
+        _ => return Err(interp.create_type_error("Symbol.iterator did not return a value")),
+    };
+    if !matches!(iterator, JsValue::Object(_)) {
+        return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
+    }
+    get_iterator_direct_getter(interp, &iterator)
+}
+
+// IteratorStepValue using getter-aware property access for .done and .value
+// Returns Ok(Some(value)) if iterator produced a value, Ok(None) if done
+fn iterator_step_value_getter(
+    interp: &mut Interpreter,
+    iterator: &JsValue,
+    next_method: &JsValue,
+) -> Result<Option<JsValue>, JsValue> {
+    let result = match interp.call_function(next_method, iterator, &[]) {
+        Completion::Normal(v) => v,
+        Completion::Throw(e) => return Err(e),
+        _ => return Err(interp.create_type_error("Iterator next failed")),
+    };
+    let obj_ref = match &result {
+        JsValue::Object(o) => o,
+        _ => return Err(interp.create_type_error("Iterator result is not an object")),
+    };
+    // Read .done via getter
+    let done = match interp.get_object_property(obj_ref.id, "done", &result) {
+        Completion::Normal(v) => v,
+        Completion::Throw(e) => return Err(e),
+        _ => JsValue::Undefined,
+    };
+    if to_boolean(&done) {
+        return Ok(None);
+    }
+    // Read .value via getter
+    let value = match interp.get_object_property(obj_ref.id, "value", &result) {
+        Completion::Normal(v) => v,
+        Completion::Throw(e) => return Err(e),
+        _ => JsValue::Undefined,
+    };
+    Ok(Some(value))
+}
+
+// IteratorClose per spec, taking a completion and returning updated completion.
+// If completion is Err (throw), the original error is preserved even if .return() throws.
+fn iterator_close_with_completion(
+    interp: &mut Interpreter,
+    iterator: &JsValue,
+    completion: Result<(), JsValue>,
+) -> Result<(), JsValue> {
+    if let JsValue::Object(io) = iterator {
+        let return_method = match interp.get_object_property(io.id, "return", iterator) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => {
+                // Step 5: If completion is a throw completion, return ? completion.
+                if let Err(orig) = completion { return Err(orig); }
+                return Err(e);
+            }
+            _ => JsValue::Undefined,
+        };
+        if matches!(return_method, JsValue::Undefined | JsValue::Null) {
+            return completion;
+        }
+        let inner_result = interp.call_function(&return_method, iterator, &[]);
+        match inner_result {
+            Completion::Normal(v) => {
+                // Step 5: If completion is throw, return completion
+                if let Err(e) = completion { return Err(e); }
+                // Step 7: If innerResult.[[Value]] is not an Object, throw TypeError
+                if !matches!(v, JsValue::Object(_)) {
+                    return Err(interp.create_type_error("Iterator result is not an object"));
+                }
+                // Step 8: Return completion
+                completion
+            }
+            Completion::Throw(e) => {
+                // Step 5: If completion is throw, return original completion
+                if let Err(orig) = completion { return Err(orig); }
+                // Step 6: innerResult is throw, return it
+                Err(e)
+            }
+            _ => completion,
+        }
+    } else {
+        completion
+    }
+}
+
+// IteratorCloseAll per spec: close iterators in reverse order, accumulating errors
+fn iterator_close_all(
+    interp: &mut Interpreter,
+    open_iters: &[(JsValue, JsValue)],
+    initial_completion: Result<(), JsValue>,
+) -> Result<(), JsValue> {
+    let mut completion = initial_completion;
+    for (iter, _) in open_iters.iter().rev() {
+        completion = iterator_close_with_completion(interp, iter, completion);
+    }
+    completion
+}
+
 impl Interpreter {
     pub(crate) fn setup_iterator_prototypes(&mut self) {
         // %IteratorPrototype% (§27.1.2)
@@ -383,7 +608,7 @@ impl Interpreter {
             "toArray".to_string(),
             0,
             |interp, this, _args| {
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -393,13 +618,13 @@ impl Interpreter {
                         Ok(Some(result)) => match interp.iterator_value(&result) {
                             Ok(v) => values.push(v),
                             Err(e) => {
-                                interp.iterator_close(&iter, JsValue::Undefined);
+                                let _ = iterator_close_getter(interp, &iter);
                                 return Completion::Throw(e);
                             }
                         },
                         Ok(None) => break,
                         Err(e) => {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            let _ = iterator_close_getter(interp, &iter);
                             return Completion::Throw(e);
                         }
                     }
@@ -420,11 +645,11 @@ impl Interpreter {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&callback, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
-                    interp.iterator_close(this, JsValue::Undefined);
+                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("callback is not a function");
                     return Completion::Throw(err);
                 }
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -441,14 +666,14 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[value, JsValue::Number(counter)],
                             ) {
-                                interp.iterator_close(&iter, JsValue::Undefined);
+                                let _ = iterator_close_getter(interp, &iter);
                                 return Completion::Throw(e);
                             }
                             counter += 1.0;
                         }
                         Ok(None) => break,
                         Err(e) => {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            let _ = iterator_close_getter(interp, &iter);
                             return Completion::Throw(e);
                         }
                     }
@@ -468,11 +693,11 @@ impl Interpreter {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
-                    interp.iterator_close(this, JsValue::Undefined);
+                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
                     return Completion::Throw(err);
                 }
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -491,12 +716,12 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => {
                                     if to_boolean(&v) {
-                                        interp.iterator_close(&iter, JsValue::Undefined);
+                                        let _ = iterator_close_getter(interp, &iter);
                                         return Completion::Normal(JsValue::Boolean(true));
                                     }
                                 }
                                 Completion::Throw(e) => {
-                                    interp.iterator_close(&iter, JsValue::Undefined);
+                                    let _ = iterator_close_getter(interp, &iter);
                                     return Completion::Throw(e);
                                 }
                                 _ => {}
@@ -505,7 +730,7 @@ impl Interpreter {
                         }
                         Ok(None) => return Completion::Normal(JsValue::Boolean(false)),
                         Err(e) => {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            let _ = iterator_close_getter(interp, &iter);
                             return Completion::Throw(e);
                         }
                     }
@@ -524,11 +749,11 @@ impl Interpreter {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
-                    interp.iterator_close(this, JsValue::Undefined);
+                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
                     return Completion::Throw(err);
                 }
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -547,12 +772,12 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => {
                                     if !to_boolean(&v) {
-                                        interp.iterator_close(&iter, JsValue::Undefined);
+                                        let _ = iterator_close_getter(interp, &iter);
                                         return Completion::Normal(JsValue::Boolean(false));
                                     }
                                 }
                                 Completion::Throw(e) => {
-                                    interp.iterator_close(&iter, JsValue::Undefined);
+                                    let _ = iterator_close_getter(interp, &iter);
                                     return Completion::Throw(e);
                                 }
                                 _ => {}
@@ -561,7 +786,7 @@ impl Interpreter {
                         }
                         Ok(None) => return Completion::Normal(JsValue::Boolean(true)),
                         Err(e) => {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            let _ = iterator_close_getter(interp, &iter);
                             return Completion::Throw(e);
                         }
                     }
@@ -580,11 +805,11 @@ impl Interpreter {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
-                    interp.iterator_close(this, JsValue::Undefined);
+                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
                     return Completion::Throw(err);
                 }
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -603,12 +828,12 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => {
                                     if to_boolean(&v) {
-                                        interp.iterator_close(&iter, JsValue::Undefined);
+                                        let _ = iterator_close_getter(interp, &iter);
                                         return Completion::Normal(value);
                                     }
                                 }
                                 Completion::Throw(e) => {
-                                    interp.iterator_close(&iter, JsValue::Undefined);
+                                    let _ = iterator_close_getter(interp, &iter);
                                     return Completion::Throw(e);
                                 }
                                 _ => {}
@@ -617,7 +842,7 @@ impl Interpreter {
                         }
                         Ok(None) => return Completion::Normal(JsValue::Undefined),
                         Err(e) => {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            let _ = iterator_close_getter(interp, &iter);
                             return Completion::Throw(e);
                         }
                     }
@@ -636,11 +861,11 @@ impl Interpreter {
                 let reducer = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&reducer, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
-                    interp.iterator_close(this, JsValue::Undefined);
+                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("reducer is not a function");
                     return Completion::Throw(err);
                 }
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -664,7 +889,7 @@ impl Interpreter {
                             return Completion::Throw(err);
                         }
                         Err(e) => {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            let _ = iterator_close_getter(interp, &iter);
                             return Completion::Throw(e);
                         }
                     }
@@ -683,7 +908,7 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => accumulator = v,
                                 Completion::Throw(e) => {
-                                    interp.iterator_close(&iter, JsValue::Undefined);
+                                    let _ = iterator_close_getter(interp, &iter);
                                     return Completion::Throw(e);
                                 }
                                 _ => {}
@@ -692,7 +917,7 @@ impl Interpreter {
                         }
                         Ok(None) => return Completion::Normal(accumulator),
                         Err(e) => {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            let _ = iterator_close_getter(interp, &iter);
                             return Completion::Throw(e);
                         }
                     }
@@ -713,14 +938,19 @@ impl Interpreter {
             "map".to_string(),
             1,
             |interp, this, args| {
+                // Step 1-2: Require this to be an object
+                if !matches!(this, JsValue::Object(_)) {
+                    let err = interp.create_type_error("Iterator.prototype.map called on non-object");
+                    return Completion::Throw(err);
+                }
                 let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&mapper, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
-                    interp.iterator_close(this, JsValue::Undefined);
+                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
                     return Completion::Throw(err);
                 }
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -760,7 +990,7 @@ impl Interpreter {
                                     ),
                                     Completion::Throw(e) => {
                                         state_next.borrow_mut().4 = false;
-                                        interp.iterator_close(&iter, JsValue::Undefined);
+                                        let _ = iterator_close_getter(interp, &iter);
                                         Completion::Throw(e)
                                     }
                                     _ => Completion::Normal(
@@ -793,7 +1023,9 @@ impl Interpreter {
                         };
                         state_ret.borrow_mut().4 = false;
                         if alive {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            if let Err(e) = iterator_close_getter(interp, &iter) {
+                                return Completion::Throw(e);
+                            }
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -814,14 +1046,18 @@ impl Interpreter {
             "filter".to_string(),
             1,
             |interp, this, args| {
+                if !matches!(this, JsValue::Object(_)) {
+                    let err = interp.create_type_error("Iterator.prototype.filter called on non-object");
+                    return Completion::Throw(err);
+                }
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
-                    interp.iterator_close(this, JsValue::Undefined);
+                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
                     return Completion::Throw(err);
                 }
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -867,7 +1103,7 @@ impl Interpreter {
                                         }
                                         Completion::Throw(e) => {
                                             state_next.borrow_mut().4 = false;
-                                            interp.iterator_close(&iter, JsValue::Undefined);
+                                            let _ = iterator_close_getter(interp, &iter);
                                             return Completion::Throw(e);
                                         }
                                         _ => {}
@@ -899,7 +1135,9 @@ impl Interpreter {
                         };
                         state_ret.borrow_mut().4 = false;
                         if alive {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            if let Err(e) = iterator_close_getter(interp, &iter) {
+                                return Completion::Throw(e);
+                            }
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -920,27 +1158,41 @@ impl Interpreter {
             "take".to_string(),
             1,
             |interp, this, args| {
-                let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let limit = interp.to_number_coerce(&limit_val);
-                if limit.is_nan() || limit < 0.0 {
-                    interp.iterator_close(this, JsValue::Undefined);
-                    let err = interp
-                        .create_error("RangeError", "take limit must be a non-negative number");
+                // Step 2: If this is not an Object, throw TypeError
+                if !matches!(this, JsValue::Object(_)) {
+                    let err = interp.create_type_error("Iterator.prototype.take called on non-object");
                     return Completion::Throw(err);
                 }
-                let limit = if limit.is_infinite() {
-                    f64::INFINITY
-                } else {
-                    limit.trunc()
+                // Step 3: numLimit = ToNumber(limit) — can throw via valueOf
+                let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let num_limit = match interp.to_number_value(&limit_val) {
+                    Ok(n) => n,
+                    Err(e) => return Completion::Throw(e),
                 };
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                // Step 4: If numLimit is NaN, throw RangeError
+                if num_limit.is_nan() {
+                    let err = interp.create_error("RangeError", "take limit must be a non-negative number");
+                    return Completion::Throw(err);
+                }
+                // Step 5-6: integerLimit = ToIntegerOrInfinity, check < 0
+                let integer_limit = if num_limit.is_infinite() {
+                    num_limit
+                } else {
+                    num_limit.trunc()
+                };
+                if integer_limit < 0.0 {
+                    let err = interp.create_error("RangeError", "take limit must be a non-negative number");
+                    return Completion::Throw(err);
+                }
+                // Step 7: GetIteratorDirect
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
 
                 // state: (iter, next_method, remaining, alive)
                 let state: Rc<RefCell<(JsValue, JsValue, f64, bool)>> =
-                    Rc::new(RefCell::new((iter, next_method, limit, true)));
+                    Rc::new(RefCell::new((iter, next_method, integer_limit, true)));
 
                 let state_next = state.clone();
                 let next_fn = interp.create_function(JsFunction::native(
@@ -958,7 +1210,10 @@ impl Interpreter {
                         }
                         if remaining <= 0.0 {
                             state_next.borrow_mut().3 = false;
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            // IteratorClose
+                            if let Err(e) = iterator_close_getter(interp, &iter) {
+                                return Completion::Throw(e);
+                            }
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::Undefined, true),
                             );
@@ -973,7 +1228,9 @@ impl Interpreter {
                                 // If we just took the last one, close
                                 if remaining - 1.0 <= 0.0 {
                                     state_next.borrow_mut().3 = false;
-                                    interp.iterator_close(&iter, JsValue::Undefined);
+                                    if let Err(e) = iterator_close_getter(interp, &iter) {
+                                        return Completion::Throw(e);
+                                    }
                                 }
                                 Completion::Normal(interp.create_iter_result_object(value, false))
                             }
@@ -1002,7 +1259,9 @@ impl Interpreter {
                         };
                         state_ret.borrow_mut().3 = false;
                         if alive {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            if let Err(e) = iterator_close_getter(interp, &iter) {
+                                return Completion::Throw(e);
+                            }
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -1023,27 +1282,41 @@ impl Interpreter {
             "drop".to_string(),
             1,
             |interp, this, args| {
-                let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let limit = interp.to_number_coerce(&limit_val);
-                if limit.is_nan() || limit < 0.0 {
-                    interp.iterator_close(this, JsValue::Undefined);
-                    let err = interp
-                        .create_error("RangeError", "drop limit must be a non-negative number");
+                // Step 2: If this is not an Object, throw TypeError
+                if !matches!(this, JsValue::Object(_)) {
+                    let err = interp.create_type_error("Iterator.prototype.drop called on non-object");
                     return Completion::Throw(err);
                 }
-                let limit = if limit.is_infinite() {
-                    f64::INFINITY
-                } else {
-                    limit.trunc()
+                // Step 3: numLimit = ToNumber(limit)
+                let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let num_limit = match interp.to_number_value(&limit_val) {
+                    Ok(n) => n,
+                    Err(e) => return Completion::Throw(e),
                 };
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                // Step 4: If numLimit is NaN, throw RangeError
+                if num_limit.is_nan() {
+                    let err = interp.create_error("RangeError", "drop limit must be a non-negative number");
+                    return Completion::Throw(err);
+                }
+                // Step 5-6: integerLimit = ToIntegerOrInfinity, check < 0
+                let integer_limit = if num_limit.is_infinite() {
+                    num_limit
+                } else {
+                    num_limit.trunc()
+                };
+                if integer_limit < 0.0 {
+                    let err = interp.create_error("RangeError", "drop limit must be a non-negative number");
+                    return Completion::Throw(err);
+                }
+                // Step 7: GetIteratorDirect
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
 
                 // state: (iter, next_method, to_skip, skipped, alive)
                 let state: Rc<RefCell<(JsValue, JsValue, f64, bool, bool)>> =
-                    Rc::new(RefCell::new((iter, next_method, limit, false, true)));
+                    Rc::new(RefCell::new((iter, next_method, integer_limit, false, true)));
 
                 let state_next = state.clone();
                 let next_fn = interp.create_function(JsFunction::native(
@@ -1116,7 +1389,9 @@ impl Interpreter {
                         };
                         state_ret.borrow_mut().4 = false;
                         if alive {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            if let Err(e) = iterator_close_getter(interp, &iter) {
+                                return Completion::Throw(e);
+                            }
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -1137,14 +1412,18 @@ impl Interpreter {
             "flatMap".to_string(),
             1,
             |interp, this, args| {
+                if !matches!(this, JsValue::Object(_)) {
+                    let err = interp.create_type_error("Iterator.prototype.flatMap called on non-object");
+                    return Completion::Throw(err);
+                }
                 let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(&mapper, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
-                    interp.iterator_close(this, JsValue::Undefined);
+                    let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
                     return Completion::Throw(err);
                 }
-                let (iter, next_method) = match interp.get_iterator_direct(this) {
+                let (iter, next_method) = match get_iterator_direct_getter(interp, this) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -1208,9 +1487,9 @@ impl Interpreter {
                                 match interp.iterator_step_direct(ii, in_next) {
                                     Ok(Some(result)) => {
                                         let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
+                                            Ok(v) => v,
+                                            Err(e) => return Completion::Throw(e),
+                                        };
                                         return Completion::Normal(
                                             interp.create_iter_result_object(value, false),
                                         );
@@ -1222,8 +1501,7 @@ impl Interpreter {
                                     }
                                     Err(e) => {
                                         state_next.borrow_mut().6 = false;
-                                        interp
-                                            .iterator_close(&outer_iter, JsValue::Undefined);
+                                        let _ = iterator_close_getter(interp, &outer_iter);
                                         return Completion::Throw(e);
                                     }
                                 }
@@ -1233,9 +1511,9 @@ impl Interpreter {
                             match interp.iterator_step_direct(&outer_iter, &outer_next) {
                                 Ok(Some(result)) => {
                                     let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
                                     let mapped = interp.call_function(
                                         &mapper,
                                         &JsValue::Undefined,
@@ -1244,32 +1522,23 @@ impl Interpreter {
                                     state_next.borrow_mut().3 = counter + 1.0;
                                     match mapped {
                                         Completion::Normal(mapped_val) => {
-                                            // Try to get an iterator from mapped_val
-                                            match interp.get_iterator(&mapped_val) {
-                                                Ok(new_inner) => {
-                                                    let inner_next_method = if let JsValue::Object(io) = &new_inner {
-                                                        interp.get_object(io.id).map(|od| od.borrow().get_property("next")).unwrap_or(JsValue::Undefined)
-                                                    } else {
-                                                        JsValue::Undefined
-                                                    };
+                                            // GetIteratorFlattenable(mapped, reject-primitives)
+                                            match get_iterator_flattenable(interp, &mapped_val, true) {
+                                                Ok((new_inner, inner_next_method)) => {
                                                     state_next.borrow_mut().4 = Some(new_inner);
                                                     state_next.borrow_mut().5 = Some(inner_next_method);
                                                     continue;
                                                 }
                                                 Err(e) => {
                                                     state_next.borrow_mut().6 = false;
-                                                    interp.iterator_close(
-                                                        &outer_iter,
-                                                        JsValue::Undefined,
-                                                    );
+                                                    let _ = iterator_close_getter(interp, &outer_iter);
                                                     return Completion::Throw(e);
                                                 }
                                             }
                                         }
                                         Completion::Throw(e) => {
                                             state_next.borrow_mut().6 = false;
-                                            interp
-                                                .iterator_close(&outer_iter, JsValue::Undefined);
+                                            let _ = iterator_close_getter(interp, &outer_iter);
                                             return Completion::Throw(e);
                                         }
                                         _ => {
@@ -1313,9 +1582,11 @@ impl Interpreter {
                         state_ret.borrow_mut().5 = None;
                         if alive {
                             if let Some(ref ii) = inner_iter {
-                                interp.iterator_close(ii, JsValue::Undefined);
+                                let _ = iterator_close_getter(interp, ii);
                             }
-                            interp.iterator_close(&outer_iter, JsValue::Undefined);
+                            if let Err(e) = iterator_close_getter(interp, &outer_iter) {
+                                return Completion::Throw(e);
+                            }
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -1340,43 +1611,74 @@ impl Interpreter {
             |interp, _this, args| {
                 let obj = args.first().cloned().unwrap_or(JsValue::Undefined);
 
-                // Try Symbol.iterator first
-                let sym_key = interp.get_symbol_iterator_key();
-                let mut iterator = None;
-
-                if let JsValue::Object(o) = &obj
-                    && let Some(ref key) = sym_key
-                    && let Some(obj_data) = interp.get_object(o.id)
-                {
-                    let iter_fn = obj_data.borrow().get_property(key);
-                    if !matches!(iter_fn, JsValue::Undefined) {
-                        match interp.call_function(&iter_fn, &obj, &[]) {
-                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
-                                iterator = Some(v);
-                            }
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => {
-                                let err = interp.create_type_error(
-                                    "Result of the Symbol.iterator method is not an object",
-                                );
-                                return Completion::Throw(err);
-                            }
+                // GetIteratorFlattenable(obj, iterate-strings)
+                // Step 1: If obj is not Object:
+                //   - if primitiveHandling is "iterate-strings" and obj is a string, get iterator
+                //   - else throw TypeError
+                let (iter_val, used_symbol_iterator) = if !matches!(&obj, JsValue::Object(_)) {
+                    if matches!(&obj, JsValue::String(_)) {
+                        // Strings are iterable - get iterator from them
+                        match interp.get_iterator(&obj) {
+                            Ok(it) => (it, true),
+                            Err(e) => return Completion::Throw(e),
                         }
-                    }
-                }
-
-                let iter_val = if let Some(it) = iterator {
-                    it
-                } else {
-                    // Treat obj as iterator directly — must have .next
-                    if !matches!(&obj, JsValue::Object(_)) {
-                        let err = interp.create_type_error("value is not an object");
+                    } else {
+                        let err = interp.create_type_error("Iterator.from requires an object or string");
                         return Completion::Throw(err);
                     }
-                    obj.clone()
+                } else {
+                    // obj is an object - check @@iterator
+                    let sym_key = interp.get_symbol_iterator_key();
+                    let iter_method = if let JsValue::Object(o) = &obj {
+                        if let Some(ref key) = sym_key {
+                            match interp.get_object_property(o.id, key, &obj) {
+                                Completion::Normal(v) => Some(v),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => Some(JsValue::Undefined),
+                            }
+                        } else {
+                            Some(JsValue::Undefined)
+                        }
+                    } else {
+                        Some(JsValue::Undefined)
+                    };
+
+                    if let Some(method) = iter_method {
+                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            // Has @@iterator — must be callable
+                            let is_callable = if let JsValue::Object(mo) = &method {
+                                interp.get_object(mo.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false)
+                            } else {
+                                false
+                            };
+                            if !is_callable {
+                                let err = interp.create_type_error("Symbol.iterator is not a function");
+                                return Completion::Throw(err);
+                            }
+                            match interp.call_function(&method, &obj, &[]) {
+                                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
+                                    (v, true)
+                                }
+                                Completion::Normal(_) => {
+                                    let err = interp.create_type_error("Result of Symbol.iterator is not an object");
+                                    return Completion::Throw(err);
+                                }
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => {
+                                    let err = interp.create_type_error("Result of Symbol.iterator is not an object");
+                                    return Completion::Throw(err);
+                                }
+                            }
+                        } else {
+                            // @@iterator is null/undefined — use obj as iterator directly
+                            (obj.clone(), false)
+                        }
+                    } else {
+                        (obj.clone(), false)
+                    }
                 };
 
-                // Check if iter_val has %IteratorPrototype% in its chain
+                // Check if iter_val already has %IteratorPrototype% in its chain
                 let has_iter_proto = if let JsValue::Object(io) = &iter_val {
                     if let Some(iter_obj) = interp.get_object(io.id) {
                         let ip = interp.iterator_prototype.clone();
@@ -1401,12 +1703,12 @@ impl Interpreter {
                     false
                 };
 
-                if has_iter_proto {
+                if has_iter_proto && used_symbol_iterator {
                     return Completion::Normal(iter_val);
                 }
 
-                // Wrap with a forwarding iterator
-                let (iter, next_method) = match interp.get_iterator_direct(&iter_val) {
+                // Wrap with a forwarding WrapForValidIteratorPrototype iterator
+                let (iter, next_method) = match get_iterator_direct_getter(interp, &iter_val) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -1462,7 +1764,10 @@ impl Interpreter {
                         };
                         state_ret.borrow_mut().2 = false;
                         if alive {
-                            interp.iterator_close(&iter, JsValue::Undefined);
+                            // Use get_object_property to get .return (handles getters)
+                            if let Err(e) = iterator_close_getter(interp, &iter) {
+                                return Completion::Throw(e);
+                            }
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -1486,26 +1791,37 @@ impl Interpreter {
             "concat".to_string(),
             1,
             |interp, _this, args| {
-                // Validate all args are iterable first
+                // Validate all args are iterable first (must be objects with @@iterator)
                 let sym_key = interp.get_symbol_iterator_key();
                 let mut iterables: Vec<(JsValue, JsValue)> = Vec::new();
                 for arg in args {
+                    // Per spec: each argument must NOT be a primitive (reject-primitives)
+                    if !matches!(arg, JsValue::Object(_)) {
+                        let err = interp.create_type_error("value is not iterable");
+                        return Completion::Throw(err);
+                    }
                     if let Some(ref key) = sym_key {
-                        let iter_fn = match arg {
-                            JsValue::Object(o) => interp
-                                .get_object(o.id)
-                                .map(|od| od.borrow().get_property(key))
-                                .unwrap_or(JsValue::Undefined),
-                            JsValue::String(_) => {
-                                let str_proto = interp.string_prototype.clone();
-                                str_proto
-                                    .map(|p| p.borrow().get_property(key))
-                                    .unwrap_or(JsValue::Undefined)
+                        let iter_fn = if let JsValue::Object(o) = arg {
+                            match interp.get_object_property(o.id, key, arg) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
                             }
-                            _ => JsValue::Undefined,
+                        } else {
+                            JsValue::Undefined
                         };
-                        if matches!(iter_fn, JsValue::Undefined) {
+                        if matches!(iter_fn, JsValue::Undefined | JsValue::Null) {
                             let err = interp.create_type_error("value is not iterable");
+                            return Completion::Throw(err);
+                        }
+                        // Verify it's callable
+                        let is_callable = if let JsValue::Object(fo) = &iter_fn {
+                            interp.get_object(fo.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false)
+                        } else {
+                            false
+                        };
+                        if !is_callable {
+                            let err = interp.create_type_error("Symbol.iterator is not a function");
                             return Completion::Throw(err);
                         }
                         iterables.push((arg.clone(), iter_fn));
@@ -1586,13 +1902,12 @@ impl Interpreter {
                                         );
                                         return Completion::Throw(err);
                                     }
-                                    let next_method = if let JsValue::Object(io) = &new_iter {
-                                        interp
-                                            .get_object(io.id)
-                                            .map(|od| od.borrow().get_property("next"))
-                                            .unwrap_or(JsValue::Undefined)
-                                    } else {
-                                        JsValue::Undefined
+                                    let next_method = match get_iterator_direct_getter(interp, &new_iter) {
+                                        Ok((_, nm)) => nm,
+                                        Err(e) => {
+                                            state_next.borrow_mut().4 = false;
+                                            return Completion::Throw(e);
+                                        }
                                     };
                                     state_next.borrow_mut().2 = Some(new_iter);
                                     state_next.borrow_mut().3 = Some(next_method);
@@ -1626,7 +1941,9 @@ impl Interpreter {
                         state_ret.borrow_mut().2 = None;
                         state_ret.borrow_mut().3 = None;
                         if alive && let Some(ref ci) = cur_iter {
-                            interp.iterator_close(ci, JsValue::Undefined);
+                            if let Err(e) = iterator_close_getter(interp, ci) {
+                                return Completion::Throw(e);
+                            }
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -1653,50 +1970,64 @@ impl Interpreter {
             |interp, _this, args| {
                 let iterables_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
 
-                // Step 1: If iterables is not an Object, throw TypeError
-                if !matches!(&iterables_arg, JsValue::Object(_)) {
+                // Step 1: If iterables is not an Object, throw a TypeError
+                if !matches!(iterables_arg, JsValue::Object(_)) {
                     let err = interp.create_type_error("iterables is not an object");
                     return Completion::Throw(err);
                 }
 
-                // Get mode from options
+                // Step 2: GetOptionsObject(options)
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(options, JsValue::Undefined | JsValue::Object(_)) {
+                    let err = interp.create_type_error("options must be an object or undefined");
+                    return Completion::Throw(err);
+                }
+
+                // Step 3: Get mode — NOT ToString, direct string comparison
                 let mode = if matches!(options, JsValue::Undefined) {
                     "shortest".to_string()
                 } else if let JsValue::Object(o) = &options {
-                    if let Some(od) = interp.get_object(o.id) {
-                        let mode_val = od.borrow().get_property("mode");
-                        if matches!(mode_val, JsValue::Undefined) {
-                            "shortest".to_string()
-                        } else {
-                            let s = to_js_string(&mode_val);
-                            match s.as_str() {
-                                "shortest" | "longest" | "strict" => s,
-                                _ => {
-                                    let err = interp.create_error("RangeError",
-                                        "mode must be 'shortest', 'longest', or 'strict'");
-                                    return Completion::Throw(err);
-                                }
+                    let mode_val = match interp.get_object_property(o.id, "mode", &options) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => JsValue::Undefined,
+                    };
+                    if matches!(mode_val, JsValue::Undefined) {
+                        "shortest".to_string()
+                    } else if let JsValue::String(ref s) = mode_val {
+                        let rs = s.to_rust_string();
+                        match rs.as_str() {
+                            "shortest" | "longest" | "strict" => rs,
+                            _ => {
+                                let err = interp.create_type_error(
+                                    "mode must be 'shortest', 'longest', or 'strict'");
+                                return Completion::Throw(err);
                             }
                         }
                     } else {
-                        "shortest".to_string()
+                        let err = interp.create_type_error(
+                            "mode must be 'shortest', 'longest', or 'strict'");
+                        return Completion::Throw(err);
                     }
                 } else {
-                    let err = interp.create_type_error("options must be an object or undefined");
-                    return Completion::Throw(err);
+                    "shortest".to_string()
                 };
 
-                // Get padding from options (for "longest" mode)
-                let padding = if mode == "longest" {
+                // Step 7: Get padding from options (for "longest" mode)
+                let padding_option = if mode == "longest" {
                     if let JsValue::Object(o) = &options {
-                        if let Some(od) = interp.get_object(o.id) {
-                            let p = od.borrow().get_property("padding");
-                            if matches!(p, JsValue::Undefined) {
-                                None
-                            } else {
-                                Some(p)
+                        let p = match interp.get_object_property(o.id, "padding", &options) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+                        if !matches!(p, JsValue::Undefined) {
+                            if !matches!(p, JsValue::Object(_)) {
+                                let err = interp.create_type_error(
+                                    "padding must be an object or undefined");
+                                return Completion::Throw(err);
                             }
+                            Some(p)
                         } else {
                             None
                         }
@@ -1707,108 +2038,88 @@ impl Interpreter {
                     None
                 };
 
-                // iterables must be iterable - get iterator from it
-                let iter_of_iterables = match interp.get_iterator(&iterables_arg) {
+                // Step 10: GetIterator(iterables, sync)
+                let (input_iter, input_next) = match get_iterator_getter(interp, &iterables_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
 
-                // Collect all iterables into (iterator, next_method) pairs
+                // Step 12: Collect all iterables using GetIteratorFlattenable(next, reject-strings)
                 let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
-                let iter_next = if let JsValue::Object(io) = &iter_of_iterables {
-                    interp.get_object(io.id)
-                        .map(|od| od.borrow().get_property("next"))
-                        .unwrap_or(JsValue::Undefined)
-                } else {
-                    JsValue::Undefined
-                };
 
                 loop {
-                    match interp.iterator_step_direct(&iter_of_iterables, &iter_next) {
-                        Ok(Some(result)) => {
-                            let iterable = match interp.iterator_value(&result) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            match interp.get_iterator(&iterable) {
-                                Ok(it) => {
-                                    let nm = if let JsValue::Object(io) = &it {
-                                        interp.get_object(io.id)
-                                            .map(|od| od.borrow().get_property("next"))
-                                            .unwrap_or(JsValue::Undefined)
-                                    } else {
-                                        JsValue::Undefined
-                                    };
-                                    iters.push((it, nm));
-                                }
+                    match iterator_step_value_getter(interp, &input_iter, &input_next) {
+                        Ok(Some(next_val)) => {
+                            match get_iterator_flattenable(interp, &next_val, true) {
+                                Ok(pair) => iters.push(pair),
                                 Err(e) => {
-                                    // Close all already-opened iterators
-                                    for (it, _) in &iters {
-                                        interp.iterator_close(it, JsValue::Undefined);
-                                    }
+                                    // IfAbruptCloseIterators(iter, « inputIter » + iters) — reverse order
+                                    let mut all = vec![(input_iter.clone(), input_next.clone())];
+                                    all.extend(iters.iter().cloned());
+                                    let _ = iterator_close_all(interp, &all, Err(e.clone()));
                                     return Completion::Throw(e);
                                 }
                             }
                         }
                         Ok(None) => break,
                         Err(e) => {
-                            for (it, _) in &iters {
-                                interp.iterator_close(it, JsValue::Undefined);
-                            }
+                            // IfAbruptCloseIterators(next, iters) — just the collected iters
+                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                             return Completion::Throw(e);
                         }
                     }
                 }
 
-                // Collect padding values (for longest mode)
-                let padding_values: Vec<JsValue> = if let Some(ref pad_iterable) = padding {
-                    let mut pads = Vec::new();
-                    match interp.get_iterator(pad_iterable) {
-                        Ok(pad_iter) => {
-                            let pad_next = if let JsValue::Object(io) = &pad_iter {
-                                interp.get_object(io.id)
-                                    .map(|od| od.borrow().get_property("next"))
-                                    .unwrap_or(JsValue::Undefined)
-                            } else {
-                                JsValue::Undefined
-                            };
-                            loop {
-                                match interp.iterator_step_direct(&pad_iter, &pad_next) {
-                                    Ok(Some(result)) => match interp.iterator_value(&result) {
-                                        Ok(v) => pads.push(v),
-                                        Err(e) => {
-                                            for (it, _) in &iters {
-                                                interp.iterator_close(it, JsValue::Undefined);
-                                            }
-                                            return Completion::Throw(e);
-                                        }
-                                    },
-                                    Ok(None) => break,
+                let iter_count = iters.len();
+
+                // Step 14: Collect padding values (exactly iter_count values)
+                let padding_values: Vec<JsValue> = if mode == "longest" {
+                    if padding_option.is_none() {
+                        vec![JsValue::Undefined; iter_count]
+                    } else {
+                        let pad_iterable = padding_option.unwrap();
+                        let (pi, pn) = match get_iterator_getter(interp, &pad_iterable) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                return Completion::Throw(e);
+                            }
+                        };
+                        let mut pads = Vec::with_capacity(iter_count);
+                        let mut using_iterator = true;
+                        for _ in 0..iter_count {
+                            if using_iterator {
+                                match iterator_step_value_getter(interp, &pi, &pn) {
+                                    Ok(Some(v)) => pads.push(v),
+                                    Ok(None) => {
+                                        using_iterator = false;
+                                        pads.push(JsValue::Undefined);
+                                    }
                                     Err(e) => {
-                                        for (it, _) in &iters {
-                                            interp.iterator_close(it, JsValue::Undefined);
-                                        }
+                                        let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                                         return Completion::Throw(e);
                                     }
                                 }
+                            } else {
+                                pads.push(JsValue::Undefined);
                             }
                         }
-                        Err(e) => {
-                            for (it, _) in &iters {
-                                interp.iterator_close(it, JsValue::Undefined);
+                        if using_iterator {
+                            if let Err(e) = iterator_close_getter(interp, &pi) {
+                                let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                return Completion::Throw(e);
                             }
-                            return Completion::Throw(e);
                         }
+                        pads
                     }
-                    pads
                 } else {
-                    Vec::new()
+                    vec![JsValue::Undefined; iter_count]
                 };
 
-                let num_iters = iters.len();
-                // state: (iters, exhausted, mode, padding_values, alive)
+                // State: (iters, exhausted, mode, padding, alive)
+                // exhausted tracks which iterators in openIters are exhausted
                 let state: Rc<RefCell<(Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>, bool)>> =
-                    Rc::new(RefCell::new((iters, vec![false; num_iters], mode, padding_values, true)));
+                    Rc::new(RefCell::new((iters, vec![false; iter_count], mode, padding_values, true)));
 
                 let state_next = state.clone();
                 let next_fn = interp.create_function(JsFunction::native(
@@ -1833,95 +2144,107 @@ impl Interpreter {
 
                         let mut values = Vec::with_capacity(iters.len());
                         let mut new_exhausted = exhausted.clone();
-                        let mut any_done = false;
-                        let mut all_done = true;
 
                         for (i, (it, nm)) in iters.iter().enumerate() {
                             if exhausted[i] {
-                                let pad = padding_values.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                values.push(pad);
+                                values.push(padding_values.get(i).cloned().unwrap_or(JsValue::Undefined));
                                 continue;
                             }
-                            all_done = false;
-                            match interp.iterator_step_direct(it, nm) {
-                                Ok(Some(result)) => match interp.iterator_value(&result) {
-                                    Ok(v) => values.push(v),
-                                    Err(e) => return Completion::Throw(e),
-                                },
+                            match iterator_step_value_getter(interp, it, nm) {
+                                Ok(Some(v)) => values.push(v),
                                 Ok(None) => {
-                                    any_done = true;
+                                    // Iterator done — remove from openIters
                                     new_exhausted[i] = true;
-                                    let pad = padding_values.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                    values.push(pad);
+
+                                    if mode == "shortest" {
+                                        // IteratorCloseAll(openIters, ReturnCompletion(undefined))
+                                        state_next.borrow_mut().4 = false;
+                                        let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                            .filter(|(j, _)| !new_exhausted[*j])
+                                            .map(|(_, pair)| pair.clone())
+                                            .collect();
+                                        if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                                            return Completion::Throw(e);
+                                        }
+                                        return Completion::Normal(
+                                            interp.create_iter_result_object(JsValue::Undefined, true),
+                                        );
+                                    } else if mode == "strict" {
+                                        if i != 0 {
+                                            // i ≠ 0: immediately close all open iters with TypeError
+                                            state_next.borrow_mut().4 = false;
+                                            let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                                .filter(|(j, _)| !new_exhausted[*j])
+                                                .map(|(_, pair)| pair.clone())
+                                                .collect();
+                                            let err = interp.create_type_error(
+                                                "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths");
+                                            let _ = iterator_close_all(interp, &open, Err(err.clone()));
+                                            return Completion::Throw(err);
+                                        }
+                                        // i = 0: check all other iterators
+                                        for k in 1..iters.len() {
+                                            if new_exhausted[k] { continue; }
+                                            match iterator_step_value_getter(interp, &iters[k].0, &iters[k].1) {
+                                                Ok(None) => {
+                                                    new_exhausted[k] = true;
+                                                }
+                                                Ok(Some(_)) => {
+                                                    // Mismatch — not all done
+                                                    state_next.borrow_mut().4 = false;
+                                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                                        .filter(|(j, _)| !new_exhausted[*j])
+                                                        .map(|(_, pair)| pair.clone())
+                                                        .collect();
+                                                    let err = interp.create_type_error(
+                                                        "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths");
+                                                    let _ = iterator_close_all(interp, &open, Err(err.clone()));
+                                                    return Completion::Throw(err);
+                                                }
+                                                Err(e) => {
+                                                    // Remove iters[k] from openIters
+                                                    new_exhausted[k] = true;
+                                                    state_next.borrow_mut().4 = false;
+                                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                                        .filter(|(j, _)| !new_exhausted[*j])
+                                                        .map(|(_, pair)| pair.clone())
+                                                        .collect();
+                                                    let _ = iterator_close_all(interp, &open, Err(e.clone()));
+                                                    return Completion::Throw(e);
+                                                }
+                                            }
+                                        }
+                                        // All done together
+                                        state_next.borrow_mut().4 = false;
+                                        return Completion::Normal(
+                                            interp.create_iter_result_object(JsValue::Undefined, true),
+                                        );
+                                    } else {
+                                        // longest mode: append padding value
+                                        values.push(padding_values.get(i).cloned().unwrap_or(JsValue::Undefined));
+                                    }
                                 }
                                 Err(e) => {
                                     state_next.borrow_mut().4 = false;
-                                    // Close remaining non-exhausted iterators
-                                    for (j, (jt, _)) in iters.iter().enumerate() {
-                                        if j != i && !new_exhausted[j] {
-                                            interp.iterator_close(jt, JsValue::Undefined);
-                                        }
-                                    }
+                                    state_next.borrow_mut().1 = new_exhausted.clone();
+                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                        .filter(|(j, _)| !new_exhausted[*j] && *j != i)
+                                        .map(|(_, pair)| pair.clone())
+                                        .collect();
+                                    let _ = iterator_close_all(interp, &open, Err(e.clone()));
                                     return Completion::Throw(e);
                                 }
                             }
                         }
 
-                        if all_done {
+                        state_next.borrow_mut().1 = new_exhausted.clone();
+
+                        // For longest mode: check if ALL are now exhausted
+                        if mode == "longest" && new_exhausted.iter().all(|e| *e) {
                             state_next.borrow_mut().4 = false;
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::Undefined, true),
                             );
-                        }
-
-                        state_next.borrow_mut().1 = new_exhausted.clone();
-
-                        match mode.as_str() {
-                            "shortest" => {
-                                if any_done {
-                                    state_next.borrow_mut().4 = false;
-                                    // Close non-exhausted iterators
-                                    for (i, (it, _)) in iters.iter().enumerate() {
-                                        if !new_exhausted[i] {
-                                            interp.iterator_close(it, JsValue::Undefined);
-                                        }
-                                    }
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
-                                    );
-                                }
-                            }
-                            "longest" => {
-                                if new_exhausted.iter().all(|e| *e) {
-                                    state_next.borrow_mut().4 = false;
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
-                                    );
-                                }
-                            }
-                            "strict" => {
-                                if any_done {
-                                    // Check if all are done
-                                    if !new_exhausted.iter().all(|e| *e) {
-                                        state_next.borrow_mut().4 = false;
-                                        // Close remaining non-exhausted
-                                        for (i, (it, _)) in iters.iter().enumerate() {
-                                            if !new_exhausted[i] {
-                                                interp.iterator_close(it, JsValue::Undefined);
-                                            }
-                                        }
-                                        let err = interp.create_type_error(
-                                            "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths",
-                                        );
-                                        return Completion::Throw(err);
-                                    }
-                                    state_next.borrow_mut().4 = false;
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
-                                    );
-                                }
-                            }
-                            _ => {}
                         }
 
                         let arr = interp.create_array(values);
@@ -1940,10 +2263,12 @@ impl Interpreter {
                         };
                         state_ret.borrow_mut().4 = false;
                         if alive {
-                            for (i, (it, _)) in iters.iter().enumerate() {
-                                if !exhausted[i] {
-                                    interp.iterator_close(it, JsValue::Undefined);
-                                }
+                            let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                .filter(|(i, _)| !exhausted[*i])
+                                .map(|(_, pair)| pair.clone())
+                                .collect();
+                            if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                                return Completion::Throw(e);
                             }
                         }
                         Completion::Normal(
@@ -1970,7 +2295,7 @@ impl Interpreter {
             |interp, _this, args| {
                 let iterables_obj = args.first().cloned().unwrap_or(JsValue::Undefined);
 
-                // Must be an object
+                // Step 1: iterables must be an object
                 let obj_id = match &iterables_obj {
                     JsValue::Object(o) => o.id,
                     _ => {
@@ -1979,44 +2304,58 @@ impl Interpreter {
                     }
                 };
 
-                // Get mode from options
+                // Step 2: GetOptionsObject(options)
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                if !matches!(options, JsValue::Undefined | JsValue::Object(_)) {
+                    let err = interp.create_type_error("options must be an object or undefined");
+                    return Completion::Throw(err);
+                }
+
+                // Step 3: Get mode — direct string comparison, no ToString
                 let mode = if matches!(options, JsValue::Undefined) {
                     "shortest".to_string()
                 } else if let JsValue::Object(o) = &options {
-                    if let Some(od) = interp.get_object(o.id) {
-                        let mode_val = od.borrow().get_property("mode");
-                        if matches!(mode_val, JsValue::Undefined) {
-                            "shortest".to_string()
-                        } else {
-                            let s = to_js_string(&mode_val);
-                            match s.as_str() {
-                                "shortest" | "longest" | "strict" => s,
-                                _ => {
-                                    let err = interp.create_error("RangeError",
-                                        "mode must be 'shortest', 'longest', or 'strict'");
-                                    return Completion::Throw(err);
-                                }
+                    let mode_val = match interp.get_object_property(o.id, "mode", &options) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => JsValue::Undefined,
+                    };
+                    if matches!(mode_val, JsValue::Undefined) {
+                        "shortest".to_string()
+                    } else if let JsValue::String(ref s) = mode_val {
+                        let rs = s.to_rust_string();
+                        match rs.as_str() {
+                            "shortest" | "longest" | "strict" => rs,
+                            _ => {
+                                let err = interp.create_type_error(
+                                    "mode must be 'shortest', 'longest', or 'strict'");
+                                return Completion::Throw(err);
                             }
                         }
                     } else {
-                        "shortest".to_string()
+                        let err = interp.create_type_error(
+                            "mode must be 'shortest', 'longest', or 'strict'");
+                        return Completion::Throw(err);
                     }
                 } else {
-                    let err = interp.create_type_error("options must be an object or undefined");
-                    return Completion::Throw(err);
+                    "shortest".to_string()
                 };
 
-                // Get padding from options (for "longest" mode)
-                let padding_obj = if mode == "longest" {
+                // Step 7: Get padding from options (for "longest" mode)
+                let padding_option = if mode == "longest" {
                     if let JsValue::Object(o) = &options {
-                        if let Some(od) = interp.get_object(o.id) {
-                            let p = od.borrow().get_property("padding");
-                            if matches!(p, JsValue::Undefined) {
-                                None
-                            } else {
-                                Some(p)
+                        let p = match interp.get_object_property(o.id, "padding", &options) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+                        if !matches!(p, JsValue::Undefined) {
+                            if !matches!(p, JsValue::Object(_)) {
+                                let err = interp.create_type_error(
+                                    "padding must be an object or undefined");
+                                return Completion::Throw(err);
                             }
+                            Some(p)
                         } else {
                             None
                         }
@@ -2027,71 +2366,86 @@ impl Interpreter {
                     None
                 };
 
-                // Get own enumerable string keys from iterables object
-                let keys: Vec<String> = if let Some(od) = interp.get_object(obj_id) {
-                    let borrowed = od.borrow();
-                    borrowed.property_order.iter()
-                        .filter(|k| {
-                            borrowed.properties.get(*k)
-                                .and_then(|pd| pd.enumerable)
-                                .unwrap_or(false)
-                        })
-                        .cloned()
-                        .collect()
+                // Step 10: Get own property keys from iterables
+                let all_keys: Vec<String> = if let Some(od) = interp.get_object(obj_id) {
+                    od.borrow().property_order.clone()
                 } else {
                     Vec::new()
                 };
 
-                // Open iterators for each key
+                // Step 11-12: Filter to enumerable string keys, get values, open iterators
                 let mut key_names: Vec<String> = Vec::new();
                 let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
 
-                for key in &keys {
-                    let iterable = if let Some(od) = interp.get_object(obj_id) {
-                        od.borrow().get_property(key)
+                for key in &all_keys {
+                    // [[GetOwnProperty]](key) to check enumerable
+                    let is_enumerable = if let Some(od) = interp.get_object(obj_id) {
+                        od.borrow().properties.get(key)
+                            .and_then(|pd| pd.enumerable)
+                            .unwrap_or(false)
                     } else {
-                        JsValue::Undefined
+                        false
                     };
-                    match interp.get_iterator(&iterable) {
-                        Ok(it) => {
-                            let nm = if let JsValue::Object(io) = &it {
-                                interp.get_object(io.id)
-                                    .map(|od| od.borrow().get_property("next"))
-                                    .unwrap_or(JsValue::Undefined)
-                            } else {
-                                JsValue::Undefined
-                            };
+                    if !is_enumerable { continue; }
+
+                    // Get(iterables, key) — via getter-aware access
+                    let iterable = match interp.get_object_property(obj_id, key, &iterables_obj) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                            return Completion::Throw(e);
+                        }
+                        _ => JsValue::Undefined,
+                    };
+
+                    // Step c.iii: If value is not undefined
+                    if matches!(iterable, JsValue::Undefined) { continue; }
+
+                    // GetIteratorFlattenable(iterable, reject-primitives)
+                    match get_iterator_flattenable(interp, &iterable, true) {
+                        Ok(pair) => {
                             key_names.push(key.clone());
-                            iters.push((it, nm));
+                            iters.push(pair);
                         }
                         Err(e) => {
-                            for (it, _) in &iters {
-                                interp.iterator_close(it, JsValue::Undefined);
-                            }
+                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                             return Completion::Throw(e);
                         }
                     }
                 }
 
-                // Get padding values per key
-                let padding_values: Vec<JsValue> = if let Some(ref pad_obj_val) = padding_obj {
-                    if let JsValue::Object(po) = pad_obj_val {
-                        key_names.iter().map(|k| {
-                            interp.get_object(po.id)
-                                .map(|od| od.borrow().get_property(k))
-                                .unwrap_or(JsValue::Undefined)
-                        }).collect()
+                let iter_count = iters.len();
+
+                // Step 14: Get padding values per key (for longest mode)
+                let padding_values: Vec<JsValue> = if mode == "longest" {
+                    if let Some(ref pad_obj) = padding_option {
+                        if let JsValue::Object(po) = pad_obj {
+                            let mut pads = Vec::with_capacity(iter_count);
+                            for key in &key_names {
+                                let val = match interp.get_object_property(po.id, key, pad_obj) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => {
+                                        let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                                        return Completion::Throw(e);
+                                    }
+                                    _ => JsValue::Undefined,
+                                };
+                                pads.push(val);
+                            }
+                            pads
+                        } else {
+                            vec![JsValue::Undefined; iter_count]
+                        }
                     } else {
-                        vec![JsValue::Undefined; key_names.len()]
+                        vec![JsValue::Undefined; iter_count]
                     }
                 } else {
-                    vec![JsValue::Undefined; key_names.len()]
+                    vec![JsValue::Undefined; iter_count]
                 };
 
-                let num_iters = iters.len();
                 // state: (key_names, iters, exhausted, mode, padding_values, alive)
                 let state: Rc<RefCell<(Vec<String>, Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>, bool)>> =
-                    Rc::new(RefCell::new((key_names, iters, vec![false; num_iters], mode, padding_values, true)));
+                    Rc::new(RefCell::new((key_names, iters, vec![false; iter_count], mode, padding_values, true)));
 
                 let state_next = state.clone();
                 let next_fn = interp.create_function(JsFunction::native(
@@ -2116,95 +2470,104 @@ impl Interpreter {
 
                         let mut values: Vec<(String, JsValue)> = Vec::with_capacity(iters.len());
                         let mut new_exhausted = exhausted.clone();
-                        let mut any_done = false;
-                        let mut all_done = true;
 
                         for (i, (it, nm)) in iters.iter().enumerate() {
                             if exhausted[i] {
-                                let pad = padding_values.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                values.push((keys[i].clone(), pad));
+                                values.push((keys[i].clone(), padding_values.get(i).cloned().unwrap_or(JsValue::Undefined)));
                                 continue;
                             }
-                            all_done = false;
-                            match interp.iterator_step_direct(it, nm) {
-                                Ok(Some(result)) => match interp.iterator_value(&result) {
-                                    Ok(v) => values.push((keys[i].clone(), v)),
-                                    Err(e) => return Completion::Throw(e),
-                                },
+                            match iterator_step_value_getter(interp, it, nm) {
+                                Ok(Some(v)) => values.push((keys[i].clone(), v)),
                                 Ok(None) => {
-                                    any_done = true;
                                     new_exhausted[i] = true;
-                                    let pad = padding_values.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                    values.push((keys[i].clone(), pad));
+
+                                    if mode == "shortest" {
+                                        state_next.borrow_mut().5 = false;
+                                        let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                            .filter(|(j, _)| !new_exhausted[*j])
+                                            .map(|(_, pair)| pair.clone())
+                                            .collect();
+                                        if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                                            return Completion::Throw(e);
+                                        }
+                                        return Completion::Normal(
+                                            interp.create_iter_result_object(JsValue::Undefined, true),
+                                        );
+                                    } else if mode == "strict" {
+                                        if i != 0 {
+                                            state_next.borrow_mut().5 = false;
+                                            let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                                .filter(|(j, _)| !new_exhausted[*j])
+                                                .map(|(_, pair)| pair.clone())
+                                                .collect();
+                                            let err = interp.create_type_error(
+                                                "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths");
+                                            let _ = iterator_close_all(interp, &open, Err(err.clone()));
+                                            return Completion::Throw(err);
+                                        }
+                                        // i = 0: check all other iterators
+                                        for k in 1..iters.len() {
+                                            if new_exhausted[k] { continue; }
+                                            match iterator_step_value_getter(interp, &iters[k].0, &iters[k].1) {
+                                                Ok(None) => { new_exhausted[k] = true; }
+                                                Ok(Some(_)) => {
+                                                    state_next.borrow_mut().5 = false;
+                                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                                        .filter(|(j, _)| !new_exhausted[*j])
+                                                        .map(|(_, pair)| pair.clone())
+                                                        .collect();
+                                                    let err = interp.create_type_error(
+                                                        "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths");
+                                                    let _ = iterator_close_all(interp, &open, Err(err.clone()));
+                                                    return Completion::Throw(err);
+                                                }
+                                                Err(e) => {
+                                                    new_exhausted[k] = true;
+                                                    state_next.borrow_mut().5 = false;
+                                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                                        .filter(|(j, _)| !new_exhausted[*j])
+                                                        .map(|(_, pair)| pair.clone())
+                                                        .collect();
+                                                    let _ = iterator_close_all(interp, &open, Err(e.clone()));
+                                                    return Completion::Throw(e);
+                                                }
+                                            }
+                                        }
+                                        state_next.borrow_mut().5 = false;
+                                        return Completion::Normal(
+                                            interp.create_iter_result_object(JsValue::Undefined, true),
+                                        );
+                                    } else {
+                                        // longest mode: append padding value
+                                        values.push((keys[i].clone(), padding_values.get(i).cloned().unwrap_or(JsValue::Undefined)));
+                                    }
                                 }
                                 Err(e) => {
                                     state_next.borrow_mut().5 = false;
-                                    for (j, (jt, _)) in iters.iter().enumerate() {
-                                        if j != i && !new_exhausted[j] {
-                                            interp.iterator_close(jt, JsValue::Undefined);
-                                        }
-                                    }
+                                    state_next.borrow_mut().2 = new_exhausted.clone();
+                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                        .filter(|(j, _)| !new_exhausted[*j] && *j != i)
+                                        .map(|(_, pair)| pair.clone())
+                                        .collect();
+                                    let _ = iterator_close_all(interp, &open, Err(e.clone()));
                                     return Completion::Throw(e);
                                 }
                             }
                         }
 
-                        if all_done {
+                        state_next.borrow_mut().2 = new_exhausted.clone();
+
+                        // For longest mode: check if ALL are now exhausted
+                        if mode == "longest" && new_exhausted.iter().all(|e| *e) {
                             state_next.borrow_mut().5 = false;
                             return Completion::Normal(
                                 interp.create_iter_result_object(JsValue::Undefined, true),
                             );
                         }
 
-                        state_next.borrow_mut().2 = new_exhausted.clone();
-
-                        match mode.as_str() {
-                            "shortest" => {
-                                if any_done {
-                                    state_next.borrow_mut().5 = false;
-                                    for (i, (it, _)) in iters.iter().enumerate() {
-                                        if !new_exhausted[i] {
-                                            interp.iterator_close(it, JsValue::Undefined);
-                                        }
-                                    }
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
-                                    );
-                                }
-                            }
-                            "longest" => {
-                                if new_exhausted.iter().all(|e| *e) {
-                                    state_next.borrow_mut().5 = false;
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
-                                    );
-                                }
-                            }
-                            "strict" => {
-                                if any_done {
-                                    if !new_exhausted.iter().all(|e| *e) {
-                                        state_next.borrow_mut().5 = false;
-                                        for (i, (it, _)) in iters.iter().enumerate() {
-                                            if !new_exhausted[i] {
-                                                interp.iterator_close(it, JsValue::Undefined);
-                                            }
-                                        }
-                                        let err = interp.create_type_error(
-                                            "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths",
-                                        );
-                                        return Completion::Throw(err);
-                                    }
-                                    state_next.borrow_mut().5 = false;
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
-                                    );
-                                }
-                            }
-                            _ => {}
-                        }
-
-                        // Create result object with key-value pairs
+                        // Create null-prototype result object with key-value pairs
                         let result_obj = interp.create_object();
+                        result_obj.borrow_mut().prototype = None;
                         for (key, val) in &values {
                             result_obj.borrow_mut().insert_property(
                                 key.clone(),
@@ -2228,10 +2591,12 @@ impl Interpreter {
                         };
                         state_ret.borrow_mut().5 = false;
                         if alive {
-                            for (i, (it, _)) in iters.iter().enumerate() {
-                                if !exhausted[i] {
-                                    interp.iterator_close(it, JsValue::Undefined);
-                                }
+                            let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                .filter(|(i, _)| !exhausted[*i])
+                                .map(|(_, pair)| pair.clone())
+                                .collect();
+                            if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                                return Completion::Throw(e);
                             }
                         }
                         Completion::Normal(

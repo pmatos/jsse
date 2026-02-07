@@ -2392,10 +2392,6 @@ impl Interpreter {
                     }
                     let first = &args[0];
                     match first {
-                        JsValue::Number(n) => {
-                            let len = *n as usize;
-                            interp.create_typed_array_from_length(kind, len, &type_proto_clone)
-                        }
                         JsValue::Object(o) => {
                             if let Some(src_obj) = interp.get_object(o.id) {
                                 let src_ref = src_obj.borrow();
@@ -2413,14 +2409,36 @@ impl Interpreter {
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
                                     let buf_len = buf_rc.borrow().len();
                                     drop(src_ref);
-                                    let byte_offset = if args.len() > 1 {
-                                        interp.to_number_coerce(&args[1]) as usize
+                                    // §22.2.5.1.3 step 7: ToIndex(byteOffset)
+                                    let byte_offset = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
+                                        let offset_val = match interp.to_index(&args[1]) {
+                                            Completion::Normal(v) => v,
+                                            Completion::Throw(e) => return Completion::Throw(e),
+                                            _ => return Completion::Normal(JsValue::Undefined),
+                                        };
+                                        if let JsValue::Number(n) = offset_val { n as usize } else { 0 }
                                     } else { 0 };
+                                    // step 9: offset modulo elementSize
+                                    if byte_offset % bpe != 0 {
+                                        return Completion::Throw(interp.create_error("RangeError",
+                                            "start offset of typed array should be a multiple of BYTES_PER_ELEMENT"
+                                        ));
+                                    }
                                     let array_length = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                                        interp.to_number_coerce(&args[2]) as usize
+                                        let len_val = match interp.to_index(&args[2]) {
+                                            Completion::Normal(v) => v,
+                                            Completion::Throw(e) => return Completion::Throw(e),
+                                            _ => return Completion::Normal(JsValue::Undefined),
+                                        };
+                                        if let JsValue::Number(n) = len_val { n as usize } else { 0 }
                                     } else {
+                                        if buf_len < byte_offset {
+                                            return Completion::Throw(interp.create_error("RangeError",
+                                                "start offset is outside the bounds of the buffer"
+                                            ));
+                                        }
                                         if (buf_len - byte_offset) % bpe != 0 {
-                                            return Completion::Throw(interp.create_type_error(
+                                            return Completion::Throw(interp.create_error("RangeError",
                                                 "byte length of typed array should be a multiple of BYTES_PER_ELEMENT"
                                             ));
                                         }
@@ -2428,7 +2446,7 @@ impl Interpreter {
                                     };
                                     let byte_length = array_length * bpe;
                                     if byte_offset + byte_length > buf_len {
-                                        return Completion::Throw(interp.create_type_error("invalid typed array length"));
+                                        return Completion::Throw(interp.create_error("RangeError", "invalid typed array length"));
                                     }
                                     let ta_info = TypedArrayInfo {
                                         kind,
@@ -2516,8 +2534,13 @@ impl Interpreter {
                             Completion::Throw(interp.create_type_error("invalid argument"))
                         }
                         _ => {
-                            // Treat as length
-                            let len = interp.to_number_coerce(first) as usize;
+                            // §22.2.5.1: If firstArgument is not an Object, treat as length
+                            let len_val = match interp.to_index(first) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => return Completion::Normal(JsValue::Undefined),
+                            };
+                            let len = if let JsValue::Number(n) = len_val { n as usize } else { 0 };
                             interp.create_typed_array_from_length(kind, len, &type_proto_clone)
                         }
                     }

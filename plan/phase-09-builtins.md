@@ -133,7 +133,7 @@ Ordered roughly by dependency and importance.
   - [ ] `toLocaleString`, `[@@unscopables]`
   - [ ] Array species (`@@species`)
   - [ ] Array groupBy
-- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (947/1,438 = 65.9%, 323/736 constructors = 43.9%)
+- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (947/1,438 = 65.9%, 498/736 constructors = 67.7%)
   - [x] `%TypedArray%` intrinsic (abstract base) with shared prototype methods
   - [x] `%TypedArray%` constructor wiring: `.prototype`, `.constructor`, `@@species`, prototype chain inheritance
   - [x] All concrete constructors: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`
@@ -151,9 +151,9 @@ Ordered roughly by dependency and importance.
   - [x] `Map.prototype`: `clear`, `delete`, `entries`, `forEach`, `get`, `has`, `keys`, `set`, `size`, `values`, `[@@iterator]`, `[@@toStringTag]`
   - [x] `Map.groupBy()`
   - [x] `Map.prototype.getOrInsert()`, `Map.prototype.getOrInsertComputed()`
-- [ ] **Set** (§24.2) — 0% (0/383 tests)
-  - [ ] `Set()` constructor
-  - [ ] `Set.prototype`: `add`, `clear`, `delete`, `difference`, `entries`, `forEach`, `has`, `intersection`, `isDisjointFrom`, `isSubsetOf`, `isSupersetOf`, `keys`, `size`, `symmetricDifference`, `union`, `values`, `[@@iterator]`, `[@@toStringTag]`
+- [x] **Set** (§24.2) — 95% (365/383 tests)
+  - [x] `Set()` constructor
+  - [x] `Set.prototype`: `add`, `clear`, `delete`, `difference`, `entries`, `forEach`, `has`, `intersection`, `isDisjointFrom`, `isSubsetOf`, `isSupersetOf`, `keys`, `size`, `symmetricDifference`, `union`, `values`, `[@@iterator]`, `[@@toStringTag]`
 - [ ] **WeakMap** (§24.3)
   - [ ] `WeakMap()` constructor
   - [ ] `delete`, `get`, `has`, `set`
@@ -196,7 +196,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/WeakRef/` (22/29), `built-ins/FinalizationRegistry/` (34/47)
 
 ### 9.9 Control Abstraction Objects (§27)
-- [x] **Iterator** (§27.1) — ✅ 316/510 (62%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose.
+- [x] **Iterator** (§27.1) — ✅ 436/510 (85%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose. Getter-aware iterator protocol, IteratorCloseAll, GetIteratorFlattenable.
 - [x] **AsyncIteratorPrototype** (§27.1.4) — ✅ [Symbol.asyncIterator] returns this
 - [x] **Promise** (§27.2) — ✅ 548/639 tests passing (86%)
   - [x] `Promise()` constructor
