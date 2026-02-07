@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 35,353 / 48,257 run (73.26%)
+**Current pass rate:** 35,691 / 48,257 run (73.96%)
 
 ---
 
@@ -30,22 +30,23 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
-| Object | 93% | 3,176/3,411 |
-| Array | 81% | 2,496/3,079 |
+| Object | 93% | 3,181/3,411 |
+| Array | 82% | 2,553/3,079 |
 | String | 92% | 1,120/1,215 |
-| Function | 85% | 432/509 |
+| Function | 85% | 433/509 |
 | Iterator | 85% | 436/510 |
-| Promise | 86% | 548/639 |
+| Promise | 89% | 571/639 |
 | Map | 77% | 158/204 |
 | Set | 95% | 365/383 |
-| Date | 76% | 451/594 |
-| Reflect | 81% | 124/153 |
-| Proxy | 58% | 181/311 |
+| Date | 82% | 493/594 |
+| DataView | 80% | 454/561 |
+| Reflect | 86% | 132/153 |
+| Proxy | 58% | 182/311 |
 | Symbol | 71% | 67/94 |
-| RegExp | 65% | 1,214/1,879 |
-| Math | 97% | 316/327 |
-| WeakRef | 76% | 22/29 |
-| FinalizationRegistry | 72% | 34/47 |
+| RegExp | 64% | 1,216/1,879 |
+| Math | 96% | 316/327 |
+| WeakRef | 82% | 24/29 |
+| FinalizationRegistry | 76% | 36/47 |
 
 ---
 
@@ -127,6 +128,8 @@ These features block significant numbers of tests:
 47. ~~**Conformance batch 13: delete-private early error, numeric separators, function .length**~~ — ✅ Done (+286 new passes, 72.39% → 72.98%). Three orthogonal fixes: (1) Delete private name early error: `delete obj.#x` and `delete (obj.#x)` now produce SyntaxError per spec Static Semantics early error rules for UnaryExpression. Parser-only change in expressions.rs (+192 passes). (2) Numeric separator validation: reject invalid `_` placements in numeric literals — double underscores, trailing underscore, leading after prefix, adjacent to `.` or `e`/`E`. Lexer-only change (+25 passes). (3) Function `.length` stops counting at first default/rest parameter per §9.2.6 SetFunctionLength, and async non-generator functions no longer get `.prototype` property since they are not constructable (+69 passes).
 
 48. ~~**Conformance batch 14: ThrowTypeError intrinsic, Uint8Array base64/hex, Math.f16round/sumPrecise**~~ — ✅ Done (+133 new passes, 72.98% → 73.26%). Three orthogonal features: (1) %ThrowTypeError% intrinsic (§10.2.4): shared frozen function that throws TypeError, wired into strict arguments callee/caller accessors and Function.prototype.caller/arguments poison pills. Sloppy non-arrow/non-generator/non-async functions get own `caller`/`arguments` = null to shadow prototype accessor (Annex B). Method definitions strip these properties. ThrowTypeError: 6→13/14 (93%), Function: 397→432/509 (85%). (2) Uint8Array base64/hex methods (ES2025): fromBase64, fromHex, toBase64, toHex, setFromBase64, setFromHex with alphabet options, lastChunkHandling modes, whitespace stripping, proper error reporting. Uint8Array: 8→66/68 (97%). (3) Math.f16round (IEEE 754 binary16 conversion with manual bit manipulation) and Math.sumPrecise (BigInt exact arithmetic summation with iterator protocol). Math: 300→316/327 (97%).
+
+49. ~~**Conformance batch 15: DataView Float16, class this TDZ, Object.__proto__ + Array fixes**~~ — ✅ Done (+338 new passes, 73.26% → 73.96%). Three orthogonal features: (1) DataView getFloat16/setFloat16 (ES2025) and DataView setter coercion ordering fix — setters now perform ToNumber/ToBigInt on value BEFORE buffer detachment and bounds checks per spec. DataView: 293→454/561 (80%). (2) Derived constructor `this` TDZ enforcement — `this` is uninitialized until `super()` is called in derived class constructors, with proper new.target forwarding via `construct_with_new_target()`. Class `.prototype` property now writable:false per spec. (3) Object.prototype.__proto__ accessor (Annex B §B.2.2.1), Array.prototype[@@unscopables], and Symbol.isConcatSpreadable support in Array.prototype.concat. Object: 3,176→3,181/3,411 (93%), Array: 2,496→2,553/3,079 (82%), Promise: 548→571/639 (89%), Reflect: 124→132/153 (86%).
 
 ---
 

@@ -1,6 +1,150 @@
 use super::*;
 
 impl Interpreter {
+    /// Check if `this` is in TDZ (derived constructor before super() called).
+    /// Walks up the environment chain to find the `this` binding.
+    fn this_is_in_tdz(env: &EnvRef) -> bool {
+        let e = env.borrow();
+        if e.bindings.contains_key("this") {
+            return e.is_in_tdz("this");
+        }
+        if let Some(ref parent) = e.parent {
+            return Self::this_is_in_tdz(parent);
+        }
+        false
+    }
+
+    /// Initialize the `this` binding in a derived constructor's environment.
+    /// Walks up to find the function scope's `this` binding and marks it initialized.
+    fn initialize_this_binding(env: &EnvRef, value: JsValue) {
+        let mut e = env.borrow_mut();
+        if e.bindings.contains_key("this") {
+            e.bindings.insert(
+                "this".to_string(),
+                crate::interpreter::types::Binding {
+                    value,
+                    kind: crate::interpreter::types::BindingKind::Const,
+                    initialized: true,
+                },
+            );
+            return;
+        }
+        if let Some(ref parent) = e.parent {
+            let parent = parent.clone();
+            drop(e);
+            Self::initialize_this_binding(&parent, value);
+        }
+    }
+
+    /// Initialize instance elements (private/public fields) after super() in derived constructor.
+    fn initialize_instance_elements(&mut self, this_val: JsValue, env: &EnvRef) -> Result<(), JsValue> {
+        // Find the new.target constructor (which has the field defs for the current class)
+        let new_target_val = if let Some(ref nt) = self.new_target {
+            nt.clone()
+        } else {
+            return Ok(());
+        };
+        let (private_field_defs, public_field_defs) = if let JsValue::Object(ref o) = new_target_val
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            let borrowed = func_obj.borrow();
+            (
+                borrowed.class_private_field_defs.clone(),
+                borrowed.class_public_field_defs.clone(),
+            )
+        } else {
+            return Ok(());
+        };
+        let this_obj_id = if let JsValue::Object(ref o) = this_val {
+            o.id
+        } else {
+            return Ok(());
+        };
+        // Set constructor reference
+        if let Some(obj) = self.get_object(this_obj_id) {
+            obj.borrow_mut()
+                .insert_builtin("constructor".to_string(), new_target_val.clone());
+        }
+        // Create env for evaluating field initializers.
+        // Use the class_env's parent (the outer scope) so that __super__ is NOT
+        // accessible via eval() in field initializers (super() should be SyntaxError there).
+        let outer_env = if let JsValue::Object(ref o) = new_target_val
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
+                let cls_env = closure.borrow();
+                cls_env.parent.clone()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let init_parent = outer_env.unwrap_or_else(|| env.clone());
+        let init_env = Environment::new(Some(init_parent));
+        init_env.borrow_mut().bindings.insert(
+            "this".to_string(),
+            crate::interpreter::types::Binding {
+                value: this_val.clone(),
+                kind: crate::interpreter::types::BindingKind::Const,
+                initialized: true,
+            },
+        );
+        for def in &private_field_defs {
+            match def {
+                PrivateFieldDef::Field { name, initializer } => {
+                    let val = if let Some(init) = initializer {
+                        match self.eval_expr(init, &init_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => JsValue::Undefined,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if let Some(obj) = self.get_object(this_obj_id) {
+                        obj.borrow_mut()
+                            .private_fields
+                            .insert(name.clone(), PrivateElement::Field(val));
+                    }
+                }
+                PrivateFieldDef::Method { name, value } => {
+                    if let Some(obj) = self.get_object(this_obj_id) {
+                        obj.borrow_mut()
+                            .private_fields
+                            .insert(name.clone(), PrivateElement::Method(value.clone()));
+                    }
+                }
+                PrivateFieldDef::Accessor { name, get, set } => {
+                    if let Some(obj) = self.get_object(this_obj_id) {
+                        obj.borrow_mut().private_fields.insert(
+                            name.clone(),
+                            PrivateElement::Accessor {
+                                get: get.clone(),
+                                set: set.clone(),
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        for (key, initializer) in &public_field_defs {
+            let val = if let Some(init) = initializer {
+                match self.eval_expr(init, &init_env) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
+                }
+            } else {
+                JsValue::Undefined
+            };
+            if let Some(obj) = self.get_object(this_obj_id) {
+                obj.borrow_mut().insert_value(key.clone(), val);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn eval_expr(&mut self, expr: &Expression, env: &EnvRef) -> Completion {
         match expr {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
@@ -12,7 +156,19 @@ impl Interpreter {
                 }
             },
             Expression::This => {
-                Completion::Normal(env.borrow().get("this").unwrap_or(JsValue::Undefined))
+                match env.borrow().get("this") {
+                    Some(v) => Completion::Normal(v),
+                    None => {
+                        // Check if this is TDZ (derived constructor before super())
+                        if Self::this_is_in_tdz(env) {
+                            Completion::Throw(self.create_reference_error(
+                                "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                            ))
+                        } else {
+                            Completion::Normal(JsValue::Undefined)
+                        }
+                    }
+                }
             }
             Expression::Super => {
                 Completion::Normal(env.borrow().get("__super__").unwrap_or(JsValue::Undefined))
@@ -2369,27 +2525,62 @@ impl Interpreter {
         // Handle super() calls - call parent constructor with current this
         if matches!(callee, Expression::Super) {
             let super_ctor = env.borrow().get("__super__").unwrap_or(JsValue::Undefined);
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
             let arg_vals = match self.eval_spread_args(args, env) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
-            let result = self.call_function(&super_ctor, &this_val, &arg_vals);
-            // Per spec §13.3.7.1 step 6: BindThisValue(result)
-            // If parent constructor returned an object, rebind this to it
-            if let Completion::Normal(ref v) = result {
-                if matches!(v, JsValue::Object(_)) {
-                    env.borrow_mut().bindings.insert(
-                        "this".to_string(),
-                        crate::interpreter::types::Binding {
-                            value: v.clone(),
-                            kind: crate::interpreter::types::BindingKind::Const,
-                            initialized: true,
-                        },
-                    );
+            let this_in_tdz = Self::this_is_in_tdz(env);
+            if this_in_tdz {
+                // Derived constructor: use Construct semantics
+                // Per spec §13.3.7.1: super() must forward the derived class's new.target
+                let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
+                let saved_new_target = self.new_target.clone();
+                let result = self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
+                self.new_target = saved_new_target;
+                if let Completion::Normal(ref v) = result {
+                    // Set prototype from new.target.prototype (the derived class)
+                    if let JsValue::Object(this_obj) = v {
+                        if let Some(nt) = &self.new_target {
+                            if let JsValue::Object(nt_o) = nt {
+                                if let Some(nt_func) = self.get_object(nt_o.id) {
+                                    let proto_val = nt_func.borrow().get_property_value("prototype");
+                                    if let Some(JsValue::Object(proto_obj)) = proto_val {
+                                        if let Some(proto_rc) = self.get_object(proto_obj.id) {
+                                            if let Some(obj) = self.get_object(this_obj.id) {
+                                                obj.borrow_mut().prototype = Some(proto_rc);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Bind this in the function environment
+                    Self::initialize_this_binding(env, v.clone());
+                    // Initialize instance elements (private/public fields) for the current class
+                    if let Err(e) = self.initialize_instance_elements(v.clone(), env) {
+                        return Completion::Throw(e);
+                    }
                 }
+                return result;
+            } else {
+                // Base constructor super() call (shouldn't normally happen, but handle gracefully)
+                let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                let result = self.call_function(&super_ctor, &this_val, &arg_vals);
+                if let Completion::Normal(ref v) = result {
+                    if matches!(v, JsValue::Object(_)) {
+                        env.borrow_mut().bindings.insert(
+                            "this".to_string(),
+                            crate::interpreter::types::Binding {
+                                value: v.clone(),
+                                kind: crate::interpreter::types::BindingKind::Const,
+                                initialized: true,
+                            },
+                        );
+                    }
+                }
+                return result;
             }
-            return result;
         }
 
         // Handle member calls: obj.method()
@@ -5112,31 +5303,44 @@ impl Interpreter {
                         }
                         // Arrow functions inherit `this` and `arguments` from closure
                         if !is_arrow {
-                            let effective_this = if !is_strict && !closure_strict {
-                                if matches!(_this_val, JsValue::Undefined | JsValue::Null) {
-                                    self.global_env
-                                        .borrow()
-                                        .get("this")
-                                        .unwrap_or(_this_val.clone())
-                                } else if !matches!(_this_val, JsValue::Object(_)) {
-                                    match self.to_object(_this_val) {
-                                        Completion::Normal(v) => v,
-                                        _ => _this_val.clone(),
+                            if self.constructing_derived {
+                                // Derived constructor: this is in TDZ until super() is called
+                                func_env.borrow_mut().bindings.insert(
+                                    "this".to_string(),
+                                    Binding {
+                                        value: JsValue::Undefined,
+                                        kind: BindingKind::Const,
+                                        initialized: false,
+                                    },
+                                );
+                                self.constructing_derived = false;
+                            } else {
+                                let effective_this = if !is_strict && !closure_strict {
+                                    if matches!(_this_val, JsValue::Undefined | JsValue::Null) {
+                                        self.global_env
+                                            .borrow()
+                                            .get("this")
+                                            .unwrap_or(_this_val.clone())
+                                    } else if !matches!(_this_val, JsValue::Object(_)) {
+                                        match self.to_object(_this_val) {
+                                            Completion::Normal(v) => v,
+                                            _ => _this_val.clone(),
+                                        }
+                                    } else {
+                                        _this_val.clone()
                                     }
                                 } else {
                                     _this_val.clone()
-                                }
-                            } else {
-                                _this_val.clone()
-                            };
-                            func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
-                                Binding {
-                                    value: effective_this,
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                },
-                            );
+                                };
+                                func_env.borrow_mut().bindings.insert(
+                                    "this".to_string(),
+                                    Binding {
+                                        value: effective_this,
+                                        kind: BindingKind::Const,
+                                        initialized: true,
+                                    },
+                                );
+                            }
                             let is_simple =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let env_strict = func_env.borrow().strict;
@@ -5354,105 +5558,153 @@ impl Interpreter {
                 Err(e) => return Completion::Throw(e),
             }
         }
-        // Create new object for 'this'
-        let new_obj = self.create_object();
-        // Set prototype from constructor.prototype if available
-        let (private_field_defs, public_field_defs) = if let JsValue::Object(o) = &callee_val
+        // Check if this is a derived class constructor
+        let is_derived = if let JsValue::Object(o) = &callee_val
             && let Some(func_obj) = self.get_object(o.id)
         {
-            let proto = func_obj.borrow().get_property_value("prototype");
-            if let Some(JsValue::Object(proto_obj)) = proto
-                && let Some(proto_rc) = self.get_object(proto_obj.id)
-            {
-                new_obj.borrow_mut().prototype = Some(proto_rc);
-            }
-            // Store constructor reference
-            new_obj
-                .borrow_mut()
-                .insert_builtin("constructor".to_string(), callee_val.clone());
-            let borrowed = func_obj.borrow();
-            (
-                borrowed.class_private_field_defs.clone(),
-                borrowed.class_public_field_defs.clone(),
-            )
+            func_obj.borrow().is_derived_class_constructor
         } else {
-            (Vec::new(), Vec::new())
+            false
         };
-        // Initialize private fields on the new instance
-        let new_obj_id = new_obj.borrow().id.unwrap();
-        let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
-        // Create a temporary env for evaluating initializers with `this` bound
-        let init_env = Environment::new(Some(env.clone()));
-        init_env.borrow_mut().declare("this", BindingKind::Const);
-        let _ = init_env.borrow_mut().set("this", this_val.clone());
-        for def in &private_field_defs {
-            match def {
-                PrivateFieldDef::Field { name, initializer } => {
-                    let val = if let Some(init) = initializer {
-                        match self.eval_expr(init, &init_env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
+
+        if is_derived {
+            // Derived constructor: don't create this, let super() handle it
+            let prev_new_target = self.new_target.take();
+            self.new_target = Some(callee_val.clone());
+            self.last_call_had_explicit_return = false;
+            self.last_call_this_value = None;
+            let prev_constructing_derived = self.constructing_derived;
+            self.constructing_derived = true;
+            let result = self.call_function(&callee_val, &JsValue::Undefined, &evaluated_args);
+            self.constructing_derived = prev_constructing_derived;
+            let had_explicit_return = self.last_call_had_explicit_return;
+            let final_this = self.last_call_this_value.take();
+            self.new_target = prev_new_target;
+            match result {
+                Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                    Completion::Normal(v)
+                }
+                Completion::Normal(_) | Completion::Empty => {
+                    // If super() was never called, this is still uninitialized
+                    match final_this {
+                        Some(v) if matches!(v, JsValue::Object(_)) => Completion::Normal(v),
+                        Some(v) if !matches!(v, JsValue::Undefined) => Completion::Normal(v),
+                        _ => {
+                            Completion::Throw(self.create_reference_error(
+                                "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                            ))
                         }
-                    } else {
-                        JsValue::Undefined
-                    };
-                    if let Some(obj) = self.get_object(new_obj_id) {
-                        obj.borrow_mut()
-                            .private_fields
-                            .insert(name.clone(), PrivateElement::Field(val));
                     }
                 }
-                PrivateFieldDef::Method { name, value } => {
-                    if let Some(obj) = self.get_object(new_obj_id) {
-                        obj.borrow_mut()
-                            .private_fields
-                            .insert(name.clone(), PrivateElement::Method(value.clone()));
-                    }
-                }
-                PrivateFieldDef::Accessor { name, get, set } => {
-                    if let Some(obj) = self.get_object(new_obj_id) {
-                        obj.borrow_mut().private_fields.insert(
-                            name.clone(),
-                            PrivateElement::Accessor {
-                                get: get.clone(),
-                                set: set.clone(),
-                            },
-                        );
-                    }
-                }
+                other => other,
             }
-        }
-        for (key, initializer) in &public_field_defs {
-            let val = if let Some(init) = initializer {
-                match self.eval_expr(init, &init_env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
+        } else {
+            // Base constructor: create this object as before
+            let new_obj = self.create_object();
+            if let JsValue::Object(o) = &callee_val
+                && let Some(func_obj) = self.get_object(o.id)
+            {
+                let proto = func_obj.borrow().get_property_value("prototype");
+                if let Some(JsValue::Object(proto_obj)) = proto
+                    && let Some(proto_rc) = self.get_object(proto_obj.id)
+                {
+                    new_obj.borrow_mut().prototype = Some(proto_rc);
                 }
+                new_obj
+                    .borrow_mut()
+                    .insert_builtin("constructor".to_string(), callee_val.clone());
+            }
+            let (private_field_defs, public_field_defs) = if let JsValue::Object(o) = &callee_val
+                && let Some(func_obj) = self.get_object(o.id)
+            {
+                let borrowed = func_obj.borrow();
+                (
+                    borrowed.class_private_field_defs.clone(),
+                    borrowed.class_public_field_defs.clone(),
+                )
             } else {
-                JsValue::Undefined
+                (Vec::new(), Vec::new())
             };
-            if let Some(obj) = self.get_object(new_obj_id) {
-                obj.borrow_mut().insert_value(key.clone(), val);
+            let new_obj_id = new_obj.borrow().id.unwrap();
+            let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+            let init_env = Environment::new(Some(env.clone()));
+            init_env.borrow_mut().declare("this", BindingKind::Const);
+            let _ = init_env.borrow_mut().set("this", this_val.clone());
+            for def in &private_field_defs {
+                match def {
+                    PrivateFieldDef::Field { name, initializer } => {
+                        let val = if let Some(init) = initializer {
+                            match self.eval_expr(init, &init_env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        if let Some(obj) = self.get_object(new_obj_id) {
+                            obj.borrow_mut()
+                                .private_fields
+                                .insert(name.clone(), PrivateElement::Field(val));
+                        }
+                    }
+                    PrivateFieldDef::Method { name, value } => {
+                        if let Some(obj) = self.get_object(new_obj_id) {
+                            obj.borrow_mut()
+                                .private_fields
+                                .insert(name.clone(), PrivateElement::Method(value.clone()));
+                        }
+                    }
+                    PrivateFieldDef::Accessor { name, get, set } => {
+                        if let Some(obj) = self.get_object(new_obj_id) {
+                            obj.borrow_mut().private_fields.insert(
+                                name.clone(),
+                                PrivateElement::Accessor {
+                                    get: get.clone(),
+                                    set: set.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
             }
-        }
-        let prev_new_target = self.new_target.take();
-        self.new_target = Some(callee_val.clone());
-        self.last_call_had_explicit_return = false;
-        self.last_call_this_value = None;
-        let result = self.call_function(&callee_val, &this_val, &evaluated_args);
-        let had_explicit_return = self.last_call_had_explicit_return;
-        let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
-        self.new_target = prev_new_target;
-        match result {
-            Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
-                Completion::Normal(v)
+            for (key, initializer) in &public_field_defs {
+                let val = if let Some(init) = initializer {
+                    match self.eval_expr(init, &init_env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
+                } else {
+                    JsValue::Undefined
+                };
+                if let Some(obj) = self.get_object(new_obj_id) {
+                    obj.borrow_mut().insert_value(key.clone(), val);
+                }
             }
-            Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
-            other => other,
+            let prev_new_target = self.new_target.take();
+            self.new_target = Some(callee_val.clone());
+            self.last_call_had_explicit_return = false;
+            self.last_call_this_value = None;
+            let result = self.call_function(&callee_val, &this_val, &evaluated_args);
+            let had_explicit_return = self.last_call_had_explicit_return;
+            let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
+            self.new_target = prev_new_target;
+            match result {
+                Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                    Completion::Normal(v)
+                }
+                Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
+                other => other,
+            }
         }
     }
 
     pub(crate) fn construct(&mut self, constructor: &JsValue, args: &[JsValue]) -> Completion {
+        self.construct_with_new_target(constructor, args, constructor.clone())
+    }
+
+    /// Construct with a specific new.target (needed for super() calls where new.target
+    /// must be the derived class, not the parent constructor).
+    pub(crate) fn construct_with_new_target(&mut self, constructor: &JsValue, args: &[JsValue], new_target: JsValue) -> Completion {
         let co = if let JsValue::Object(co) = constructor {
             co.clone()
         } else {
@@ -5465,11 +5717,11 @@ impl Interpreter {
         if self.get_proxy_info(co.id).is_some() {
             let target_val = self.get_proxy_target_val(co.id);
             let args_array = self.create_array(args.to_vec());
-            let new_target = constructor.clone();
+            let nt = new_target.clone();
             match self.invoke_proxy_trap(
                 co.id,
                 "construct",
-                vec![target_val.clone(), args_array, new_target],
+                vec![target_val.clone(), args_array, nt],
             ) {
                 Ok(Some(v)) => {
                     if matches!(v, JsValue::Object(_)) {
@@ -5508,32 +5760,72 @@ impl Interpreter {
             }
         }
 
-        let new_obj = self.create_object();
-        if let Some(func_obj) = self.get_object(co.id) {
-            let proto = func_obj.borrow().get_property_value("prototype");
-            if let Some(JsValue::Object(proto_obj)) = proto
-                && let Some(proto_rc) = self.get_object(proto_obj.id)
-            {
-                new_obj.borrow_mut().prototype = Some(proto_rc);
-            }
-        }
-        let new_obj_id = new_obj.borrow().id.unwrap();
-        let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+        let is_derived = if let Some(func_obj) = self.get_object(co.id) {
+            func_obj.borrow().is_derived_class_constructor
+        } else {
+            false
+        };
 
-        let prev_new_target = self.new_target.take();
-        self.new_target = Some(constructor.clone());
-        self.last_call_had_explicit_return = false;
-        self.last_call_this_value = None;
-        let result = self.call_function(constructor, &this_val, args);
-        let had_explicit_return = self.last_call_had_explicit_return;
-        let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
-        self.new_target = prev_new_target;
-        match result {
-            Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
-                Completion::Normal(v)
+        if is_derived {
+            let prev_new_target = self.new_target.take();
+            self.new_target = Some(new_target.clone());
+            self.last_call_had_explicit_return = false;
+            self.last_call_this_value = None;
+            let prev_constructing_derived = self.constructing_derived;
+            self.constructing_derived = true;
+            let result = self.call_function(constructor, &JsValue::Undefined, args);
+            self.constructing_derived = prev_constructing_derived;
+            let had_explicit_return = self.last_call_had_explicit_return;
+            let final_this = self.last_call_this_value.take();
+            self.new_target = prev_new_target;
+            match result {
+                Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                    Completion::Normal(v)
+                }
+                Completion::Normal(_) | Completion::Empty => {
+                    match final_this {
+                        Some(v) if matches!(v, JsValue::Object(_)) => Completion::Normal(v),
+                        Some(v) if !matches!(v, JsValue::Undefined) => Completion::Normal(v),
+                        _ => {
+                            Completion::Throw(self.create_reference_error(
+                                "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                            ))
+                        }
+                    }
+                }
+                other => other,
             }
-            Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
-            other => other,
+        } else {
+            let new_obj = self.create_object();
+            // Use new_target's .prototype for the new object's [[Prototype]]
+            if let JsValue::Object(nt_o) = &new_target
+                && let Some(nt_func) = self.get_object(nt_o.id)
+            {
+                let proto = nt_func.borrow().get_property_value("prototype");
+                if let Some(JsValue::Object(proto_obj)) = proto
+                    && let Some(proto_rc) = self.get_object(proto_obj.id)
+                {
+                    new_obj.borrow_mut().prototype = Some(proto_rc);
+                }
+            }
+            let new_obj_id = new_obj.borrow().id.unwrap();
+            let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+
+            let prev_new_target = self.new_target.take();
+            self.new_target = Some(new_target.clone());
+            self.last_call_had_explicit_return = false;
+            self.last_call_this_value = None;
+            let result = self.call_function(constructor, &this_val, args);
+            let had_explicit_return = self.last_call_had_explicit_return;
+            let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
+            self.new_target = prev_new_target;
+            match result {
+                Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
+                    Completion::Normal(v)
+                }
+                Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
+                other => other,
+            }
         }
     }
 
@@ -6762,6 +7054,21 @@ impl Interpreter {
         };
 
         let ctor_val = self.create_function(ctor_func);
+
+        // Mark derived class constructors and make .prototype writable:false
+        if let JsValue::Object(ref o) = ctor_val {
+            if let Some(func_obj) = self.get_object(o.id) {
+                if super_val.is_some() {
+                    func_obj.borrow_mut().is_derived_class_constructor = true;
+                }
+                // Per spec §14.6.13: class .prototype is {writable: false, enumerable: false, configurable: false}
+                let proto_val_for_desc = func_obj.borrow().get_property("prototype");
+                func_obj.borrow_mut().insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val_for_desc, false, false, false),
+                );
+            }
+        }
 
         // Bind class name as immutable binding in class_env (spec §15.7.14 step 2.e)
         if !name.is_empty() {

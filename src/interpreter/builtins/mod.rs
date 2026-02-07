@@ -3303,13 +3303,22 @@ impl Interpreter {
                     "get __proto__".to_string(),
                     0,
                     |interp, this_val, _args| {
+                        // 1. Let O be ? ToObject(this value).
                         let obj_val = match interp.to_object(this_val) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => return Completion::Normal(JsValue::Undefined),
                         };
+                        // 2. Return ? O.[[GetPrototypeOf]]()
                         if let JsValue::Object(ref o) = obj_val {
                             if let Some(obj) = interp.get_object(o.id) {
+                                // Proxy getPrototypeOf trap
+                                if obj.borrow().is_proxy() {
+                                    match interp.proxy_get_prototype_of(o.id) {
+                                        Ok(v) => return Completion::Normal(v),
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                }
                                 return if let Some(ref proto) = obj.borrow().prototype {
                                     let pid = proto.borrow().id.unwrap();
                                     Completion::Normal(JsValue::Object(
@@ -3327,27 +3336,58 @@ impl Interpreter {
                     "set __proto__".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        // 1. Let O be ? RequireObjectCoercible(this value).
+                        if matches!(this_val, JsValue::Undefined | JsValue::Null) {
+                            return Completion::Throw(interp.create_type_error(
+                                "Cannot convert undefined or null to object",
+                            ));
+                        }
+                        let proto = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        // 2. If Type(proto) is neither Object nor Null, return undefined.
+                        if !matches!(proto, JsValue::Object(_) | JsValue::Null) {
+                            return Completion::Normal(JsValue::Undefined);
+                        }
+                        // 3. If Type(O) is not Object, return undefined.
                         if !matches!(this_val, JsValue::Object(_)) {
                             return Completion::Normal(JsValue::Undefined);
                         }
-                        if !matches!(val, JsValue::Object(_) | JsValue::Null) {
-                            return Completion::Normal(JsValue::Undefined);
-                        }
+                        // 4. Let status be ? O.[[SetPrototypeOf]](proto).
                         if let JsValue::Object(o) = this_val {
                             if let Some(obj) = interp.get_object(o.id) {
+                                if obj.borrow().is_proxy() {
+                                    match interp.proxy_set_prototype_of(o.id, &proto) {
+                                        Ok(success) => {
+                                            if !success {
+                                                return Completion::Throw(interp.create_type_error(
+                                                    "Object.prototype.__proto__: proxy setPrototypeOf returned false",
+                                                ));
+                                            }
+                                            return Completion::Normal(JsValue::Undefined);
+                                        }
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                }
+                                // OrdinarySetPrototypeOf: SameValue(V, current) check
+                                let current_proto_id = obj.borrow().prototype.as_ref().and_then(|p| p.borrow().id);
+                                let same = match (current_proto_id, &proto) {
+                                    (None, JsValue::Null) => true,
+                                    (Some(cid), JsValue::Object(p)) => cid == p.id,
+                                    _ => false,
+                                };
+                                if same {
+                                    return Completion::Normal(JsValue::Undefined);
+                                }
                                 if !obj.borrow().extensible {
                                     return Completion::Throw(interp.create_type_error(
                                         "Object is not extensible",
                                     ));
                                 }
-                                match &val {
+                                match &proto {
                                     JsValue::Null => {
                                         obj.borrow_mut().prototype = None;
                                     }
                                     JsValue::Object(p) => {
                                         if let Some(proto_rc) = interp.get_object(p.id) {
-                                            // Cycle check
                                             let mut check = Some(proto_rc.clone());
                                             while let Some(ref c) = check {
                                                 if c.borrow().id == obj.borrow().id {

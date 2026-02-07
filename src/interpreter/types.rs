@@ -288,6 +288,16 @@ impl Environment {
         }
     }
 
+    /// Check if a binding exists but is uninitialized (in TDZ).
+    /// Only checks the current environment, not parents.
+    pub fn is_in_tdz(&self, name: &str) -> bool {
+        if let Some(binding) = self.bindings.get(name) {
+            !binding.initialized
+        } else {
+            false
+        }
+    }
+
     pub fn has(&self, name: &str) -> bool {
         if let Some(ref with) = self.with_object {
             let obj = with.object.borrow();
@@ -631,6 +641,7 @@ pub struct JsObjectData {
     pub data_view_info: Option<DataViewInfo>,
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
+    pub is_derived_class_constructor: bool,
     pub(crate) disposable_stack: Option<DisposableStackData>,
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
 }
@@ -677,6 +688,7 @@ impl JsObjectData {
             data_view_info: None,
             promise_data: None,
             is_raw_json: false,
+            is_derived_class_constructor: false,
             disposable_stack: None,
             module_namespace: None,
         }

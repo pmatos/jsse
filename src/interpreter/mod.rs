@@ -79,6 +79,7 @@ pub struct Interpreter {
     throw_type_error: Option<JsValue>,
     last_call_had_explicit_return: bool,
     last_call_this_value: Option<JsValue>,
+    constructing_derived: bool,
 }
 
 pub struct LoadedModule {
@@ -171,6 +172,7 @@ impl Interpreter {
             throw_type_error: None,
             last_call_had_explicit_return: false,
             last_call_this_value: None,
+            constructing_derived: false,
         };
         interp.setup_globals();
         interp

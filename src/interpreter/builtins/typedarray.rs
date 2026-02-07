@@ -3149,42 +3149,55 @@ impl Interpreter {
         dv_getter!("byteLength", byte_length);
 
         // DataView get/set methods
+        // Spec ordering for GetViewValue:
+        // 1. Require this to be a DataView (no detach check yet)
+        // 2. ToIndex(byteOffset)
+        // 3. Check buffer detached
+        // 4. Check bounds
+        // 5. Read value
         macro_rules! dv_get_method {
             ($method_name:expr, $size:expr, $read_fn:expr) => {{
                 let getter = self.create_function(JsFunction::native(
                     $method_name.to_string(),
                     1,
                     |interp, this_val, args| {
+                        // Step 1: Require this to be a DataView (no detach check)
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id)
                         {
-                            let dv = {
+                            {
                                 let obj_ref = obj.borrow();
-                                if let Some(ref dv) = obj_ref.data_view_info {
-                                    if dv.is_detached.get() {
-                                        return Completion::Throw(
-                                            interp.create_type_error(
-                                                "DataView buffer is detached",
-                                            ),
-                                        );
-                                    }
-                                    dv.clone()
-                                } else {
+                                if obj_ref.data_view_info.is_none() {
                                     return Completion::Throw(
                                         interp.create_type_error("not a DataView"),
                                     );
                                 }
+                            }
+                            // Step 2: ToIndex(byteOffset) — before detach check
+                            let byte_offset = match interp.to_index(args.first().unwrap_or(&JsValue::Undefined)) {
+                                Completion::Normal(JsValue::Number(n)) => n as usize,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => 0,
                             };
-                            let byte_offset =
-                                interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined)) as usize;
                             let little_endian = if args.len() > 1 {
                                 to_boolean(&args[1])
                             } else {
                                 false
                             };
+                            // Step 3-5: Re-borrow, check detach, check bounds, read
+                            let dv = {
+                                let obj_ref = obj.borrow();
+                                let dv = obj_ref.data_view_info.as_ref().unwrap().clone();
+                                dv
+                            };
+                            if dv.is_detached.get() {
+                                return Completion::Throw(
+                                    interp.create_type_error("DataView buffer is detached"),
+                                );
+                            }
                             let idx = dv.byte_offset + byte_offset;
                             if idx + $size > dv.byte_offset + dv.byte_length {
-                                return Completion::Throw(interp.create_type_error(
+                                return Completion::Throw(interp.create_error("RangeError",
                                     "offset is outside the bounds of the DataView",
                                 ));
                             }
@@ -3281,50 +3294,135 @@ impl Interpreter {
                 value: num_bigint::BigInt::from(v),
             })
         });
+        dv_get_method!("getFloat16", 2, |buf: &[u8], le: bool| -> JsValue {
+            let bits = if le {
+                u16::from_le_bytes([buf[0], buf[1]])
+            } else {
+                u16::from_be_bytes([buf[0], buf[1]])
+            };
+            JsValue::Number(dv_f16_to_f64(bits))
+        });
 
         // DataView set methods
+        // Spec ordering for SetViewValue:
+        // 1. Require this to be a DataView (no detach check yet)
+        // 2. ToIndex(byteOffset)
+        // 3. ToNumber(value) or ToBigInt(value)
+        // 4. Check buffer detached
+        // 5. Check bounds
+        // 6. Write value
         macro_rules! dv_set_method {
-            ($method_name:expr, $size:expr, $write_fn:expr) => {{
+            ($method_name:expr, $size:expr, number, $write_fn:expr) => {{
                 let setter = self.create_function(JsFunction::native(
                     $method_name.to_string(),
                     2,
                     |interp, this_val, args| {
+                        // Step 1: Require this to be a DataView (no detach check)
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id)
                         {
-                            let dv = {
+                            {
                                 let obj_ref = obj.borrow();
-                                if let Some(ref dv) = obj_ref.data_view_info {
-                                    if dv.is_detached.get() {
-                                        return Completion::Throw(
-                                            interp.create_type_error(
-                                                "DataView buffer is detached",
-                                            ),
-                                        );
-                                    }
-                                    dv.clone()
-                                } else {
+                                if obj_ref.data_view_info.is_none() {
                                     return Completion::Throw(
                                         interp.create_type_error("not a DataView"),
                                     );
                                 }
+                            }
+                            // Step 2: ToIndex(byteOffset) — before detach check
+                            let byte_offset = match interp.to_index(args.first().unwrap_or(&JsValue::Undefined)) {
+                                Completion::Normal(JsValue::Number(n)) => n as usize,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => 0,
                             };
-                            let byte_offset =
-                                interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined)) as usize;
-                            let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                            // Step 3: ToNumber(value) — before detach check
+                            let num_value = match interp.to_number_value(args.get(1).unwrap_or(&JsValue::Undefined)) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             let little_endian = if args.len() > 2 {
                                 to_boolean(&args[2])
                             } else {
                                 false
                             };
+                            // Step 4-6: Re-borrow, check detach, check bounds, write
+                            let dv = {
+                                let obj_ref = obj.borrow();
+                                obj_ref.data_view_info.as_ref().unwrap().clone()
+                            };
+                            if dv.is_detached.get() {
+                                return Completion::Throw(
+                                    interp.create_type_error("DataView buffer is detached"),
+                                );
+                            }
                             let idx = dv.byte_offset + byte_offset;
                             if idx + $size > dv.byte_offset + dv.byte_length {
-                                return Completion::Throw(interp.create_type_error(
+                                return Completion::Throw(interp.create_error("RangeError",
                                     "offset is outside the bounds of the DataView",
                                 ));
                             }
                             let mut buf = dv.buffer.borrow_mut();
-                            $write_fn(&mut buf[idx..idx + $size], &value, little_endian);
+                            $write_fn(&mut buf[idx..idx + $size], num_value, little_endian);
+                            return Completion::Normal(JsValue::Undefined);
+                        }
+                        Completion::Throw(interp.create_type_error("not a DataView"))
+                    },
+                ));
+                dv_proto
+                    .borrow_mut()
+                    .insert_builtin($method_name.to_string(), setter);
+            }};
+            ($method_name:expr, $size:expr, bigint, $write_fn:expr) => {{
+                let setter = self.create_function(JsFunction::native(
+                    $method_name.to_string(),
+                    2,
+                    |interp, this_val, args| {
+                        // Step 1: Require this to be a DataView (no detach check)
+                        if let JsValue::Object(o) = this_val
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            {
+                                let obj_ref = obj.borrow();
+                                if obj_ref.data_view_info.is_none() {
+                                    return Completion::Throw(
+                                        interp.create_type_error("not a DataView"),
+                                    );
+                                }
+                            }
+                            // Step 2: ToIndex(byteOffset) — before detach check
+                            let byte_offset = match interp.to_index(args.first().unwrap_or(&JsValue::Undefined)) {
+                                Completion::Normal(JsValue::Number(n)) => n as usize,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => 0,
+                            };
+                            // Step 3: ToBigInt(value) — before detach check
+                            let bigint_value = match interp.to_bigint_value(args.get(1).unwrap_or(&JsValue::Undefined)) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let little_endian = if args.len() > 2 {
+                                to_boolean(&args[2])
+                            } else {
+                                false
+                            };
+                            // Step 4-6: Re-borrow, check detach, check bounds, write
+                            let dv = {
+                                let obj_ref = obj.borrow();
+                                obj_ref.data_view_info.as_ref().unwrap().clone()
+                            };
+                            if dv.is_detached.get() {
+                                return Completion::Throw(
+                                    interp.create_type_error("DataView buffer is detached"),
+                                );
+                            }
+                            let idx = dv.byte_offset + byte_offset;
+                            if idx + $size > dv.byte_offset + dv.byte_length {
+                                return Completion::Throw(interp.create_error("RangeError",
+                                    "offset is outside the bounds of the DataView",
+                                ));
+                            }
+                            let mut buf = dv.buffer.borrow_mut();
+                            $write_fn(&mut buf[idx..idx + $size], &bigint_value, little_endian);
                             return Completion::Normal(JsValue::Undefined);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
@@ -3336,43 +3434,47 @@ impl Interpreter {
             }};
         }
 
-        dv_set_method!("setInt8", 1, |buf: &mut [u8], v: &JsValue, _le: bool| {
-            buf[0] = to_number(v) as i32 as i8 as u8;
+        dv_set_method!("setInt8", 1, number, |buf: &mut [u8], n: f64, _le: bool| {
+            buf[0] = n as i32 as i8 as u8;
         });
-        dv_set_method!("setUint8", 1, |buf: &mut [u8], v: &JsValue, _le: bool| {
-            buf[0] = to_number(v) as i32 as u8;
+        dv_set_method!("setUint8", 1, number, |buf: &mut [u8], n: f64, _le: bool| {
+            buf[0] = n as i32 as u8;
         });
-        dv_set_method!("setInt16", 2, |buf: &mut [u8], v: &JsValue, le: bool| {
-            let n = to_number(v) as i16;
+        dv_set_method!("setInt16", 2, number, |buf: &mut [u8], n: f64, le: bool| {
+            let v = n as i16;
+            let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+            buf.copy_from_slice(&bytes);
+        });
+        dv_set_method!("setUint16", 2, number, |buf: &mut [u8], n: f64, le: bool| {
+            let v = n as u16;
+            let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+            buf.copy_from_slice(&bytes);
+        });
+        dv_set_method!("setInt32", 4, number, |buf: &mut [u8], n: f64, le: bool| {
+            let v = n as i32;
+            let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+            buf.copy_from_slice(&bytes);
+        });
+        dv_set_method!("setUint32", 4, number, |buf: &mut [u8], n: f64, le: bool| {
+            let v = n as u32;
+            let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+            buf.copy_from_slice(&bytes);
+        });
+        dv_set_method!("setFloat32", 4, number, |buf: &mut [u8], n: f64, le: bool| {
+            let v = n as f32;
+            let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+            buf.copy_from_slice(&bytes);
+        });
+        dv_set_method!("setFloat64", 8, number, |buf: &mut [u8], n: f64, le: bool| {
             let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
             buf.copy_from_slice(&bytes);
         });
-        dv_set_method!("setUint16", 2, |buf: &mut [u8], v: &JsValue, le: bool| {
-            let n = to_number(v) as u16;
-            let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
+        dv_set_method!("setFloat16", 2, number, |buf: &mut [u8], n: f64, le: bool| {
+            let bits = dv_f64_to_f16_bits(n);
+            let bytes = if le { bits.to_le_bytes() } else { bits.to_be_bytes() };
             buf.copy_from_slice(&bytes);
         });
-        dv_set_method!("setInt32", 4, |buf: &mut [u8], v: &JsValue, le: bool| {
-            let n = to_number(v) as i32;
-            let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
-        dv_set_method!("setUint32", 4, |buf: &mut [u8], v: &JsValue, le: bool| {
-            let n = to_number(v) as u32;
-            let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
-        dv_set_method!("setFloat32", 4, |buf: &mut [u8], v: &JsValue, le: bool| {
-            let n = to_number(v) as f32;
-            let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
-        dv_set_method!("setFloat64", 8, |buf: &mut [u8], v: &JsValue, le: bool| {
-            let n = to_number(v);
-            let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
-        dv_set_method!("setBigInt64", 8, |buf: &mut [u8], v: &JsValue, le: bool| {
+        dv_set_method!("setBigInt64", 8, bigint, |buf: &mut [u8], v: &JsValue, le: bool| {
             let n = match v {
                 JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
                 _ => 0,
@@ -3383,6 +3485,7 @@ impl Interpreter {
         dv_set_method!(
             "setBigUint64",
             8,
+            bigint,
             |buf: &mut [u8], v: &JsValue, le: bool| {
                 let n = match v {
                     JsValue::BigInt(b) => u64::try_from(&b.value).unwrap_or(0),
@@ -3535,6 +3638,116 @@ fn extract_ta_and_callback(
     Err(Completion::Throw(
         interp.create_type_error("not a TypedArray"),
     ))
+}
+
+/// Convert IEEE 754 binary16 (half-precision) bits to f64.
+fn dv_f16_to_f64(bits: u16) -> f64 {
+    let sign = ((bits >> 15) & 1) as u64;
+    let exp = ((bits >> 10) & 0x1F) as u64;
+    let frac = (bits & 0x3FF) as u64;
+
+    if exp == 0 {
+        if frac == 0 {
+            return f64::from_bits(sign << 63);
+        }
+        let mut shifts = 0_i32;
+        let mut f = frac;
+        while f & 0x400 == 0 {
+            f <<= 1;
+            shifts += 1;
+        }
+        let f64_exp = (1023 - 14 - shifts) as u64;
+        let f64_frac = (f & 0x3FF) << 42;
+        return f64::from_bits((sign << 63) | (f64_exp << 52) | f64_frac);
+    }
+
+    if exp == 31 {
+        if frac == 0 {
+            return f64::from_bits((sign << 63) | 0x7FF0_0000_0000_0000);
+        }
+        return f64::from_bits((sign << 63) | 0x7FF8_0000_0000_0000 | (frac << 42));
+    }
+
+    let f64_exp = (exp as i32 - 15 + 1023) as u64;
+    let f64_frac = frac << 42;
+    f64::from_bits((sign << 63) | (f64_exp << 52) | f64_frac)
+}
+
+/// Convert f64 to IEEE 754 binary16 (half-precision) bits.
+/// Uses round-to-nearest-even (banker's rounding).
+fn dv_f64_to_f16_bits(val: f64) -> u16 {
+    if val.is_nan() {
+        return 0x7E00; // NaN
+    }
+    if !val.is_finite() {
+        return if val > 0.0 { 0x7C00 } else { 0xFC00 };
+    }
+    if val == 0.0 {
+        return if val.is_sign_negative() { 0x8000 } else { 0x0000 };
+    }
+
+    let bits = val.to_bits();
+    let sign = ((bits >> 63) as u16) << 15;
+    let exp = ((bits >> 52) & 0x7FF) as i32;
+    let frac = bits & 0x000F_FFFF_FFFF_FFFF;
+    let unbiased = exp - 1023;
+
+    if unbiased > 15 {
+        return sign | 0x7C00; // Infinity
+    }
+
+    if unbiased >= -14 {
+        // Normal f16
+        let f16_exp = ((unbiased + 15) as u16) << 10;
+        let mantissa_10 = (frac >> 42) as u16;
+        let round_bits = frac & 0x3FF_FFFF_FFFF;
+        let halfway = 0x200_0000_0000_u64;
+
+        let rounded = if round_bits > halfway {
+            mantissa_10 + 1
+        } else if round_bits == halfway {
+            if mantissa_10 & 1 != 0 { mantissa_10 + 1 } else { mantissa_10 }
+        } else {
+            mantissa_10
+        };
+
+        let result = sign | f16_exp | (rounded & 0x3FF);
+        return if rounded > 0x3FF { result + (1 << 10) } else { result };
+    }
+
+    // Subnormal f16
+    let shift = (-14 - unbiased) as u64;
+    let full = (1_u64 << 52) | frac;
+    let total_shift = 42 + shift;
+
+    if total_shift >= 53 {
+        if total_shift == 53 {
+            if frac > 0 {
+                return sign | 1;
+            }
+            return sign;
+        }
+        return sign;
+    }
+
+    let mantissa = ((full >> total_shift) & 0x3FF) as u16;
+    let round_bit_pos = total_shift - 1;
+    let round_bit = (full >> round_bit_pos) & 1;
+    let sticky = if round_bit_pos > 0 {
+        full & ((1_u64 << round_bit_pos) - 1)
+    } else {
+        0
+    };
+    let rounded = if round_bit == 1 {
+        if sticky > 0 || (mantissa & 1 != 0) { mantissa + 1 } else { mantissa }
+    } else {
+        mantissa
+    };
+
+    if rounded >= 0x400 {
+        return sign | (1 << 10);
+    }
+    sign | rounded
 }
 
 fn to_integer(n: f64) -> f64 {

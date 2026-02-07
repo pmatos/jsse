@@ -1,5 +1,32 @@
 use super::super::*;
 
+// §7.2.2 IsArray — Proxy-aware check
+fn is_array_check(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue> {
+    if let Some(obj) = interp.get_object(obj_id) {
+        let (is_revoked, is_proxy, target_id, class) = {
+            let b = obj.borrow();
+            let tid = b.proxy_target.as_ref().and_then(|t| t.borrow().id);
+            // is_proxy() checks proxy_target.is_some(), but revoked proxies have proxy_target=None
+            // Use proxy_revoked flag to also detect revoked proxies
+            (b.proxy_revoked, b.is_proxy() || b.proxy_revoked, tid, b.class_name.clone())
+        };
+        if is_revoked {
+            return Err(interp.create_type_error(
+                "Cannot perform 'IsArray' on a proxy that has been revoked",
+            ));
+        }
+        if is_proxy {
+            if let Some(tid) = target_id {
+                return is_array_check(interp, tid);
+            }
+            return Ok(false);
+        }
+        Ok(class == "Array")
+    } else {
+        Ok(false)
+    }
+}
+
 fn to_object_val(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, Completion> {
     match interp.to_object(this) {
         Completion::Normal(v) => Ok(v),
@@ -16,7 +43,11 @@ fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, 
     } else {
         JsValue::Undefined
     };
-    let n = interp.to_number_coerce(&len_val);
+    // ? ToLength(lenProperty) — must propagate errors from ToNumber/ToPrimitive
+    let n = match interp.to_number_value(&len_val) {
+        Ok(v) => v,
+        Err(e) => return Err(Completion::Throw(e)),
+    };
     let len = to_integer_or_infinity(n);
     if len < 0.0 {
         return Ok(0);
@@ -63,7 +94,33 @@ fn obj_set(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
 }
 
 fn create_data_property(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
+    let _ = create_data_property_or_throw(interp, o, key, value);
+}
+
+fn create_data_property_or_throw(
+    interp: &mut Interpreter,
+    o: &JsValue,
+    key: &str,
+    value: JsValue,
+) -> Result<(), JsValue> {
     if let Some(obj) = get_obj(interp, o) {
+        // Check extensibility — if object is not extensible and property doesn't exist, fail
+        {
+            let borrow = obj.borrow();
+            if !borrow.extensible && !borrow.has_property(key) {
+                return Err(interp.create_type_error(&format!(
+                    "Cannot add property {key}, object is not extensible"
+                )));
+            }
+            // Check for non-configurable existing property
+            if let Some(desc) = borrow.get_own_property(key) {
+                if desc.configurable == Some(false) {
+                    return Err(interp.create_type_error(&format!(
+                        "Cannot redefine property: {key}"
+                    )));
+                }
+            }
+        }
         let mut borrow = obj.borrow_mut();
         if let Some(ref mut elems) = borrow.array_elements
             && let Ok(idx) = key.parse::<usize>()
@@ -79,6 +136,7 @@ fn create_data_property(interp: &mut Interpreter, o: &JsValue, key: &str, value:
         }
         borrow.define_own_property(key.to_string(), PropertyDescriptor::data_default(value));
     }
+    Ok(())
 }
 
 fn obj_has(interp: &mut Interpreter, o: &JsValue, key: &str) -> bool {
@@ -639,10 +697,10 @@ impl Interpreter {
                         if !matches!(spreadable_val, JsValue::Undefined) {
                             to_boolean(&spreadable_val)
                         } else {
-                            if let Some(obj) = interp.get_object(obj_ref.id) {
-                                obj.borrow().array_elements.is_some()
-                            } else {
-                                false
+                            // 4. Return ? IsArray(O)
+                            match is_array_check(interp, obj_ref.id) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
                             }
                         }
                     } else {
@@ -668,12 +726,16 @@ impl Interpreter {
                                         Err(c) => return c,
                                     }
                                 };
-                                create_data_property(interp, &a, &n.to_string(), val);
+                                if let Err(e) = create_data_property_or_throw(interp, &a, &n.to_string(), val) {
+                                    return Completion::Throw(e);
+                                }
                             }
                             n += 1;
                         }
                     } else {
-                        create_data_property(interp, &a, &n.to_string(), item.clone());
+                        if let Err(e) = create_data_property_or_throw(interp, &a, &n.to_string(), item.clone()) {
+                            return Completion::Throw(e);
+                        }
                         n += 1;
                     }
                 }
@@ -2323,6 +2385,42 @@ impl Interpreter {
             proto
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), array_val);
+        }
+
+        // Array.prototype[@@unscopables] (§23.1.3.38)
+        {
+            let unscopables_obj = self.create_object();
+            unscopables_obj.borrow_mut().prototype = None;
+            let names = [
+                "at",
+                "copyWithin",
+                "entries",
+                "fill",
+                "find",
+                "findIndex",
+                "findLast",
+                "findLastIndex",
+                "flat",
+                "flatMap",
+                "groupBy",
+                "includes",
+                "keys",
+                "toReversed",
+                "toSorted",
+                "toSpliced",
+                "values",
+            ];
+            for name in names {
+                unscopables_obj
+                    .borrow_mut()
+                    .insert_value(name.to_string(), JsValue::Boolean(true));
+            }
+            let unscopables_id = unscopables_obj.borrow().id.unwrap();
+            let unscopables_val = JsValue::Object(crate::types::JsObject { id: unscopables_id });
+            proto.borrow_mut().insert_property(
+                "Symbol(Symbol.unscopables)".to_string(),
+                PropertyDescriptor::data(unscopables_val, false, false, true),
+            );
         }
 
         self.array_prototype = Some(proto);
