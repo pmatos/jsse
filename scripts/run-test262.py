@@ -12,13 +12,43 @@ Examples:
 """
 
 import argparse
+import ctypes
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+_main_pgid = None
+
+
+def _set_pdeathsig():
+    """Set PR_SET_PDEATHSIG so this process dies when its parent dies (Linux only)."""
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG = 1
+    except Exception:
+        pass
+
+
+def _worker_init():
+    """Initializer for pool worker processes."""
+    _set_pdeathsig()
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+
+def _cleanup_handler(signum, frame):
+    """Kill entire process group on termination signals."""
+    if _main_pgid is not None:
+        try:
+            os.killpg(_main_pgid, signal.SIGTERM)
+        except OSError:
+            pass
+    os._exit(128 + signum)
 
 FRONTMATTER_RE = re.compile(r"/\*---\s*\n(.*?)\n---\*/", re.DOTALL)
 
@@ -201,6 +231,7 @@ def run_single_test(
         import resource
         mem_limit = 512 * 1024 * 1024  # 512 MB
         resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+        _set_pdeathsig()
 
     # For modules, use --prelude to load harness and run original file
     # For scripts, use combined source in temp file
@@ -273,6 +304,18 @@ def run_single_test(
 
 
 def main():
+    global _main_pgid
+
+    # Create a new process group so we can kill all children at once
+    try:
+        os.setpgrp()
+    except OSError:
+        pass
+    _main_pgid = os.getpid()
+
+    signal.signal(signal.SIGTERM, _cleanup_handler)
+    signal.signal(signal.SIGINT, _cleanup_handler)
+
     args = parse_args()
 
     jsse = Path(args.jsse)
@@ -310,7 +353,7 @@ def main():
         for t in tests
     ]
 
-    with ProcessPoolExecutor(max_workers=args.jobs) as pool:
+    with ProcessPoolExecutor(max_workers=args.jobs, initializer=_worker_init) as pool:
         futures = {pool.submit(run_single_test, w): w for w in work}
         for future in as_completed(futures):
             test_path, test_passed, skip_reason = future.result()
