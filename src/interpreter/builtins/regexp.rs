@@ -219,6 +219,278 @@ fn push_literal_char(result: &mut String, ch: char, _in_char_class: bool) {
     result.push(ch);
 }
 
+fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
+    if *i >= chars.len() {
+        return None;
+    }
+    let c = chars[*i];
+    *i += 1;
+    match c {
+        '\\' => {
+            if *i >= chars.len() {
+                return None;
+            }
+            let next = chars[*i];
+            *i += 1;
+            match next {
+                'n' => Some('\n' as u32),
+                'r' => Some('\r' as u32),
+                't' => Some('\t' as u32),
+                'f' => Some('\x0C' as u32),
+                'v' => Some('\x0B' as u32),
+                '0' => Some(0),
+                'x' => {
+                    if *i + 1 < chars.len()
+                        && chars[*i].is_ascii_hexdigit()
+                        && chars[*i + 1].is_ascii_hexdigit()
+                    {
+                        let hex: String = chars[*i..*i + 2].iter().collect();
+                        *i += 2;
+                        u32::from_str_radix(&hex, 16).ok()
+                    } else {
+                        Some('x' as u32)
+                    }
+                }
+                'u' => {
+                    if *i < chars.len() && chars[*i] == '{' {
+                        *i += 1;
+                        let start = *i;
+                        while *i < chars.len() && chars[*i] != '}' {
+                            *i += 1;
+                        }
+                        if *i < chars.len() {
+                            let hex: String = chars[start..*i].iter().collect();
+                            *i += 1;
+                            u32::from_str_radix(&hex, 16).ok()
+                        } else {
+                            Some('u' as u32)
+                        }
+                    } else if *i + 3 < chars.len()
+                        && chars[*i].is_ascii_hexdigit()
+                        && chars[*i + 1].is_ascii_hexdigit()
+                        && chars[*i + 2].is_ascii_hexdigit()
+                        && chars[*i + 3].is_ascii_hexdigit()
+                    {
+                        let hex: String = chars[*i..*i + 4].iter().collect();
+                        *i += 4;
+                        u32::from_str_radix(&hex, 16).ok()
+                    } else {
+                        Some('u' as u32)
+                    }
+                }
+                'c' => {
+                    if *i < chars.len() && chars[*i].is_ascii_alphabetic() {
+                        let val = (chars[*i] as u8 % 32) as u32;
+                        *i += 1;
+                        Some(val)
+                    } else {
+                        Some('c' as u32)
+                    }
+                }
+                'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B' | 'p' | 'P' => None,
+                _ => Some(next as u32),
+            }
+        }
+        _ => Some(c as u32),
+    }
+}
+
+fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), String> {
+    let _unicode = _flags.contains('u') || _flags.contains('v');
+    let chars: Vec<char> = source.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let c = chars[i];
+
+        if c == '\\' && i + 1 < len {
+            i += 2;
+            let after_escape = chars[i - 1];
+            if after_escape == 'x' && i < len && chars[i].is_ascii_hexdigit() {
+                i += 1;
+                if i < len && chars[i].is_ascii_hexdigit() {
+                    i += 1;
+                }
+            } else if after_escape == 'u' {
+                if i < len && chars[i] == '{' {
+                    i += 1;
+                    while i < len && chars[i] != '}' {
+                        i += 1;
+                    }
+                    if i < len {
+                        i += 1;
+                    }
+                } else {
+                    let mut count = 0;
+                    while count < 4 && i < len && chars[i].is_ascii_hexdigit() {
+                        i += 1;
+                        count += 1;
+                    }
+                }
+            } else if after_escape == 'c' && i < len && chars[i].is_ascii_alphabetic() {
+                i += 1;
+            } else if after_escape == 'p' || after_escape == 'P' {
+                if i < len && chars[i] == '{' {
+                    i += 1;
+                    while i < len && chars[i] != '}' {
+                        i += 1;
+                    }
+                    if i < len {
+                        i += 1;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if c == '[' {
+            i += 1;
+            if i < len && chars[i] == '^' {
+                i += 1;
+            }
+            let mut prev_value: Option<u32> = None;
+            let mut expecting_range_end = false;
+
+            while i < len && chars[i] != ']' {
+                if chars[i] == '-' && !expecting_range_end {
+                    if prev_value.is_some() && i + 1 < len && chars[i + 1] != ']' {
+                        expecting_range_end = true;
+                        i += 1;
+                        continue;
+                    }
+                    prev_value = Some('-' as u32);
+                    i += 1;
+                    continue;
+                }
+
+                let save_i = i;
+                let val = resolve_class_escape(&chars, &mut i);
+
+                if expecting_range_end {
+                    expecting_range_end = false;
+                    if let (Some(start_val), Some(end_val)) = (prev_value, val) {
+                        if start_val > end_val {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Range out of order in character class",
+                                source
+                            ));
+                        }
+                    }
+                    prev_value = val;
+                    continue;
+                }
+
+                prev_value = val;
+                if i == save_i {
+                    i += 1;
+                }
+            }
+
+            if i < len {
+                i += 1; // skip ']'
+            }
+            continue;
+        }
+
+        // Quantifier validation: detect double quantifiers
+        if c == '*' || c == '+' || c == '?' || c == '{' {
+            let mut quant_end = i + 1;
+            if c == '{' {
+                // Find matching }
+                let brace_start = i;
+                let mut j = i + 1;
+                let mut found_close = false;
+                while j < len {
+                    if chars[j] == '}' {
+                        found_close = true;
+                        quant_end = j + 1;
+                        break;
+                    }
+                    if !chars[j].is_ascii_digit() && chars[j] != ',' {
+                        break;
+                    }
+                    j += 1;
+                }
+                if !found_close {
+                    // Not a quantifier, just a literal '{'
+                    i += 1;
+                    continue;
+                }
+                // Validate the quantifier content
+                let inner: String = chars[brace_start + 1..j].iter().collect();
+                let parts: Vec<&str> = inner.split(',').collect();
+                let valid = match parts.len() {
+                    1 => parts[0].parse::<u64>().is_ok(),
+                    2 => {
+                        let a_ok = parts[0].parse::<u64>().is_ok();
+                        let b_ok = parts[1].is_empty() || parts[1].parse::<u64>().is_ok();
+                        a_ok && b_ok
+                    }
+                    _ => false,
+                };
+                if !valid {
+                    i += 1;
+                    continue;
+                }
+            }
+
+            // After quantifier, check if '?' follows (lazy modifier) — that's OK
+            if quant_end < len && chars[quant_end] == '?' {
+                quant_end += 1;
+            }
+            // Now check if another quantifier follows (double quantifier = error)
+            if quant_end < len {
+                let next_c = chars[quant_end];
+                if next_c == '*' || next_c == '+' || next_c == '?' {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Nothing to repeat",
+                        source
+                    ));
+                }
+                if next_c == '{' {
+                    // Check if it's a valid quantifier
+                    let mut k = quant_end + 1;
+                    let mut has_close = false;
+                    while k < len {
+                        if chars[k] == '}' {
+                            has_close = true;
+                            break;
+                        }
+                        if !chars[k].is_ascii_digit() && chars[k] != ',' {
+                            break;
+                        }
+                        k += 1;
+                    }
+                    if has_close {
+                        let inner: String = chars[quant_end + 1..k].iter().collect();
+                        let parts: Vec<&str> = inner.split(',').collect();
+                        let valid = match parts.len() {
+                            1 => parts[0].parse::<u64>().is_ok(),
+                            2 => {
+                                let a_ok = parts[0].parse::<u64>().is_ok();
+                                let b_ok = parts[1].is_empty() || parts[1].parse::<u64>().is_ok();
+                                a_ok && b_ok
+                            }
+                            _ => false,
+                        };
+                        if valid {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Nothing to repeat",
+                                source
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        i += 1;
+    }
+
+    Ok(())
+}
+
 fn build_fancy_regex(source: &str, flags: &str) -> Result<fancy_regex::Regex, String> {
     let pattern = translate_js_pattern(source, flags);
     fancy_regex::Regex::new(&pattern).map_err(|e| e.to_string())
@@ -363,18 +635,14 @@ fn set_last_index_strict(interp: &mut Interpreter, obj_id: u64, val: f64) -> Res
             .set_property_value("lastIndex", JsValue::Number(val));
         if !success {
             return Err(
-                interp.create_type_error("Cannot set property 'lastIndex' which is not writable"),
+                interp.create_type_error("Cannot set property 'lastIndex' which is not writable")
             );
         }
     }
     Ok(())
 }
 
-fn regexp_exec_abstract(
-    interp: &mut Interpreter,
-    rx_id: u64,
-    s: &str,
-) -> Completion {
+fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, s: &str) -> Completion {
     let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
     let exec_val = match interp.get_object_property(rx_id, "exec", &rx_val) {
         Completion::Normal(v) => v,
@@ -391,9 +659,9 @@ fn regexp_exec_abstract(
                 if matches!(v, JsValue::Object(_)) || matches!(v, JsValue::Null) {
                     result
                 } else {
-                    Completion::Throw(
-                        interp.create_type_error("RegExp exec method returned something other than an Object or null"),
-                    )
+                    Completion::Throw(interp.create_type_error(
+                        "RegExp exec method returned something other than an Object or null",
+                    ))
                 }
             }
             other => other,
@@ -717,7 +985,6 @@ fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<String> {
     })
 }
 
-
 impl Interpreter {
     pub(crate) fn setup_regexp(&mut self) {
         let regexp_proto = self.create_object();
@@ -728,11 +995,20 @@ impl Interpreter {
             "exec".to_string(),
             1,
             |interp, this_val, args| {
-                if !matches!(this_val, JsValue::Object(_)) {
-                    let err = interp.create_type_error(
-                        "RegExp.prototype.exec requires that 'this' be an Object",
-                    );
-                    return Completion::Throw(err);
+                let obj_id = match this_val {
+                    JsValue::Object(o) => o.id,
+                    _ => {
+                        return Completion::Throw(interp.create_type_error(
+                            "RegExp.prototype.exec requires that 'this' be an Object",
+                        ));
+                    }
+                };
+                if let Some(obj) = interp.get_object(obj_id) {
+                    if obj.borrow().class_name != "RegExp" {
+                        return Completion::Throw(interp.create_type_error(
+                            "RegExp.prototype.exec requires that 'this' be a RegExp object",
+                        ));
+                    }
                 }
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let input = match interp.to_string_value(&arg) {
@@ -754,27 +1030,26 @@ impl Interpreter {
             "test".to_string(),
             1,
             |interp, this_val, args| {
-                if !matches!(this_val, JsValue::Object(_)) {
-                    let err = interp.create_type_error(
-                        "RegExp.prototype.test requires that 'this' be an Object",
-                    );
-                    return Completion::Throw(err);
-                }
+                let obj_id = match this_val {
+                    JsValue::Object(o) => o.id,
+                    _ => {
+                        return Completion::Throw(interp.create_type_error(
+                            "RegExp.prototype.test requires that 'this' be an Object",
+                        ));
+                    }
+                };
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let input = match interp.to_string_value(&arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let Some((source, flags, obj_id)) = extract_source_flags(interp, this_val) {
-                    let result = regexp_exec_raw(interp, obj_id, &source, &flags, &input);
-                    return match result {
-                        Completion::Normal(v) => {
-                            Completion::Normal(JsValue::Boolean(!matches!(v, JsValue::Null)))
-                        }
-                        other => other,
-                    };
+                let result = regexp_exec_abstract(interp, obj_id, &input);
+                match result {
+                    Completion::Normal(v) => {
+                        Completion::Normal(JsValue::Boolean(!matches!(v, JsValue::Null)))
+                    }
+                    other => other,
                 }
-                Completion::Normal(JsValue::Boolean(false))
             },
         ));
         regexp_proto
@@ -816,6 +1091,11 @@ impl Interpreter {
             "[Symbol.match]".to_string(),
             1,
             |interp, this_val, args| {
+                if !matches!(this_val, JsValue::Object(_)) {
+                    return Completion::Throw(interp.create_type_error(
+                        "RegExp.prototype[@@match] requires that 'this' be an Object",
+                    ));
+                }
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let s = match interp.to_string_value(&arg) {
                     Ok(s) => s,
@@ -827,7 +1107,7 @@ impl Interpreter {
                 };
                 let global = flags.contains('g');
                 if !global {
-                    return regexp_exec_raw(interp, obj_id, &source, &flags, &s);
+                    return regexp_exec_abstract(interp, obj_id, &s);
                 }
                 // Global: collect all matches
                 set_last_index(interp, obj_id, 0.0);
@@ -870,18 +1150,23 @@ impl Interpreter {
             "[Symbol.search]".to_string(),
             1,
             |interp, this_val, args| {
+                if !matches!(this_val, JsValue::Object(_)) {
+                    return Completion::Throw(interp.create_type_error(
+                        "RegExp.prototype[@@search] requires that 'this' be an Object",
+                    ));
+                }
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let s = match interp.to_string_value(&arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let (source, flags, obj_id) = match extract_source_flags(interp, this_val) {
+                let (_source, _flags, obj_id) = match extract_source_flags(interp, this_val) {
                     Some(v) => v,
                     None => return Completion::Normal(JsValue::Number(-1.0)),
                 };
                 let prev_last_index = get_last_index(interp, obj_id);
                 set_last_index(interp, obj_id, 0.0);
-                let result = regexp_exec_raw(interp, obj_id, &source, &flags, &s);
+                let result = regexp_exec_abstract(interp, obj_id, &s);
                 set_last_index(interp, obj_id, prev_last_index);
                 match result {
                     Completion::Normal(JsValue::Null) => Completion::Normal(JsValue::Number(-1.0)),
@@ -975,7 +1260,9 @@ impl Interpreter {
                     let result = regexp_exec_abstract(interp, rx_id, &s);
                     match result {
                         Completion::Normal(JsValue::Null) => break,
-                        Completion::Normal(ref result_val) if matches!(result_val, JsValue::Object(_)) => {
+                        Completion::Normal(ref result_val)
+                            if matches!(result_val, JsValue::Object(_)) =>
+                        {
                             let result_obj = result_val.clone();
                             results.push(result_obj.clone());
 
@@ -984,11 +1271,16 @@ impl Interpreter {
                             }
 
                             // For global: check if match is empty and advance
-                            let result_id = if let JsValue::Object(ref o) = result_obj { o.id } else { unreachable!() };
-                            let matched_val = match interp.get_object_property(result_id, "0", &result_obj) {
-                                Completion::Normal(v) => v,
-                                other => return other,
+                            let result_id = if let JsValue::Object(ref o) = result_obj {
+                                o.id
+                            } else {
+                                unreachable!()
                             };
+                            let matched_val =
+                                match interp.get_object_property(result_id, "0", &result_obj) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
                             let match_str = match interp.to_string_value(&matched_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
@@ -996,16 +1288,21 @@ impl Interpreter {
                             if match_str.is_empty() {
                                 // a. Let thisIndex be ? ToLength(? Get(rx, "lastIndex")).
                                 let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
-                                let li_val = match interp.get_object_property(rx_id, "lastIndex", &rx_val) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
+                                let li_val =
+                                    match interp.get_object_property(rx_id, "lastIndex", &rx_val) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
                                 let li_num = match interp.to_number_value(&li_val) {
                                     Ok(n) => n,
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let this_index = {
-                                    let n = if li_num.is_nan() || li_num <= 0.0 { 0.0 } else { li_num.min(9007199254740991.0).floor() };
+                                    let n = if li_num.is_nan() || li_num <= 0.0 {
+                                        0.0
+                                    } else {
+                                        li_num.min(9007199254740991.0).floor()
+                                    };
                                     n as usize
                                 };
                                 let next_index = advance_string_index(&s, this_index, full_unicode);
@@ -1025,10 +1322,15 @@ impl Interpreter {
                 let mut next_source_position: usize = 0;
 
                 for result_val in &results {
-                    let result_id = if let JsValue::Object(o) = result_val { o.id } else { continue };
+                    let result_id = if let JsValue::Object(o) = result_val {
+                        o.id
+                    } else {
+                        continue;
+                    };
 
                     // a. Let nCaptures be ? ToLength(? Get(result, "length")).
-                    let len_val = match interp.get_object_property(result_id, "length", result_val) {
+                    let len_val = match interp.get_object_property(result_id, "length", result_val)
+                    {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
@@ -1037,7 +1339,11 @@ impl Interpreter {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         };
-                        let len = if n.is_nan() || n <= 0.0 { 0.0 } else { n.min(9007199254740991.0).floor() };
+                        let len = if n.is_nan() || n <= 0.0 {
+                            0.0
+                        } else {
+                            n.min(9007199254740991.0).floor()
+                        };
                         (len as usize).max(1) // at least 1
                     };
                     // nCaptures = max(nCaptures - 1, 0) — number of capture groups
@@ -1055,7 +1361,8 @@ impl Interpreter {
                     let match_length = matched.len();
 
                     // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
-                    let index_val = match interp.get_object_property(result_id, "index", result_val) {
+                    let index_val = match interp.get_object_property(result_id, "index", result_val)
+                    {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
@@ -1071,10 +1378,12 @@ impl Interpreter {
                     // g-i. Get captures
                     let mut captures: Vec<JsValue> = Vec::new();
                     for n in 1..=n_cap {
-                        let cap_n = match interp.get_object_property(result_id, &n.to_string(), result_val) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
+                        let cap_n =
+                            match interp.get_object_property(result_id, &n.to_string(), result_val)
+                            {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
                         if !cap_n.is_undefined() {
                             let cap_str = match interp.to_string_value(&cap_n) {
                                 Ok(s) => s,
@@ -1087,10 +1396,11 @@ impl Interpreter {
                     }
 
                     // j. Let namedCaptures be ? Get(result, "groups").
-                    let named_captures = match interp.get_object_property(result_id, "groups", result_val) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
+                    let named_captures =
+                        match interp.get_object_property(result_id, "groups", result_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
 
                     let replacement = if functional_replace {
                         // k. If functionalReplace is true, then
@@ -1110,12 +1420,10 @@ impl Interpreter {
                             &replacer_args,
                         );
                         match repl_val {
-                            Completion::Normal(v) => {
-                                match interp.to_string_value(&v) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            }
+                            Completion::Normal(v) => match interp.to_string_value(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            },
                             other => return other,
                         }
                     } else {
@@ -1171,6 +1479,11 @@ impl Interpreter {
             "[Symbol.split]".to_string(),
             2,
             |interp, this_val, args| {
+                if !matches!(this_val, JsValue::Object(_)) {
+                    return Completion::Throw(interp.create_type_error(
+                        "RegExp.prototype[@@split] requires that 'this' be an Object",
+                    ));
+                }
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let s = match interp.to_string_value(&arg) {
                     Ok(s) => s,
@@ -1272,6 +1585,11 @@ impl Interpreter {
             "[Symbol.matchAll]".to_string(),
             1,
             |interp, this_val, args| {
+                if !matches!(this_val, JsValue::Object(_)) {
+                    return Completion::Throw(interp.create_type_error(
+                        "RegExp.prototype[@@matchAll] requires that 'this' be an Object",
+                    ));
+                }
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let s = match interp.to_string_value(&arg) {
                     Ok(s) => s,
@@ -1695,38 +2013,47 @@ impl Interpreter {
                 let valid_flags = "dgimsuyv";
                 for c in flags_str.chars() {
                     if !valid_flags.contains(c) {
-                        return Completion::Throw(
-                            interp.create_error("SyntaxError", &format!(
-                                "Invalid regular expression flags '{}'", flags_str
-                            )),
-                        );
+                        return Completion::Throw(interp.create_error(
+                            "SyntaxError",
+                            &format!("Invalid regular expression flags '{}'", flags_str),
+                        ));
                     }
                 }
                 let mut seen = std::collections::HashSet::new();
                 for c in flags_str.chars() {
                     if !seen.insert(c) {
-                        return Completion::Throw(
-                            interp.create_error("SyntaxError", &format!(
-                                "Invalid regular expression flags '{}'", flags_str
-                            )),
-                        );
+                        return Completion::Throw(interp.create_error(
+                            "SyntaxError",
+                            &format!("Invalid regular expression flags '{}'", flags_str),
+                        ));
                     }
                 }
 
                 // u and v flags are mutually exclusive
                 if flags_str.contains('u') && flags_str.contains('v') {
-                    return Completion::Throw(
-                        interp.create_error("SyntaxError", &format!(
-                            "Invalid regular expression flags '{}'", flags_str
-                        )),
-                    );
+                    return Completion::Throw(interp.create_error(
+                        "SyntaxError",
+                        &format!("Invalid regular expression flags '{}'", flags_str),
+                    ));
                 }
+
+                // Validate the pattern
+                if let Err(msg) = validate_js_pattern(&pattern_str, &flags_str) {
+                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                }
+
+                // Empty source → "(?:)" per spec
+                let source_str = if pattern_str.is_empty() {
+                    "(?:)".to_string()
+                } else {
+                    pattern_str.clone()
+                };
 
                 let mut obj = JsObjectData::new();
                 obj.prototype = Some(regexp_proto_rc.clone());
                 obj.class_name = "RegExp".to_string();
                 let regexp_props: &[(&str, JsValue)] = &[
-                    ("source", JsValue::String(JsString::from_str(&pattern_str))),
+                    ("source", JsValue::String(JsString::from_str(&source_str))),
                     ("flags", JsValue::String(JsString::from_str(&flags_str))),
                     ("hasIndices", JsValue::Boolean(flags_str.contains('d'))),
                     ("global", JsValue::Boolean(flags_str.contains('g'))),

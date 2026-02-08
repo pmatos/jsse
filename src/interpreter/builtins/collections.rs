@@ -1158,7 +1158,7 @@ impl Interpreter {
                 _ => {
                     return Err(Completion::Throw(
                         interp.create_type_error("Iterator result is not an object"),
-                    ))
+                    ));
                 }
             };
             let done = match interp.get_object_property(result_id, "done", &next_result) {
@@ -1188,10 +1188,7 @@ impl Interpreter {
             entries.iter().flatten().any(|e| same_value_zero(e, val))
         }
 
-        fn make_result_set(
-            interp: &mut Interpreter,
-            entries: Vec<Option<JsValue>>,
-        ) -> Completion {
+        fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
             let new_obj = interp.create_object();
             new_obj.borrow_mut().prototype = interp.set_prototype.clone();
             new_obj.borrow_mut().class_name = "Set".to_string();
@@ -1465,14 +1462,11 @@ impl Interpreter {
                         };
                         i += 1;
                         if let Some(e) = entry {
-                            let has_result = match interp.call_function(
-                                &other_rec.has,
-                                &other,
-                                &[e],
-                            ) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
+                            let has_result =
+                                match interp.call_function(&other_rec.has, &other, &[e]) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
                             if !to_boolean(&has_result) {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
@@ -1564,14 +1558,11 @@ impl Interpreter {
                             };
                             i += 1;
                             if let Some(e) = entry {
-                                let has_result = match interp.call_function(
-                                    &other_rec.has,
-                                    &other,
-                                    &[e],
-                                ) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
+                                let has_result =
+                                    match interp.call_function(&other_rec.has, &other, &[e]) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
                                 if to_boolean(&has_result) {
                                     return Completion::Normal(JsValue::Boolean(false));
                                 }

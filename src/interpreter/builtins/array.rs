@@ -8,12 +8,16 @@ fn is_array_check(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue
             let tid = b.proxy_target.as_ref().and_then(|t| t.borrow().id);
             // is_proxy() checks proxy_target.is_some(), but revoked proxies have proxy_target=None
             // Use proxy_revoked flag to also detect revoked proxies
-            (b.proxy_revoked, b.is_proxy() || b.proxy_revoked, tid, b.class_name.clone())
+            (
+                b.proxy_revoked,
+                b.is_proxy() || b.proxy_revoked,
+                tid,
+                b.class_name.clone(),
+            )
         };
         if is_revoked {
-            return Err(interp.create_type_error(
-                "Cannot perform 'IsArray' on a proxy that has been revoked",
-            ));
+            return Err(interp
+                .create_type_error("Cannot perform 'IsArray' on a proxy that has been revoked"));
         }
         if is_proxy {
             if let Some(tid) = target_id {
@@ -115,9 +119,9 @@ fn create_data_property_or_throw(
             // Check for non-configurable existing property
             if let Some(desc) = borrow.get_own_property(key) {
                 if desc.configurable == Some(false) {
-                    return Err(interp.create_type_error(&format!(
-                        "Cannot redefine property: {key}"
-                    )));
+                    return Err(
+                        interp.create_type_error(&format!("Cannot redefine property: {key}"))
+                    );
                 }
             }
         }
@@ -189,7 +193,11 @@ fn require_callable(interp: &mut Interpreter, val: &JsValue, msg: &str) -> Resul
 }
 
 // ArraySpeciesCreate (§23.1.3.7.1)
-fn array_species_create(interp: &mut Interpreter, original_array: &JsValue, length: usize) -> Result<JsValue, Completion> {
+fn array_species_create(
+    interp: &mut Interpreter,
+    original_array: &JsValue,
+    length: usize,
+) -> Result<JsValue, Completion> {
     let is_array = if let JsValue::Object(o) = original_array
         && let Some(obj) = interp.get_object(o.id)
     {
@@ -639,10 +647,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let to_locale_str_method = match obj_get(interp, &element_obj, "toLocaleString") {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+                        let to_locale_str_method =
+                            match obj_get(interp, &element_obj, "toLocaleString") {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
                         if interp.is_callable(&to_locale_str_method) {
                             // Call with NO arguments per spec, using original value as this
                             match interp.call_function(&to_locale_str_method, &next_element, &[]) {
@@ -726,14 +735,18 @@ impl Interpreter {
                                         Err(c) => return c,
                                     }
                                 };
-                                if let Err(e) = create_data_property_or_throw(interp, &a, &n.to_string(), val) {
+                                if let Err(e) =
+                                    create_data_property_or_throw(interp, &a, &n.to_string(), val)
+                                {
                                     return Completion::Throw(e);
                                 }
                             }
                             n += 1;
                         }
                     } else {
-                        if let Err(e) = create_data_property_or_throw(interp, &a, &n.to_string(), item.clone()) {
+                        if let Err(e) =
+                            create_data_property_or_throw(interp, &a, &n.to_string(), item.clone())
+                        {
                             return Completion::Throw(e);
                         }
                         n += 1;
@@ -2216,14 +2229,19 @@ impl Interpreter {
                                 }
                             } else {
                                 // Array-like
-                                let len_val = match interp.get_object_property(o.id, "length", &source) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                let len =
-                                    to_integer_or_infinity(interp.to_number_coerce(&len_val)).max(0.0) as usize;
+                                let len_val =
+                                    match interp.get_object_property(o.id, "length", &source) {
+                                        Completion::Normal(v) => v,
+                                        other => return other,
+                                    };
+                                let len = to_integer_or_infinity(interp.to_number_coerce(&len_val))
+                                    .max(0.0) as usize;
                                 for i in 0..len {
-                                    let v = match interp.get_object_property(o.id, &i.to_string(), &source) {
+                                    let v = match interp.get_object_property(
+                                        o.id,
+                                        &i.to_string(),
+                                        &source,
+                                    ) {
                                         Completion::Normal(v) => v,
                                         other => return other,
                                     };
@@ -2360,8 +2378,10 @@ impl Interpreter {
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });
-            obj.borrow_mut()
-                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
 
             // Array[Symbol.species] getter - returns `this`
             let species_getter = self.create_function(JsFunction::native(

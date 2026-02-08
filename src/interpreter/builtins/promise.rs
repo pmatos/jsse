@@ -15,7 +15,9 @@ impl Interpreter {
         constructor: &JsValue,
     ) -> Result<PromiseCapability, JsValue> {
         if !self.is_constructor(constructor) {
-            return Err(self.create_type_error("Promise resolve or reject function is not callable"));
+            return Err(
+                self.create_type_error("Promise resolve or reject function is not callable")
+            );
         }
 
         // Check if C is the built-in Promise constructor - fast path
@@ -53,17 +55,13 @@ impl Interpreter {
                 // Spec: If promiseCapability.[[Resolve]] is not undefined, throw TypeError
                 if !matches!(*rs.borrow(), JsValue::Undefined) {
                     return Completion::Throw(
-                        interp.create_type_error(
-                            "Promise executor has already been resolved",
-                        ),
+                        interp.create_type_error("Promise executor has already been resolved"),
                     );
                 }
                 // Spec: If promiseCapability.[[Reject]] is not undefined, throw TypeError
                 if !matches!(*rj.borrow(), JsValue::Undefined) {
                     return Completion::Throw(
-                        interp.create_type_error(
-                            "Promise executor has already been resolved",
-                        ),
+                        interp.create_type_error("Promise executor has already been resolved"),
                     );
                 }
 
@@ -86,14 +84,10 @@ impl Interpreter {
         let reject = reject_slot.borrow().clone();
 
         if !self.is_callable(&resolve) {
-            return Err(
-                self.create_type_error("Promise resolve function is not callable"),
-            );
+            return Err(self.create_type_error("Promise resolve function is not callable"));
         }
         if !self.is_callable(&reject) {
-            return Err(
-                self.create_type_error("Promise reject function is not callable"),
-            );
+            return Err(self.create_type_error("Promise reject function is not callable"));
         }
 
         Ok(PromiseCapability {
@@ -136,12 +130,11 @@ impl Interpreter {
         } else {
             return Ok(default_ctor.clone());
         };
-        let species =
-            match self.get_object_property(ctor_id, "Symbol(Symbol.species)", &ctor) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Ok(default_ctor.clone()),
-            };
+        let species = match self.get_object_property(ctor_id, "Symbol(Symbol.species)", &ctor) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(default_ctor.clone()),
+        };
 
         if matches!(species, JsValue::Undefined | JsValue::Null) {
             return Ok(default_ctor.clone());
@@ -220,16 +213,15 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 // Step 1-2: Let promise be the this value. If not Object, throw TypeError.
-                let promise_id = match this {
-                    JsValue::Object(o) => o.id,
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error(
+                let promise_id =
+                    match this {
+                        JsValue::Object(o) => o.id,
+                        _ => {
+                            return Completion::Throw(interp.create_type_error(
                                 "Promise.prototype.finally called on non-object",
-                            ),
-                        );
-                    }
-                };
+                            ));
+                        }
+                    };
 
                 // Step 3: Let C = ? SpeciesConstructor(promise, %Promise%).
                 let promise_ctor = interp
@@ -258,11 +250,8 @@ impl Interpreter {
                         move |interp, _this, args| {
                             let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                             // Step 6a.i: Let result = ? Call(onFinally, undefined).
-                            let result = interp.call_function(
-                                &on_finally_clone,
-                                &JsValue::Undefined,
-                                &[],
-                            );
+                            let result =
+                                interp.call_function(&on_finally_clone, &JsValue::Undefined, &[]);
                             match result {
                                 Completion::Throw(e) => Completion::Throw(e),
                                 Completion::Normal(r) => {
@@ -275,27 +264,25 @@ impl Interpreter {
                                     };
                                     // Step 6a.iii-iv: valueThunk that returns value
                                     let value_clone = value.clone();
-                                    let return_fn =
-                                        interp.create_function(JsFunction::native(
-                                            "".to_string(),
-                                            0,
-                                            move |_interp, _this, _args| {
-                                                Completion::Normal(value_clone.clone())
-                                            },
-                                        ));
+                                    let return_fn = interp.create_function(JsFunction::native(
+                                        "".to_string(),
+                                        0,
+                                        move |_interp, _this, _args| {
+                                            Completion::Normal(value_clone.clone())
+                                        },
+                                    ));
                                     // Step 6a.v: Return ? Invoke(promise, "then", « valueThunk »).
                                     let p_id = if let JsValue::Object(ref o) = p {
                                         o.id
                                     } else {
                                         0
                                     };
-                                    let then_method = match interp
-                                        .get_object_property(p_id, "then", &p)
-                                    {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Completion::Throw(e),
-                                        _ => JsValue::Undefined,
-                                    };
+                                    let then_method =
+                                        match interp.get_object_property(p_id, "then", &p) {
+                                            Completion::Normal(v) => v,
+                                            Completion::Throw(e) => return Completion::Throw(e),
+                                            _ => JsValue::Undefined,
+                                        };
                                     interp.call_function(&then_method, &p, &[return_fn])
                                 }
                                 _ => Completion::Normal(JsValue::Undefined),
@@ -312,11 +299,8 @@ impl Interpreter {
                         move |interp, _this, args| {
                             let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
                             // Step 6c.i: Let result = ? Call(onFinally, undefined).
-                            let result = interp.call_function(
-                                &on_finally_clone2,
-                                &JsValue::Undefined,
-                                &[],
-                            );
+                            let result =
+                                interp.call_function(&on_finally_clone2, &JsValue::Undefined, &[]);
                             match result {
                                 Completion::Throw(e) => Completion::Throw(e),
                                 Completion::Normal(r) => {
@@ -329,27 +313,25 @@ impl Interpreter {
                                     };
                                     // Step 6c.iii-iv: thrower that throws reason
                                     let reason_clone = reason.clone();
-                                    let throw_fn =
-                                        interp.create_function(JsFunction::native(
-                                            "".to_string(),
-                                            0,
-                                            move |_interp, _this, _args| {
-                                                Completion::Throw(reason_clone.clone())
-                                            },
-                                        ));
+                                    let throw_fn = interp.create_function(JsFunction::native(
+                                        "".to_string(),
+                                        0,
+                                        move |_interp, _this, _args| {
+                                            Completion::Throw(reason_clone.clone())
+                                        },
+                                    ));
                                     // Step 6c.v: Return ? Invoke(promise, "then", « thrower »).
                                     let p_id = if let JsValue::Object(ref o) = p {
                                         o.id
                                     } else {
                                         0
                                     };
-                                    let then_method = match interp
-                                        .get_object_property(p_id, "then", &p)
-                                    {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return Completion::Throw(e),
-                                        _ => JsValue::Undefined,
-                                    };
+                                    let then_method =
+                                        match interp.get_object_property(p_id, "then", &p) {
+                                            Completion::Normal(v) => v,
+                                            Completion::Throw(e) => return Completion::Throw(e),
+                                            _ => JsValue::Undefined,
+                                        };
                                     interp.call_function(&then_method, &p, &[throw_fn])
                                 }
                                 _ => Completion::Normal(JsValue::Undefined),
@@ -361,12 +343,11 @@ impl Interpreter {
                 };
 
                 // Step 7: Return ? Invoke(promise, "then", « thenFinally, catchFinally »).
-                let then_method =
-                    match interp.get_object_property(promise_id, "then", this) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
-                    };
+                let then_method = match interp.get_object_property(promise_id, "then", this) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => JsValue::Undefined,
+                };
                 interp.call_function(&then_method, this, &[then_finally, catch_finally])
             },
         ));
@@ -493,11 +474,7 @@ impl Interpreter {
                 let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
                 match interp.new_promise_capability(this) {
                     Ok(cap) => {
-                        let _ = interp.call_function(
-                            &cap.reject,
-                            &JsValue::Undefined,
-                            &[reason],
-                        );
+                        let _ = interp.call_function(&cap.reject, &JsValue::Undefined, &[reason]);
                         Completion::Normal(cap.promise)
                     }
                     Err(e) => Completion::Throw(e),
@@ -584,24 +561,22 @@ impl Interpreter {
         let with_resolvers_fn = self.create_function(JsFunction::native(
             "withResolvers".to_string(),
             0,
-            |interp, this, _args| {
-                match interp.new_promise_capability(this) {
-                    Ok(cap) => {
-                        let result = interp.create_object();
-                        result
-                            .borrow_mut()
-                            .insert_value("promise".to_string(), cap.promise);
-                        result
-                            .borrow_mut()
-                            .insert_value("resolve".to_string(), cap.resolve);
-                        result
-                            .borrow_mut()
-                            .insert_value("reject".to_string(), cap.reject);
-                        let id = result.borrow().id.unwrap();
-                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                    }
-                    Err(e) => Completion::Throw(e),
+            |interp, this, _args| match interp.new_promise_capability(this) {
+                Ok(cap) => {
+                    let result = interp.create_object();
+                    result
+                        .borrow_mut()
+                        .insert_value("promise".to_string(), cap.promise);
+                    result
+                        .borrow_mut()
+                        .insert_value("resolve".to_string(), cap.resolve);
+                    result
+                        .borrow_mut()
+                        .insert_value("reject".to_string(), cap.reject);
+                    let id = result.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }
+                Err(e) => Completion::Throw(e),
             },
         ));
         if let JsValue::Object(ref o) = ctor
@@ -981,7 +956,11 @@ impl Interpreter {
         };
 
         // GetPromiseResolve(C) + IfAbruptRejectPromise
-        let ctor_id = if let JsValue::Object(o) = constructor { o.id } else { 0 };
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
@@ -1045,7 +1024,11 @@ impl Interpreter {
                 },
             ));
             // Invoke(nextPromise, "then", « onFulfilled, rejectElement »)
-            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
@@ -1072,7 +1055,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor { o.id } else { 0 };
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
@@ -1174,7 +1161,11 @@ impl Interpreter {
                 },
             ));
             // Invoke(nextPromise, "then", « onFulfilled, onRejected »)
-            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
@@ -1201,7 +1192,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor { o.id } else { 0 };
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
@@ -1234,7 +1229,11 @@ impl Interpreter {
                 _ => JsValue::Undefined,
             };
             // Invoke(nextPromise, "then", « resolve, reject »)
-            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
@@ -1261,7 +1260,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor { o.id } else { 0 };
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
@@ -1324,7 +1327,11 @@ impl Interpreter {
                 },
             ));
             // Invoke(nextPromise, "then", « resolve, onRejected »)
-            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {

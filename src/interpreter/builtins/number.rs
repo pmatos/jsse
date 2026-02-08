@@ -290,9 +290,10 @@ impl Interpreter {
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });
-            sym_obj
-                .borrow_mut()
-                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
+            sym_obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
             // Set constructor on prototype
             let ctor_val = sym_val.clone();
             proto
@@ -529,9 +530,10 @@ impl Interpreter {
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });
-            num_obj
-                .borrow_mut()
-                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
+            num_obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
             proto
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), num_val);
@@ -610,9 +612,10 @@ impl Interpreter {
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });
-            bool_obj
-                .borrow_mut()
-                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
+            bool_obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
             proto
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), bool_val);

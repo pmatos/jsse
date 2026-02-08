@@ -339,9 +339,7 @@ impl<'a> Parser<'a> {
                 )));
             }
             if Self::is_strict_reserved_word(name) {
-                return Err(self.error(format!(
-                    "Unexpected strict mode reserved word '{name}'"
-                )));
+                return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
             }
         }
         Ok(())
@@ -783,9 +781,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
             let pat = expr_to_pattern(*inner)?;
             Ok(Pattern::Rest(Box::new(pat)))
         }
-        Expression::Member(_, _) => {
-            Ok(Pattern::MemberExpression(Box::new(expr)))
-        }
+        Expression::Member(_, _) => Ok(Pattern::MemberExpression(Box::new(expr))),
         _ => Err(ParseError {
             message: "Invalid destructuring target".to_string(),
         }),

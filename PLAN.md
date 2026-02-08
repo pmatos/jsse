@@ -43,7 +43,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Reflect | 86% | 132/153 |
 | Proxy | 58% | 182/311 |
 | Symbol | 71% | 67/94 |
-| RegExp | 64% | 1,216/1,879 |
+| RegExp | 69% | 1,289/1,879 |
 | Math | 96% | 316/327 |
 | WeakRef | 82% | 24/29 |
 | FinalizationRegistry | 76% | 36/47 |
@@ -131,6 +131,8 @@ These features block significant numbers of tests:
 
 49. ~~**Conformance batch 15: DataView Float16, class this TDZ, Object.__proto__ + Array fixes**~~ — ✅ Done (+338 new passes, 73.26% → 73.96%). Three orthogonal features: (1) DataView getFloat16/setFloat16 (ES2025) and DataView setter coercion ordering fix — setters now perform ToNumber/ToBigInt on value BEFORE buffer detachment and bounds checks per spec. DataView: 293→454/561 (80%). (2) Derived constructor `this` TDZ enforcement — `this` is uninitialized until `super()` is called in derived class constructors, with proper new.target forwarding via `construct_with_new_target()`. Class `.prototype` property now writable:false per spec. (3) Object.prototype.__proto__ accessor (Annex B §B.2.2.1), Array.prototype[@@unscopables], and Symbol.isConcatSpreadable support in Array.prototype.concat. Object: 3,176→3,181/3,411 (93%), Array: 2,496→2,553/3,079 (82%), Promise: 548→571/639 (89%), Reflect: 124→132/153 (86%).
 
+50. ~~**Conformance batch 16: Annex B block-level functions, RegExp fixes**~~ — ✅ Done (+363 new passes, 73.96% → 74.71%). Two orthogonal features: (1) Annex B.3.3/B.3.4 block-level function declarations in sloppy mode: var-scope hoisting with copy-on-evaluation semantics, parameter/lexical conflict detection, generator/async exclusion, switch case function hoisting, IsLabelledFunction checks for iteration bodies and if-with-else. Parser: function declarations in if-bodies and labeled statements (sloppy mode only). annexB: 399→674/1,086 (62%). (2) RegExp fixes: pattern validation, type checks, `regexp_exec_abstract()` usage for spec-compliant exec dispatch. RegExp: 1,216→1,289/1,879 (69%).
+
 ---
 
 ## Cross-Cutting Concerns
@@ -144,7 +146,7 @@ These are tracked across all phases:
 - [ ] **Spec compliance annotations** — link code to spec section IDs
 - [x] **Garbage collection** — mark-and-sweep GC with ephemeron support for WeakMap/WeakSet
 - [ ] **Performance** — profile and optimize hot paths after correctness
-- [x] **Annex B (partial)** — String HTML methods, substr, escape/unescape, Date getYear/setYear/toGMTString (+117 passes)
+- [x] **Annex B (partial)** — String HTML methods, substr, escape/unescape, Date getYear/setYear/toGMTString (+117 passes), block-level function declarations B.3.3/B.3.4 (+275 passes)
 
 ---
 
@@ -175,11 +177,11 @@ These are tracked across all phases:
 | `built-ins/Temporal` | 4,482 | Stage 3 — optional |
 | `built-ins/Object` | 3,411 | |
 | `built-ins/Array` | 3,079 | |
-| `built-ins/RegExp` | 1,879 | 1,101 (58.6%) |
+| `built-ins/RegExp` | 1,879 | 1,289 (68.6%) |
 | `built-ins/TypedArray` | 1,438 | 786 |
 | `built-ins/String` | 1,215 | |
 | `built-ins/` (rest) | ~8,000+ | All other built-ins |
-| `annexB` | 1,086 | Legacy web compat |
+| `annexB` | 1,086 | 674 (62.1%) |
 | `intl402` | varies | Internationalization — optional |
 
 ---

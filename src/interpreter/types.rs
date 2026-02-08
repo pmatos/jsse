@@ -87,6 +87,8 @@ pub struct Environment {
     pub(crate) with_object: Option<WithObject>,
     pub(crate) dispose_stack: Option<Vec<DisposableResource>>,
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
+    // Annex B.3.3: names registered for block-level function var hoisting
+    pub(crate) annexb_function_names: Option<Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -142,6 +144,7 @@ impl Environment {
             with_object: None,
             dispose_stack: None,
             global_object: None,
+            annexb_function_names: None,
         }))
     }
 
@@ -155,6 +158,7 @@ impl Environment {
             with_object: None,
             dispose_stack: None,
             global_object: None,
+            annexb_function_names: None,
         }))
     }
 
@@ -707,9 +711,9 @@ impl JsObjectData {
                 }
                 if let Ok(idx) = key.parse::<usize>() {
                     if idx < units.len() {
-                        return Some(JsValue::String(
-                            crate::types::JsString { code_units: vec![units[idx]] },
-                        ));
+                        return Some(JsValue::String(crate::types::JsString {
+                            code_units: vec![units[idx]],
+                        }));
                     }
                 }
             }
@@ -818,9 +822,9 @@ impl JsObjectData {
                 if let Ok(idx) = key.parse::<usize>() {
                     if idx < units.len() {
                         return Some(PropertyDescriptor {
-                            value: Some(JsValue::String(
-                                crate::types::JsString { code_units: vec![units[idx]] },
-                            )),
+                            value: Some(JsValue::String(crate::types::JsString {
+                                code_units: vec![units[idx]],
+                            })),
                             writable: Some(false),
                             enumerable: Some(true),
                             configurable: Some(false),
@@ -863,19 +867,21 @@ impl JsObjectData {
                 if key == "length" {
                     return Some(PropertyDescriptor::data(
                         JsValue::Number(s.code_units.len() as f64),
-                        false, false, false,
+                        false,
+                        false,
+                        false,
                     ));
                 }
                 if let Ok(idx) = key.parse::<usize>() {
                     if idx < s.code_units.len() {
                         let ch = std::char::from_u32(s.code_units[idx] as u32)
                             .map(|c| c.to_string())
-                            .unwrap_or_else(|| {
-                                String::from_utf16_lossy(&[s.code_units[idx]])
-                            });
+                            .unwrap_or_else(|| String::from_utf16_lossy(&[s.code_units[idx]]));
                         return Some(PropertyDescriptor::data(
                             JsValue::String(JsString::from_str(&ch)),
-                            false, true, false,
+                            false,
+                            true,
+                            false,
                         ));
                     }
                 }
@@ -1260,7 +1266,11 @@ pub(crate) fn canonical_numeric_index_string(key: &str) -> Option<f64> {
         return Some(-0.0_f64);
     }
     let n: f64 = key.parse().ok()?;
-    if crate::types::number_ops::to_string(n) == key { Some(n) } else { None }
+    if crate::types::number_ops::to_string(n) == key {
+        Some(n)
+    } else {
+        None
+    }
 }
 
 // §10.4.5.14 IsValidIntegerIndex

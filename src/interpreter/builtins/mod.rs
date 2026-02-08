@@ -43,13 +43,21 @@ fn f64_to_f16_to_f64(val: f64) -> f64 {
         let rounded = if round_bits > halfway {
             mantissa_10 + 1
         } else if round_bits == halfway {
-            if mantissa_10 & 1 != 0 { mantissa_10 + 1 } else { mantissa_10 }
+            if mantissa_10 & 1 != 0 {
+                mantissa_10 + 1
+            } else {
+                mantissa_10
+            }
         } else {
             mantissa_10
         };
 
         let f16_bits = f16_sign | f16_exp | (rounded & 0x3FF);
-        let f16_bits = if rounded > 0x3FF { f16_bits + (1 << 10) } else { f16_bits };
+        let f16_bits = if rounded > 0x3FF {
+            f16_bits + (1 << 10)
+        } else {
+            f16_bits
+        };
         return f16_to_f64(f16_bits);
     }
 
@@ -78,7 +86,11 @@ fn f64_to_f16_to_f64(val: f64) -> f64 {
         0
     };
     let rounded = if round_bit == 1 {
-        if sticky > 0 || (mantissa & 1 != 0) { mantissa + 1 } else { mantissa }
+        if sticky > 0 || (mantissa & 1 != 0) {
+            mantissa + 1
+        } else {
+            mantissa
+        }
     } else {
         mantissa
     };
@@ -138,10 +150,16 @@ fn sum_precise_shewchuk(vals: &[f64]) -> f64 {
     // Find the minimum exponent to use as a common scale
     let mut min_exp = i32::MAX;
     for &v in vals {
-        if v == 0.0 { continue; }
+        if v == 0.0 {
+            continue;
+        }
         let bits = v.to_bits();
         let biased_exp = ((bits >> 52) & 0x7FF) as i32;
-        let exp = if biased_exp == 0 { -1074 } else { biased_exp - 1023 - 52 };
+        let exp = if biased_exp == 0 {
+            -1074
+        } else {
+            biased_exp - 1023 - 52
+        };
         if exp < min_exp {
             min_exp = exp;
         }
@@ -153,7 +171,9 @@ fn sum_precise_shewchuk(vals: &[f64]) -> f64 {
     // Sum as big integers scaled to 2^min_exp
     let mut total = BigInt::from(0);
     for &v in vals {
-        if v == 0.0 { continue; }
+        if v == 0.0 {
+            continue;
+        }
         let bits = v.to_bits();
         let sign_bit = bits >> 63;
         let biased_exp = ((bits >> 52) & 0x7FF) as i32;
@@ -168,7 +188,11 @@ fn sum_precise_shewchuk(vals: &[f64]) -> f64 {
         if shift > 0 {
             big_m <<= shift as u64;
         }
-        if sign_bit != 0 { total -= big_m; } else { total += big_m; }
+        if sign_bit != 0 {
+            total -= big_m;
+        } else {
+            total += big_m;
+        }
     }
 
     if total == BigInt::from(0) {
@@ -183,7 +207,11 @@ fn sum_precise_shewchuk(vals: &[f64]) -> f64 {
 
     // Check overflow
     if unbiased_exp > 1023 {
-        return if is_negative { f64::NEG_INFINITY } else { f64::INFINITY };
+        return if is_negative {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
     }
 
     // Check if it fits in the subnormal/normal range
@@ -246,7 +274,11 @@ fn sum_precise_shewchuk(vals: &[f64]) -> f64 {
     };
 
     let rounded = if round_bit == 1 {
-        if sticky || (mantissa & 1 != 0) { mantissa + 1 } else { mantissa }
+        if sticky || (mantissa & 1 != 0) {
+            mantissa + 1
+        } else {
+            mantissa
+        }
     } else {
         mantissa
     };
@@ -259,7 +291,11 @@ fn sum_precise_shewchuk(vals: &[f64]) -> f64 {
     };
 
     if final_exp > 1023 {
-        return if is_negative { f64::NEG_INFINITY } else { f64::INFINITY };
+        return if is_negative {
+            f64::NEG_INFINITY
+        } else {
+            f64::INFINITY
+        };
     }
 
     let sign_bit = if is_negative { 1_u64 } else { 0 };
@@ -314,7 +350,9 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            console.borrow_mut().insert_builtin("log".to_string(), log_fn);
+            console
+                .borrow_mut()
+                .insert_builtin("log".to_string(), log_fn);
         }
         let console_val = JsValue::Object(crate::types::JsObject { id: console_id });
         self.global_env
@@ -364,8 +402,9 @@ impl Interpreter {
             dollar_262
                 .borrow_mut()
                 .insert_builtin("gc".to_string(), gc_fn);
-            let dollar_262_val =
-                JsValue::Object(crate::types::JsObject { id: dollar_262.borrow().id.unwrap() });
+            let dollar_262_val = JsValue::Object(crate::types::JsObject {
+                id: dollar_262.borrow().id.unwrap(),
+            });
             self.global_env
                 .borrow_mut()
                 .declare("$262", BindingKind::Var);
@@ -678,7 +717,12 @@ impl Interpreter {
                     let proto_id = native_proto.borrow().id.unwrap();
                     ctor_obj.borrow_mut().insert_property(
                         "prototype".to_string(),
-                        PropertyDescriptor::data(JsValue::Object(crate::types::JsObject { id: proto_id }), false, false, false),
+                        PropertyDescriptor::data(
+                            JsValue::Object(crate::types::JsObject { id: proto_id }),
+                            false,
+                            false,
+                            false,
+                        ),
                     );
                 }
             }
@@ -775,7 +819,12 @@ impl Interpreter {
                     let proto_id = suppressed_proto.borrow().id.unwrap();
                     ctor_obj.borrow_mut().insert_property(
                         "prototype".to_string(),
-                        PropertyDescriptor::data(JsValue::Object(crate::types::JsObject { id: proto_id }), false, false, false),
+                        PropertyDescriptor::data(
+                            JsValue::Object(crate::types::JsObject { id: proto_id }),
+                            false,
+                            false,
+                            false,
+                        ),
                     );
                 }
             }
@@ -877,7 +926,12 @@ impl Interpreter {
                     let proto_id = agg_proto.borrow().id.unwrap();
                     ctor_obj.borrow_mut().insert_property(
                         "prototype".to_string(),
-                        PropertyDescriptor::data(JsValue::Object(crate::types::JsObject { id: proto_id }), false, false, false),
+                        PropertyDescriptor::data(
+                            JsValue::Object(crate::types::JsObject { id: proto_id }),
+                            false,
+                            false,
+                            false,
+                        ),
                     );
                 }
             }
@@ -1230,19 +1284,51 @@ impl Interpreter {
                 );
                 n.insert_property(
                     "NEGATIVE_INFINITY".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(f64::NEG_INFINITY), false, false, false),
+                    PropertyDescriptor::data(
+                        JsValue::Number(f64::NEG_INFINITY),
+                        false,
+                        false,
+                        false,
+                    ),
                 );
-                n.insert_property("MAX_VALUE".to_string(), PropertyDescriptor::data(JsValue::Number(f64::MAX), false, false, false));
-                n.insert_property("MIN_VALUE".to_string(), PropertyDescriptor::data(JsValue::Number(f64::MIN_POSITIVE), false, false, false));
-                n.insert_property("NaN".to_string(), PropertyDescriptor::data(JsValue::Number(f64::NAN), false, false, false));
-                n.insert_property("EPSILON".to_string(), PropertyDescriptor::data(JsValue::Number(f64::EPSILON), false, false, false));
+                n.insert_property(
+                    "MAX_VALUE".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(f64::MAX), false, false, false),
+                );
+                n.insert_property(
+                    "MIN_VALUE".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Number(f64::MIN_POSITIVE),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
+                n.insert_property(
+                    "NaN".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(f64::NAN), false, false, false),
+                );
+                n.insert_property(
+                    "EPSILON".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(f64::EPSILON), false, false, false),
+                );
                 n.insert_property(
                     "MAX_SAFE_INTEGER".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(9007199254740991.0), false, false, false),
+                    PropertyDescriptor::data(
+                        JsValue::Number(9007199254740991.0),
+                        false,
+                        false,
+                        false,
+                    ),
                 );
                 n.insert_property(
                     "MIN_SAFE_INTEGER".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(-9007199254740991.0), false, false, false),
+                    PropertyDescriptor::data(
+                        JsValue::Number(-9007199254740991.0),
+                        false,
+                        false,
+                        false,
+                    ),
                 );
                 n.insert_builtin("isFinite".to_string(), is_finite_fn);
                 n.insert_builtin("isNaN".to_string(), is_nan_fn);
@@ -1366,17 +1452,23 @@ impl Interpreter {
                 }
                 // Handle Infinity/-Infinity
                 if let Some(rest) = s.strip_prefix("Infinity") {
-                    if rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.') {
+                    if rest.is_empty()
+                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.')
+                    {
                         return Completion::Normal(JsValue::Number(f64::INFINITY));
                     }
                 }
                 if let Some(rest) = s.strip_prefix("+Infinity") {
-                    if rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.') {
+                    if rest.is_empty()
+                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.')
+                    {
                         return Completion::Normal(JsValue::Number(f64::INFINITY));
                     }
                 }
                 if let Some(rest) = s.strip_prefix("-Infinity") {
-                    if rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.') {
+                    if rest.is_empty()
+                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.')
+                    {
                         return Completion::Normal(JsValue::Number(f64::NEG_INFINITY));
                     }
                 }
@@ -1943,15 +2035,19 @@ impl Interpreter {
                         JsValue::Number(n) => *n,
                         _ => {
                             interp.iterator_close(&iterator, JsValue::Undefined);
-                            return Completion::Throw(
-                                interp.create_type_error("Math.sumPrecise requires all values to be Numbers"),
-                            );
+                            return Completion::Throw(interp.create_type_error(
+                                "Math.sumPrecise requires all values to be Numbers",
+                            ));
                         }
                     };
                     if n.is_nan() {
                         has_nan = true;
                     } else if n.is_infinite() {
-                        if n > 0.0 { pos_inf += 1; } else { neg_inf += 1; }
+                        if n > 0.0 {
+                            pos_inf += 1;
+                        } else {
+                            neg_inf += 1;
+                        }
                     } else if n == 0.0 {
                         if !n.is_sign_negative() {
                             has_non_neg_zero = true;
@@ -2401,12 +2497,7 @@ impl Interpreter {
                     // Set constructor back-reference on AsyncFunction.prototype
                     af_proto.borrow_mut().insert_property(
                         "constructor".to_string(),
-                        PropertyDescriptor::data(
-                            af_ctor.clone(),
-                            true,
-                            false,
-                            true,
-                        ),
+                        PropertyDescriptor::data(af_ctor.clone(), true, false, true),
                     );
                 }
             }
@@ -2494,12 +2585,7 @@ impl Interpreter {
                     // Set constructor back-reference on GeneratorFunction.prototype
                     gf_proto.borrow_mut().insert_property(
                         "constructor".to_string(),
-                        PropertyDescriptor::data(
-                            gf_ctor.clone(),
-                            true,
-                            false,
-                            true,
-                        ),
+                        PropertyDescriptor::data(gf_ctor.clone(), true, false, true),
                     );
                 }
             }
@@ -2588,12 +2674,7 @@ impl Interpreter {
                     // Set constructor back-reference on AsyncGeneratorFunction.prototype
                     agf_proto.borrow_mut().insert_property(
                         "constructor".to_string(),
-                        PropertyDescriptor::data(
-                            agf_ctor.clone(),
-                            true,
-                            false,
-                            true,
-                        ),
+                        PropertyDescriptor::data(agf_ctor.clone(), true, false, true),
                     );
                 }
             }
@@ -2668,7 +2749,8 @@ impl Interpreter {
                 let reviver = args.get(1).cloned();
 
                 let has_reviver = if let Some(JsValue::Object(rev_obj)) = &reviver {
-                    interp.get_object(rev_obj.id)
+                    interp
+                        .get_object(rev_obj.id)
                         .map(|o| o.borrow().callable.is_some())
                         .unwrap_or(false)
                 } else {
@@ -2681,7 +2763,9 @@ impl Interpreter {
                         Completion::Normal(parsed) => {
                             let wrapper = interp.create_object();
                             let wrapper_id = wrapper.borrow().id.unwrap();
-                            wrapper.borrow_mut().insert_value("".to_string(), parsed.clone());
+                            wrapper
+                                .borrow_mut()
+                                .insert_value("".to_string(), parsed.clone());
                             // Store source text for top-level primitive
                             let source_map = if is_json_primitive(&parsed) {
                                 let mut sm = smap;
@@ -2690,9 +2774,8 @@ impl Interpreter {
                             } else {
                                 Some(smap)
                             };
-                            let wrapper_val = JsValue::Object(crate::types::JsObject {
-                                id: wrapper_id,
-                            });
+                            let wrapper_val =
+                                JsValue::Object(crate::types::JsObject { id: wrapper_id });
                             json_internalize(
                                 interp,
                                 &wrapper_val,
@@ -2891,26 +2974,66 @@ impl Interpreter {
         // Populate globalThis with built-in constructors and functions as
         // non-enumerable, writable, configurable properties (per spec §19.1)
         let global_names = [
-            "Object", "Function", "Array", "String", "Number", "Boolean",
-            "Symbol", "Error", "SyntaxError", "TypeError", "ReferenceError",
-            "RangeError", "URIError", "EvalError", "Date", "RegExp", "Map",
-            "Set", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry",
-            "Promise", "ArrayBuffer", "DataView", "JSON", "Math", "Reflect",
-            "Proxy", "eval", "parseInt", "parseFloat", "isNaN", "isFinite",
-            "encodeURI", "decodeURI", "encodeURIComponent",
-            "decodeURIComponent", "NaN", "Infinity", "undefined",
-            "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array",
-            "Uint16Array", "Int32Array", "Uint32Array", "Float32Array",
-            "Float64Array", "BigInt64Array", "BigUint64Array", "BigInt",
+            "Object",
+            "Function",
+            "Array",
+            "String",
+            "Number",
+            "Boolean",
+            "Symbol",
+            "Error",
+            "SyntaxError",
+            "TypeError",
+            "ReferenceError",
+            "RangeError",
+            "URIError",
+            "EvalError",
+            "Date",
+            "RegExp",
+            "Map",
+            "Set",
+            "WeakMap",
+            "WeakSet",
+            "WeakRef",
+            "FinalizationRegistry",
+            "Promise",
+            "ArrayBuffer",
+            "DataView",
+            "JSON",
+            "Math",
+            "Reflect",
+            "Proxy",
+            "eval",
+            "parseInt",
+            "parseFloat",
+            "isNaN",
+            "isFinite",
+            "encodeURI",
+            "decodeURI",
+            "encodeURIComponent",
+            "decodeURIComponent",
+            "NaN",
+            "Infinity",
+            "undefined",
+            "Int8Array",
+            "Uint8Array",
+            "Uint8ClampedArray",
+            "Int16Array",
+            "Uint16Array",
+            "Int32Array",
+            "Uint32Array",
+            "Float32Array",
+            "Float64Array",
+            "BigInt64Array",
+            "BigUint64Array",
+            "BigInt",
             "AggregateError",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.global_env.borrow();
             global_names
                 .iter()
-                .filter_map(|name| {
-                    env.get(name).map(|v| (name.to_string(), v))
-                })
+                .filter_map(|name| env.get(name).map(|v| (name.to_string(), v)))
                 .collect()
         };
         for (name, val) in vals {
@@ -2936,14 +3059,30 @@ impl Interpreter {
         // create_function sets writable=true (correct for user-defined constructors per §10.2.5),
         // but built-in constructors need writable=false per their respective spec sections.
         let builtin_ctors = [
-            "Object", "Function", "Array", "RegExp", "Promise", "Error",
-            "TypeError", "RangeError", "SyntaxError", "ReferenceError",
-            "URIError", "EvalError", "DataView", "ArrayBuffer", "SharedArrayBuffer",
-            "WeakRef", "FinalizationRegistry",
+            "Object",
+            "Function",
+            "Array",
+            "RegExp",
+            "Promise",
+            "Error",
+            "TypeError",
+            "RangeError",
+            "SyntaxError",
+            "ReferenceError",
+            "URIError",
+            "EvalError",
+            "DataView",
+            "ArrayBuffer",
+            "SharedArrayBuffer",
+            "WeakRef",
+            "FinalizationRegistry",
         ];
         let ctor_vals: Vec<JsValue> = {
             let env = self.global_env.borrow();
-            builtin_ctors.iter().filter_map(|name| env.get(name)).collect()
+            builtin_ctors
+                .iter()
+                .filter_map(|name| env.get(name))
+                .collect()
         };
         for ctor_val in &ctor_vals {
             if let JsValue::Object(o) = ctor_val
@@ -3003,8 +3142,7 @@ impl Interpreter {
                                     if let JsValue::Object(p) = &pv {
                                         if let Some(ep) = self.get_object(p.id) {
                                             if ep.borrow().prototype.is_none() {
-                                                ep.borrow_mut().prototype =
-                                                    Some(proto_obj.clone());
+                                                ep.borrow_mut().prototype = Some(proto_obj.clone());
                                             }
                                         }
                                     }
@@ -3321,9 +3459,9 @@ impl Interpreter {
                                 }
                                 return if let Some(ref proto) = obj.borrow().prototype {
                                     let pid = proto.borrow().id.unwrap();
-                                    Completion::Normal(JsValue::Object(
-                                        crate::types::JsObject { id: pid },
-                                    ))
+                                    Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                        id: pid,
+                                    }))
                                 } else {
                                     Completion::Normal(JsValue::Null)
                                 };
@@ -3739,9 +3877,9 @@ impl Interpreter {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     // ES6 §19.1.2.9: Let obj = ? ToObject(O)
                     if matches!(target, JsValue::Null | JsValue::Undefined) {
-                        return Completion::Throw(interp.create_type_error(
-                            "Cannot convert undefined or null to object",
-                        ));
+                        return Completion::Throw(
+                            interp.create_type_error("Cannot convert undefined or null to object"),
+                        );
                     }
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
@@ -3871,7 +4009,9 @@ impl Interpreter {
                     {
                         let keys: Vec<String> = {
                             let borrowed = obj.borrow();
-                            borrowed.property_order.iter()
+                            borrowed
+                                .property_order
+                                .iter()
                                 .filter(|k| {
                                     if let Some(desc) = borrowed.properties.get(*k) {
                                         desc.enumerable != Some(false)
@@ -3916,7 +4056,9 @@ impl Interpreter {
                     {
                         let keys: Vec<String> = {
                             let borrowed = obj.borrow();
-                            borrowed.property_order.iter()
+                            borrowed
+                                .property_order
+                                .iter()
                                 .filter(|k| {
                                     if let Some(desc) = borrowed.properties.get(*k) {
                                         desc.enumerable != Some(false)
@@ -4109,7 +4251,9 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(result))
                 },
             ));
-            obj_func.borrow_mut().insert_builtin("is".to_string(), is_fn);
+            obj_func
+                .borrow_mut()
+                .insert_builtin("is".to_string(), is_fn);
 
             // Object.getOwnPropertyNames
             let gopn_fn = self.create_function(JsFunction::native(
@@ -4189,9 +4333,11 @@ impl Interpreter {
                         if obj.borrow().is_proxy() {
                             match interp.proxy_prevent_extensions(o.id) {
                                 Ok(true) => return Completion::Normal(target),
-                                Ok(false) => return Completion::Throw(interp.create_type_error(
-                                    "Object.preventExtensions returned false",
-                                )),
+                                Ok(false) => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Object.preventExtensions returned false",
+                                    ));
+                                }
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
@@ -4437,9 +4583,9 @@ impl Interpreter {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     // §22.1.2.8 step 1: RequireObjectCoercible then ToObject
                     if matches!(target, JsValue::Undefined | JsValue::Null) {
-                        return Completion::Throw(interp.create_type_error(
-                            "Cannot convert undefined or null to object",
-                        ));
+                        return Completion::Throw(
+                            interp.create_type_error("Cannot convert undefined or null to object"),
+                        );
                     }
                     let obj_val = match interp.to_object(&target) {
                         Completion::Normal(v) => v,
@@ -5848,8 +5994,7 @@ impl Interpreter {
                     }
                     // Check @@toStringTag (spec 20.1.3.6 steps 14-17)
                     let tag_key = "Symbol(Symbol.toStringTag)".to_string();
-                    let tag_result =
-                        interp.get_object_property(o.id, &tag_key, &this_val);
+                    let tag_result = interp.get_object_property(o.id, &tag_key, &this_val);
                     if let Completion::Normal(ref tag_val) = tag_result {
                         if let JsValue::String(s) = tag_val {
                             return Completion::Normal(JsValue::String(JsString::from_str(
@@ -5875,17 +6020,11 @@ impl Interpreter {
                             || ob.class_name == "EvalError"
                         {
                             "Error"
-                        } else if ob.class_name == "Boolean"
-                            && ob.primitive_value.is_some()
-                        {
+                        } else if ob.class_name == "Boolean" && ob.primitive_value.is_some() {
                             "Boolean"
-                        } else if ob.class_name == "Number"
-                            && ob.primitive_value.is_some()
-                        {
+                        } else if ob.class_name == "Number" && ob.primitive_value.is_some() {
                             "Number"
-                        } else if ob.class_name == "String"
-                            && ob.primitive_value.is_some()
-                        {
+                        } else if ob.class_name == "String" && ob.primitive_value.is_some() {
                             "String"
                         } else if ob.class_name == "Date" {
                             "Date"

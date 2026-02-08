@@ -242,9 +242,10 @@ impl Interpreter {
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });
-            bigint_obj
-                .borrow_mut()
-                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
+            bigint_obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
             bigint_obj
                 .borrow_mut()
                 .insert_builtin("asIntN".to_string(), as_int_n);

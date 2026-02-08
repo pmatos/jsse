@@ -1,7 +1,10 @@
 use super::super::*;
 
 // GetIteratorDirect that uses get_object_property (invokes getters/Proxy traps)
-fn get_iterator_direct_getter(interp: &mut Interpreter, obj: &JsValue) -> Result<(JsValue, JsValue), JsValue> {
+fn get_iterator_direct_getter(
+    interp: &mut Interpreter,
+    obj: &JsValue,
+) -> Result<(JsValue, JsValue), JsValue> {
     match obj {
         JsValue::Object(o) => {
             let next_method = match interp.get_object_property(o.id, "next", obj) {
@@ -43,10 +46,16 @@ fn iterator_close_getter(interp: &mut Interpreter, iterator: &JsValue) -> Result
 
 // GetIteratorFlattenable(obj, primitiveHandling) per spec
 // primitiveHandling is either "reject-primitives" or "iterate-strings"
-fn get_iterator_flattenable(interp: &mut Interpreter, obj: &JsValue, reject_primitives: bool) -> Result<(JsValue, JsValue), JsValue> {
+fn get_iterator_flattenable(
+    interp: &mut Interpreter,
+    obj: &JsValue,
+    reject_primitives: bool,
+) -> Result<(JsValue, JsValue), JsValue> {
     if !matches!(obj, JsValue::Object(_)) {
         if reject_primitives {
-            return Err(interp.create_type_error("Iterator.prototype.flatMap mapper returned a non-object"));
+            return Err(
+                interp.create_type_error("Iterator.prototype.flatMap mapper returned a non-object")
+            );
         }
         // For strings in iterate-strings mode, we'd handle it, but flatMap uses reject-primitives
         return Err(interp.create_type_error("value is not an object"));
@@ -72,7 +81,11 @@ fn get_iterator_flattenable(interp: &mut Interpreter, obj: &JsValue, reject_prim
         if !matches!(method, JsValue::Undefined | JsValue::Null) {
             // Has @@iterator - check it's callable and call it
             if let JsValue::Object(mo) = &method {
-                if !interp.get_object(mo.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false) {
+                if !interp
+                    .get_object(mo.id)
+                    .map(|od| od.borrow().callable.is_some())
+                    .unwrap_or(false)
+                {
                     return Err(interp.create_type_error("Symbol.iterator is not a function"));
                 }
             } else {
@@ -95,7 +108,10 @@ fn get_iterator_flattenable(interp: &mut Interpreter, obj: &JsValue, reject_prim
 }
 
 // GetIterator(obj, sync) using getter-aware property access for @@iterator
-fn get_iterator_getter(interp: &mut Interpreter, obj: &JsValue) -> Result<(JsValue, JsValue), JsValue> {
+fn get_iterator_getter(
+    interp: &mut Interpreter,
+    obj: &JsValue,
+) -> Result<(JsValue, JsValue), JsValue> {
     let sym_key = interp.get_symbol_iterator_key();
     let method = match obj {
         JsValue::Object(o) => {
@@ -179,7 +195,9 @@ fn iterator_close_with_completion(
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
                 // Step 5: If completion is a throw completion, return ? completion.
-                if let Err(orig) = completion { return Err(orig); }
+                if let Err(orig) = completion {
+                    return Err(orig);
+                }
                 return Err(e);
             }
             _ => JsValue::Undefined,
@@ -191,7 +209,9 @@ fn iterator_close_with_completion(
         match inner_result {
             Completion::Normal(v) => {
                 // Step 5: If completion is throw, return completion
-                if let Err(e) = completion { return Err(e); }
+                if let Err(e) = completion {
+                    return Err(e);
+                }
                 // Step 7: If innerResult.[[Value]] is not an Object, throw TypeError
                 if !matches!(v, JsValue::Object(_)) {
                     return Err(interp.create_type_error("Iterator result is not an object"));
@@ -201,7 +221,9 @@ fn iterator_close_with_completion(
             }
             Completion::Throw(e) => {
                 // Step 5: If completion is throw, return original completion
-                if let Err(orig) = completion { return Err(orig); }
+                if let Err(orig) = completion {
+                    return Err(orig);
+                }
                 // Step 6: innerResult is throw, return it
                 Err(e)
             }
@@ -1160,7 +1182,8 @@ impl Interpreter {
             |interp, this, args| {
                 // Step 2: If this is not an Object, throw TypeError
                 if !matches!(this, JsValue::Object(_)) {
-                    let err = interp.create_type_error("Iterator.prototype.take called on non-object");
+                    let err =
+                        interp.create_type_error("Iterator.prototype.take called on non-object");
                     return Completion::Throw(err);
                 }
                 // Step 3: numLimit = ToNumber(limit) — can throw via valueOf
@@ -1171,7 +1194,8 @@ impl Interpreter {
                 };
                 // Step 4: If numLimit is NaN, throw RangeError
                 if num_limit.is_nan() {
-                    let err = interp.create_error("RangeError", "take limit must be a non-negative number");
+                    let err = interp
+                        .create_error("RangeError", "take limit must be a non-negative number");
                     return Completion::Throw(err);
                 }
                 // Step 5-6: integerLimit = ToIntegerOrInfinity, check < 0
@@ -1181,7 +1205,8 @@ impl Interpreter {
                     num_limit.trunc()
                 };
                 if integer_limit < 0.0 {
-                    let err = interp.create_error("RangeError", "take limit must be a non-negative number");
+                    let err = interp
+                        .create_error("RangeError", "take limit must be a non-negative number");
                     return Completion::Throw(err);
                 }
                 // Step 7: GetIteratorDirect
@@ -1284,7 +1309,8 @@ impl Interpreter {
             |interp, this, args| {
                 // Step 2: If this is not an Object, throw TypeError
                 if !matches!(this, JsValue::Object(_)) {
-                    let err = interp.create_type_error("Iterator.prototype.drop called on non-object");
+                    let err =
+                        interp.create_type_error("Iterator.prototype.drop called on non-object");
                     return Completion::Throw(err);
                 }
                 // Step 3: numLimit = ToNumber(limit)
@@ -1295,7 +1321,8 @@ impl Interpreter {
                 };
                 // Step 4: If numLimit is NaN, throw RangeError
                 if num_limit.is_nan() {
-                    let err = interp.create_error("RangeError", "drop limit must be a non-negative number");
+                    let err = interp
+                        .create_error("RangeError", "drop limit must be a non-negative number");
                     return Completion::Throw(err);
                 }
                 // Step 5-6: integerLimit = ToIntegerOrInfinity, check < 0
@@ -1305,7 +1332,8 @@ impl Interpreter {
                     num_limit.trunc()
                 };
                 if integer_limit < 0.0 {
-                    let err = interp.create_error("RangeError", "drop limit must be a non-negative number");
+                    let err = interp
+                        .create_error("RangeError", "drop limit must be a non-negative number");
                     return Completion::Throw(err);
                 }
                 // Step 7: GetIteratorDirect
@@ -1315,8 +1343,9 @@ impl Interpreter {
                 };
 
                 // state: (iter, next_method, to_skip, skipped, alive)
-                let state: Rc<RefCell<(JsValue, JsValue, f64, bool, bool)>> =
-                    Rc::new(RefCell::new((iter, next_method, integer_limit, false, true)));
+                let state: Rc<RefCell<(JsValue, JsValue, f64, bool, bool)>> = Rc::new(
+                    RefCell::new((iter, next_method, integer_limit, false, true)),
+                );
 
                 let state_next = state.clone();
                 let next_fn = interp.create_function(JsFunction::native(
@@ -1623,7 +1652,8 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
-                        let err = interp.create_type_error("Iterator.from requires an object or string");
+                        let err =
+                            interp.create_type_error("Iterator.from requires an object or string");
                         return Completion::Throw(err);
                     }
                 } else {
@@ -1647,12 +1677,16 @@ impl Interpreter {
                         if !matches!(method, JsValue::Undefined | JsValue::Null) {
                             // Has @@iterator — must be callable
                             let is_callable = if let JsValue::Object(mo) = &method {
-                                interp.get_object(mo.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false)
+                                interp
+                                    .get_object(mo.id)
+                                    .map(|od| od.borrow().callable.is_some())
+                                    .unwrap_or(false)
                             } else {
                                 false
                             };
                             if !is_callable {
-                                let err = interp.create_type_error("Symbol.iterator is not a function");
+                                let err =
+                                    interp.create_type_error("Symbol.iterator is not a function");
                                 return Completion::Throw(err);
                             }
                             match interp.call_function(&method, &obj, &[]) {
@@ -1660,12 +1694,16 @@ impl Interpreter {
                                     (v, true)
                                 }
                                 Completion::Normal(_) => {
-                                    let err = interp.create_type_error("Result of Symbol.iterator is not an object");
+                                    let err = interp.create_type_error(
+                                        "Result of Symbol.iterator is not an object",
+                                    );
                                     return Completion::Throw(err);
                                 }
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => {
-                                    let err = interp.create_type_error("Result of Symbol.iterator is not an object");
+                                    let err = interp.create_type_error(
+                                        "Result of Symbol.iterator is not an object",
+                                    );
                                     return Completion::Throw(err);
                                 }
                             }
@@ -1816,7 +1854,10 @@ impl Interpreter {
                         }
                         // Verify it's callable
                         let is_callable = if let JsValue::Object(fo) = &iter_fn {
-                            interp.get_object(fo.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false)
+                            interp
+                                .get_object(fo.id)
+                                .map(|od| od.borrow().callable.is_some())
+                                .unwrap_or(false)
                         } else {
                             false
                         };
@@ -1863,9 +1904,9 @@ impl Interpreter {
                                 match interp.iterator_step_direct(ci, cn) {
                                     Ok(Some(result)) => {
                                         let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
+                                            Ok(v) => v,
+                                            Err(e) => return Completion::Throw(e),
+                                        };
                                         return Completion::Normal(
                                             interp.create_iter_result_object(value, false),
                                         );
@@ -1902,13 +1943,14 @@ impl Interpreter {
                                         );
                                         return Completion::Throw(err);
                                     }
-                                    let next_method = match get_iterator_direct_getter(interp, &new_iter) {
-                                        Ok((_, nm)) => nm,
-                                        Err(e) => {
-                                            state_next.borrow_mut().4 = false;
-                                            return Completion::Throw(e);
-                                        }
-                                    };
+                                    let next_method =
+                                        match get_iterator_direct_getter(interp, &new_iter) {
+                                            Ok((_, nm)) => nm,
+                                            Err(e) => {
+                                                state_next.borrow_mut().4 = false;
+                                                return Completion::Throw(e);
+                                            }
+                                        };
                                     state_next.borrow_mut().2 = Some(new_iter);
                                     state_next.borrow_mut().3 = Some(next_method);
                                     continue;

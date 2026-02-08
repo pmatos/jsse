@@ -1500,9 +1500,10 @@ impl Interpreter {
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });
-            str_obj
-                .borrow_mut()
-                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val.clone(), false, false, false));
+            str_obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
             proto
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), str_val.clone());

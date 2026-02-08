@@ -170,7 +170,10 @@ impl Interpreter {
                         }
                     };
                     let len = buf_len as f64;
-                    let start_arg = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
+                    let start_arg = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
                     let start = if start_arg < 0.0 {
                         ((len + start_arg) as isize).max(0) as usize
                     } else {
@@ -478,9 +481,9 @@ impl Interpreter {
                         let src_ref = src_obj.borrow();
                         if let Some(ref src_ta) = src_ref.typed_array_info {
                             if is_bigint_kind(ta.kind) != is_bigint_kind(src_ta.kind) {
-                                return Completion::Throw(
-                                    interp.create_type_error("cannot mix BigInt and non-BigInt typed arrays"),
-                                );
+                                return Completion::Throw(interp.create_type_error(
+                                    "cannot mix BigInt and non-BigInt typed arrays",
+                                ));
                             }
                             let src_len = src_ta.array_length;
                             if offset + src_len > ta.array_length {
@@ -536,13 +539,15 @@ impl Interpreter {
                             }
                             Completion::Normal(JsValue::Undefined)
                         }
-                        JsValue::Undefined | JsValue::Null => {
-                            Completion::Throw(interp.create_type_error("Cannot convert undefined or null to object"))
-                        }
+                        JsValue::Undefined | JsValue::Null => Completion::Throw(
+                            interp.create_type_error("Cannot convert undefined or null to object"),
+                        ),
                         JsValue::Number(_) | JsValue::Boolean(_) | JsValue::Symbol(_) => {
                             Completion::Normal(JsValue::Undefined)
                         }
-                        _ => Completion::Throw(interp.create_type_error("argument is not an object"))
+                        _ => {
+                            Completion::Throw(interp.create_type_error("argument is not an object"))
+                        }
                     }
                 } else {
                     Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -573,7 +578,11 @@ impl Interpreter {
                         }
                     };
                     let len = ta.array_length as f64;
-                    let begin_arg = to_integer(args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(0.0));
+                    let begin_arg = to_integer(
+                        args.first()
+                            .map(|a| interp.to_number_coerce(a))
+                            .unwrap_or(0.0),
+                    );
                     let begin = if begin_arg < 0.0 {
                         ((len + begin_arg) as isize).max(0) as usize
                     } else {
@@ -634,7 +643,11 @@ impl Interpreter {
                         }
                     };
                     let len = ta.array_length as f64;
-                    let begin_arg = to_integer(args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(0.0));
+                    let begin_arg = to_integer(
+                        args.first()
+                            .map(|a| interp.to_number_coerce(a))
+                            .unwrap_or(0.0),
+                    );
                     let begin = if begin_arg < 0.0 {
                         ((len + begin_arg) as isize).max(0) as usize
                     } else {
@@ -721,11 +734,15 @@ impl Interpreter {
                     };
                     let len = ta.array_length as i64;
                     let target = {
-                        let v = to_integer(interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined))) as i64;
+                        let v = to_integer(
+                            interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined)),
+                        ) as i64;
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
                     let start = {
-                        let v = to_integer(interp.to_number_coerce(args.get(1).unwrap_or(&JsValue::Undefined))) as i64;
+                        let v = to_integer(
+                            interp.to_number_coerce(args.get(1).unwrap_or(&JsValue::Undefined)),
+                        ) as i64;
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
                     let end = {
@@ -1025,7 +1042,9 @@ impl Interpreter {
                     if let Some(ref cmp) = comparefn {
                         if !matches!(cmp, JsValue::Undefined) {
                             let is_callable = if let JsValue::Object(co) = cmp {
-                                interp.get_object(co.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                                interp
+                                    .get_object(co.id)
+                                    .is_some_and(|obj| obj.borrow().callable.is_some())
                             } else {
                                 false
                             };
@@ -1323,7 +1342,9 @@ impl Interpreter {
                     if let Some(ref cmp) = comparefn {
                         if !matches!(cmp, JsValue::Undefined) {
                             let is_callable = if let JsValue::Object(co) = cmp {
-                                interp.get_object(co.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                                interp
+                                    .get_object(co.id)
+                                    .is_some_and(|obj| obj.borrow().callable.is_some())
                             } else {
                                 false
                             };
@@ -3174,7 +3195,9 @@ impl Interpreter {
                                 }
                             }
                             // Step 2: ToIndex(byteOffset) — before detach check
-                            let byte_offset = match interp.to_index(args.first().unwrap_or(&JsValue::Undefined)) {
+                            let byte_offset = match interp
+                                .to_index(args.first().unwrap_or(&JsValue::Undefined))
+                            {
                                 Completion::Normal(JsValue::Number(n)) => n as usize,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => 0,
@@ -3197,7 +3220,8 @@ impl Interpreter {
                             }
                             let idx = dv.byte_offset + byte_offset;
                             if idx + $size > dv.byte_offset + dv.byte_length {
-                                return Completion::Throw(interp.create_error("RangeError",
+                                return Completion::Throw(interp.create_error(
+                                    "RangeError",
                                     "offset is outside the bounds of the DataView",
                                 ));
                             }
@@ -3330,13 +3354,17 @@ impl Interpreter {
                                 }
                             }
                             // Step 2: ToIndex(byteOffset) — before detach check
-                            let byte_offset = match interp.to_index(args.first().unwrap_or(&JsValue::Undefined)) {
+                            let byte_offset = match interp
+                                .to_index(args.first().unwrap_or(&JsValue::Undefined))
+                            {
                                 Completion::Normal(JsValue::Number(n)) => n as usize,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => 0,
                             };
                             // Step 3: ToNumber(value) — before detach check
-                            let num_value = match interp.to_number_value(args.get(1).unwrap_or(&JsValue::Undefined)) {
+                            let num_value = match interp
+                                .to_number_value(args.get(1).unwrap_or(&JsValue::Undefined))
+                            {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -3357,7 +3385,8 @@ impl Interpreter {
                             }
                             let idx = dv.byte_offset + byte_offset;
                             if idx + $size > dv.byte_offset + dv.byte_length {
-                                return Completion::Throw(interp.create_error("RangeError",
+                                return Completion::Throw(interp.create_error(
+                                    "RangeError",
                                     "offset is outside the bounds of the DataView",
                                 ));
                             }
@@ -3390,13 +3419,17 @@ impl Interpreter {
                                 }
                             }
                             // Step 2: ToIndex(byteOffset) — before detach check
-                            let byte_offset = match interp.to_index(args.first().unwrap_or(&JsValue::Undefined)) {
+                            let byte_offset = match interp
+                                .to_index(args.first().unwrap_or(&JsValue::Undefined))
+                            {
                                 Completion::Normal(JsValue::Number(n)) => n as usize,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => 0,
                             };
                             // Step 3: ToBigInt(value) — before detach check
-                            let bigint_value = match interp.to_bigint_value(args.get(1).unwrap_or(&JsValue::Undefined)) {
+                            let bigint_value = match interp
+                                .to_bigint_value(args.get(1).unwrap_or(&JsValue::Undefined))
+                            {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
                             };
@@ -3417,7 +3450,8 @@ impl Interpreter {
                             }
                             let idx = dv.byte_offset + byte_offset;
                             if idx + $size > dv.byte_offset + dv.byte_length {
-                                return Completion::Throw(interp.create_error("RangeError",
+                                return Completion::Throw(interp.create_error(
+                                    "RangeError",
                                     "offset is outside the bounds of the DataView",
                                 ));
                             }
@@ -3437,51 +3471,90 @@ impl Interpreter {
         dv_set_method!("setInt8", 1, number, |buf: &mut [u8], n: f64, _le: bool| {
             buf[0] = n as i32 as i8 as u8;
         });
-        dv_set_method!("setUint8", 1, number, |buf: &mut [u8], n: f64, _le: bool| {
-            buf[0] = n as i32 as u8;
-        });
+        dv_set_method!(
+            "setUint8",
+            1,
+            number,
+            |buf: &mut [u8], n: f64, _le: bool| {
+                buf[0] = n as i32 as u8;
+            }
+        );
         dv_set_method!("setInt16", 2, number, |buf: &mut [u8], n: f64, le: bool| {
             let v = n as i16;
             let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
             buf.copy_from_slice(&bytes);
         });
-        dv_set_method!("setUint16", 2, number, |buf: &mut [u8], n: f64, le: bool| {
-            let v = n as u16;
-            let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
+        dv_set_method!(
+            "setUint16",
+            2,
+            number,
+            |buf: &mut [u8], n: f64, le: bool| {
+                let v = n as u16;
+                let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+                buf.copy_from_slice(&bytes);
+            }
+        );
         dv_set_method!("setInt32", 4, number, |buf: &mut [u8], n: f64, le: bool| {
             let v = n as i32;
             let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
             buf.copy_from_slice(&bytes);
         });
-        dv_set_method!("setUint32", 4, number, |buf: &mut [u8], n: f64, le: bool| {
-            let v = n as u32;
-            let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
-        dv_set_method!("setFloat32", 4, number, |buf: &mut [u8], n: f64, le: bool| {
-            let v = n as f32;
-            let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
-        dv_set_method!("setFloat64", 8, number, |buf: &mut [u8], n: f64, le: bool| {
-            let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
-        dv_set_method!("setFloat16", 2, number, |buf: &mut [u8], n: f64, le: bool| {
-            let bits = dv_f64_to_f16_bits(n);
-            let bytes = if le { bits.to_le_bytes() } else { bits.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
-        dv_set_method!("setBigInt64", 8, bigint, |buf: &mut [u8], v: &JsValue, le: bool| {
-            let n = match v {
-                JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
-                _ => 0,
-            };
-            let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
-            buf.copy_from_slice(&bytes);
-        });
+        dv_set_method!(
+            "setUint32",
+            4,
+            number,
+            |buf: &mut [u8], n: f64, le: bool| {
+                let v = n as u32;
+                let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+                buf.copy_from_slice(&bytes);
+            }
+        );
+        dv_set_method!(
+            "setFloat32",
+            4,
+            number,
+            |buf: &mut [u8], n: f64, le: bool| {
+                let v = n as f32;
+                let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
+                buf.copy_from_slice(&bytes);
+            }
+        );
+        dv_set_method!(
+            "setFloat64",
+            8,
+            number,
+            |buf: &mut [u8], n: f64, le: bool| {
+                let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
+                buf.copy_from_slice(&bytes);
+            }
+        );
+        dv_set_method!(
+            "setFloat16",
+            2,
+            number,
+            |buf: &mut [u8], n: f64, le: bool| {
+                let bits = dv_f64_to_f16_bits(n);
+                let bytes = if le {
+                    bits.to_le_bytes()
+                } else {
+                    bits.to_be_bytes()
+                };
+                buf.copy_from_slice(&bytes);
+            }
+        );
+        dv_set_method!(
+            "setBigInt64",
+            8,
+            bigint,
+            |buf: &mut [u8], v: &JsValue, le: bool| {
+                let n = match v {
+                    JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                    _ => 0,
+                };
+                let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
+                buf.copy_from_slice(&bytes);
+            }
+        );
         dv_set_method!(
             "setBigUint64",
             8,
@@ -3523,7 +3596,9 @@ impl Interpreter {
                             }
                         }
                         if let Some(ref buf) = obj_ref.arraybuffer_data {
-                            let det = obj_ref.arraybuffer_detached.clone()
+                            let det = obj_ref
+                                .arraybuffer_detached
+                                .clone()
                                 .unwrap_or_else(|| Rc::new(Cell::new(false)));
                             (buf.clone(), det)
                         } else {
@@ -3624,7 +3699,9 @@ fn extract_ta_and_callback(
         };
         let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
         let is_callable = if let JsValue::Object(co) = &callback {
-            interp.get_object(co.id).is_some_and(|obj| obj.borrow().callable.is_some())
+            interp
+                .get_object(co.id)
+                .is_some_and(|obj| obj.borrow().callable.is_some())
         } else {
             false
         };
@@ -3683,7 +3760,11 @@ fn dv_f64_to_f16_bits(val: f64) -> u16 {
         return if val > 0.0 { 0x7C00 } else { 0xFC00 };
     }
     if val == 0.0 {
-        return if val.is_sign_negative() { 0x8000 } else { 0x0000 };
+        return if val.is_sign_negative() {
+            0x8000
+        } else {
+            0x0000
+        };
     }
 
     let bits = val.to_bits();
@@ -3706,13 +3787,21 @@ fn dv_f64_to_f16_bits(val: f64) -> u16 {
         let rounded = if round_bits > halfway {
             mantissa_10 + 1
         } else if round_bits == halfway {
-            if mantissa_10 & 1 != 0 { mantissa_10 + 1 } else { mantissa_10 }
+            if mantissa_10 & 1 != 0 {
+                mantissa_10 + 1
+            } else {
+                mantissa_10
+            }
         } else {
             mantissa_10
         };
 
         let result = sign | f16_exp | (rounded & 0x3FF);
-        return if rounded > 0x3FF { result + (1 << 10) } else { result };
+        return if rounded > 0x3FF {
+            result + (1 << 10)
+        } else {
+            result
+        };
     }
 
     // Subnormal f16
@@ -3739,7 +3828,11 @@ fn dv_f64_to_f16_bits(val: f64) -> u16 {
         0
     };
     let rounded = if round_bit == 1 {
-        if sticky > 0 || (mantissa & 1 != 0) { mantissa + 1 } else { mantissa }
+        if sticky > 0 || (mantissa & 1 != 0) {
+            mantissa + 1
+        } else {
+            mantissa
+        }
     } else {
         mantissa
     };
@@ -3871,9 +3964,9 @@ fn parse_base64_options(
                 }
                 let s = to_js_string(&alpha_val);
                 if s != "base64" && s != "base64url" {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("expected alphabet to be either \"base64\" or \"base64url\""),
-                    ));
+                    return Err(Completion::Throw(interp.create_type_error(
+                        "expected alphabet to be either \"base64\" or \"base64url\"",
+                    )));
                 }
                 alphabet = s;
             }
@@ -3922,9 +4015,9 @@ fn parse_to_base64_options(
                 }
                 let s = to_js_string(&alpha_val);
                 if s != "base64" && s != "base64url" {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("expected alphabet to be either \"base64\" or \"base64url\""),
-                    ));
+                    return Err(Completion::Throw(interp.create_type_error(
+                        "expected alphabet to be either \"base64\" or \"base64url\"",
+                    )));
                 }
                 alphabet = s;
             }
@@ -3974,7 +4067,11 @@ fn decode_base64(
 ) -> DecodeResult {
     let max = max_bytes.unwrap_or(usize::MAX);
     if max == 0 {
-        return DecodeResult { bytes: Vec::new(), read: 0, error: None };
+        return DecodeResult {
+            bytes: Vec::new(),
+            read: 0,
+            error: None,
+        };
     }
 
     let chars: Vec<char> = input.chars().collect();
@@ -4241,7 +4338,11 @@ fn decode_base64(
         chars.len()
     };
 
-    DecodeResult { bytes: output, read: chars_read, error: None }
+    DecodeResult {
+        bytes: output,
+        read: chars_read,
+        error: None,
+    }
 }
 
 fn decode_hex(input: &str, max_bytes: Option<usize>) -> DecodeResult {
@@ -4291,7 +4392,11 @@ fn decode_hex(input: &str, max_bytes: Option<usize>) -> DecodeResult {
     }
 
     let read = output.len() * 2;
-    DecodeResult { bytes: output, read, error: None }
+    DecodeResult {
+        bytes: output,
+        read,
+        error: None,
+    }
 }
 
 fn hex_digit(c: char) -> Option<u8> {
@@ -4304,7 +4409,8 @@ fn hex_digit(c: char) -> Option<u8> {
 }
 
 const BASE64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-const BASE64URL_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const BASE64URL_CHARS: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 fn encode_base64(data: &[u8], alphabet: &str, omit_padding: bool) -> String {
     let table = if alphabet == "base64url" {
@@ -4382,11 +4488,7 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
     Completion::Normal(JsValue::Object(JsObject { id }))
 }
 
-fn make_read_written_result(
-    interp: &mut Interpreter,
-    read: usize,
-    written: usize,
-) -> Completion {
+fn make_read_written_result(interp: &mut Interpreter, read: usize, written: usize) -> Completion {
     let obj = interp.create_object();
     obj.borrow_mut()
         .set_property_value("read", JsValue::Number(read as f64));

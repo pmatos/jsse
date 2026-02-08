@@ -278,8 +278,14 @@ impl Interpreter {
         {
             let mut r = result.borrow_mut();
             if is_accessor {
-                r.insert_value("get".to_string(), desc.get.clone().unwrap_or(JsValue::Undefined));
-                r.insert_value("set".to_string(), desc.set.clone().unwrap_or(JsValue::Undefined));
+                r.insert_value(
+                    "get".to_string(),
+                    desc.get.clone().unwrap_or(JsValue::Undefined),
+                );
+                r.insert_value(
+                    "set".to_string(),
+                    desc.set.clone().unwrap_or(JsValue::Undefined),
+                );
             } else {
                 if let Some(ref val) = desc.value {
                     r.insert_value("value".to_string(), val.clone());
@@ -425,7 +431,14 @@ impl Interpreter {
         );
         // Annex B: sloppy non-arrow, non-generator, non-async functions get
         // own caller/arguments = null to shadow the ThrowTypeError accessor
-        if let Some(JsFunction::User { is_strict, is_arrow, is_generator, is_async, .. }) = &obj_data.callable {
+        if let Some(JsFunction::User {
+            is_strict,
+            is_arrow,
+            is_generator,
+            is_async,
+            ..
+        }) = &obj_data.callable
+        {
             if !*is_strict && !*is_arrow && !*is_generator && !*is_async {
                 obj_data.insert_property(
                     "caller".to_string(),
@@ -439,7 +452,10 @@ impl Interpreter {
         }
         let is_constructable = match &obj_data.callable {
             Some(JsFunction::User {
-                is_arrow, is_async, is_generator, ..
+                is_arrow,
+                is_async,
+                is_generator,
+                ..
             }) => !is_arrow && !(*is_async && !*is_generator),
             Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
             None => false,
@@ -453,7 +469,10 @@ impl Interpreter {
             }
             let proto_id = proto.borrow().id.unwrap();
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-            obj_data.insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val.clone(), true, false, false));
+            obj_data.insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), true, false, false),
+            );
         }
         let obj = Rc::new(RefCell::new(obj_data));
         let func_id = self.allocate_object_slot(obj.clone());

@@ -110,7 +110,12 @@ impl<'a> Parser<'a> {
                     return Err(self.error("In strict mode code, functions can only be declared at top level or inside a block"));
                 }
                 self.labels.push((name.clone(), is_iteration));
-                let stmt = self.parse_statement()?;
+                let stmt = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
+                    // Annex B: labeled function declaration in sloppy mode
+                    self.parse_function_declaration()?
+                } else {
+                    self.parse_statement()?
+                };
                 self.labels.pop();
                 return Ok(Statement::Labeled(name, Box::new(stmt)));
             }
@@ -220,10 +225,42 @@ impl<'a> Parser<'a> {
         self.eat(&Token::LeftParen)?;
         let test = self.parse_expression()?;
         self.eat(&Token::RightParen)?;
-        let consequent = Box::new(self.parse_statement()?);
+        let consequent = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
+            // B.3.4: function declaration in if-body (sloppy mode)
+            let fdecl = self.parse_function_declaration()?;
+            if let Statement::FunctionDeclaration(ref f) = fdecl {
+                if f.is_generator {
+                    return Err(ParseError {
+                        message:
+                            "Generators can only be declared at the top level or inside a block"
+                                .to_string(),
+                    });
+                }
+            }
+            Box::new(Statement::Block(vec![fdecl]))
+        } else {
+            Box::new(self.parse_statement()?)
+        };
         let alternate = if self.current == Token::Keyword(Keyword::Else) {
+            if Self::is_labelled_function(&consequent) {
+                return Err(self.error("In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement"));
+            }
             self.advance()?;
-            Some(Box::new(self.parse_statement()?))
+            if !self.strict && self.current == Token::Keyword(Keyword::Function) {
+                let fdecl = self.parse_function_declaration()?;
+                if let Statement::FunctionDeclaration(ref f) = fdecl {
+                    if f.is_generator {
+                        return Err(ParseError {
+                            message:
+                                "Generators can only be declared at the top level or inside a block"
+                                    .to_string(),
+                        });
+                    }
+                }
+                Some(Box::new(Statement::Block(vec![fdecl])))
+            } else {
+                Some(Box::new(self.parse_statement()?))
+            }
         } else {
             None
         };
@@ -234,11 +271,23 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    fn is_labelled_function(stmt: &Statement) -> bool {
+        match stmt {
+            Statement::Labeled(_, inner) => Self::is_labelled_function(inner),
+            Statement::FunctionDeclaration(_) => true,
+            _ => false,
+        }
+    }
+
     fn parse_iteration_body(&mut self) -> Result<Box<Statement>, ParseError> {
         self.in_iteration += 1;
         let body = self.parse_statement();
         self.in_iteration -= 1;
-        Ok(Box::new(body?))
+        let body = body?;
+        if Self::is_labelled_function(&body) {
+            return Err(self.error("In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement"));
+        }
+        Ok(Box::new(body))
     }
 
     fn parse_while_statement(&mut self) -> Result<Statement, ParseError> {

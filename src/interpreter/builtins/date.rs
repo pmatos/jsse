@@ -261,7 +261,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let v = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let v = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let v = time_clip(v);
                     if let JsValue::Object(o) = this
                         && let Some(obj) = interp.get_object(o.id)
@@ -279,7 +282,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let ms = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let ms = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let lt = local_time(t);
                     let time =
                         make_time(hour_from_time(lt), min_from_time(lt), sec_from_time(lt), ms);
@@ -300,7 +306,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let ms = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let ms = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let time = make_time(hour_from_time(t), min_from_time(t), sec_from_time(t), ms);
                     let v = time_clip(make_date(day(t), time));
                     if let JsValue::Object(o) = this
@@ -319,7 +328,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let s = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let s = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let lt = local_time(t);
                     let ms = args
                         .get(1)
@@ -343,7 +355,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let s = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let s = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let ms = args
                         .get(1)
                         .map(|a| interp.to_number_coerce(a))
@@ -366,7 +381,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let m = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let m = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let lt = local_time(t);
                     let s = args
                         .get(1)
@@ -394,7 +412,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let m = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let m = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let s = args
                         .get(1)
                         .map(|a| interp.to_number_coerce(a))
@@ -421,7 +442,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let h = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let h = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let lt = local_time(t);
                     let m = args
                         .get(1)
@@ -453,7 +477,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let h = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let h = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let m = args
                         .get(1)
                         .map(|a| interp.to_number_coerce(a))
@@ -484,7 +511,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let dt = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let dt = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let lt = local_time(t);
                     let new_date = make_day(year_from_time(lt), month_from_time(lt), dt);
                     let v = time_clip(utc_time(make_date(new_date, time_within_day(lt))));
@@ -504,7 +534,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let dt = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let dt = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let new_date = make_day(year_from_time(t), month_from_time(t), dt);
                     let v = time_clip(make_date(new_date, time_within_day(t)));
                     if let JsValue::Object(o) = this
@@ -523,7 +556,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let m = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let m = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let lt = local_time(t);
                     let dt = args
                         .get(1)
@@ -547,7 +583,10 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let m = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let m = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let dt = args
                         .get(1)
                         .map(|a| interp.to_number_coerce(a))
@@ -571,7 +610,10 @@ impl Interpreter {
                         return Completion::Throw(e);
                     };
                     let t = if t.is_nan() { 0.0 } else { t };
-                    let y = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let y = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let lt = local_time(t);
                     let m = args
                         .get(1)
@@ -600,7 +642,10 @@ impl Interpreter {
                         return Completion::Throw(e);
                     };
                     let t = if t.is_nan() { 0.0 } else { t };
-                    let y = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                    let y = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
                     let m = args
                         .get(1)
                         .map(|a| interp.to_number_coerce(a))
@@ -868,12 +913,30 @@ impl Interpreter {
                 } else {
                     // 2-7 args
                     let y = interp.to_number_coerce(&args[0]);
-                    let m = args.get(1).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
-                    let dt = args.get(2).map(|a| interp.to_number_coerce(a)).unwrap_or(1.0);
-                    let h = args.get(3).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
-                    let min = args.get(4).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
-                    let s = args.get(5).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
-                    let ms = args.get(6).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
+                    let m = args
+                        .get(1)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
+                    let dt = args
+                        .get(2)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(1.0);
+                    let h = args
+                        .get(3)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
+                    let min = args
+                        .get(4)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
+                    let s = args
+                        .get(5)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
+                    let ms = args
+                        .get(6)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
                     let yr = if !y.is_nan() {
                         let yi = y.trunc();
                         if (0.0..=99.0).contains(&yi) {
@@ -935,13 +998,34 @@ impl Interpreter {
                 "UTC".to_string(),
                 7,
                 |interp, _this, args| {
-                    let y = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
-                    let m = args.get(1).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
-                    let dt = args.get(2).map(|a| interp.to_number_coerce(a)).unwrap_or(1.0);
-                    let h = args.get(3).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
-                    let min = args.get(4).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
-                    let s = args.get(5).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
-                    let ms = args.get(6).map(|a| interp.to_number_coerce(a)).unwrap_or(0.0);
+                    let y = args
+                        .first()
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(f64::NAN);
+                    let m = args
+                        .get(1)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
+                    let dt = args
+                        .get(2)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(1.0);
+                    let h = args
+                        .get(3)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
+                    let min = args
+                        .get(4)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
+                    let s = args
+                        .get(5)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
+                    let ms = args
+                        .get(6)
+                        .map(|a| interp.to_number_coerce(a))
+                        .unwrap_or(0.0);
                     let yr = if !y.is_nan() {
                         let yi = y.trunc();
                         if (0.0..=99.0).contains(&yi) {
@@ -963,8 +1047,10 @@ impl Interpreter {
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });
-            obj.borrow_mut()
-                .insert_property("prototype".to_string(), PropertyDescriptor::data(proto_val, false, false, false));
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
         }
 
         // Date.prototype.constructor
@@ -1006,7 +1092,10 @@ impl Interpreter {
                     let e = interp.create_type_error("this is not a Date object");
                     return Completion::Throw(e);
                 };
-                let y = args.first().map(|a| interp.to_number_coerce(a)).unwrap_or(f64::NAN);
+                let y = args
+                    .first()
+                    .map(|a| interp.to_number_coerce(a))
+                    .unwrap_or(f64::NAN);
                 if y.is_nan() {
                     if let JsValue::Object(o) = this
                         && let Some(obj) = interp.get_object(o.id)

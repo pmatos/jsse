@@ -37,7 +37,11 @@ impl Interpreter {
     }
 
     /// Initialize instance elements (private/public fields) after super() in derived constructor.
-    fn initialize_instance_elements(&mut self, this_val: JsValue, env: &EnvRef) -> Result<(), JsValue> {
+    fn initialize_instance_elements(
+        &mut self,
+        this_val: JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
         // Find the new.target constructor (which has the field defs for the current class)
         let new_target_val = if let Some(ref nt) = self.new_target {
             nt.clone()
@@ -1028,7 +1032,11 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn to_primitive(&mut self, val: &JsValue, preferred_type: &str) -> Result<JsValue, JsValue> {
+    pub(crate) fn to_primitive(
+        &mut self,
+        val: &JsValue,
+        preferred_type: &str,
+    ) -> Result<JsValue, JsValue> {
         match val {
             JsValue::Object(o) => {
                 // §7.1.1 Step 2-3: Check @@toPrimitive
@@ -1048,10 +1056,13 @@ impl Interpreter {
                         let hint = JsValue::String(JsString::from_str(preferred_type));
                         let result = self.call_function(&exotic_to_prim, val, &[hint]);
                         match result {
-                            Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => return Ok(v),
+                            Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                return Ok(v);
+                            }
                             Completion::Normal(_) => {
-                                return Err(self
-                                    .create_type_error("@@toPrimitive must return a primitive"));
+                                return Err(
+                                    self.create_type_error("@@toPrimitive must return a primitive")
+                                );
                             }
                             Completion::Throw(e) => return Err(e),
                             _ => {}
@@ -1153,25 +1164,39 @@ impl Interpreter {
         match &prim {
             JsValue::BigInt(_) => Ok(prim),
             JsValue::Boolean(b) => Ok(JsValue::BigInt(crate::types::JsBigInt {
-                value: if *b { num_bigint::BigInt::from(1) } else { num_bigint::BigInt::from(0) },
+                value: if *b {
+                    num_bigint::BigInt::from(1)
+                } else {
+                    num_bigint::BigInt::from(0)
+                },
             })),
             JsValue::String(s) => {
                 let text = s.to_rust_string();
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
-                    return Err(self.create_error("SyntaxError",
-                        &format!("Cannot convert \"{}\" to a BigInt", text)));
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!("Cannot convert \"{}\" to a BigInt", text),
+                    ));
                 }
                 match trimmed.parse::<num_bigint::BigInt>() {
                     Ok(n) => Ok(JsValue::BigInt(crate::types::JsBigInt { value: n })),
-                    Err(_) => Err(self.create_error("SyntaxError",
-                        &format!("Cannot convert \"{}\" to a BigInt", text))),
+                    Err(_) => Err(self.create_error(
+                        "SyntaxError",
+                        &format!("Cannot convert \"{}\" to a BigInt", text),
+                    )),
                 }
             }
-            JsValue::Undefined => Err(self.create_type_error("Cannot convert undefined to a BigInt")),
+            JsValue::Undefined => {
+                Err(self.create_type_error("Cannot convert undefined to a BigInt"))
+            }
             JsValue::Null => Err(self.create_type_error("Cannot convert null to a BigInt")),
-            JsValue::Number(_) => Err(self.create_type_error("Cannot convert a Number to a BigInt")),
-            JsValue::Symbol(_) => Err(self.create_type_error("Cannot convert a Symbol to a BigInt")),
+            JsValue::Number(_) => {
+                Err(self.create_type_error("Cannot convert a Number to a BigInt"))
+            }
+            JsValue::Symbol(_) => {
+                Err(self.create_type_error("Cannot convert a Symbol to a BigInt"))
+            }
             _ => Err(self.create_type_error("Cannot convert to BigInt")),
         }
     }
@@ -1245,8 +1270,12 @@ impl Interpreter {
     }
 
     fn abstract_relational(&mut self, left: &JsValue, right: &JsValue) -> Option<bool> {
-        let lprim = self.to_primitive(left, "number").unwrap_or(JsValue::Undefined);
-        let rprim = self.to_primitive(right, "number").unwrap_or(JsValue::Undefined);
+        let lprim = self
+            .to_primitive(left, "number")
+            .unwrap_or(JsValue::Undefined);
+        let rprim = self
+            .to_primitive(right, "number")
+            .unwrap_or(JsValue::Undefined);
         if is_string(&lprim) && is_string(&rprim) {
             let ls = to_js_string(&lprim);
             let rs = to_js_string(&rprim);
@@ -1743,8 +1772,12 @@ impl Interpreter {
                         let is_ta = obj.borrow().typed_array_info.is_some();
                         if is_ta {
                             if let Some(index) = canonical_numeric_index_string(&key) {
-                                let is_bigint = obj.borrow().typed_array_info.as_ref()
-                                    .map(|ta| ta.kind.is_bigint()).unwrap_or(false);
+                                let is_bigint = obj
+                                    .borrow()
+                                    .typed_array_info
+                                    .as_ref()
+                                    .map(|ta| ta.kind.is_bigint())
+                                    .unwrap_or(false);
                                 let num_val = if is_bigint {
                                     self.to_bigint_value(&value)?
                                 } else {
@@ -1958,9 +1991,9 @@ impl Interpreter {
                         match self.proxy_set(o.id, &key, final_val.clone(), &receiver) {
                             Ok(success) => {
                                 if !success && env.borrow().strict {
-                                    return Completion::Throw(self.create_type_error(
-                                        &format!("Cannot assign to read only property '{key}'"),
-                                    ));
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot assign to read only property '{key}'"
+                                    )));
                                 }
                                 return Completion::Normal(final_val);
                             }
@@ -1997,8 +2030,12 @@ impl Interpreter {
                         let is_ta = obj.borrow().typed_array_info.is_some();
                         if is_ta {
                             if let Some(index) = canonical_numeric_index_string(&key) {
-                                let is_bigint = obj.borrow().typed_array_info.as_ref()
-                                    .map(|ta| ta.kind.is_bigint()).unwrap_or(false);
+                                let is_bigint = obj
+                                    .borrow()
+                                    .typed_array_info
+                                    .as_ref()
+                                    .map(|ta| ta.kind.is_bigint())
+                                    .unwrap_or(false);
                                 // Convert value first (may throw)
                                 let num_val = if is_bigint {
                                     match self.to_bigint_value(&final_val) {
@@ -2199,8 +2236,12 @@ impl Interpreter {
             let is_ta = obj.borrow().typed_array_info.is_some();
             if is_ta {
                 if let Some(index) = canonical_numeric_index_string(&key) {
-                    let is_bigint = obj.borrow().typed_array_info.as_ref()
-                        .map(|ta| ta.kind.is_bigint()).unwrap_or(false);
+                    let is_bigint = obj
+                        .borrow()
+                        .typed_array_info
+                        .as_ref()
+                        .map(|ta| ta.kind.is_bigint())
+                        .unwrap_or(false);
                     let num_val = if is_bigint {
                         self.to_bigint_value(&val)?
                     } else {
@@ -2236,9 +2277,7 @@ impl Interpreter {
             Expression::Identifier(name) => {
                 if !env.borrow().has(name) {
                     if env.borrow().strict {
-                        return Err(
-                            self.create_reference_error(&format!("{name} is not defined")),
-                        );
+                        return Err(self.create_reference_error(&format!("{name} is not defined")));
                     }
                     env.borrow_mut().declare(name, BindingKind::Var);
                 }
@@ -2299,7 +2338,11 @@ impl Interpreter {
                             match self.iterator_step(&iterator) {
                                 Ok(Some(result)) => match self.iterator_value(&result) {
                                     Ok(v) => rest.push(v),
-                                    Err(e) => { done = true; error = Some(e); break; }
+                                    Err(e) => {
+                                        done = true;
+                                        error = Some(e);
+                                        break;
+                                    }
                                 },
                                 Ok(None) => {
                                     done = true;
@@ -2337,7 +2380,11 @@ impl Interpreter {
                         match self.iterator_step(&iterator) {
                             Ok(Some(result)) => match self.iterator_value(&result) {
                                 Ok(v) => v,
-                                Err(e) => { done = true; error = Some(e); break; }
+                                Err(e) => {
+                                    done = true;
+                                    error = Some(e);
+                                    break;
+                                }
                             },
                             Ok(None) => {
                                 done = true;
@@ -2535,7 +2582,8 @@ impl Interpreter {
                 // Per spec §13.3.7.1: super() must forward the derived class's new.target
                 let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
                 let saved_new_target = self.new_target.clone();
-                let result = self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
+                let result =
+                    self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
                 self.new_target = saved_new_target;
                 if let Completion::Normal(ref v) = result {
                     // Set prototype from new.target.prototype (the derived class)
@@ -2543,7 +2591,8 @@ impl Interpreter {
                         if let Some(nt) = &self.new_target {
                             if let JsValue::Object(nt_o) = nt {
                                 if let Some(nt_func) = self.get_object(nt_o.id) {
-                                    let proto_val = nt_func.borrow().get_property_value("prototype");
+                                    let proto_val =
+                                        nt_func.borrow().get_property_value("prototype");
                                     if let Some(JsValue::Object(proto_obj)) = proto_val {
                                         if let Some(proto_rc) = self.get_object(proto_obj.id) {
                                             if let Some(obj) = self.get_object(this_obj.id) {
@@ -2665,9 +2714,9 @@ impl Interpreter {
                             let method = proto_rc.borrow().get_property(&key);
                             (method, this_val)
                         } else {
-                            return Completion::Throw(self.create_type_error(
-                                &format!("Cannot read properties of null (reading '{key}')"),
-                            ));
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot read properties of null (reading '{key}')"
+                            )));
                         }
                     } else if let JsValue::Object(ref o) = obj_val {
                         // Fallback: __super__.prototype for class super
@@ -5371,8 +5420,7 @@ impl Interpreter {
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                         }
                         let result = self.exec_statements(&body, &func_env);
-                        self.last_call_this_value =
-                            func_env.borrow().get("this");
+                        self.last_call_this_value = func_env.borrow().get("this");
                         match result {
                             Completion::Return(v) => {
                                 self.last_call_had_explicit_return = true;
@@ -5446,9 +5494,7 @@ impl Interpreter {
         let mut p = match parser::Parser::new(&code) {
             Ok(p) => p,
             Err(_) => {
-                return Completion::Throw(
-                    self.create_error("SyntaxError", "Invalid eval source"),
-                );
+                return Completion::Throw(self.create_error("SyntaxError", "Invalid eval source"));
             }
         };
         if caller_strict {
@@ -5457,9 +5503,7 @@ impl Interpreter {
         let program = match p.parse_program() {
             Ok(prog) => prog,
             Err(e) => {
-                return Completion::Throw(
-                    self.create_error("SyntaxError", &format!("{}", e)),
-                );
+                return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
             }
         };
         let eval_code_strict = program.body.first().is_some_and(|s| {
@@ -5704,13 +5748,16 @@ impl Interpreter {
 
     /// Construct with a specific new.target (needed for super() calls where new.target
     /// must be the derived class, not the parent constructor).
-    pub(crate) fn construct_with_new_target(&mut self, constructor: &JsValue, args: &[JsValue], new_target: JsValue) -> Completion {
+    pub(crate) fn construct_with_new_target(
+        &mut self,
+        constructor: &JsValue,
+        args: &[JsValue],
+        new_target: JsValue,
+    ) -> Completion {
         let co = if let JsValue::Object(co) = constructor {
             co.clone()
         } else {
-            return Completion::Throw(
-                self.create_type_error("not a constructor"),
-            );
+            return Completion::Throw(self.create_type_error("not a constructor"));
         };
 
         // Proxy construct trap
@@ -5754,9 +5801,7 @@ impl Interpreter {
             };
             if !is_ctor {
                 drop(b);
-                return Completion::Throw(
-                    self.create_type_error("not a constructor"),
-                );
+                return Completion::Throw(self.create_type_error("not a constructor"));
             }
         }
 
@@ -6299,8 +6344,12 @@ impl Interpreter {
             let is_ta = obj.borrow().typed_array_info.is_some();
             if is_ta {
                 if let Some(index) = canonical_numeric_index_string(key) {
-                    let is_bigint = obj.borrow().typed_array_info.as_ref()
-                        .map(|ta| ta.kind.is_bigint()).unwrap_or(false);
+                    let is_bigint = obj
+                        .borrow()
+                        .typed_array_info
+                        .as_ref()
+                        .map(|ta| ta.kind.is_bigint())
+                        .unwrap_or(false);
                     let num_val = if is_bigint {
                         self.to_bigint_value(&value)?
                     } else {
@@ -6421,7 +6470,8 @@ impl Interpreter {
                                             "'defineProperty' on proxy: trap returned truish for defining non-configurable property which is already non-configurable in the proxy target as configurable",
                                         ));
                                     }
-                                    if desc.is_data_descriptor() && td.is_data_descriptor()
+                                    if desc.is_data_descriptor()
+                                        && td.is_data_descriptor()
                                         && td.writable == Some(false)
                                         && desc.writable == Some(true)
                                     {
@@ -6502,7 +6552,8 @@ impl Interpreter {
                                                 "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with configurable: true for non-configurable property in the proxy target",
                                             ));
                                         }
-                                        if td.is_data_descriptor() && td.writable == Some(false)
+                                        if td.is_data_descriptor()
+                                            && td.writable == Some(false)
                                             && trap_d.writable == Some(true)
                                         {
                                             return Err(self.create_type_error(
@@ -6825,7 +6876,9 @@ impl Interpreter {
                     other => return other,
                 };
                 // Check for null/undefined base before ToPropertyKey (skip for super)
-                if !matches!(obj, Expression::Super) && matches!(&obj_val, JsValue::Null | JsValue::Undefined) {
+                if !matches!(obj, Expression::Super)
+                    && matches!(&obj_val, JsValue::Null | JsValue::Undefined)
+                {
                     let err = self.create_type_error(&format!(
                         "Cannot read properties of {obj_val} (reading property)"
                     ));
@@ -6851,9 +6904,9 @@ impl Interpreter {
                     let proto_id = proto_rc.borrow().id.unwrap();
                     return self.get_object_property(proto_id, &key, &this_val);
                 }
-                return Completion::Throw(self.create_type_error(
-                    &format!("Cannot read properties of null (reading '{key}')"),
-                ));
+                return Completion::Throw(self.create_type_error(&format!(
+                    "Cannot read properties of null (reading '{key}')"
+                )));
             }
             // Fallback: __super__.prototype for class super
             if let JsValue::Object(ref o) = obj_val {
@@ -7072,9 +7125,7 @@ impl Interpreter {
 
         // Bind class name as immutable binding in class_env (spec §15.7.14 step 2.e)
         if !name.is_empty() {
-            class_env
-                .borrow_mut()
-                .declare(name, BindingKind::Const);
+            class_env.borrow_mut().declare(name, BindingKind::Const);
             let _ = class_env.borrow_mut().set(name, ctor_val.clone());
         }
 
@@ -7295,8 +7346,12 @@ impl Interpreter {
                     if let JsValue::Object(ref fo) = method_val
                         && let Some(func_obj) = self.get_object(fo.id)
                     {
-                        if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
-                            closure.borrow_mut().declare("__home_object__", BindingKind::Const);
+                        if let Some(JsFunction::User { ref closure, .. }) =
+                            func_obj.borrow().callable
+                        {
+                            closure
+                                .borrow_mut()
+                                .declare("__home_object__", BindingKind::Const);
                             let _ = closure.borrow_mut().set("__home_object__", home_target);
                         }
                     }
@@ -7596,9 +7651,7 @@ impl Interpreter {
                 if let JsValue::Object(fo) = val
                     && let Some(func_obj) = self.get_object(fo.id)
                 {
-                    if let Some(JsFunction::User { ref closure, .. }) =
-                        func_obj.borrow().callable
-                    {
+                    if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
                         closure
                             .borrow_mut()
                             .declare("__home_object__", BindingKind::Const);

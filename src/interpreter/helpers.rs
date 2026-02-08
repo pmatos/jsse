@@ -337,7 +337,10 @@ fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue
             (b.proxy_revoked, b.is_proxy(), tid, b.class_name.clone())
         };
         if is_revoked {
-            return Err(interp.create_error("TypeError", "Cannot perform 'IsArray' on a proxy that has been revoked"));
+            return Err(interp.create_error(
+                "TypeError",
+                "Cannot perform 'IsArray' on a proxy that has been revoked",
+            ));
         }
         if is_proxy {
             if let Some(tid) = target_id {
@@ -395,13 +398,17 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
                             if let JsValue::String(s) = k {
                                 let key_str = s.to_rust_string();
                                 let key_val = JsValue::String(s);
-                                match interp.invoke_proxy_trap(obj_id, "getOwnPropertyDescriptor",
-                                    vec![target_val.clone(), key_val]) {
+                                match interp.invoke_proxy_trap(
+                                    obj_id,
+                                    "getOwnPropertyDescriptor",
+                                    vec![target_val.clone(), key_val],
+                                ) {
                                     Ok(Some(desc_val)) => {
                                         if let JsValue::Object(dobj) = &desc_val
                                             && let Some(desc_obj) = interp.get_object(dobj.id)
                                         {
-                                            let enum_val = desc_obj.borrow().get_property("enumerable");
+                                            let enum_val =
+                                                desc_obj.borrow().get_property("enumerable");
                                             if to_boolean(&enum_val) {
                                                 keys.push(key_str);
                                             }
@@ -411,7 +418,8 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
                                         if let JsValue::Object(ref t) = target_val
                                             && let Some(tobj) = interp.get_object(t.id)
                                         {
-                                            if let Some(d) = tobj.borrow().properties.get(&key_str) {
+                                            if let Some(d) = tobj.borrow().properties.get(&key_str)
+                                            {
                                                 if d.enumerable != Some(false) {
                                                     keys.push(key_str);
                                                 }
@@ -454,7 +462,9 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
 pub(crate) fn json_stringify_value(interp: &mut Interpreter, val: &JsValue) -> Option<String> {
     let mut stack = Vec::new();
     let wrapper = interp.create_object();
-    wrapper.borrow_mut().insert_value("".to_string(), val.clone());
+    wrapper
+        .borrow_mut()
+        .insert_value("".to_string(), val.clone());
     let holder_id = wrapper.borrow().id.unwrap();
     json_stringify_internal(interp, holder_id, "", val, &mut stack, &None, &None, "", "")
         .unwrap_or_default()
@@ -525,11 +535,21 @@ pub(crate) fn json_stringify_full(
     }
 
     let wrapper = interp.create_object();
-    wrapper.borrow_mut().insert_value("".to_string(), val.clone());
+    wrapper
+        .borrow_mut()
+        .insert_value("".to_string(), val.clone());
     let holder_id = wrapper.borrow().id.unwrap();
 
     json_stringify_internal(
-        interp, holder_id, "", val, &mut stack, &replacer_fn, &property_list, space, "",
+        interp,
+        holder_id,
+        "",
+        val,
+        &mut stack,
+        &replacer_fn,
+        &property_list,
+        space,
+        "",
     )
 }
 
@@ -605,18 +625,14 @@ fn json_stringify_internal(
             String::new()
         };
         match class.as_str() {
-            "Number" => {
-                match interp.to_number_value(&value) {
-                    Ok(n) => value = JsValue::Number(n),
-                    Err(e) => return Err(e),
-                }
-            }
-            "String" => {
-                match interp.to_string_value(&value) {
-                    Ok(s) => value = JsValue::String(JsString::from_str(&s)),
-                    Err(e) => return Err(e),
-                }
-            }
+            "Number" => match interp.to_number_value(&value) {
+                Ok(n) => value = JsValue::Number(n),
+                Err(e) => return Err(e),
+            },
+            "String" => match interp.to_string_value(&value) {
+                Ok(s) => value = JsValue::String(JsString::from_str(&s)),
+                Err(e) => return Err(e),
+            },
             "Boolean" => {
                 if let Some(obj) = interp.get_object(o.id) {
                     if let Some(pv) = obj.borrow().primitive_value.clone() {
@@ -674,23 +690,40 @@ fn json_stringify_internal(
                 let result = if is_array {
                     let len_val = match interp.get_object_property(obj_id, "length", &obj_val) {
                         Completion::Normal(v) => v,
-                        Completion::Throw(e) => { stack.pop(); return Err(e); }
+                        Completion::Throw(e) => {
+                            stack.pop();
+                            return Err(e);
+                        }
                         _ => JsValue::Undefined,
                     };
                     let len = match interp.to_number_value(&len_val) {
                         Ok(n) => n as usize,
-                        Err(e) => { stack.pop(); return Err(e); }
+                        Err(e) => {
+                            stack.pop();
+                            return Err(e);
+                        }
                     };
                     let mut items = Vec::new();
                     for i in 0..len {
                         let ikey = i.to_string();
                         let v = match interp.get_object_property(obj_id, &ikey, &obj_val) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => { stack.pop(); return Err(e); }
+                            Completion::Throw(e) => {
+                                stack.pop();
+                                return Err(e);
+                            }
                             _ => JsValue::Undefined,
                         };
                         match json_stringify_internal(
-                            interp, obj_id, &ikey, &v, stack, replacer_fn, property_list, gap, &new_indent,
+                            interp,
+                            obj_id,
+                            &ikey,
+                            &v,
+                            stack,
+                            replacer_fn,
+                            property_list,
+                            gap,
+                            &new_indent,
                         )? {
                             Some(s) => items.push(s),
                             None => items.push("null".to_string()),
@@ -702,7 +735,12 @@ fn json_stringify_internal(
                         Ok(Some(format!("[{}]", items.join(","))))
                     } else {
                         let sep = format!(",\n{}", new_indent);
-                        Ok(Some(format!("[\n{}{}\n{}]", new_indent, items.join(&sep), indent)))
+                        Ok(Some(format!(
+                            "[\n{}{}\n{}]",
+                            new_indent,
+                            items.join(&sep),
+                            indent
+                        )))
                     }
                 } else {
                     let keys: Vec<String> = if let Some(pl) = property_list {
@@ -710,18 +748,32 @@ fn json_stringify_internal(
                     } else {
                         match enumerable_own_keys(interp, obj_id) {
                             Ok(k) => k,
-                            Err(e) => { stack.pop(); return Err(e); }
+                            Err(e) => {
+                                stack.pop();
+                                return Err(e);
+                            }
                         }
                     };
                     let mut entries = Vec::new();
                     for k in &keys {
                         let v = match interp.get_object_property(obj_id, k, &obj_val) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => { stack.pop(); return Err(e); }
+                            Completion::Throw(e) => {
+                                stack.pop();
+                                return Err(e);
+                            }
                             _ => JsValue::Undefined,
                         };
                         match json_stringify_internal(
-                            interp, obj_id, k, &v, stack, replacer_fn, property_list, gap, &new_indent,
+                            interp,
+                            obj_id,
+                            k,
+                            &v,
+                            stack,
+                            replacer_fn,
+                            property_list,
+                            gap,
+                            &new_indent,
                         )? {
                             Some(sv) => {
                                 let quoted_key = json_quote(k);
@@ -740,7 +792,12 @@ fn json_stringify_internal(
                         Ok(Some(format!("{{{}}}", entries.join(","))))
                     } else {
                         let sep = format!(",\n{}", new_indent);
-                        Ok(Some(format!("{{\n{}{}\n{}}}", new_indent, entries.join(&sep), indent)))
+                        Ok(Some(format!(
+                            "{{\n{}{}\n{}}}",
+                            new_indent,
+                            entries.join(&sep),
+                            indent
+                        )))
                     }
                 };
                 stack.pop();
@@ -886,7 +943,10 @@ fn json_parse_value_inner(
 }
 
 pub(crate) fn is_json_primitive(val: &JsValue) -> bool {
-    matches!(val, JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) | JsValue::String(_))
+    matches!(
+        val,
+        JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) | JsValue::String(_)
+    )
 }
 
 fn json_validate_string(s: &str) -> Result<(), String> {
@@ -948,21 +1008,28 @@ fn json_unescape_string(s: &str) -> String {
     result
 }
 
-fn json_internalize_apply(interp: &mut Interpreter, obj_id: u64, key: &str, new_val: JsValue) -> Result<(), JsValue> {
-    let is_proxy = interp.get_object(obj_id)
+fn json_internalize_apply(
+    interp: &mut Interpreter,
+    obj_id: u64,
+    key: &str,
+    new_val: JsValue,
+) -> Result<(), JsValue> {
+    let is_proxy = interp
+        .get_object(obj_id)
         .map(|o| o.borrow().is_proxy() || o.borrow().proxy_revoked)
         .unwrap_or(false);
 
     if is_proxy {
         let target_val = interp.get_proxy_target_val(obj_id);
-        let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
         if let JsValue::Undefined = &new_val {
             // Delete via proxy deleteProperty trap
             let key_val = JsValue::String(JsString::from_str(key));
             match interp.invoke_proxy_trap(obj_id, "deleteProperty", vec![target_val, key_val]) {
                 Ok(Some(v)) => {
                     if !to_boolean(&v) {
-                        return Err(interp.create_type_error("'deleteProperty' on proxy: trap returned falsish"));
+                        return Err(interp.create_type_error(
+                            "'deleteProperty' on proxy: trap returned falsish",
+                        ));
                     }
                 }
                 Ok(None) => {
@@ -980,15 +1047,31 @@ fn json_internalize_apply(interp: &mut Interpreter, obj_id: u64, key: &str, new_
             // CreateDataProperty via proxy defineProperty trap
             let key_val = JsValue::String(JsString::from_str(key));
             let desc_obj = interp.create_object();
-            desc_obj.borrow_mut().insert_value("value".to_string(), new_val.clone());
-            desc_obj.borrow_mut().insert_value("writable".to_string(), JsValue::Boolean(true));
-            desc_obj.borrow_mut().insert_value("enumerable".to_string(), JsValue::Boolean(true));
-            desc_obj.borrow_mut().insert_value("configurable".to_string(), JsValue::Boolean(true));
-            let desc_val = JsValue::Object(crate::types::JsObject { id: desc_obj.borrow().id.unwrap() });
-            match interp.invoke_proxy_trap(obj_id, "defineProperty", vec![target_val, key_val, desc_val]) {
+            desc_obj
+                .borrow_mut()
+                .insert_value("value".to_string(), new_val.clone());
+            desc_obj
+                .borrow_mut()
+                .insert_value("writable".to_string(), JsValue::Boolean(true));
+            desc_obj
+                .borrow_mut()
+                .insert_value("enumerable".to_string(), JsValue::Boolean(true));
+            desc_obj
+                .borrow_mut()
+                .insert_value("configurable".to_string(), JsValue::Boolean(true));
+            let desc_val = JsValue::Object(crate::types::JsObject {
+                id: desc_obj.borrow().id.unwrap(),
+            });
+            match interp.invoke_proxy_trap(
+                obj_id,
+                "defineProperty",
+                vec![target_val, key_val, desc_val],
+            ) {
                 Ok(Some(v)) => {
                     if !to_boolean(&v) {
-                        return Err(interp.create_type_error("'defineProperty' on proxy: trap returned falsish"));
+                        return Err(interp.create_type_error(
+                            "'defineProperty' on proxy: trap returned falsish",
+                        ));
                     }
                 }
                 Ok(None) => {
@@ -1106,15 +1189,13 @@ pub(crate) fn json_internalize(
                             JsValue::Null => src == "null",
                             JsValue::Boolean(true) => src == "true",
                             JsValue::Boolean(false) => src == "false",
-                            JsValue::Number(n) => {
-                                src.parse::<f64>().map_or(false, |parsed| {
-                                    (parsed.is_nan() && n.is_nan()) || parsed == *n
-                                })
-                            }
+                            JsValue::Number(n) => src.parse::<f64>().map_or(false, |parsed| {
+                                (parsed.is_nan() && n.is_nan()) || parsed == *n
+                            }),
                             JsValue::String(s) => {
                                 // Source includes quotes, parse it to compare
                                 if src.starts_with('"') && src.ends_with('"') {
-                                    let inner = &src[1..src.len()-1];
+                                    let inner = &src[1..src.len() - 1];
                                     json_unescape_string(inner) == s.to_rust_string()
                                 } else {
                                     false
