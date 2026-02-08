@@ -68,7 +68,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Object/` (3,411), `built-ins/Function/` (509), `built-ins/Boolean/` (51), `built-ins/Symbol/` (94), `built-ins/Error/` (53), `built-ins/NativeErrors/` (92), `built-ins/AggregateError/` (25), `built-ins/SuppressedError/` (22)
 
 ### 9.3 Numbers & Dates (§21)
-- [x] **Number** (§21.1) — 74% pass rate (248/335 tests)
+- [x] **Number** (§21.1) — 98% pass rate (331/335 tests)
   - [x] `Number()` constructor
   - [x] `Number.isFinite()`, `.isInteger()`, `.isNaN()`, `.isSafeInteger()`
   - [x] `Number.MAX_SAFE_INTEGER`, `.MIN_SAFE_INTEGER`, `.MAX_VALUE`, `.MIN_VALUE`, `.EPSILON`, `.NaN`, `.POSITIVE_INFINITY`, `.NEGATIVE_INFINITY`
@@ -100,7 +100,7 @@ Ordered roughly by dependency and importance.
   - [x] RequireObjectCoercible on `this` for all methods, UTF-16 code unit indexing, proper argument coercion via ToPrimitive
   - [ ] `String.prototype[@@iterator]`
   - [ ] String HTML methods (Annex B): `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup`
-- [x] **RegExp** (§22.2) — 1,214/1,879 (64.6%)
+- [x] **RegExp** (§22.2) — 1,433/1,879 (76.3%)
   - [x] `RegExp()` constructor
   - [x] `RegExp.prototype.exec()` (TypeError for non-object `this`)
   - [x] `RegExp.prototype.test()` (TypeError for non-object `this`)

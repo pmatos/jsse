@@ -79,6 +79,18 @@ fn string_to_number(s: &JsString) -> f64 {
             .map(|n| n as f64)
             .unwrap_or(f64::NAN);
     }
+    if trimmed == "Infinity" || trimmed == "+Infinity" {
+        return f64::INFINITY;
+    }
+    if trimmed == "-Infinity" {
+        return f64::NEG_INFINITY;
+    }
+    if trimmed.eq_ignore_ascii_case("infinity")
+        || trimmed.eq_ignore_ascii_case("+infinity")
+        || trimmed.eq_ignore_ascii_case("-infinity")
+    {
+        return f64::NAN;
+    }
     trimmed.parse::<f64>().unwrap_or(f64::NAN)
 }
 

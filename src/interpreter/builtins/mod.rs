@@ -986,13 +986,18 @@ impl Interpreter {
                         let err = interp.create_type_error("Symbol is not a constructor");
                         return Completion::Throw(err);
                     }
-                    let desc = args.first().and_then(|v| {
+                    let desc = if let Some(v) = args.first() {
                         if matches!(v, JsValue::Undefined) {
                             None
                         } else {
-                            Some(JsString::from_str(&to_js_string(v)))
+                            match interp.to_string_value(v) {
+                                Ok(s) => Some(JsString::from_str(&s)),
+                                Err(e) => return Completion::Throw(e),
+                            }
                         }
-                    });
+                    } else {
+                        None
+                    };
                     let id = interp.next_symbol_id;
                     interp.next_symbol_id += 1;
                     Completion::Normal(JsValue::Symbol(crate::types::JsSymbol {
@@ -1039,7 +1044,14 @@ impl Interpreter {
                     "for".to_string(),
                     1,
                     Rc::new(|interp, _this, args| {
-                        let key = args.first().map(to_js_string).unwrap_or_default();
+                        let key = if let Some(v) = args.first() {
+                            match interp.to_string_value(v) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else {
+                            "undefined".to_string()
+                        };
                         if let Some(existing) = interp.global_symbol_registry.get(&key) {
                             return Completion::Normal(JsValue::Symbol(existing.clone()));
                         }
@@ -1215,7 +1227,10 @@ impl Interpreter {
                     let s = b.value.to_string();
                     s.parse::<f64>().unwrap_or(f64::INFINITY)
                 } else {
-                    interp.to_number_coerce(&val)
+                    match interp.to_number_value(&val) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    }
                 };
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
@@ -5998,7 +6013,7 @@ impl Interpreter {
                     if let Completion::Normal(ref tag_val) = tag_result {
                         if let JsValue::String(s) = tag_val {
                             return Completion::Normal(JsValue::String(JsString::from_str(
-                                &format!("[object {}]", s.to_string()),
+                                &format!("[object {}]", s),
                             )));
                         }
                     }

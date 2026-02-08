@@ -64,11 +64,6 @@ impl Interpreter {
         } else {
             return Ok(());
         };
-        // Set constructor reference
-        if let Some(obj) = self.get_object(this_obj_id) {
-            obj.borrow_mut()
-                .insert_builtin("constructor".to_string(), new_target_val.clone());
-        }
         // Create env for evaluating field initializers.
         // Use the class_env's parent (the outer scope) so that __super__ is NOT
         // accessible via eval() in field initializers (super() should be SyntaxError there).
@@ -5663,9 +5658,6 @@ impl Interpreter {
                 {
                     new_obj.borrow_mut().prototype = Some(proto_rc);
                 }
-                new_obj
-                    .borrow_mut()
-                    .insert_builtin("constructor".to_string(), callee_val.clone());
             }
             let (private_field_defs, public_field_defs) = if let JsValue::Object(o) = &callee_val
                 && let Some(func_obj) = self.get_object(o.id)

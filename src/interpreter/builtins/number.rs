@@ -339,16 +339,18 @@ impl Interpreter {
                             interp.create_type_error("Number.prototype.toString requires a Number");
                         return Completion::Throw(err);
                     };
-                    let radix = args
-                        .first()
-                        .map(|v| {
-                            if v.is_undefined() {
-                                10
-                            } else {
-                                to_number(v) as u32
+                    let radix = if let Some(v) = args.first() {
+                        if v.is_undefined() {
+                            10u32
+                        } else {
+                            match interp.to_number_value(v) {
+                                Ok(r) => r as u32,
+                                Err(e) => return Completion::Throw(e),
                             }
-                        })
-                        .unwrap_or(10);
+                        }
+                    } else {
+                        10u32
+                    };
                     if !(2..=36).contains(&radix) {
                         let err =
                             interp.create_error("RangeError", "radix must be between 2 and 36");
@@ -395,7 +397,14 @@ impl Interpreter {
                             interp.create_type_error("Number.prototype.toFixed requires a Number");
                         return Completion::Throw(err);
                     };
-                    let f_raw = args.first().map(to_number).unwrap_or(0.0);
+                    let f_raw = if let Some(v) = args.first() {
+                        match interp.to_number_value(v) {
+                            Ok(r) => r,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        0.0
+                    };
                     let f = to_integer_or_infinity(f_raw);
                     if !(0.0..=100.0).contains(&f) {
                         let err = interp.create_error(
@@ -413,6 +422,11 @@ impl Interpreter {
                             if n > 0.0 { "Infinity" } else { "-Infinity" },
                         )));
                     }
+                    if n.abs() >= 1e21 {
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            &to_js_string(&JsValue::Number(n)),
+                        )));
+                    }
                     Completion::Normal(JsValue::String(JsString::from_str(&format!(
                         "{n:.digits$}"
                     ))))
@@ -428,17 +442,24 @@ impl Interpreter {
                         return Completion::Throw(err);
                     };
                     let has_arg = args.first().is_some_and(|v| !v.is_undefined());
-                    if has_arg {
-                        let f_raw = to_number(args.first().unwrap());
-                        let f = to_integer_or_infinity(f_raw);
-                        if n.is_nan() {
-                            return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
-                        }
-                        if n.is_infinite() {
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                if n > 0.0 { "Infinity" } else { "-Infinity" },
-                            )));
-                        }
+                    let f = if has_arg {
+                        let f_raw = match interp.to_number_value(args.first().unwrap()) {
+                            Ok(r) => r,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        Some(to_integer_or_infinity(f_raw))
+                    } else {
+                        None
+                    };
+                    if n.is_nan() {
+                        return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
+                    }
+                    if n.is_infinite() {
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            if n > 0.0 { "Infinity" } else { "-Infinity" },
+                        )));
+                    }
+                    if let Some(f) = f {
                         if !(0.0..=100.0).contains(&f) {
                             let err = interp.create_error(
                                 "RangeError",
@@ -446,18 +467,9 @@ impl Interpreter {
                             );
                             return Completion::Throw(err);
                         }
-                        let digits = f as usize;
-                        let result = format_exponential(n, Some(digits));
+                        let result = format_exponential(n, Some(f as usize));
                         Completion::Normal(JsValue::String(JsString::from_str(&result)))
                     } else {
-                        if n.is_nan() {
-                            return Completion::Normal(JsValue::String(JsString::from_str("NaN")));
-                        }
-                        if n.is_infinite() {
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                if n > 0.0 { "Infinity" } else { "-Infinity" },
-                            )));
-                        }
                         let result = format_exponential(n, None);
                         Completion::Normal(JsValue::String(JsString::from_str(&result)))
                     }
@@ -478,7 +490,10 @@ impl Interpreter {
                             &to_js_string(&JsValue::Number(n)),
                         )));
                     }
-                    let p_raw = to_number(args.first().unwrap());
+                    let p_raw = match interp.to_number_value(args.first().unwrap()) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
                     let p = to_integer_or_infinity(p_raw);
                     if n.is_nan() {
                         return Completion::Normal(JsValue::String(JsString::from_str("NaN")));

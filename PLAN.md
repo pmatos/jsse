@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 36,413 / 48,257 run (75.46%)
+**Current pass rate:** 36,484 / 48,257 run (75.60%)
 
 ---
 
@@ -30,20 +30,21 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
-| Object | 93% | 3,181/3,411 |
+| Object | 93% | 3,184/3,411 |
 | Array | 88% | 2,711/3,079 |
-| String | 94% | 1,137/1,215 |
+| String | 93% | 1,141/1,215 |
 | Function | 85% | 433/509 |
-| Iterator | 85% | 436/510 |
+| Iterator | 85% | 438/510 |
 | Promise | 89% | 571/639 |
-| Map | 77% | 158/204 |
+| Map | 79% | 162/204 |
 | Set | 95% | 365/383 |
 | Date | 94% | 561/594 |
 | DataView | 80% | 454/561 |
 | Reflect | 86% | 132/153 |
 | Proxy | 58% | 182/311 |
-| Symbol | 71% | 67/94 |
-| RegExp | 74% | 1,389/1,879 |
+| Symbol | 75% | 71/94 |
+| RegExp | 76% | 1,432/1,879 |
+| Number | 98% | 331/335 |
 | Math | 96% | 316/327 |
 | WeakRef | 82% | 24/29 |
 | FinalizationRegistry | 76% | 36/47 |
@@ -134,6 +135,8 @@ These features block significant numbers of tests:
 50. ~~**Conformance batch 16: Annex B block-level functions, RegExp fixes**~~ — ✅ Done (+363 new passes, 73.96% → 74.71%). Two orthogonal features: (1) Annex B.3.3/B.3.4 block-level function declarations in sloppy mode: var-scope hoisting with copy-on-evaluation semantics, parameter/lexical conflict detection, generator/async exclusion, switch case function hoisting, IsLabelledFunction checks for iteration bodies and if-with-else. Parser: function declarations in if-bodies and labeled statements (sloppy mode only). annexB: 399→674/1,086 (62%). (2) RegExp fixes: pattern validation, type checks, `regexp_exec_abstract()` usage for spec-compliant exec dispatch. RegExp: 1,216→1,289/1,879 (69%).
 
 51. ~~**Conformance batch 17: RegExp, Array, Date improvements**~~ — ✅ Done (+359 new passes, 74.71% → 75.46%). Three orthogonal features implemented in parallel: (1) RegExp: removed own flag/source/flags data properties from RegExp instances (now prototype getters only), internal slots via `__original_source__`/`__original_flags__`, spec_set() helper, Symbol.match/search/split/matchAll rewrites, RegExp constructor IsRegExp check, escape_regexp_pattern(), pattern validation. RegExp: 1,289→1,389/1,879 (74%). (2) Array: coercion fixes (to_number_value/to_string_value), spec-compliant Set/Delete/HasProperty with throw variants, CreateDataPropertyOrThrow with extensibility checks, ArraySpeciesCreate with Proxy support, integer limit checks (2^53-1), toString fallback to %Object.prototype.toString%. Array: 2,553→2,711/3,079 (88%). (3) Date: removed primitive_value from Date.prototype, setter error propagation with to_number_value(), Symbol.toPrimitive rewrite (check Object not Date), toJSON rewrite per spec, constructor ToPrimitive hint="default". Date: 493→561/594 (94%). Integration fixes: String.prototype.replaceAll/matchAll now use Get(searchValue, "flags") and IsRegExp per spec, TypedArray.prototype.join separator coercion, array_elements sync for indexed property mutation.
+
+52. ~~**Conformance batch 18: Number/Symbol coercion, constructor fix, RegExp patterns**~~ — ✅ Done (+71 new passes, 75.46% → 75.60%). Three orthogonal fixes implemented in parallel: (1) Number/Symbol: Number prototype methods (toString, toFixed, toExponential, toPrecision) now use `to_number_value()` for argument coercion with proper ToPrimitive/Symbol TypeError. Argument coercion order fixed (coerce BEFORE NaN/Infinity check). `toFixed` returns ToString(x) for |x|>=10^21. `string_to_number` rejects case-insensitive "infinity". Symbol()/Symbol.for() use `to_string_value()` for description coercion. Number() constructor propagates ToPrimitive errors. Number: 331/335 (98%). (2) Constructor own property: removed spurious `constructor` own property set on every `new` object instance — `constructor` is now properly inherited from prototype chain only. Object: 3,181→3,184/3,411 (93%). (3) RegExp: quantifier-at-start validation (SyntaxError for `*`/`+`/`?`/`{}` at pattern start or after `(`/`|`), forward backreference handling (\N matches empty string when group not yet captured), octal escape handling for non-Unicode mode. RegExp: 1,389→1,432/1,879 (76%).
 
 ---
 
