@@ -410,6 +410,15 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(MemberProperty::Dot(name))
             }
+            Token::BooleanLiteral(b) => {
+                let name = if *b { "true" } else { "false" }.to_string();
+                self.advance()?;
+                Ok(MemberProperty::Dot(name))
+            }
+            Token::NullLiteral => {
+                self.advance()?;
+                Ok(MemberProperty::Dot("null".to_string()))
+            }
             _ => Err(self.error("Expected identifier after '.'")),
         }
     }
@@ -454,7 +463,10 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         let p = self.parse_expression()?;
                         self.eat(&Token::RightBracket)?;
-                        p
+                        Expression::Member(
+                            Box::new(Expression::Identifier("".into())),
+                            MemberProperty::Computed(Box::new(p)),
+                        )
                     } else if let Token::PrivateName(name) = &self.current {
                         let name = name.clone();
                         self.advance()?;
@@ -916,6 +928,10 @@ impl<'a> Parser<'a> {
             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                 let tmpl = self.parse_template_literal_expr(false)?;
                 Ok(Expression::Template(tmpl))
+            }
+            Token::Keyword(Keyword::Of) => {
+                self.advance()?;
+                Ok(Expression::Identifier("of".to_string()))
             }
             _ => Err(self.error(format!("Unexpected token: {:?}", self.current))),
         }

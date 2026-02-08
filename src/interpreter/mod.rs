@@ -81,6 +81,8 @@ pub struct Interpreter {
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
     pub(crate) call_stack_envs: Vec<EnvRef>,
+    pub(crate) gc_temp_roots: Vec<u64>,
+    pub(crate) microtask_roots: Vec<JsValue>,
 }
 
 pub struct LoadedModule {
@@ -175,6 +177,8 @@ impl Interpreter {
             last_call_this_value: None,
             constructing_derived: false,
             call_stack_envs: Vec::new(),
+            gc_temp_roots: Vec::new(),
+            microtask_roots: Vec::new(),
         };
         interp.setup_globals();
         interp
@@ -644,6 +648,20 @@ impl Interpreter {
         }
 
         result
+    }
+
+    pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
+        if let JsValue::Object(o) = val {
+            self.gc_temp_roots.push(o.id);
+        }
+    }
+
+    pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
+        if let JsValue::Object(o) = val {
+            if let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id) {
+                self.gc_temp_roots.remove(pos);
+            }
+        }
     }
 
     pub fn run(&mut self, program: &Program) -> Completion {
@@ -1615,6 +1633,7 @@ impl Interpreter {
             let job = self.microtask_queue.remove(0);
             let _ = job(self);
         }
+        self.microtask_roots.clear();
     }
 
     pub fn format_value(&self, val: &JsValue) -> String {

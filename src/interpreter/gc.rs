@@ -98,6 +98,12 @@ impl Interpreter {
         for env in &self.call_stack_envs {
             Self::collect_env_roots(env, &mut worklist);
         }
+        // Temporary roots (iterators, etc.)
+        worklist.extend_from_slice(&self.gc_temp_roots);
+        // Root values captured in microtask closures
+        for val in &self.microtask_roots {
+            Self::collect_value_roots(val, &mut worklist);
+        }
 
         // Mark phase (BFS)
         while let Some(id) = worklist.pop() {
@@ -161,6 +167,24 @@ impl Interpreter {
                 }
             }
 
+            // Trace class_private_field_defs (method/accessor templates on constructors)
+            for def in &obj.class_private_field_defs {
+                match def {
+                    PrivateFieldDef::Method { value, .. } => {
+                        Self::collect_value_roots(value, &mut worklist);
+                    }
+                    PrivateFieldDef::Accessor { get, set, .. } => {
+                        if let Some(g) = get {
+                            Self::collect_value_roots(g, &mut worklist);
+                        }
+                        if let Some(s) = set {
+                            Self::collect_value_roots(s, &mut worklist);
+                        }
+                    }
+                    PrivateFieldDef::Field { .. } => {}
+                }
+            }
+
             // Trace callable (closure environments)
             if let Some(ref func) = obj.callable
                 && let JsFunction::User { closure, .. } = func
@@ -204,6 +228,27 @@ impl Interpreter {
                 && let Some(hid) = handler.borrow().id
             {
                 worklist.push(hid);
+            }
+
+            // Trace promise_data (reactions + state value)
+            if let Some(ref pd) = obj.promise_data {
+                match &pd.state {
+                    crate::interpreter::types::PromiseState::Fulfilled(v)
+                    | crate::interpreter::types::PromiseState::Rejected(v) => {
+                        Self::collect_value_roots(v, &mut worklist);
+                    }
+                    crate::interpreter::types::PromiseState::Pending => {}
+                }
+                for reaction in pd.fulfill_reactions.iter().chain(pd.reject_reactions.iter()) {
+                    if let Some(ref h) = reaction.handler {
+                        Self::collect_value_roots(h, &mut worklist);
+                    }
+                    Self::collect_value_roots(&reaction.resolve, &mut worklist);
+                    Self::collect_value_roots(&reaction.reject, &mut worklist);
+                    if let Some(pid) = reaction.promise_id {
+                        worklist.push(pid);
+                    }
+                }
             }
 
             // Trace iterator state

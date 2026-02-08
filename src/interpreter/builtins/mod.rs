@@ -4706,29 +4706,48 @@ impl Interpreter {
                 |interp, _this, args| {
                     let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let obj = interp.create_object();
-                    if let JsValue::Object(ref arr) = iterable
-                        && let Some(arr_obj) = interp.get_object(arr.id)
-                    {
-                        let len = if let Some(JsValue::Number(n)) =
-                            arr_obj.borrow().get_property_value("length")
-                        {
-                            n as usize
-                        } else {
-                            0
-                        };
-                        for i in 0..len {
-                            let entry = arr_obj.borrow().get_property(&i.to_string());
-                            if let JsValue::Object(ref e) = entry
-                                && let Some(e_obj) = interp.get_object(e.id)
-                            {
-                                let k = to_js_string(&e_obj.borrow().get_property("0"));
-                                let v = e_obj.borrow().get_property("1");
-                                obj.borrow_mut().insert_builtin(k, v);
+                    let obj_id = obj.borrow().id.unwrap();
+                    let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    interp.gc_root_value(&iterator);
+                    loop {
+                        let step = match interp.iterator_step(&iterator) {
+                            Ok(Some(result)) => result,
+                            Ok(None) => break,
+                            Err(e) => {
+                                interp.gc_unroot_value(&iterator);
+                                return Completion::Throw(e);
                             }
+                        };
+                        let value = match interp.iterator_value(&step) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                interp.gc_unroot_value(&iterator);
+                                return Completion::Throw(e);
+                            }
+                        };
+                        let (k, v) = if let JsValue::Object(ref vo) = value {
+                            if let Some(val_obj) = interp.get_object(vo.id) {
+                                let k = to_js_string(&val_obj.borrow().get_property("0"));
+                                let v = val_obj.borrow().get_property("1");
+                                (k, v)
+                            } else {
+                                (String::new(), JsValue::Undefined)
+                            }
+                        } else {
+                            interp.gc_unroot_value(&iterator);
+                            let err = interp.create_type_error("Iterator value is not an object");
+                            return Completion::Throw(err);
+                        };
+                        if let Some(obj_data) = interp.get_object(obj_id) {
+                            obj_data.borrow_mut().insert_value(k, v);
                         }
                     }
-                    let id = obj.borrow().id.unwrap();
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                    interp.gc_unroot_value(&iterator);
+                    Completion::Normal(obj_val)
                 },
             ));
             obj_func

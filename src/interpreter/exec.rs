@@ -746,6 +746,9 @@ impl Interpreter {
             }
             Pattern::Array(elements) => {
                 let iterator = self.get_iterator(&val)?;
+                if let JsValue::Object(o) = &iterator {
+                    self.gc_temp_roots.push(o.id);
+                }
                 let mut done = false;
                 let mut error: Option<JsValue> = None;
                 for elem in elements {
@@ -833,13 +836,24 @@ impl Interpreter {
                         }
                     }
                 }
+                let unroot_iter = |s: &mut Self| {
+                    if let JsValue::Object(o) = &iterator {
+                        if let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id) {
+                            s.gc_temp_roots.remove(pos);
+                        }
+                    }
+                };
                 if !done {
                     if let Some(err) = error {
                         let _ = self.iterator_close_result(&iterator);
+                        unroot_iter(self);
                         return Err(err);
                     }
-                    return self.iterator_close_result(&iterator);
+                    let r = self.iterator_close_result(&iterator);
+                    unroot_iter(self);
+                    return r;
                 }
+                unroot_iter(self);
                 if let Some(err) = error {
                     return Err(err);
                 }
@@ -1208,6 +1222,13 @@ impl Interpreter {
             }
         };
 
+        self.gc_root_value(&iterator);
+        let result = self.exec_for_of_loop(fo, env, &iterator);
+        self.gc_unroot_value(&iterator);
+        result
+    }
+
+    fn exec_for_of_loop(&mut self, fo: &ForOfStatement, env: &EnvRef, iterator: &JsValue) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
             let step_result = match self.iterator_next(&iterator) {

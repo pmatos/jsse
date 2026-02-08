@@ -797,6 +797,13 @@ impl Interpreter {
     fn trigger_promise_reactions(&mut self, reactions: Vec<PromiseReaction>, argument: JsValue) {
         for reaction in reactions {
             let arg = argument.clone();
+            // Root values captured by the microtask closure so GC doesn't collect them
+            self.microtask_roots.push(arg.clone());
+            if let Some(ref h) = reaction.handler {
+                self.microtask_roots.push(h.clone());
+            }
+            self.microtask_roots.push(reaction.resolve.clone());
+            self.microtask_roots.push(reaction.reject.clone());
             self.microtask_queue.push(Box::new(move |interp| {
                 let handler_result = if let Some(ref handler) = reaction.handler {
                     if interp.is_callable(handler) {
@@ -849,6 +856,11 @@ impl Interpreter {
 
     fn promise_resolve_thenable(&mut self, promise_id: u64, thenable: JsValue, then_fn: JsValue) {
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+        // Root values captured by the microtask closure
+        self.microtask_roots.push(thenable.clone());
+        self.microtask_roots.push(then_fn.clone());
+        self.microtask_roots.push(resolve_fn.clone());
+        self.microtask_roots.push(reject_fn.clone());
         self.microtask_queue.push(Box::new(move |interp| {
             let result =
                 interp.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]);

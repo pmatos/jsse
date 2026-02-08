@@ -1781,24 +1781,9 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iter_key = interp.get_symbol_iterator_key();
-                    let iterator_fn = if let Some(ref key) = iter_key {
-                        if let JsValue::Object(io) = &iterable {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                let v = iter_obj.borrow().get_property(key);
-                                if v.is_undefined() { JsValue::Undefined } else { v }
-                            } else { JsValue::Undefined }
-                        } else { JsValue::Undefined }
-                    } else { JsValue::Undefined };
-
-                    if iterator_fn.is_undefined() {
-                        let err = interp.create_type_error("object is not iterable");
-                        return Completion::Throw(err);
-                    }
-
-                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
                     };
 
                     loop {
@@ -2046,24 +2031,9 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iter_key = interp.get_symbol_iterator_key();
-                    let iterator_fn = if let Some(ref key) = iter_key {
-                        if let JsValue::Object(io) = &iterable {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                let v = iter_obj.borrow().get_property(key);
-                                if v.is_undefined() { JsValue::Undefined } else { v }
-                            } else { JsValue::Undefined }
-                        } else { JsValue::Undefined }
-                    } else { JsValue::Undefined };
-
-                    if iterator_fn.is_undefined() {
-                        let err = interp.create_type_error("object is not iterable");
-                        return Completion::Throw(err);
-                    }
-
-                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
                     };
 
                     loop {
@@ -2278,24 +2248,9 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iter_key = interp.get_symbol_iterator_key();
-                    let iterator_fn = if let Some(ref key) = iter_key {
-                        if let JsValue::Object(io) = &iterable {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                let v = iter_obj.borrow().get_property(key);
-                                if v.is_undefined() { JsValue::Undefined } else { v }
-                            } else { JsValue::Undefined }
-                        } else { JsValue::Undefined }
-                    } else { JsValue::Undefined };
-
-                    if iterator_fn.is_undefined() {
-                        let err = interp.create_type_error("object is not iterable");
-                        return Completion::Throw(err);
-                    }
-
-                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
                     };
 
                     loop {

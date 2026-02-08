@@ -468,16 +468,19 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    loop {
+                    if let JsValue::Object(o) = &iterator {
+                        self.gc_temp_roots.push(o.id);
+                    }
+                    let result = loop {
                         let next_result = match self.iterator_next(&iterator) {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => { self.gc_unroot_value(&iterator); return Completion::Throw(e); }
                         };
                         let next_result = if is_async_gen {
                             match self.await_value(&next_result) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                other => return other,
+                                Completion::Throw(e) => { self.gc_unroot_value(&iterator); return Completion::Throw(e); }
+                                other => { self.gc_unroot_value(&iterator); return other; }
                             }
                         } else {
                             next_result
@@ -503,11 +506,15 @@ impl Interpreter {
                                 continue;
                             }
                             if current == ctx.target_yield {
+                                self.gc_unroot_value(&iterator);
                                 return Completion::Yield(value);
                             }
                         }
+                        self.gc_unroot_value(&iterator);
                         return Completion::Yield(value);
-                    }
+                    };
+                    self.gc_unroot_value(&iterator);
+                    result
                 } else {
                     let value = if let Some(e) = expr {
                         match self.eval_expr(e, env) {
@@ -579,14 +586,112 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&s)))
             }
             Expression::OptionalChain(base, prop) => {
-                let base_val = match self.eval_expr(base, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
+                // When base is a Member expr and prop starts with Call(Identifier(""),...),
+                // we need to preserve the `this` binding from the member access.
+                // E.g., obj.method?.() should call method with this=obj.
+                let (base_val, base_this) = match base.as_ref() {
+                    Expression::Member(obj_expr, member_prop) => {
+                        let obj_val = match self.eval_expr(obj_expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let key = match member_prop {
+                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Computed(expr) => {
+                                let v = match self.eval_expr(expr, env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                                match self.to_property_key(&v) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                            MemberProperty::Private(name) => {
+                                if let JsValue::Object(ref o) = obj_val
+                                    && let Some(obj) = self.get_object(o.id)
+                                {
+                                    let elem =
+                                        obj.borrow().private_fields.get(name).cloned();
+                                    match elem {
+                                        Some(PrivateElement::Field(v))
+                                        | Some(PrivateElement::Method(v)) => {
+                                            return if matches!(
+                                                v,
+                                                JsValue::Null | JsValue::Undefined
+                                            ) {
+                                                Completion::Normal(JsValue::Undefined)
+                                            } else {
+                                                match self.eval_oc_tail_with_this(
+                                                    &v, prop, env,
+                                                ) {
+                                                    Ok((result, _)) => {
+                                                        Completion::Normal(result)
+                                                    }
+                                                    Err(c) => c,
+                                                }
+                                            };
+                                        }
+                                        Some(PrivateElement::Accessor { get, .. }) => {
+                                            if let Some(getter) = get {
+                                                let v = match self
+                                                    .call_function(&getter, &obj_val, &[])
+                                                {
+                                                    Completion::Normal(v) => v,
+                                                    other => return other,
+                                                };
+                                                return if matches!(
+                                                    v,
+                                                    JsValue::Null | JsValue::Undefined
+                                                ) {
+                                                    Completion::Normal(JsValue::Undefined)
+                                                } else {
+                                                    match self.eval_oc_tail_with_this(
+                                                        &v, prop, env,
+                                                    ) {
+                                                        Ok((result, _)) => {
+                                                            Completion::Normal(result)
+                                                        }
+                                                        Err(c) => c,
+                                                    }
+                                                };
+                                            }
+                                            return Completion::Normal(JsValue::Undefined);
+                                        }
+                                        None => {
+                                            return Completion::Throw(
+                                                self.create_type_error(&format!(
+                                                    "Cannot read private member #{name}"
+                                                )),
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    return Completion::Normal(JsValue::Undefined);
+                                }
+                            }
+                        };
+                        let prop_val =
+                            match self.access_property_on_value(&obj_val, &key) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                        (prop_val, obj_val)
+                    }
+                    _ => {
+                        let val = match self.eval_expr(base, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        (val, JsValue::Undefined)
+                    }
                 };
                 if matches!(base_val, JsValue::Null | JsValue::Undefined) {
                     return Completion::Normal(JsValue::Undefined);
                 }
-                self.eval_optional_chain_tail(&base_val, prop, env)
+                self.eval_optional_chain_tail_with_base_this(
+                    &base_val, &base_this, prop, env,
+                )
             }
             Expression::TaggedTemplate(tag_expr, tmpl) => {
                 let (func_val, this_val) = match tag_expr.as_ref() {
@@ -690,6 +795,22 @@ impl Interpreter {
         }
     }
 
+    /// Evaluate optional chain tail with a known `this` from the base member access.
+    /// This is used when the optional chain base is `obj.method?.()` so that
+    /// the call uses `obj` as `this`.
+    fn eval_optional_chain_tail_with_base_this(
+        &mut self,
+        base_val: &JsValue,
+        base_this: &JsValue,
+        prop: &Expression,
+        env: &EnvRef,
+    ) -> Completion {
+        match self.eval_oc_tail_with_this_ctx(base_val, base_this, prop, env) {
+            Ok((v, _)) => Completion::Normal(v),
+            Err(c) => c,
+        }
+    }
+
     /// Evaluate optional chain tail, returning (value, this_for_call).
     fn eval_oc_tail_with_this(
         &mut self,
@@ -697,11 +818,25 @@ impl Interpreter {
         prop: &Expression,
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
+        self.eval_oc_tail_with_this_ctx(base_val, &JsValue::Undefined, prop, env)
+    }
+
+    /// Core optional chain tail evaluator with explicit this context.
+    /// `chain_this` is the `this` value to use for `?.()` direct calls
+    /// (from `obj.method?.()` where chain_this = obj).
+    fn eval_oc_tail_with_this_ctx(
+        &mut self,
+        base_val: &JsValue,
+        chain_this: &JsValue,
+        prop: &Expression,
+        env: &EnvRef,
+    ) -> Result<(JsValue, JsValue), Completion> {
         match prop {
             Expression::Identifier(name) => {
                 if name.is_empty() {
                     // x?.() — direct call placeholder, base_val IS the value
-                    Ok((base_val.clone(), JsValue::Undefined))
+                    // chain_this is the object for `obj.method?.()` calls
+                    Ok((base_val.clone(), chain_this.clone()))
                 } else {
                     let val = match self.access_property_on_value(base_val, name) {
                         Completion::Normal(v) => v,
@@ -713,7 +848,7 @@ impl Interpreter {
             }
             Expression::Call(callee, args) => {
                 let (func_val, this_val) =
-                    self.eval_oc_tail_with_this(base_val, callee, env)?;
+                    self.eval_oc_tail_with_this_ctx(base_val, chain_this, callee, env)?;
                 let evaluated_args = match self.eval_spread_args(args, env) {
                     Ok(v) => v,
                     Err(e) => return Err(Completion::Throw(e)),
@@ -724,7 +859,7 @@ impl Interpreter {
                 }
             }
             Expression::Member(inner, mp) => {
-                let (inner_val, _) = self.eval_oc_tail_with_this(base_val, inner, env)?;
+                let (inner_val, _) = self.eval_oc_tail_with_this_ctx(base_val, chain_this, inner, env)?;
                 match mp {
                     MemberProperty::Dot(name) => {
                         let val = match self.access_property_on_value(&inner_val, name) {
@@ -2436,6 +2571,9 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let iterator = self.get_iterator(rval)?;
+        if let JsValue::Object(o) = &iterator {
+            self.gc_temp_roots.push(o.id);
+        }
         let mut done = false;
         let mut error: Option<JsValue> = None;
 
@@ -2555,17 +2693,27 @@ impl Interpreter {
             }
         }
 
+        let unroot = |s: &mut Self| {
+            if let JsValue::Object(o) = &iterator {
+                if let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id) {
+                    s.gc_temp_roots.remove(pos);
+                }
+            }
+        };
+
         // IteratorClose: if iterator is not done, call return()
         if !done {
             if let Some(err) = error {
-                // Original error wins over close error
                 let _ = self.iterator_close_result(&iterator);
+                unroot(self);
                 return Err(err);
             }
-            // No prior error — close error propagates
-            return self.iterator_close_result(&iterator);
+            let r = self.iterator_close_result(&iterator);
+            unroot(self);
+            return r;
         }
 
+        unroot(self);
         if let Some(err) = error {
             return Err(err);
         }
@@ -2867,7 +3015,9 @@ impl Interpreter {
                     let oid = o.id;
                     let ov = obj_val.clone();
                     match self.get_object_property(oid, &key, &ov) {
-                        Completion::Normal(method) => (method, obj_val),
+                        Completion::Normal(method) => {
+                            (method, obj_val)
+                        }
                         other => return other,
                     }
                 } else if let JsValue::String(_) = &obj_val {
@@ -2958,11 +3108,20 @@ impl Interpreter {
             }
         }
 
+        // Root func_val and this_val before evaluating args (which may trigger GC)
+        self.gc_root_value(&func_val);
+        self.gc_root_value(&this_val);
         let evaluated_args = match self.eval_spread_args(args, env) {
             Ok(args) => args,
-            Err(e) => return Completion::Throw(e),
+            Err(e) => {
+                self.gc_unroot_value(&this_val);
+                self.gc_unroot_value(&func_val);
+                return Completion::Throw(e);
+            }
         };
 
+        self.gc_unroot_value(&this_val);
+        self.gc_unroot_value(&func_val);
         self.call_function(&func_val, &this_val, &evaluated_args)
     }
 
@@ -5284,12 +5443,16 @@ impl Interpreter {
             if let Some(func) = callable {
                 return match func {
                     JsFunction::Native(_, _, f, _) => {
+                        // Root args and this_val so GC doesn't collect them
+                        // during native function execution (e.g. Array.prototype.map callback)
+                        self.gc_root_value(_this_val);
+                        for a in args.iter() { self.gc_root_value(a); }
                         let saved_this = self.last_call_this_value.take();
                         let result = f(self, _this_val, args);
-                        // Restore so nested calls inside native functions
-                        // don't corrupt the outer eval_new/construct state
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
+                        for a in args.iter().rev() { self.gc_unroot_value(a); }
+                        self.gc_unroot_value(_this_val);
                         result
                     }
                     JsFunction::User {
@@ -5586,7 +5749,28 @@ impl Interpreter {
                 };
             }
         }
-        let err = self.create_type_error("is not a function");
+        let desc = match func_val {
+            JsValue::Undefined => "undefined is not a function".to_string(),
+            JsValue::Null => "null is not a function".to_string(),
+            JsValue::Boolean(b) => format!("{} is not a function", b),
+            JsValue::Number(n) => format!("{} is not a function", n),
+            JsValue::String(s) => {
+                let preview: String = s.to_rust_string().chars().take(30).collect();
+                format!("\"{}\" is not a function", preview)
+            }
+            JsValue::Object(o) => {
+                if let Some(obj) = self.get_object(o.id) {
+                    let class = obj.borrow().class_name.clone();
+                    let has_callable = obj.borrow().callable.is_some();
+                    let keys: Vec<String> = obj.borrow().property_order.iter().take(10).cloned().collect();
+                    format!("object (class={}, callable={}, id={}, keys={:?}) is not a function", class, has_callable, o.id, keys)
+                } else {
+                    format!("object (id={}, GC'd?) is not a function", o.id)
+                }
+            }
+            _ => "is not a function".to_string(),
+        };
+        let err = self.create_type_error(&desc);
         Completion::Throw(err)
     }
 
@@ -5600,20 +5784,35 @@ impl Interpreter {
             if let Expression::Spread(inner) = arg {
                 let val = match self.eval_expr(inner, env) {
                     Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
+                    Completion::Throw(e) => {
+                        for v in &evaluated { self.gc_unroot_value(v); }
+                        return Err(e);
+                    }
                     _ => JsValue::Undefined,
                 };
-                let items = self.iterate_to_vec(&val)?;
+                let items = match self.iterate_to_vec(&val) {
+                    Ok(items) => items,
+                    Err(e) => {
+                        for v in &evaluated { self.gc_unroot_value(v); }
+                        return Err(e);
+                    }
+                };
+                for item in &items { self.gc_root_value(item); }
                 evaluated.extend(items);
             } else {
                 let val = match self.eval_expr(arg, env) {
                     Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
+                    Completion::Throw(e) => {
+                        for v in &evaluated { self.gc_unroot_value(v); }
+                        return Err(e);
+                    }
                     _ => JsValue::Undefined,
                 };
+                self.gc_root_value(&val);
                 evaluated.push(val);
             }
         }
+        for v in &evaluated { self.gc_unroot_value(v); }
         Ok(evaluated)
     }
 
@@ -7464,12 +7663,19 @@ impl Interpreter {
             && let JsValue::Object(super_o) = sv
             && let Some(super_obj) = self.get_object(super_o.id)
         {
+            // Step 5.e: proto.[[Prototype]] = superclass.prototype
             let super_proto_val = super_obj.borrow().get_property("prototype");
             if let JsValue::Object(ref sp) = super_proto_val
                 && let Some(super_proto) = self.get_object(sp.id)
                 && let Some(ref proto) = proto_obj
             {
                 proto.borrow_mut().prototype = Some(super_proto);
+            }
+            // Step 7.a: F.[[Prototype]] = superclass (for static method inheritance)
+            if let JsValue::Object(ref o) = ctor_val {
+                if let Some(ctor_obj) = self.get_object(o.id) {
+                    ctor_obj.borrow_mut().prototype = Some(super_obj);
+                }
             }
         }
 
@@ -7997,7 +8203,10 @@ impl Interpreter {
         } else {
             0
         };
+        self.gc_root_value(&promise);
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+        self.gc_root_value(&resolve_fn);
+        self.gc_root_value(&reject_fn);
 
         let closure_strict = closure.borrow().strict;
         let func_env = Environment::new_function_scope(Some(closure));
@@ -8008,6 +8217,9 @@ impl Interpreter {
                 if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
                     let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                     self.drain_microtasks();
+                    self.gc_unroot_value(&reject_fn);
+                    self.gc_unroot_value(&resolve_fn);
+                    self.gc_unroot_value(&promise);
                     return Completion::Normal(promise);
                 }
                 break;
@@ -8016,6 +8228,9 @@ impl Interpreter {
             if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                 self.drain_microtasks();
+                self.gc_unroot_value(&reject_fn);
+                self.gc_unroot_value(&resolve_fn);
+                self.gc_unroot_value(&promise);
                 return Completion::Normal(promise);
             }
         }
@@ -8082,6 +8297,9 @@ impl Interpreter {
             _ => {}
         }
         self.drain_microtasks();
+        self.gc_unroot_value(&reject_fn);
+        self.gc_unroot_value(&resolve_fn);
+        self.gc_unroot_value(&promise);
         Completion::Normal(promise)
     }
 

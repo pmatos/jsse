@@ -265,6 +265,7 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Await) if !self.in_async => Some("await".to_string()),
             Token::Keyword(Keyword::Let) if !self.strict => Some("let".to_string()),
             Token::Keyword(Keyword::Async) => Some("async".to_string()),
+            Token::Keyword(Keyword::Of) => Some("of".to_string()),
             _ => None,
         }
     }

@@ -1312,6 +1312,17 @@ impl JsObjectData {
             if let Ok(idx) = key.parse::<usize>() {
                 if idx < elements.len() {
                     elements[idx] = value.clone();
+                } else {
+                    // Extend array_elements for out-of-bounds index assignment
+                    while elements.len() < idx {
+                        elements.push(JsValue::Undefined);
+                    }
+                    elements.push(value.clone());
+                    // Update length property
+                    let new_len = elements.len();
+                    if let Some(len_desc) = self.properties.get_mut("length") {
+                        len_desc.value = Some(JsValue::Number(new_len as f64));
+                    }
                 }
             }
         }
