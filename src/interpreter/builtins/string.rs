@@ -913,22 +913,51 @@ impl Interpreter {
                     }
                     let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = search_value {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            let is_regexp = obj.borrow().class_name == "RegExp";
-                            if is_regexp {
-                                let flags_val = obj.borrow().get_property("flags");
-                                let flags = to_js_string(&flags_val);
-                                if !flags.contains('g') {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "String.prototype.replaceAll called with a non-global RegExp argument",
-                                    ));
+                        // Step 2a: IsRegExp check
+                        let is_regexp = if let Some(match_key) = interp.get_symbol_key("match") {
+                            match interp.get_object_property(o.id, &match_key, &search_value) {
+                                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
+                                    to_boolean(&v)
                                 }
+                                Completion::Normal(_) => interp
+                                    .get_object(o.id)
+                                    .map(|obj| obj.borrow().class_name == "RegExp")
+                                    .unwrap_or(false),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            }
+                        } else {
+                            interp
+                                .get_object(o.id)
+                                .map(|obj| obj.borrow().class_name == "RegExp")
+                                .unwrap_or(false)
+                        };
+                        if is_regexp {
+                            // Step 2b: Get flags via getter
+                            let flags_val =
+                                match interp.get_object_property(o.id, "flags", &search_value) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    other => return other,
+                                };
+                            let flags = match interp.to_string_value(&flags_val) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if !flags.contains('g') {
+                                return Completion::Throw(interp.create_type_error(
+                                    "String.prototype.replaceAll called with a non-global RegExp argument",
+                                ));
                             }
                         }
-                        if let Some(key) = interp.get_symbol_key("replace")
-                            && let Some(obj) = interp.get_object(o.id)
-                        {
-                            let method = obj.borrow().get_property(&key);
+                        // Step 2c-d: GetMethod(searchValue, @@replace)
+                        if let Some(key) = interp.get_symbol_key("replace") {
+                            let method = match interp.get_object_property(o.id, &key, &search_value)
+                            {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            };
                             if !matches!(method, JsValue::Undefined | JsValue::Null) {
                                 let replace_val =
                                     args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -1182,22 +1211,48 @@ impl Interpreter {
                     }
                     let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = regexp {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            let is_regexp = obj.borrow().class_name == "RegExp";
-                            if is_regexp {
-                                let flags_val = obj.borrow().get_property("flags");
-                                let flags = to_js_string(&flags_val);
-                                if !flags.contains('g') {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "String.prototype.matchAll called with a non-global RegExp argument",
-                                    ));
+                        // IsRegExp check
+                        let is_regexp = if let Some(match_key) = interp.get_symbol_key("match") {
+                            match interp.get_object_property(o.id, &match_key, &regexp) {
+                                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
+                                    to_boolean(&v)
                                 }
+                                Completion::Normal(_) => interp
+                                    .get_object(o.id)
+                                    .map(|obj| obj.borrow().class_name == "RegExp")
+                                    .unwrap_or(false),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            }
+                        } else {
+                            interp
+                                .get_object(o.id)
+                                .map(|obj| obj.borrow().class_name == "RegExp")
+                                .unwrap_or(false)
+                        };
+                        if is_regexp {
+                            let flags_val = match interp.get_object_property(o.id, "flags", &regexp)
+                            {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            };
+                            let flags = match interp.to_string_value(&flags_val) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if !flags.contains('g') {
+                                return Completion::Throw(interp.create_type_error(
+                                    "String.prototype.matchAll called with a non-global RegExp argument",
+                                ));
                             }
                         }
-                        if let Some(key) = interp.get_symbol_key("matchAll")
-                            && let Some(obj) = interp.get_object(o.id)
-                        {
-                            let method = obj.borrow().get_property(&key);
+                        if let Some(key) = interp.get_symbol_key("matchAll") {
+                            let method = match interp.get_object_property(o.id, &key, &regexp) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            };
                             if !matches!(method, JsValue::Undefined | JsValue::Null) {
                                 let this_str = this_val.clone();
                                 return interp.call_function(&method, &regexp, &[this_str]);

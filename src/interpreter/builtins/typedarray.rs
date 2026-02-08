@@ -1133,7 +1133,10 @@ impl Interpreter {
                     let sep = if args.is_empty() || matches!(args[0], JsValue::Undefined) {
                         ",".to_string()
                     } else {
-                        to_js_string(&args[0])
+                        match interp.to_string_value(&args[0]) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
                     };
                     let parts: Vec<String> = (0..ta.array_length)
                         .map(|i| to_js_string(&typed_array_get_index(&ta, i)))
@@ -4350,7 +4353,7 @@ fn decode_hex(input: &str, max_bytes: Option<usize>) -> DecodeResult {
     let max = max_bytes.unwrap_or(usize::MAX);
 
     // Check odd length first (before maxLength check per spec)
-    if chars.len() % 2 != 0 {
+    if !chars.len().is_multiple_of(2) {
         return DecodeResult {
             bytes: Vec::new(),
             read: 0,

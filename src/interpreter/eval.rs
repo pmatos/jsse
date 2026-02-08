@@ -818,22 +818,29 @@ impl Interpreter {
                     .clone()
                     .or(self.object_prototype.clone());
                 obj.class_name = "RegExp".to_string();
-                let regexp_props: &[(&str, JsValue)] = &[
-                    ("source", JsValue::String(JsString::from_str(pattern))),
-                    ("flags", JsValue::String(JsString::from_str(flags))),
-                    ("global", JsValue::Boolean(flags.contains('g'))),
-                    ("ignoreCase", JsValue::Boolean(flags.contains('i'))),
-                    ("multiline", JsValue::Boolean(flags.contains('m'))),
-                    ("dotAll", JsValue::Boolean(flags.contains('s'))),
-                    ("unicode", JsValue::Boolean(flags.contains('u'))),
-                    ("sticky", JsValue::Boolean(flags.contains('y'))),
-                ];
-                for (name, val) in regexp_props {
-                    obj.insert_property(
-                        name.to_string(),
-                        PropertyDescriptor::data(val.clone(), false, false, false),
-                    );
-                }
+                let source_str = if pattern.is_empty() {
+                    "(?:)".to_string()
+                } else {
+                    pattern.clone()
+                };
+                obj.insert_property(
+                    "__original_source__".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str(&source_str)),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
+                obj.insert_property(
+                    "__original_flags__".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str(flags)),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
                 obj.insert_property(
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
@@ -867,23 +874,25 @@ impl Interpreter {
             .clone()
             .or(self.object_prototype.clone());
         obj.class_name = "RegExp".to_string();
-        let regexp_props: &[(&str, JsValue)] = &[
-            ("source", JsValue::String(JsString::from_str(pattern))),
-            ("flags", JsValue::String(JsString::from_str(flags))),
-            ("hasIndices", JsValue::Boolean(flags.contains('d'))),
-            ("global", JsValue::Boolean(flags.contains('g'))),
-            ("ignoreCase", JsValue::Boolean(flags.contains('i'))),
-            ("multiline", JsValue::Boolean(flags.contains('m'))),
-            ("dotAll", JsValue::Boolean(flags.contains('s'))),
-            ("unicode", JsValue::Boolean(flags.contains('u'))),
-            ("sticky", JsValue::Boolean(flags.contains('y'))),
-        ];
-        for (name, val) in regexp_props {
-            obj.insert_property(
-                name.to_string(),
-                PropertyDescriptor::data(val.clone(), false, false, false),
-            );
-        }
+        let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
+        obj.insert_property(
+            "__original_source__".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str(source_str)),
+                false,
+                false,
+                false,
+            ),
+        );
+        obj.insert_property(
+            "__original_flags__".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str(flags)),
+                false,
+                false,
+                false,
+            ),
+        );
         obj.insert_property(
             "lastIndex".to_string(),
             PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),

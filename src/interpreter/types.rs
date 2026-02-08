@@ -987,7 +987,7 @@ impl JsObjectData {
             }
         }
         // Check array_elements for existing array index properties
-        let current_from_array = if self.properties.get(&key).is_none() {
+        let current_from_array = if !self.properties.contains_key(&key) {
             if let Some(ref elems) = self.array_elements
                 && let Ok(idx) = key.parse::<usize>()
                 && idx < elems.len()
@@ -1212,6 +1212,14 @@ impl JsObjectData {
             && let Some((env_ref, param_name)) = map.get(key)
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
+        }
+        // Keep array_elements in sync with properties for numeric indices
+        if let Some(ref mut elements) = self.array_elements {
+            if let Ok(idx) = key.parse::<usize>() {
+                if idx < elements.len() {
+                    elements[idx] = value.clone();
+                }
+            }
         }
         if let Some(desc) = self.properties.get_mut(key) {
             if desc.writable == Some(false) {

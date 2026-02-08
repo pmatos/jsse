@@ -79,22 +79,84 @@ fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<JsValue, 
 }
 
 fn obj_set(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
-    if let Some(obj) = get_obj(interp, o) {
-        let mut borrow = obj.borrow_mut();
-        if let Some(ref mut elems) = borrow.array_elements
-            && let Ok(idx) = key.parse::<usize>()
-        {
-            if idx < elems.len() {
-                elems[idx] = value.clone();
-            } else {
-                while elems.len() < idx {
-                    elems.push(JsValue::Undefined);
+    let _ = obj_set_throw(interp, o, key, value);
+}
+
+// Set(O, P, V, true) — invoke setters on prototype, check writable, throw on failure
+fn obj_set_throw(
+    interp: &mut Interpreter,
+    o: &JsValue,
+    key: &str,
+    value: JsValue,
+) -> Result<(), JsValue> {
+    if let JsValue::Object(obj_ref) = o {
+        // Check for Proxy
+        if let Some(obj) = interp.get_object(obj_ref.id) {
+            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                match interp.proxy_set(obj_ref.id, key, value, o) {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {
+                        return Err(interp.create_type_error(&format!(
+                            "Cannot assign to read only property '{key}'"
+                        )));
+                    }
+                    Err(e) => return Err(e),
                 }
-                elems.push(value.clone());
             }
         }
-        borrow.set_property_value(key, value);
+        // Check for setter in prototype chain
+        if let Some(obj) = interp.get_object(obj_ref.id) {
+            let desc = obj.borrow().get_property_descriptor(key);
+            if let Some(ref d) = desc {
+                if let Some(ref setter) = d.set {
+                    if !matches!(setter, JsValue::Undefined) {
+                        let setter = setter.clone();
+                        let this = o.clone();
+                        return match interp.call_function(&setter, &this, &[value]) {
+                            Completion::Normal(_) => Ok(()),
+                            Completion::Throw(e) => Err(e),
+                            _ => Ok(()),
+                        };
+                    }
+                }
+                // Accessor with no setter
+                if d.is_accessor_descriptor() {
+                    return Err(interp.create_type_error(&format!(
+                        "Cannot set property '{key}' which has only a getter"
+                    )));
+                }
+                // Non-writable data property
+                if d.writable == Some(false) {
+                    return Err(interp.create_type_error(&format!(
+                        "Cannot assign to read only property '{key}'"
+                    )));
+                }
+            }
+        }
+        // Normal set
+        if let Some(obj) = interp.get_object(obj_ref.id) {
+            let mut borrow = obj.borrow_mut();
+            if let Some(ref mut elems) = borrow.array_elements
+                && let Ok(idx) = key.parse::<usize>()
+            {
+                if idx < elems.len() {
+                    elems[idx] = value.clone();
+                } else {
+                    while elems.len() < idx {
+                        elems.push(JsValue::Undefined);
+                    }
+                    elems.push(value.clone());
+                }
+            }
+            if !borrow.extensible && !borrow.has_own_property(key) {
+                return Err(interp.create_type_error(&format!(
+                    "Cannot add property {key}, object is not extensible"
+                )));
+            }
+            borrow.set_property_value(key, value);
+        }
     }
+    Ok(())
 }
 
 fn create_data_property(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
@@ -107,56 +169,86 @@ fn create_data_property_or_throw(
     key: &str,
     value: JsValue,
 ) -> Result<(), JsValue> {
-    if let Some(obj) = get_obj(interp, o) {
-        // Check extensibility — if object is not extensible and property doesn't exist, fail
-        {
-            let borrow = obj.borrow();
-            if !borrow.extensible && !borrow.has_property(key) {
-                return Err(interp.create_type_error(&format!(
-                    "Cannot add property {key}, object is not extensible"
-                )));
-            }
-            // Check for non-configurable existing property
-            if let Some(desc) = borrow.get_own_property(key) {
-                if desc.configurable == Some(false) {
-                    return Err(
-                        interp.create_type_error(&format!("Cannot redefine property: {key}"))
-                    );
+    if let JsValue::Object(obj_ref) = o {
+        // Check for Proxy defineProperty trap
+        if let Some(obj) = interp.get_object(obj_ref.id) {
+            if obj.borrow().is_proxy() {
+                // Build descriptor object for proxy trap
+                let desc_obj = interp.create_object();
+                {
+                    let mut borrow = desc_obj.borrow_mut();
+                    borrow.set_property_value("value", value);
+                    borrow.set_property_value("writable", JsValue::Boolean(true));
+                    borrow.set_property_value("enumerable", JsValue::Boolean(true));
+                    borrow.set_property_value("configurable", JsValue::Boolean(true));
                 }
+                let desc_id = desc_obj.borrow().id.unwrap();
+                let desc_val = JsValue::Object(crate::types::JsObject { id: desc_id });
+                return match interp.proxy_define_own_property(
+                    obj_ref.id,
+                    key.to_string(),
+                    &desc_val,
+                ) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => {
+                        Err(interp.create_type_error(&format!("Cannot define property: {key}")))
+                    }
+                    Err(e) => Err(e),
+                };
             }
         }
-        let mut borrow = obj.borrow_mut();
-        if let Some(ref mut elems) = borrow.array_elements
-            && let Ok(idx) = key.parse::<usize>()
-        {
-            if idx < elems.len() {
-                elems[idx] = value.clone();
-            } else {
-                while elems.len() < idx {
-                    elems.push(JsValue::Undefined);
+        if let Some(obj) = interp.get_object(obj_ref.id) {
+            // Check extensibility — if object is not extensible and property doesn't exist, fail
+            {
+                let borrow = obj.borrow();
+                if !borrow.extensible && !borrow.has_property(key) {
+                    return Err(interp.create_type_error(&format!(
+                        "Cannot add property {key}, object is not extensible"
+                    )));
                 }
-                elems.push(value.clone());
+                // Check for non-configurable existing property
+                if let Some(desc) = borrow.get_own_property(key) {
+                    if desc.configurable == Some(false) {
+                        return Err(
+                            interp.create_type_error(&format!("Cannot redefine property: {key}"))
+                        );
+                    }
+                }
             }
+            let mut borrow = obj.borrow_mut();
+            if let Some(ref mut elems) = borrow.array_elements
+                && let Ok(idx) = key.parse::<usize>()
+            {
+                if idx < elems.len() {
+                    elems[idx] = value.clone();
+                } else {
+                    while elems.len() < idx {
+                        elems.push(JsValue::Undefined);
+                    }
+                    elems.push(value.clone());
+                }
+            }
+            borrow.define_own_property(key.to_string(), PropertyDescriptor::data_default(value));
         }
-        borrow.define_own_property(key.to_string(), PropertyDescriptor::data_default(value));
     }
     Ok(())
 }
 
 fn obj_has(interp: &mut Interpreter, o: &JsValue, key: &str) -> bool {
-    if let Some(obj) = get_obj(interp, o) {
-        let borrow = obj.borrow();
-        if borrow.has_property(key) {
-            return true;
-        }
-        if let Some(ref elems) = borrow.array_elements
-            && let Ok(idx) = key.parse::<usize>()
-        {
-            return idx < elems.len();
-        }
-        false
+    if let JsValue::Object(obj_ref) = o {
+        interp
+            .proxy_has_property(obj_ref.id, key)
+            .unwrap_or_default()
     } else {
         false
+    }
+}
+
+fn obj_has_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<bool, JsValue> {
+    if let JsValue::Object(obj_ref) = o {
+        interp.proxy_has_property(obj_ref.id, key)
+    } else {
+        Ok(false)
     }
 }
 
@@ -174,6 +266,38 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
     }
 }
 
+// DeletePropertyOrThrow(O, P) - throws TypeError if delete fails
+fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<(), JsValue> {
+    if let JsValue::Object(obj_ref) = o {
+        // Check for Proxy deleteProperty trap
+        if let Some(obj) = interp.get_object(obj_ref.id) {
+            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                match interp.proxy_delete_property(obj_ref.id, key) {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {
+                        return Err(
+                            interp.create_type_error(&format!("Cannot delete property '{key}'"))
+                        );
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+        // Check if property is non-configurable
+        if let Some(obj) = interp.get_object(obj_ref.id) {
+            let desc = obj.borrow().get_own_property(key);
+            if let Some(ref d) = desc {
+                if d.configurable == Some(false) {
+                    return Err(interp
+                        .create_type_error(&format!("Cannot delete property '{key}' of object")));
+                }
+            }
+        }
+    }
+    obj_delete(interp, o, key);
+    Ok(())
+}
+
 fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
     if let Some(obj) = get_obj(interp, o) {
         let mut borrow = obj.borrow_mut();
@@ -182,6 +306,40 @@ fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
         }
         borrow.set_property_value("length", JsValue::Number(len as f64));
     }
+}
+
+// Set(O, "length", len, true) — uses obj_set_throw for setter invocation
+fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result<(), JsValue> {
+    if let Some(obj) = get_obj(interp, o) {
+        if obj.borrow().array_elements.is_some() {
+            // Check if length is writable
+            let desc = obj.borrow().get_own_property("length");
+            if let Some(ref d) = desc {
+                if d.writable == Some(false) {
+                    return Err(
+                        interp.create_type_error("Cannot assign to read only property 'length'")
+                    );
+                }
+            }
+            // Check if frozen (not extensible + all props non-configurable)
+            if !obj.borrow().extensible {
+                let desc = obj.borrow().get_own_property("length");
+                if let Some(ref d) = desc {
+                    if d.configurable == Some(false) && d.writable == Some(false) {
+                        return Err(interp
+                            .create_type_error("Cannot assign to read only property 'length'"));
+                    }
+                }
+            }
+            let mut borrow = obj.borrow_mut();
+            if let Some(ref mut elems) = borrow.array_elements {
+                elems.resize(len, JsValue::Undefined);
+            }
+            borrow.set_property_value("length", JsValue::Number(len as f64));
+            return Ok(());
+        }
+    }
+    obj_set_throw(interp, o, "length", JsValue::Number(len as f64))
 }
 
 fn require_callable(interp: &mut Interpreter, val: &JsValue, msg: &str) -> Result<(), Completion> {
@@ -198,15 +356,23 @@ fn array_species_create(
     original_array: &JsValue,
     length: usize,
 ) -> Result<JsValue, Completion> {
-    let is_array = if let JsValue::Object(o) = original_array
-        && let Some(obj) = interp.get_object(o.id)
-    {
-        obj.borrow().array_elements.is_some()
+    if length as u64 > 0xFFFF_FFFF {
+        return Err(Completion::Throw(
+            interp.create_range_error("Invalid array length"),
+        ));
+    }
+    let is_array = if let JsValue::Object(o) = original_array {
+        match is_array_check(interp, o.id) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        }
     } else {
         false
     };
     if !is_array {
-        return Ok(interp.create_array(Vec::new()));
+        let arr = interp.create_array(Vec::new());
+        set_length(interp, &arr, length);
+        return Ok(arr);
     }
     // Get constructor
     let c = if let JsValue::Object(o) = original_array {
@@ -277,11 +443,19 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                // Step 5: If len + argCount > 2^53 - 1, throw TypeError
+                if (len + args.len()) as u64 > 9007199254740991 {
+                    return Completion::Throw(interp.create_type_error("Invalid array length"));
+                }
                 for arg in args {
-                    obj_set(interp, &o, &len.to_string(), arg.clone());
+                    if let Err(e) = obj_set_throw(interp, &o, &len.to_string(), arg.clone()) {
+                        return Completion::Throw(e);
+                    }
                     len += 1;
                 }
-                set_length(interp, &o, len);
+                if let Err(e) = set_length_throw(interp, &o, len) {
+                    return Completion::Throw(e);
+                }
                 Completion::Normal(JsValue::Number(len as f64))
             },
         ));
@@ -303,7 +477,9 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 if len == 0 {
-                    set_length(interp, &o, 0);
+                    if let Err(e) = set_length_throw(interp, &o, 0) {
+                        return Completion::Throw(e);
+                    }
                     return Completion::Normal(JsValue::Undefined);
                 }
                 let idx = (len - 1).to_string();
@@ -311,8 +487,12 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                obj_delete(interp, &o, &idx);
-                set_length(interp, &o, len - 1);
+                if let Err(e) = obj_delete_throw(interp, &o, &idx) {
+                    return Completion::Throw(e);
+                }
+                if let Err(e) = set_length_throw(interp, &o, len - 1) {
+                    return Completion::Throw(e);
+                }
                 Completion::Normal(val)
             },
         ));
@@ -332,7 +512,9 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 if len == 0 {
-                    set_length(interp, &o, 0);
+                    if let Err(e) = set_length_throw(interp, &o, 0) {
+                        return Completion::Throw(e);
+                    }
                     return Completion::Normal(JsValue::Undefined);
                 }
                 let first = match obj_get(interp, &o, "0") {
@@ -342,18 +524,28 @@ impl Interpreter {
                 for k in 1..len {
                     let from = k.to_string();
                     let to = (k - 1).to_string();
-                    if obj_has(interp, &o, &from) {
+                    let from_present = match obj_has_throw(interp, &o, &from) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if from_present {
                         let val = match obj_get(interp, &o, &from) {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
-                        obj_set(interp, &o, &to, val);
-                    } else {
-                        obj_delete(interp, &o, &to);
+                        if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                            return Completion::Throw(e);
+                        }
+                    } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                        return Completion::Throw(e);
                     }
                 }
-                obj_delete(interp, &o, &(len - 1).to_string());
-                set_length(interp, &o, len - 1);
+                if let Err(e) = obj_delete_throw(interp, &o, &(len - 1).to_string()) {
+                    return Completion::Throw(e);
+                }
+                if let Err(e) = set_length_throw(interp, &o, len - 1) {
+                    return Completion::Throw(e);
+                }
                 Completion::Normal(first)
             },
         ));
@@ -375,27 +567,41 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let arg_count = args.len();
+                // If len + argCount > 2^53-1, throw TypeError
+                if (len + arg_count) as u64 > 9007199254740991 {
+                    return Completion::Throw(interp.create_type_error("Invalid array length"));
+                }
                 if arg_count > 0 {
                     // Shift existing elements
                     for k in (0..len).rev() {
                         let from = k.to_string();
                         let to = (k + arg_count).to_string();
-                        if obj_has(interp, &o, &from) {
+                        let from_present = match obj_has_throw(interp, &o, &from) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if from_present {
                             let val = match obj_get(interp, &o, &from) {
                                 Ok(v) => v,
                                 Err(c) => return c,
                             };
-                            obj_set(interp, &o, &to, val);
-                        } else {
-                            obj_delete(interp, &o, &to);
+                            if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                                return Completion::Throw(e);
+                            }
+                        } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                            return Completion::Throw(e);
                         }
                     }
                     for (j, arg) in args.iter().enumerate() {
-                        obj_set(interp, &o, &j.to_string(), arg.clone());
+                        if let Err(e) = obj_set_throw(interp, &o, &j.to_string(), arg.clone()) {
+                            return Completion::Throw(e);
+                        }
                     }
                 }
                 let new_len = len + arg_count;
-                set_length(interp, &o, new_len);
+                if let Err(e) = set_length_throw(interp, &o, new_len) {
+                    return Completion::Throw(e);
+                }
                 Completion::Normal(JsValue::Number(new_len as f64))
             },
         ));
@@ -421,7 +627,10 @@ impl Interpreter {
                 }
                 let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let n = if args.len() >= 2 {
-                    to_integer_or_infinity(interp.to_number_coerce(&args[1]))
+                    match interp.to_number_value(&args[1]) {
+                        Ok(v) => to_integer_or_infinity(v),
+                        Err(e) => return Completion::Throw(e),
+                    }
                 } else {
                     0.0
                 };
@@ -471,7 +680,10 @@ impl Interpreter {
                 }
                 let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let n = if args.len() >= 2 {
-                    to_integer_or_infinity(interp.to_number_coerce(&args[1]))
+                    match interp.to_number_value(&args[1]) {
+                        Ok(v) => to_integer_or_infinity(v),
+                        Err(e) => return Completion::Throw(e),
+                    }
                 } else {
                     len as f64 - 1.0
                 };
@@ -521,7 +733,10 @@ impl Interpreter {
                 }
                 let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let n = if args.len() >= 2 {
-                    to_integer_or_infinity(interp.to_number_coerce(&args[1]))
+                    match interp.to_number_value(&args[1]) {
+                        Ok(v) => to_integer_or_infinity(v),
+                        Err(e) => return Completion::Throw(e),
+                    }
                 } else {
                     0.0
                 };
@@ -564,7 +779,10 @@ impl Interpreter {
                     if matches!(s, JsValue::Undefined) {
                         ",".to_string()
                     } else {
-                        to_js_string(s)
+                        match interp.to_string_value(s) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                 } else {
                     ",".to_string()
@@ -578,7 +796,10 @@ impl Interpreter {
                     if elem.is_undefined() || elem.is_null() {
                         parts.push(String::new());
                     } else {
-                        parts.push(to_js_string(&elem));
+                        match interp.to_string_value(&elem) {
+                            Ok(s) => parts.push(s),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                 }
                 Completion::Normal(JsValue::String(JsString::from_str(&parts.join(&sep))))
@@ -605,7 +826,14 @@ impl Interpreter {
                 if interp.is_callable(&join_fn) {
                     return interp.call_function(&join_fn, &o, &[]);
                 }
-                // Fall back to Object.prototype.toString
+                // Fall back to %Object.prototype.toString%
+                if let Some(proto) = &interp.object_prototype {
+                    let proto_ref = proto.clone();
+                    let ts = proto_ref.borrow().get_property("toString");
+                    if interp.is_callable(&ts) {
+                        return interp.call_function(&ts, &o, &[]);
+                    }
+                }
                 Completion::Normal(JsValue::String(JsString::from_str("[object Array]")))
             },
         ));
@@ -655,9 +883,10 @@ impl Interpreter {
                         if interp.is_callable(&to_locale_str_method) {
                             // Call with NO arguments per spec, using original value as this
                             match interp.call_function(&to_locale_str_method, &next_element, &[]) {
-                                Completion::Normal(v) => {
-                                    parts.push(to_js_string(&v));
-                                }
+                                Completion::Normal(v) => match interp.to_string_value(&v) {
+                                    Ok(s) => parts.push(s),
+                                    Err(e) => return Completion::Throw(e),
+                                },
                                 other => return other,
                             }
                         } else {
@@ -720,6 +949,13 @@ impl Interpreter {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
+                        // Step 5.c.iii: If n + len > 2^53 - 1, throw TypeError
+                        if (n as u64) + (len as u64) > 9007199254740991 {
+                            return Completion::Throw(
+                                interp
+                                    .create_type_error("Array length exceeds the allowed maximum"),
+                            );
+                        }
                         for k in 0..len {
                             let pk = k.to_string();
                             if obj_has(interp, item, &pk) {
@@ -744,6 +980,13 @@ impl Interpreter {
                             n += 1;
                         }
                     } else {
+                        // Step 5.d.ii.2: If n >= 2^53 - 1, throw TypeError
+                        if n as u64 >= 9007199254740991 {
+                            return Completion::Throw(
+                                interp
+                                    .create_type_error("Array length exceeds the allowed maximum"),
+                            );
+                        }
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &n.to_string(), item.clone())
                         {
@@ -773,10 +1016,14 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 } as i64;
-                let relative_start = args
-                    .first()
-                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
-                    .unwrap_or(0.0);
+                let relative_start = if let Some(v) = args.first() {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    0.0
+                };
                 let k = if relative_start < 0.0 {
                     (len as f64 + relative_start).max(0.0) as usize
                 } else {
@@ -786,7 +1033,10 @@ impl Interpreter {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
                     } else {
-                        to_integer_or_infinity(interp.to_number_coerce(v))
+                        match interp.to_number_value(v) {
+                            Ok(n) => to_integer_or_infinity(n),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                 } else {
                     len as f64
@@ -796,7 +1046,7 @@ impl Interpreter {
                 } else {
                     (relative_end as i64).min(len) as usize
                 };
-                let count = if fin > k { fin - k } else { 0 };
+                let count = fin.saturating_sub(k);
                 let a = match array_species_create(interp, &o, count) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -809,7 +1059,11 @@ impl Interpreter {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
-                        create_data_property(interp, &a, &n.to_string(), val);
+                        if let Err(e) =
+                            create_data_property_or_throw(interp, &a, &n.to_string(), val)
+                        {
+                            return Completion::Throw(e);
+                        }
                     }
                     n += 1;
                 }
@@ -858,14 +1112,26 @@ impl Interpreter {
                         JsValue::Undefined
                     };
                     if lower_exists && upper_exists {
-                        obj_set(interp, &o, &lower_s, upper_val);
-                        obj_set(interp, &o, &upper_s, lower_val);
+                        if let Err(e) = obj_set_throw(interp, &o, &lower_s, upper_val) {
+                            return Completion::Throw(e);
+                        }
+                        if let Err(e) = obj_set_throw(interp, &o, &upper_s, lower_val) {
+                            return Completion::Throw(e);
+                        }
                     } else if upper_exists {
-                        obj_set(interp, &o, &lower_s, upper_val);
-                        obj_delete(interp, &o, &upper_s);
+                        if let Err(e) = obj_set_throw(interp, &o, &lower_s, upper_val) {
+                            return Completion::Throw(e);
+                        }
+                        if let Err(e) = obj_delete_throw(interp, &o, &upper_s) {
+                            return Completion::Throw(e);
+                        }
                     } else if lower_exists {
-                        obj_delete(interp, &o, &lower_s);
-                        obj_set(interp, &o, &upper_s, lower_val);
+                        if let Err(e) = obj_delete_throw(interp, &o, &lower_s) {
+                            return Completion::Throw(e);
+                        }
+                        if let Err(e) = obj_set_throw(interp, &o, &upper_s, lower_val) {
+                            return Completion::Throw(e);
+                        }
                     }
                 }
                 Completion::Normal(o)
@@ -888,6 +1154,9 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                if len as u64 > 0xFFFF_FFFF {
+                    return Completion::Throw(interp.create_range_error("Invalid array length"));
+                }
                 let mut result = Vec::with_capacity(len);
                 for i in (0..len).rev() {
                     result.push(match obj_get(interp, &o, &i.to_string()) {
@@ -982,7 +1251,9 @@ impl Interpreter {
                             &[kvalue, JsValue::Number(k as f64), o.clone()],
                         ) {
                             Completion::Normal(v) => {
-                                create_data_property(interp, &a, &pk, v);
+                                if let Err(e) = create_data_property_or_throw(interp, &a, &pk, v) {
+                                    return Completion::Throw(e);
+                                }
                             }
                             other => return other,
                         }
@@ -1033,7 +1304,14 @@ impl Interpreter {
                         ) {
                             Completion::Normal(v) => {
                                 if to_boolean(&v) {
-                                    create_data_property(interp, &a, &to.to_string(), kvalue);
+                                    if let Err(e) = create_data_property_or_throw(
+                                        interp,
+                                        &a,
+                                        &to.to_string(),
+                                        kvalue,
+                                    ) {
+                                        return Completion::Throw(e);
+                                    }
                                     to += 1;
                                 }
                             }
@@ -1485,10 +1763,14 @@ impl Interpreter {
                     Ok(v) => v as i64,
                     Err(c) => return c,
                 };
-                let relative_start = args
-                    .first()
-                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
-                    .unwrap_or(0.0);
+                let relative_start = if let Some(v) = args.first() {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    0.0
+                };
                 let actual_start = if relative_start < 0.0 {
                     (len as f64 + relative_start).max(0.0) as usize
                 } else {
@@ -1500,9 +1782,20 @@ impl Interpreter {
                 } else if args.len() == 1 {
                     (len - actual_start as i64) as usize
                 } else {
-                    let dc = to_integer_or_infinity(interp.to_number_coerce(&args[1]));
+                    let dc = match interp.to_number_value(&args[1]) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    };
                     dc.max(0.0).min((len - actual_start as i64) as f64) as usize
                 };
+                // Step 8: If len + insertCount - actualDeleteCount > 2^53-1, throw TypeError
+                if (len as i128) + (insert_count as i128) - (actual_delete_count as i128)
+                    > 9007199254740991
+                {
+                    return Completion::Throw(
+                        interp.create_type_error("Array length exceeds the allowed maximum"),
+                    );
+                }
                 let a = match array_species_create(interp, &o, actual_delete_count) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -1514,7 +1807,11 @@ impl Interpreter {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
-                        create_data_property(interp, &a, &i.to_string(), val);
+                        if let Err(e) =
+                            create_data_property_or_throw(interp, &a, &i.to_string(), val)
+                        {
+                            return Completion::Throw(e);
+                        }
                     }
                 }
                 set_length(interp, &a, actual_delete_count);
@@ -1523,41 +1820,60 @@ impl Interpreter {
                     for k in actual_start..((len as usize) - actual_delete_count) {
                         let from = (k + actual_delete_count).to_string();
                         let to = (k + insert_count).to_string();
-                        if obj_has(interp, &o, &from) {
+                        let from_present = match obj_has_throw(interp, &o, &from) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if from_present {
                             let val = match obj_get(interp, &o, &from) {
                                 Ok(v) => v,
                                 Err(c) => return c,
                             };
-                            obj_set(interp, &o, &to, val);
-                        } else {
-                            obj_delete(interp, &o, &to);
+                            if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                                return Completion::Throw(e);
+                            }
+                        } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                            return Completion::Throw(e);
                         }
                     }
                     for k in
                         ((len as usize - actual_delete_count + insert_count)..(len as usize)).rev()
                     {
-                        obj_delete(interp, &o, &k.to_string());
+                        if let Err(e) = obj_delete_throw(interp, &o, &k.to_string()) {
+                            return Completion::Throw(e);
+                        }
                     }
                 } else if insert_count > actual_delete_count {
                     for k in (actual_start..((len as usize) - actual_delete_count)).rev() {
                         let from = (k + actual_delete_count).to_string();
                         let to = (k + insert_count).to_string();
-                        if obj_has(interp, &o, &from) {
+                        let from_present = match obj_has_throw(interp, &o, &from) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if from_present {
                             let val = match obj_get(interp, &o, &from) {
                                 Ok(v) => v,
                                 Err(c) => return c,
                             };
-                            obj_set(interp, &o, &to, val);
-                        } else {
-                            obj_delete(interp, &o, &to);
+                            if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                                return Completion::Throw(e);
+                            }
+                        } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                            return Completion::Throw(e);
                         }
                     }
                 }
                 for (j, item) in items.into_iter().enumerate() {
-                    obj_set(interp, &o, &(actual_start + j).to_string(), item);
+                    if let Err(e) = obj_set_throw(interp, &o, &(actual_start + j).to_string(), item)
+                    {
+                        return Completion::Throw(e);
+                    }
                 }
                 let new_len = (len as usize) - actual_delete_count + insert_count;
-                set_length(interp, &o, new_len);
+                if let Err(e) = set_length_throw(interp, &o, new_len) {
+                    return Completion::Throw(e);
+                }
                 Completion::Normal(a)
             },
         ));
@@ -1578,10 +1894,14 @@ impl Interpreter {
                     Ok(v) => v as i64,
                     Err(c) => return c,
                 };
-                let relative_start = args
-                    .first()
-                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
-                    .unwrap_or(0.0);
+                let relative_start = if let Some(v) = args.first() {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    0.0
+                };
                 let actual_start = if relative_start < 0.0 {
                     (len as f64 + relative_start).max(0.0) as usize
                 } else {
@@ -1592,11 +1912,25 @@ impl Interpreter {
                 } else if args.len() == 1 {
                     (len - actual_start as i64) as usize
                 } else {
-                    let dc = to_integer_or_infinity(interp.to_number_coerce(&args[1]));
+                    let dc = match interp.to_number_value(&args[1]) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    };
                     dc.max(0.0).min((len - actual_start as i64) as f64) as usize
                 };
                 let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
-                let new_len = (len as usize) - actual_delete_count + items.len();
+                let new_len = (len as i128) - (actual_delete_count as i128) + (items.len() as i128);
+                // Step 12: If newLen > 2^53 - 1, throw TypeError
+                if new_len > 9007199254740991 {
+                    return Completion::Throw(
+                        interp.create_type_error("Array length exceeds the allowed maximum"),
+                    );
+                }
+                let new_len = new_len as usize;
+                // Step 13: ArrayCreate(newLen) — If newLen > 2^32-1, throw RangeError
+                if new_len as u64 > 0xFFFF_FFFF {
+                    return Completion::Throw(interp.create_range_error("Invalid array length"));
+                }
                 let mut result = Vec::with_capacity(new_len);
                 for i in 0..actual_start {
                     result.push(match obj_get(interp, &o, &i.to_string()) {
@@ -1633,7 +1967,10 @@ impl Interpreter {
                 };
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let relative_start = if let Some(v) = args.get(1) {
-                    to_integer_or_infinity(interp.to_number_coerce(v))
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
                 } else {
                     0.0
                 };
@@ -1646,7 +1983,10 @@ impl Interpreter {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
                     } else {
-                        to_integer_or_infinity(interp.to_number_coerce(v))
+                        match interp.to_number_value(v) {
+                            Ok(n) => to_integer_or_infinity(n),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                 } else {
                     len as f64
@@ -1657,7 +1997,9 @@ impl Interpreter {
                     (relative_end as i64).min(len) as usize
                 };
                 for i in k..fin {
-                    obj_set(interp, &o, &i.to_string(), value.clone());
+                    if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), value.clone()) {
+                        return Completion::Throw(e);
+                    }
                 }
                 Completion::Normal(o)
             },
@@ -1699,7 +2041,11 @@ impl Interpreter {
                     }
                 }
                 let cmp_fn = compare_fn.clone();
+                let mut sort_error: Option<JsValue> = None;
                 items.sort_by(|x, y| {
+                    if sort_error.is_some() {
+                        return std::cmp::Ordering::Equal;
+                    }
                     if matches!(x, JsValue::Undefined) && matches!(y, JsValue::Undefined) {
                         return std::cmp::Ordering::Equal;
                     }
@@ -1715,21 +2061,52 @@ impl Interpreter {
                     {
                         let result =
                             interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
-                        if let Completion::Normal(v) = result {
-                            let n = interp.to_number_coerce(&v);
-                            if n < 0.0 {
-                                return std::cmp::Ordering::Less;
+                        match result {
+                            Completion::Normal(v) => {
+                                let n = match interp.to_number_value(&v) {
+                                    Ok(n) => n,
+                                    Err(e) => {
+                                        sort_error = Some(e);
+                                        return std::cmp::Ordering::Equal;
+                                    }
+                                };
+                                if n.is_nan() {
+                                    return std::cmp::Ordering::Equal;
+                                }
+                                if n < 0.0 {
+                                    return std::cmp::Ordering::Less;
+                                }
+                                if n > 0.0 {
+                                    return std::cmp::Ordering::Greater;
+                                }
+                                return std::cmp::Ordering::Equal;
                             }
-                            if n > 0.0 {
-                                return std::cmp::Ordering::Greater;
+                            Completion::Throw(e) => {
+                                sort_error = Some(e);
+                                return std::cmp::Ordering::Equal;
                             }
-                            return std::cmp::Ordering::Equal;
+                            _ => return std::cmp::Ordering::Equal,
                         }
                     }
-                    let xs = to_js_string(x);
-                    let ys = to_js_string(y);
+                    let xs = match interp.to_string_value(x) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            sort_error = Some(e);
+                            return std::cmp::Ordering::Equal;
+                        }
+                    };
+                    let ys = match interp.to_string_value(y) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            sort_error = Some(e);
+                            return std::cmp::Ordering::Equal;
+                        }
+                    };
                     xs.cmp(&ys)
                 });
+                if let Some(e) = sort_error {
+                    return Completion::Throw(e);
+                }
                 // Write back
                 for (i, v) in items.iter().enumerate() {
                     obj_set(interp, &o, &i.to_string(), v.clone());
@@ -1766,6 +2143,10 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                // ArrayCreate(len) — If len > 2^32-1, throw RangeError
+                if len as u64 > 0xFFFF_FFFF {
+                    return Completion::Throw(interp.create_range_error("Invalid array length"));
+                }
                 let mut items: Vec<JsValue> = Vec::with_capacity(len);
                 for i in 0..len {
                     items.push(match obj_get(interp, &o, &i.to_string()) {
@@ -1774,7 +2155,11 @@ impl Interpreter {
                     });
                 }
                 let cmp_fn = compare_fn.clone();
+                let mut sort_error: Option<JsValue> = None;
                 items.sort_by(|x, y| {
+                    if sort_error.is_some() {
+                        return std::cmp::Ordering::Equal;
+                    }
                     if matches!(x, JsValue::Undefined) && matches!(y, JsValue::Undefined) {
                         return std::cmp::Ordering::Equal;
                     }
@@ -1790,21 +2175,52 @@ impl Interpreter {
                     {
                         let result =
                             interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
-                        if let Completion::Normal(v) = result {
-                            let n = interp.to_number_coerce(&v);
-                            if n < 0.0 {
-                                return std::cmp::Ordering::Less;
+                        match result {
+                            Completion::Normal(v) => {
+                                let n = match interp.to_number_value(&v) {
+                                    Ok(n) => n,
+                                    Err(e) => {
+                                        sort_error = Some(e);
+                                        return std::cmp::Ordering::Equal;
+                                    }
+                                };
+                                if n.is_nan() {
+                                    return std::cmp::Ordering::Equal;
+                                }
+                                if n < 0.0 {
+                                    return std::cmp::Ordering::Less;
+                                }
+                                if n > 0.0 {
+                                    return std::cmp::Ordering::Greater;
+                                }
+                                return std::cmp::Ordering::Equal;
                             }
-                            if n > 0.0 {
-                                return std::cmp::Ordering::Greater;
+                            Completion::Throw(e) => {
+                                sort_error = Some(e);
+                                return std::cmp::Ordering::Equal;
                             }
-                            return std::cmp::Ordering::Equal;
+                            _ => {}
                         }
                     }
-                    let xs = to_js_string(x);
-                    let ys = to_js_string(y);
+                    let xs = match interp.to_string_value(x) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            sort_error = Some(e);
+                            return std::cmp::Ordering::Equal;
+                        }
+                    };
+                    let ys = match interp.to_string_value(y) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            sort_error = Some(e);
+                            return std::cmp::Ordering::Equal;
+                        }
+                    };
                     xs.cmp(&ys)
                 });
+                if let Some(e) = sort_error {
+                    return Completion::Throw(e);
+                }
                 Completion::Normal(interp.create_array(items))
             },
         ));
@@ -1829,7 +2245,10 @@ impl Interpreter {
                     if matches!(d, JsValue::Undefined) {
                         1.0
                     } else {
-                        to_integer_or_infinity(interp.to_number_coerce(d))
+                        match interp.to_number_value(d) {
+                            Ok(n) => to_integer_or_infinity(n),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                 } else {
                     1.0
@@ -1871,7 +2290,9 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 for (i, val) in result.into_iter().enumerate() {
-                    create_data_property(interp, &a, &i.to_string(), val);
+                    if let Err(e) = create_data_property_or_throw(interp, &a, &i.to_string(), val) {
+                        return Completion::Throw(e);
+                    }
                 }
                 set_length(interp, &a, result_len);
                 Completion::Normal(a)
@@ -1944,7 +2365,9 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 for (i, val) in result.into_iter().enumerate() {
-                    create_data_property(interp, &a, &i.to_string(), val);
+                    if let Err(e) = create_data_property_or_throw(interp, &a, &i.to_string(), val) {
+                        return Completion::Throw(e);
+                    }
                 }
                 set_length(interp, &a, result_len);
                 Completion::Normal(a)
@@ -1967,19 +2390,27 @@ impl Interpreter {
                     Ok(v) => v as i64,
                     Err(c) => return c,
                 };
-                let relative_target = args
-                    .first()
-                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
-                    .unwrap_or(0.0);
+                let relative_target = if let Some(v) = args.first() {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    0.0
+                };
                 let to_val = if relative_target < 0.0 {
                     (len as f64 + relative_target).max(0.0) as i64
                 } else {
                     (relative_target as i64).min(len)
                 };
-                let relative_start = args
-                    .get(1)
-                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)))
-                    .unwrap_or(0.0);
+                let relative_start = if let Some(v) = args.get(1) {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    0.0
+                };
                 let from = if relative_start < 0.0 {
                     (len as f64 + relative_start).max(0.0) as i64
                 } else {
@@ -1989,7 +2420,10 @@ impl Interpreter {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
                     } else {
-                        to_integer_or_infinity(interp.to_number_coerce(v))
+                        match interp.to_number_value(v) {
+                            Ok(n) => to_integer_or_infinity(n),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                 } else {
                     len as f64
@@ -2013,14 +2447,20 @@ impl Interpreter {
                 for _ in 0..count {
                     let from_s = (from_idx as usize).to_string();
                     let to_s = (to_idx as usize).to_string();
-                    if obj_has(interp, &o, &from_s) {
+                    let from_present = match obj_has_throw(interp, &o, &from_s) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if from_present {
                         let val = match obj_get(interp, &o, &from_s) {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
-                        obj_set(interp, &o, &to_s, val);
-                    } else {
-                        obj_delete(interp, &o, &to_s);
+                        if let Err(e) = obj_set_throw(interp, &o, &to_s, val) {
+                            return Completion::Throw(e);
+                        }
+                    } else if let Err(e) = obj_delete_throw(interp, &o, &to_s) {
+                        return Completion::Throw(e);
                     }
                     from_idx += direction;
                     to_idx += direction;
@@ -2045,10 +2485,14 @@ impl Interpreter {
                     Ok(v) => v as i64,
                     Err(c) => return c,
                 };
-                let relative_index = args
-                    .first()
-                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)) as i64)
-                    .unwrap_or(0);
+                let relative_index = if let Some(v) = args.first() {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n) as i64,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    0
+                };
                 let k = if relative_index >= 0 {
                     relative_index
                 } else {
@@ -2078,13 +2522,17 @@ impl Interpreter {
                     Ok(v) => v as i64,
                     Err(c) => return c,
                 };
-                if len as u64 > 0xFFFFFFFF {
+                if len as u64 > 0xFFFF_FFFF {
                     return Completion::Throw(interp.create_range_error("Invalid array length"));
                 }
-                let relative_index = args
-                    .first()
-                    .map(|v| to_integer_or_infinity(interp.to_number_coerce(v)) as i64)
-                    .unwrap_or(0);
+                let relative_index = if let Some(v) = args.first() {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n) as i64,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    0
+                };
                 let actual = if relative_index >= 0 {
                     relative_index
                 } else {
@@ -2118,14 +2566,14 @@ impl Interpreter {
             1,
             |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(o) = &val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    return Completion::Normal(JsValue::Boolean(
-                        obj.borrow().array_elements.is_some(),
-                    ));
+                if let JsValue::Object(o) = &val {
+                    match is_array_check(interp, o.id) {
+                        Ok(result) => Completion::Normal(JsValue::Boolean(result)),
+                        Err(e) => Completion::Throw(e),
+                    }
+                } else {
+                    Completion::Normal(JsValue::Boolean(false))
                 }
-                Completion::Normal(JsValue::Boolean(false))
             },
         ));
 
@@ -2133,139 +2581,183 @@ impl Interpreter {
         let array_from = self.create_function(JsFunction::native(
             "from".to_string(),
             1,
-            |interp, _this, args: &[JsValue]| {
+            |interp, this_val, args: &[JsValue]| {
+                let c = this_val.clone();
                 let source = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let map_fn = args.get(1).cloned();
                 let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                if let Some(ref mf) = map_fn
+                let mapping = if let Some(ref mf) = map_fn
                     && !matches!(mf, JsValue::Undefined)
-                    && !interp.is_callable(mf)
                 {
+                    if !interp.is_callable(mf) {
+                        return Completion::Throw(
+                            interp.create_type_error("Array.from mapFn is not a function"),
+                        );
+                    }
+                    true
+                } else {
+                    false
+                };
+
+                // Check if source is null/undefined
+                if matches!(source, JsValue::Undefined | JsValue::Null) {
                     return Completion::Throw(
-                        interp.create_type_error("Array.from mapFn is not a function"),
+                        interp.create_type_error("Cannot convert undefined or null to object"),
                     );
                 }
-                let mut values = Vec::new();
-                match &source {
-                    JsValue::String(s) => {
-                        for ch in s.to_rust_string().chars() {
-                            let v = JsValue::String(JsString::from_str(&ch.to_string()));
-                            if let Some(ref mf) = map_fn
-                                && !matches!(mf, JsValue::Undefined)
+
+                // Check for iterable via @@iterator using get_object_property
+                let using_iterator = if let JsValue::Object(o) = &source {
+                    if let Some(key) = interp.get_symbol_key("iterator") {
+                        match interp.get_object_property(o.id, &key, &source) {
+                            Completion::Normal(v)
+                                if !matches!(v, JsValue::Undefined | JsValue::Null) =>
                             {
-                                match interp.call_function(
-                                    mf,
-                                    &this_arg,
-                                    &[v, JsValue::Number(values.len() as f64)],
-                                ) {
-                                    Completion::Normal(mapped) => values.push(mapped),
-                                    other => return other,
-                                }
-                                continue;
+                                Some(v)
                             }
-                            values.push(v);
+                            Completion::Normal(_) => None,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            other => return other,
                         }
+                    } else {
+                        None
                     }
-                    JsValue::Object(o) => {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            // Check for iterable (Symbol.iterator)
-                            let has_iterator = {
-                                let borrow = obj.borrow();
-                                let mut found = false;
-                                for k in borrow.properties.keys() {
-                                    if k.starts_with("Symbol(Symbol.iterator)") {
-                                        found = true;
-                                        break;
-                                    }
+                } else if matches!(source, JsValue::String(_)) {
+                    // Strings are iterable
+                    if let Some(key) = interp.get_symbol_key("iterator") {
+                        if let Some(sp) = interp.string_prototype.clone() {
+                            let sp_id = sp.borrow().id.unwrap();
+                            match interp.get_object_property(sp_id, &key, &source) {
+                                Completion::Normal(v)
+                                    if !matches!(v, JsValue::Undefined | JsValue::Null) =>
+                                {
+                                    Some(v)
                                 }
-                                found
-                            };
-                            if has_iterator {
-                                // Use iterator protocol
-                                let iter_key = {
-                                    let borrow = obj.borrow();
-                                    borrow
-                                        .properties
-                                        .keys()
-                                        .find(|k| k.starts_with("Symbol(Symbol.iterator)"))
-                                        .cloned()
-                                };
-                                if let Some(ik) = iter_key {
-                                    let iter_fn = obj.borrow().get_property(&ik);
-                                    let iterator =
-                                        match interp.call_function(&iter_fn, &source, &[]) {
-                                            Completion::Normal(v) => v,
-                                            other => return other,
-                                        };
-                                    loop {
-                                        let next_fn = match obj_get(interp, &iterator, "next") {
-                                            Ok(v) => v,
-                                            Err(c) => return c,
-                                        };
-                                        let result =
-                                            match interp.call_function(&next_fn, &iterator, &[]) {
-                                                Completion::Normal(v) => v,
-                                                other => return other,
-                                            };
-                                        let (done, value) = extract_iter_result(interp, &result);
-                                        if done {
-                                            break;
-                                        }
-                                        if let Some(ref mf) = map_fn
-                                            && !matches!(mf, JsValue::Undefined)
-                                        {
-                                            match interp.call_function(
-                                                mf,
-                                                &this_arg,
-                                                &[value, JsValue::Number(values.len() as f64)],
-                                            ) {
-                                                Completion::Normal(mapped) => values.push(mapped),
-                                                other => return other,
-                                            }
-                                            continue;
-                                        }
-                                        values.push(value);
-                                    }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(iter_method) = using_iterator {
+                    // Iterator path - spec says Construct(C) with no arguments
+                    let a = if interp.is_constructor(&c) {
+                        match interp.construct(&c, &[]) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            other => return other,
+                        }
+                    } else {
+                        interp.create_array(Vec::new())
+                    };
+
+                    let iterator = match interp.call_function(&iter_method, &source, &[]) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            return Completion::Throw(e);
+                        }
+                        other => return other,
+                    };
+                    let mut k: usize = 0;
+                    loop {
+                        let next = match interp.iterator_step(&iterator) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let next = match next {
+                            Some(result) => result,
+                            None => {
+                                if let Err(e) = set_length_throw(interp, &a, k) {
+                                    return Completion::Throw(e);
                                 }
-                            } else {
-                                // Array-like
-                                let len_val =
-                                    match interp.get_object_property(o.id, "length", &source) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
-                                    };
-                                let len = to_integer_or_infinity(interp.to_number_coerce(&len_val))
-                                    .max(0.0) as usize;
-                                for i in 0..len {
-                                    let v = match interp.get_object_property(
-                                        o.id,
-                                        &i.to_string(),
-                                        &source,
-                                    ) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
-                                    };
-                                    if let Some(ref mf) = map_fn
-                                        && !matches!(mf, JsValue::Undefined)
-                                    {
-                                        match interp.call_function(
-                                            mf,
-                                            &this_arg,
-                                            &[v, JsValue::Number(i as f64)],
-                                        ) {
-                                            Completion::Normal(mapped) => values.push(mapped),
-                                            other => return other,
-                                        }
-                                        continue;
-                                    }
-                                    values.push(v);
+                                return Completion::Normal(a);
+                            }
+                        };
+                        let value = match interp.iterator_value(&next) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let _ = interp.iterator_close(&iterator, JsValue::Undefined);
+                                return Completion::Throw(e);
+                            }
+                        };
+                        let mapped_value = if mapping {
+                            match interp.call_function(
+                                map_fn.as_ref().unwrap(),
+                                &this_arg,
+                                &[value, JsValue::Number(k as f64)],
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => {
+                                    let _ = interp.iterator_close(&iterator, JsValue::Undefined);
+                                    return other;
                                 }
                             }
+                        } else {
+                            value
+                        };
+                        if let Err(e) =
+                            create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
+                        {
+                            let _ = interp.iterator_close(&iterator, JsValue::Undefined);
+                            return Completion::Throw(e);
+                        }
+                        k += 1;
+                    }
+                } else {
+                    // Array-like path
+                    let array_like = match to_object_val(interp, &source) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let len = match length_of_array_like(interp, &array_like) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+
+                    let a = if interp.is_constructor(&c) {
+                        match interp.construct(&c, &[JsValue::Number(len as f64)]) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            other => return other,
+                        }
+                    } else {
+                        interp.create_array(Vec::new())
+                    };
+
+                    for k in 0..len {
+                        let kvalue = match obj_get(interp, &array_like, &k.to_string()) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        let mapped_value = if mapping {
+                            match interp.call_function(
+                                map_fn.as_ref().unwrap(),
+                                &this_arg,
+                                &[kvalue, JsValue::Number(k as f64)],
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            kvalue
+                        };
+                        if let Err(e) =
+                            create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
+                        {
+                            return Completion::Throw(e);
                         }
                     }
-                    _ => {}
+                    if let Err(e) = set_length_throw(interp, &a, len) {
+                        return Completion::Throw(e);
+                    }
+                    Completion::Normal(a)
                 }
-                Completion::Normal(interp.create_array(values))
             },
         ));
 
@@ -2273,8 +2765,29 @@ impl Interpreter {
         let array_of = self.create_function(JsFunction::native(
             "of".to_string(),
             0,
-            |interp, _this, args: &[JsValue]| {
-                Completion::Normal(interp.create_array(args.to_vec()))
+            |interp, this_val, args: &[JsValue]| {
+                let c = this_val.clone();
+                let len = args.len();
+                let a = if interp.is_constructor(&c) {
+                    match interp.construct(&c, &[JsValue::Number(len as f64)]) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        other => return other,
+                    }
+                } else {
+                    interp.create_array(Vec::new())
+                };
+                for (k, arg) in args.iter().enumerate() {
+                    if let Err(e) =
+                        create_data_property_or_throw(interp, &a, &k.to_string(), arg.clone())
+                    {
+                        return Completion::Throw(e);
+                    }
+                }
+                if let Err(e) = set_length_throw(interp, &a, len) {
+                    return Completion::Throw(e);
+                }
+                Completion::Normal(a)
             },
         ));
 

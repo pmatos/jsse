@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 35,691 / 48,257 run (73.96%)
+**Current pass rate:** 36,413 / 48,257 run (75.46%)
 
 ---
 
@@ -31,19 +31,19 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
 | Object | 93% | 3,181/3,411 |
-| Array | 82% | 2,553/3,079 |
-| String | 92% | 1,120/1,215 |
+| Array | 88% | 2,711/3,079 |
+| String | 94% | 1,137/1,215 |
 | Function | 85% | 433/509 |
 | Iterator | 85% | 436/510 |
 | Promise | 89% | 571/639 |
 | Map | 77% | 158/204 |
 | Set | 95% | 365/383 |
-| Date | 82% | 493/594 |
+| Date | 94% | 561/594 |
 | DataView | 80% | 454/561 |
 | Reflect | 86% | 132/153 |
 | Proxy | 58% | 182/311 |
 | Symbol | 71% | 67/94 |
-| RegExp | 69% | 1,289/1,879 |
+| RegExp | 74% | 1,389/1,879 |
 | Math | 96% | 316/327 |
 | WeakRef | 82% | 24/29 |
 | FinalizationRegistry | 76% | 36/47 |
@@ -132,6 +132,8 @@ These features block significant numbers of tests:
 49. ~~**Conformance batch 15: DataView Float16, class this TDZ, Object.__proto__ + Array fixes**~~ — ✅ Done (+338 new passes, 73.26% → 73.96%). Three orthogonal features: (1) DataView getFloat16/setFloat16 (ES2025) and DataView setter coercion ordering fix — setters now perform ToNumber/ToBigInt on value BEFORE buffer detachment and bounds checks per spec. DataView: 293→454/561 (80%). (2) Derived constructor `this` TDZ enforcement — `this` is uninitialized until `super()` is called in derived class constructors, with proper new.target forwarding via `construct_with_new_target()`. Class `.prototype` property now writable:false per spec. (3) Object.prototype.__proto__ accessor (Annex B §B.2.2.1), Array.prototype[@@unscopables], and Symbol.isConcatSpreadable support in Array.prototype.concat. Object: 3,176→3,181/3,411 (93%), Array: 2,496→2,553/3,079 (82%), Promise: 548→571/639 (89%), Reflect: 124→132/153 (86%).
 
 50. ~~**Conformance batch 16: Annex B block-level functions, RegExp fixes**~~ — ✅ Done (+363 new passes, 73.96% → 74.71%). Two orthogonal features: (1) Annex B.3.3/B.3.4 block-level function declarations in sloppy mode: var-scope hoisting with copy-on-evaluation semantics, parameter/lexical conflict detection, generator/async exclusion, switch case function hoisting, IsLabelledFunction checks for iteration bodies and if-with-else. Parser: function declarations in if-bodies and labeled statements (sloppy mode only). annexB: 399→674/1,086 (62%). (2) RegExp fixes: pattern validation, type checks, `regexp_exec_abstract()` usage for spec-compliant exec dispatch. RegExp: 1,216→1,289/1,879 (69%).
+
+51. ~~**Conformance batch 17: RegExp, Array, Date improvements**~~ — ✅ Done (+359 new passes, 74.71% → 75.46%). Three orthogonal features implemented in parallel: (1) RegExp: removed own flag/source/flags data properties from RegExp instances (now prototype getters only), internal slots via `__original_source__`/`__original_flags__`, spec_set() helper, Symbol.match/search/split/matchAll rewrites, RegExp constructor IsRegExp check, escape_regexp_pattern(), pattern validation. RegExp: 1,289→1,389/1,879 (74%). (2) Array: coercion fixes (to_number_value/to_string_value), spec-compliant Set/Delete/HasProperty with throw variants, CreateDataPropertyOrThrow with extensibility checks, ArraySpeciesCreate with Proxy support, integer limit checks (2^53-1), toString fallback to %Object.prototype.toString%. Array: 2,553→2,711/3,079 (88%). (3) Date: removed primitive_value from Date.prototype, setter error propagation with to_number_value(), Symbol.toPrimitive rewrite (check Object not Date), toJSON rewrite per spec, constructor ToPrimitive hint="default". Date: 493→561/594 (94%). Integration fixes: String.prototype.replaceAll/matchAll now use Get(searchValue, "flags") and IsRegExp per spec, TypedArray.prototype.join separator coercion, array_elements sync for indexed property mutation.
 
 ---
 
