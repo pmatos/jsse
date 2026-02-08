@@ -81,6 +81,7 @@ impl Interpreter {
             }
         }
 
+        self.active_envs.push(env.clone());
         let mut result = Completion::Empty;
         for stmt in stmts {
             self.maybe_gc();
@@ -89,24 +90,28 @@ impl Interpreter {
                 Completion::Normal(val) => result = Completion::Normal(val),
                 Completion::Empty => {} // keep previous result (UpdateEmpty semantics)
                 Completion::Break(label, break_val) => {
-                    // UpdateEmpty: only replace if break's value is empty (None)
                     let val = match break_val {
                         None => Some(result.value_or(JsValue::Undefined)),
                         some => some,
                     };
+                    self.active_envs.pop();
                     return Completion::Break(label, val);
                 }
                 Completion::Continue(label, cont_val) => {
-                    // UpdateEmpty: only replace if continue's value is empty (None)
                     let val = match cont_val {
                         None => Some(result.value_or(JsValue::Undefined)),
                         some => some,
                     };
+                    self.active_envs.pop();
                     return Completion::Continue(label, val);
                 }
-                other => return other,
+                other => {
+                    self.active_envs.pop();
+                    return other;
+                }
             }
         }
+        self.active_envs.pop();
         result
     }
 

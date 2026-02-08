@@ -86,6 +86,14 @@ impl Interpreter {
         for &obj_id in self.template_cache.values() {
             worklist.push(obj_id);
         }
+        // Root from module environments (not reachable from global_env)
+        for module in self.module_registry.values() {
+            let m = module.borrow();
+            Self::collect_env_roots(&m.env, &mut worklist);
+            for val in m.exports.values() {
+                Self::collect_value_roots(val, &mut worklist);
+            }
+        }
         // Trace active call stack environments
         for env in &self.call_stack_envs {
             Self::collect_env_roots(env, &mut worklist);
