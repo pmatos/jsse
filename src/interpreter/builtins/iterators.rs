@@ -1776,7 +1776,9 @@ impl Interpreter {
                                     return Completion::Throw(err);
                                 }
                                 match interp.iterator_complete(&v) {
-                                    Ok(true) => { state_next.borrow_mut().2 = false; }
+                                    Ok(true) => {
+                                        state_next.borrow_mut().2 = false;
+                                    }
                                     Err(e) => return Completion::Throw(e),
                                     _ => {}
                                 }

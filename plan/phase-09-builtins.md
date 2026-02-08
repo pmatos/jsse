@@ -146,7 +146,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Array/` (3,079), `built-ins/ArrayIteratorPrototype/` (27), `built-ins/TypedArray/` (1,438), `built-ins/TypedArrayConstructors/` (736), `built-ins/Uint8Array/` (68)
 
 ### 9.6 Keyed Collections (§24) — **NOT IMPLEMENTED, 587 tests**
-- [x] **Map** (§24.1) — 77% (158/204 tests)
+- [x] **Map** (§24.1) — 99% (203/204 tests)
   - [x] `Map()` constructor
   - [x] `Map.prototype`: `clear`, `delete`, `entries`, `forEach`, `get`, `has`, `keys`, `set`, `size`, `values`, `[@@iterator]`, `[@@toStringTag]`
   - [x] `Map.groupBy()`
@@ -221,13 +221,13 @@ Ordered roughly by dependency and importance.
 - [x] **Reflect** (§28.1) — ✅ 124/153 passing (81%)
   - [x] `Reflect.apply()`, `.construct()`, `.defineProperty()`, `.deleteProperty()`, `.get()`, `.getOwnPropertyDescriptor()`, `.getPrototypeOf()`, `.has()`, `.isExtensible()`, `.ownKeys()`, `.preventExtensions()`, `.set()`, `.setPrototypeOf()`
   - [x] Proxy trap delegation from Reflect methods
-- [x] **Proxy** (§28.2) — ✅ 203/311 passing (65%)
+- [x] **Proxy** (§28.2) — ✅ 224/311 passing (72%)
   - [x] `Proxy()` constructor
   - [x] `Proxy.revocable()`
   - [x] All 13 proxy handler traps
   - [x] Proxy invariant enforcement (get/set/has/delete/defineProperty/getOwnPropertyDescriptor/ownKeys/getPrototypeOf/setPrototypeOf/isExtensible/preventExtensions)
 
-**Tests:** `built-ins/Reflect/` (124/153), `built-ins/Proxy/` (163/310)
+**Tests:** `built-ins/Reflect/` (132/153), `built-ins/Proxy/` (224/311)
 
 ### 9.11 Resource Management
 - [x] **DisposableStack** (§Disposable) — ✅ 71/91 passing

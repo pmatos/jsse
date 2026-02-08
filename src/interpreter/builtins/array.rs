@@ -429,6 +429,10 @@ impl Interpreter {
     pub(crate) fn setup_array_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Array".to_string();
+        proto.borrow_mut().insert_property(
+            "length".to_string(),
+            PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
+        );
 
         // Array.prototype.push
         let push_fn = self.create_function(JsFunction::native(

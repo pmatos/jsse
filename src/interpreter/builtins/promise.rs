@@ -206,7 +206,8 @@ impl Interpreter {
                     JsValue::Object(o) => o.id,
                     _ => {
                         return Completion::Throw(
-                            interp.create_type_error("Promise.prototype.catch called on non-object"),
+                            interp
+                                .create_type_error("Promise.prototype.catch called on non-object"),
                         );
                     }
                 };
@@ -1549,7 +1550,14 @@ impl Interpreter {
         if let JsValue::Object(o) = val
             && let Some(obj) = self.get_object(o.id)
         {
-            return obj.borrow().callable.is_some();
+            if obj.borrow().callable.is_some() {
+                return true;
+            }
+            // Proxy wrapping a callable is callable
+            if obj.borrow().is_proxy() {
+                let target_val = self.get_proxy_target_val(o.id);
+                return self.is_callable(&target_val);
+            }
         }
         false
     }
@@ -1563,6 +1571,11 @@ impl Interpreter {
                     JsFunction::Native(_, _, _, is_ctor) => *is_ctor,
                     JsFunction::User { .. } => true,
                 };
+            }
+            // Proxy wrapping a constructor is a constructor
+            if obj.borrow().is_proxy() {
+                let target_val = self.get_proxy_target_val(o.id);
+                return self.is_constructor(&target_val);
             }
         }
         false

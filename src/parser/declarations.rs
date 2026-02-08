@@ -19,6 +19,17 @@ impl<'a> Parser<'a> {
         };
         self.advance()?;
         let declarations = self.parse_variable_declaration_list()?;
+        // "let" cannot be a bound name in let/const declarations (§13.3.1.1)
+        for d in &declarations {
+            let mut names = Vec::new();
+            Self::collect_bound_names(&d.pattern, &mut names);
+            for name in &names {
+                if name == "let" {
+                    return Err(self
+                        .error("'let' is not allowed as a variable name in lexical declarations"));
+                }
+            }
+        }
         self.eat_semicolon()?;
         Ok(Statement::Variable(VariableDeclaration {
             kind,
@@ -227,12 +238,18 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_class_declaration(&mut self) -> Result<Statement, ParseError> {
         let source_start = self.current_token_start;
         self.advance()?; // class
+        // Class definitions are strict mode code — set strict before parsing name
+        let prev_strict = self.strict;
+        self.set_strict(true);
         let name = match self.current_identifier_name() {
             Some(n) => {
                 self.advance()?;
                 n
             }
-            None => return Err(self.error("Expected class name")),
+            None => {
+                self.set_strict(prev_strict);
+                return Err(self.error("Expected class name"));
+            }
         };
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
             self.advance()?;
@@ -240,6 +257,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        self.set_strict(prev_strict);
         let body = self.parse_class_body()?;
         let source_text = Some(self.source_since(source_start));
         Ok(Statement::ClassDeclaration(ClassDecl {

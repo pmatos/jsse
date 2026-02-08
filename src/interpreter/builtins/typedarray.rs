@@ -239,9 +239,7 @@ impl Interpreter {
                         (is_ab, is_detached, old_len)
                     };
                     if !is_ab {
-                        return Completion::Throw(
-                            interp.create_type_error("not an ArrayBuffer"),
-                        );
+                        return Completion::Throw(interp.create_type_error("not an ArrayBuffer"));
                     }
                     if is_detached {
                         return Completion::Throw(
@@ -261,12 +259,7 @@ impl Interpreter {
                     // Copy data
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        obj_ref
-                            .arraybuffer_data
-                            .as_ref()
-                            .unwrap()
-                            .borrow()
-                            .clone()
+                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
                     };
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
@@ -313,9 +306,7 @@ impl Interpreter {
                         (is_ab, is_detached, old_len)
                     };
                     if !is_ab {
-                        return Completion::Throw(
-                            interp.create_type_error("not an ArrayBuffer"),
-                        );
+                        return Completion::Throw(interp.create_type_error("not an ArrayBuffer"));
                     }
                     if is_detached {
                         return Completion::Throw(
@@ -334,12 +325,7 @@ impl Interpreter {
                     };
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        obj_ref
-                            .arraybuffer_data
-                            .as_ref()
-                            .unwrap()
-                            .borrow()
-                            .clone()
+                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
                     };
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
@@ -358,10 +344,9 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto.borrow_mut().insert_builtin(
-            "transferToFixedLength".to_string(),
-            transfer_fixed_fn,
-        );
+        ab_proto
+            .borrow_mut()
+            .insert_builtin("transferToFixedLength".to_string(), transfer_fixed_fn);
 
         // @@toStringTag
         let tag = JsValue::String(JsString::from_str("ArrayBuffer"));
@@ -377,9 +362,9 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 if interp.new_target.is_none() {
-                    return Completion::Throw(interp.create_type_error(
-                        "Constructor ArrayBuffer requires 'new'",
-                    ));
+                    return Completion::Throw(
+                        interp.create_type_error("Constructor ArrayBuffer requires 'new'"),
+                    );
                 }
                 let len_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let len = match interp.to_index(&len_val) {
@@ -3765,9 +3750,9 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 if interp.new_target.is_none() {
-                    return Completion::Throw(interp.create_type_error(
-                        "Constructor DataView requires 'new'",
-                    ));
+                    return Completion::Throw(
+                        interp.create_type_error("Constructor DataView requires 'new'"),
+                    );
                 }
                 let buf_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &buf_arg
@@ -3783,13 +3768,12 @@ impl Interpreter {
                         ));
                     }
                     // ToIndex(byteOffset) BEFORE detach check
-                    let byte_offset = match interp
-                        .to_index(args.get(1).unwrap_or(&JsValue::Undefined))
-                    {
-                        Completion::Normal(JsValue::Number(n)) => n as usize,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => 0,
-                    };
+                    let byte_offset =
+                        match interp.to_index(args.get(1).unwrap_or(&JsValue::Undefined)) {
+                            Completion::Normal(JsValue::Number(n)) => n as usize,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => 0,
+                        };
                     // Now check detach + get buffer info
                     let (buf_rc, detached_flag, buf_len) = {
                         let obj_ref = obj.borrow();
@@ -3809,9 +3793,10 @@ impl Interpreter {
                         (buf, det, len)
                     };
                     if byte_offset > buf_len {
-                        return Completion::Throw(
-                            interp.create_error("RangeError", "offset is outside the bounds of the buffer"),
-                        );
+                        return Completion::Throw(interp.create_error(
+                            "RangeError",
+                            "offset is outside the bounds of the buffer",
+                        ));
                     }
                     let byte_length_arg = args.get(2).unwrap_or(&JsValue::Undefined);
                     let byte_length = if matches!(byte_length_arg, JsValue::Undefined) {
@@ -3821,10 +3806,10 @@ impl Interpreter {
                             Completion::Normal(JsValue::Number(n)) => {
                                 let bl = n as usize;
                                 if byte_offset + bl > buf_len {
-                                    return Completion::Throw(interp.create_error(
-                                        "RangeError",
-                                        "invalid DataView length",
-                                    ));
+                                    return Completion::Throw(
+                                        interp
+                                            .create_error("RangeError", "invalid DataView length"),
+                                    );
                                 }
                                 bl
                             }

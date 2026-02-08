@@ -134,7 +134,10 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().map_data.is_some()
+                    && {
+                        let b = obj.borrow();
+                        b.map_data.is_some() && b.class_name == "Map"
+                    }
                 {
                     return Completion::Normal(create_map_iterator(
                         interp,
@@ -164,7 +167,10 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().map_data.is_some()
+                    && {
+                        let b = obj.borrow();
+                        b.map_data.is_some() && b.class_name == "Map"
+                    }
                 {
                     return Completion::Normal(create_map_iterator(
                         interp,
@@ -187,7 +193,10 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().map_data.is_some()
+                    && {
+                        let b = obj.borrow();
+                        b.map_data.is_some() && b.class_name == "Map"
+                    }
                 {
                     return Completion::Normal(create_map_iterator(
                         interp,
@@ -211,7 +220,14 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let map_data = obj.borrow().map_data.clone();
+                    let borrowed = obj.borrow();
+                    let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
+                    let map_data = if is_map {
+                        borrowed.map_data.clone()
+                    } else {
+                        None
+                    };
+                    drop(borrowed);
                     if let Some(entries) = map_data {
                         let key = args.first().cloned().unwrap_or(JsValue::Undefined);
                         for entry in entries.iter().flatten() {
@@ -236,7 +252,10 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_map = obj.borrow().map_data.is_some();
+                    let has_map = {
+                        let b = obj.borrow();
+                        b.map_data.is_some() && b.class_name == "Map"
+                    };
                     if has_map {
                         let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -273,7 +292,14 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let map_data = obj.borrow().map_data.clone();
+                    let borrowed = obj.borrow();
+                    let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
+                    let map_data = if is_map {
+                        borrowed.map_data.clone()
+                    } else {
+                        None
+                    };
+                    drop(borrowed);
                     if let Some(entries) = map_data {
                         let key = args.first().cloned().unwrap_or(JsValue::Undefined);
                         for entry in entries.iter().flatten() {
@@ -298,7 +324,10 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_map = obj.borrow().map_data.is_some();
+                    let has_map = {
+                        let b = obj.borrow();
+                        b.map_data.is_some() && b.class_name == "Map"
+                    };
                     if has_map {
                         let key = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let mut borrowed = obj.borrow_mut();
@@ -330,7 +359,10 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_map = obj.borrow().map_data.is_some();
+                    let has_map = {
+                        let b = obj.borrow();
+                        b.map_data.is_some() && b.class_name == "Map"
+                    };
                     if has_map {
                         obj.borrow_mut().map_data = Some(Vec::new());
                         return Completion::Normal(JsValue::Undefined);
@@ -351,7 +383,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id) {
-                        let has_map = obj.borrow().map_data.is_some();
+                        let has_map = { let b = obj.borrow(); b.map_data.is_some() && b.class_name == "Map" };
                         if has_map {
                             let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                             if !matches!(&callback, JsValue::Object(co) if interp.get_object(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
@@ -392,7 +424,14 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let map_data = obj.borrow().map_data.clone();
+                    let borrowed = obj.borrow();
+                    let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
+                    let map_data = if is_map {
+                        borrowed.map_data.clone()
+                    } else {
+                        None
+                    };
+                    drop(borrowed);
                     if let Some(entries) = map_data {
                         let count = entries.iter().filter(|e| e.is_some()).count();
                         return Completion::Normal(JsValue::Number(count as f64));
@@ -413,6 +452,118 @@ impl Interpreter {
                 configurable: Some(true),
             },
         );
+
+        // Map.prototype.getOrInsert
+        let get_or_insert_fn = self.create_function(JsFunction::native(
+            "getOrInsert".to_string(),
+            2,
+            |interp, this, args| {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let is_map = {
+                        let borrowed = obj.borrow();
+                        borrowed.map_data.is_some() && borrowed.class_name == "Map"
+                    };
+                    if is_map {
+                        let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        // CanonicalizeKeyedCollectionKey: normalize -0 to +0
+                        if let JsValue::Number(n) = &key {
+                            if *n == 0.0 && n.is_sign_negative() {
+                                key = JsValue::Number(0.0);
+                            }
+                        }
+                        // Search existing entries
+                        {
+                            let borrowed = obj.borrow();
+                            let entries = borrowed.map_data.as_ref().unwrap();
+                            for entry in entries.iter().flatten() {
+                                if same_value_zero(&entry.0, &key) {
+                                    return Completion::Normal(entry.1.clone());
+                                }
+                            }
+                        }
+                        // Key not found - append new entry
+                        let mut borrowed = obj.borrow_mut();
+                        let entries = borrowed.map_data.as_mut().unwrap();
+                        entries.push(Some((key, value.clone())));
+                        return Completion::Normal(value);
+                    }
+                }
+                let err = interp.create_type_error("Map.prototype.getOrInsert requires a Map");
+                Completion::Throw(err)
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("getOrInsert".to_string(), get_or_insert_fn);
+
+        // Map.prototype.getOrInsertComputed
+        let get_or_insert_computed_fn = self.create_function(JsFunction::native(
+            "getOrInsertComputed".to_string(),
+            2,
+            |interp, this, args| {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let is_map = {
+                        let borrowed = obj.borrow();
+                        borrowed.map_data.is_some() && borrowed.class_name == "Map"
+                    };
+                    if is_map {
+                        let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let callbackfn = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        // Step 3: IsCallable check BEFORE anything else
+                        if !matches!(&callbackfn, JsValue::Object(co) if interp.get_object(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                            let err = interp.create_type_error("callbackfn is not a function");
+                            return Completion::Throw(err);
+                        }
+                        // CanonicalizeKeyedCollectionKey: normalize -0 to +0
+                        if let JsValue::Number(n) = &key {
+                            if *n == 0.0 && n.is_sign_negative() {
+                                key = JsValue::Number(0.0);
+                            }
+                        }
+                        // Step 5: Search existing entries
+                        {
+                            let borrowed = obj.borrow();
+                            let entries = borrowed.map_data.as_ref().unwrap();
+                            for entry in entries.iter().flatten() {
+                                if same_value_zero(&entry.0, &key) {
+                                    return Completion::Normal(entry.1.clone());
+                                }
+                            }
+                        }
+                        // Step 6: Call(callbackfn, undefined, « key »)
+                        let value = match interp.call_function(&callbackfn, &JsValue::Undefined, &[key.clone()]) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        // Step 7: Re-check if key was inserted by callback
+                        {
+                            let obj = interp.get_object(o.id).unwrap();
+                            let mut borrowed = obj.borrow_mut();
+                            let entries = borrowed.map_data.as_mut().unwrap();
+                            for entry in entries.iter_mut().flatten() {
+                                if same_value_zero(&entry.0, &key) {
+                                    entry.1 = value.clone();
+                                    return Completion::Normal(value);
+                                }
+                            }
+                            // Step 8-9: Not found, append
+                            entries.push(Some((key, value.clone())));
+                        }
+                        return Completion::Normal(value);
+                    }
+                }
+                let err = interp.create_type_error("Map.prototype.getOrInsertComputed requires a Map");
+                Completion::Throw(err)
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("getOrInsertComputed".to_string(), get_or_insert_computed_fn);
 
         // @@toStringTag
         proto.borrow_mut().insert_property(
@@ -449,79 +600,72 @@ impl Interpreter {
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !iterable.is_undefined() && !iterable.is_null() {
-                    // Get adder = this.set
-                    let adder = obj.borrow().get_property("set");
+                    // Step 7a: Get adder = Get(map, "set") — must invoke getters
+                    let adder = match interp.get_object_property(obj_id, "set", &this_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
                     if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("Map.prototype.set is not a function");
                         return Completion::Throw(err);
                     }
 
                     // Get iterator from iterable
-                    let iter_key = interp.get_symbol_iterator_key();
-                    let iterator_fn = if let Some(ref key) = iter_key {
-                        if let JsValue::Object(io) = &iterable {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                let v = iter_obj.borrow().get_property(key);
-                                if v.is_undefined() { JsValue::Undefined } else { v }
-                            } else { JsValue::Undefined }
-                        } else { JsValue::Undefined }
-                    } else { JsValue::Undefined };
-
-                    if iterator_fn.is_undefined() {
-                        let err = interp.create_type_error("object is not iterable");
-                        return Completion::Throw(err);
-                    }
-
-                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                    let iterator = match interp.get_iterator(&iterable) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
                     };
 
                     // Iterate
                     loop {
-                        let next_fn = if let JsValue::Object(io) = &iterator {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                iter_obj.borrow().get_property("next")
-                            } else { JsValue::Undefined }
-                        } else { JsValue::Undefined };
+                        let next = match interp.iterator_step(&iterator) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let next = match next {
+                            Some(v) => v,
+                            None => break,
+                        };
 
-                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
+                        let value = match interp.iterator_value(&next) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+
+                        // value should be [key, value] — must be Object
+                        if !matches!(&value, JsValue::Object(_)) {
+                            let err = interp.create_type_error("Iterator value is not an object");
+                            let _ = interp.iterator_close(&iterator, err.clone());
+                            return Completion::Throw(err);
+                        }
+
+                        // Get(nextItem, "0") — invoke getters, close on abrupt
+                        let val_id = if let JsValue::Object(vo) = &value { vo.id } else { unreachable!() };
+                        let k = match interp.get_object_property(val_id, "0", &value) {
                             Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                            other => return other,
+                        };
+                        // Get(nextItem, "1") — invoke getters, close on abrupt
+                        let v = match interp.get_object_property(val_id, "1", &value) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
                             other => return other,
                         };
 
-                        let done = if let JsValue::Object(ro) = &next_result {
-                            if let Some(result_obj) = interp.get_object(ro.id) {
-                                let d = result_obj.borrow().get_property("done");
-                                matches!(d, JsValue::Boolean(true))
-                            } else { false }
-                        } else { false };
-
-                        if done { break; }
-
-                        let value = if let JsValue::Object(ro) = &next_result {
-                            if let Some(result_obj) = interp.get_object(ro.id) {
-                                result_obj.borrow().get_property("value")
-                            } else { JsValue::Undefined }
-                        } else { JsValue::Undefined };
-
-                        // value should be [key, value]
-                        let (k, v) = if let JsValue::Object(vo) = &value {
-                            if let Some(val_obj) = interp.get_object(vo.id) {
-                                let borrowed = val_obj.borrow();
-                                let k = borrowed.get_property("0");
-                                let v = borrowed.get_property("1");
-                                (k, v)
-                            } else {
-                                (JsValue::Undefined, JsValue::Undefined)
-                            }
-                        } else {
-                            let err = interp.create_type_error("Iterator value is not an object");
-                            return Completion::Throw(err);
-                        };
-
+                        // Call(adder, map, « k, v ») — close on abrupt
                         match interp.call_function(&adder, &this_val, &[k, v]) {
                             Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                let _ = interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
                             other => return other,
                         }
                     }

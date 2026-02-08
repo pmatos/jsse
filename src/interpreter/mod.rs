@@ -80,6 +80,7 @@ pub struct Interpreter {
     last_call_had_explicit_return: bool,
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
+    pub(crate) call_stack_envs: Vec<EnvRef>,
 }
 
 pub struct LoadedModule {
@@ -173,6 +174,7 @@ impl Interpreter {
             last_call_had_explicit_return: false,
             last_call_this_value: None,
             constructing_derived: false,
+            call_stack_envs: Vec::new(),
         };
         interp.setup_globals();
         interp

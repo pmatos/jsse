@@ -216,17 +216,6 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // Proxy has trap for `in` operator
-                if *op == BinaryOp::In
-                    && let JsValue::Object(ref o) = rval
-                    && self.get_proxy_info(o.id).is_some()
-                {
-                    let key = to_js_string(&lval);
-                    match self.proxy_has_property(o.id, &key) {
-                        Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                }
                 if *op == BinaryOp::Instanceof {
                     return self.eval_instanceof(&lval, &rval);
                 }
@@ -297,12 +286,25 @@ impl Interpreter {
             }
             Expression::Typeof(operand) => {
                 // typeof on unresolvable reference returns "undefined"
+                // typeof on TDZ reference throws ReferenceError
                 if let Expression::Identifier(name) = operand.as_ref() {
-                    let val = env.borrow().get(name).unwrap_or(JsValue::Undefined);
-                    return Completion::Normal(JsValue::String(JsString::from_str(typeof_val(
-                        &val,
-                        &self.objects,
-                    ))));
+                    match env.borrow().get(name) {
+                        Some(val) => {
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                typeof_val(&val, &self.objects),
+                            )));
+                        }
+                        None => {
+                            if env.borrow().has(name) {
+                                return Completion::Throw(self.create_reference_error(&format!(
+                                    "Cannot access '{name}' before initialization"
+                                )));
+                            }
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                "undefined",
+                            )));
+                        }
+                    }
                 }
                 let val = match self.eval_expr(operand, env) {
                     Completion::Normal(v) => v,
@@ -1534,12 +1536,10 @@ impl Interpreter {
             }
             BinaryOp::In => {
                 if let JsValue::Object(o) = &right {
-                    if let Some(obj) = self.get_object(o.id) {
-                        let key = to_property_key_string(left);
-                        let obj_ref = obj.borrow();
-                        Completion::Normal(JsValue::Boolean(obj_ref.has_property(&key)))
-                    } else {
-                        Completion::Normal(JsValue::Boolean(false))
+                    let key = to_property_key_string(left);
+                    match self.proxy_has_property(o.id, &key) {
+                        Ok(result) => Completion::Normal(JsValue::Boolean(result)),
+                        Err(e) => Completion::Throw(e),
                     }
                 } else {
                     Completion::Throw(self.create_type_error(
@@ -2063,6 +2063,29 @@ impl Interpreter {
                             }
                         }
                     }
+                    // OrdinarySet: if no own property, check for proxy in prototype chain
+                    if !obj.borrow().has_own_property(&key) {
+                        let proto = obj.borrow().prototype.clone();
+                        if let Some(proto_rc) = proto {
+                            let proto_id = proto_rc.borrow().id.unwrap();
+                            if self.has_proxy_in_prototype_chain(proto_id) {
+                                let receiver = obj_val.clone();
+                                match self.proxy_set(proto_id, &key, final_val.clone(), &receiver) {
+                                    Ok(success) => {
+                                        if !success && env.borrow().strict {
+                                            return Completion::Throw(self.create_type_error(
+                                                &format!(
+                                                    "Cannot assign to read only property '{key}'"
+                                                ),
+                                            ));
+                                        }
+                                        return Completion::Normal(final_val);
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                        }
+                    }
                     let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
                     if !success && env.borrow().strict {
                         return Completion::Throw(self.create_type_error(&format!(
@@ -2259,6 +2282,27 @@ impl Interpreter {
                         typed_array_set_index(&ta_clone, index as usize, &num_val);
                     }
                     return Ok(());
+                }
+            }
+            // OrdinarySet: if no own property, check for proxy in prototype chain
+            if !obj.borrow().has_own_property(&key) {
+                let proto = obj.borrow().prototype.clone();
+                if let Some(proto_rc) = proto {
+                    let proto_id = proto_rc.borrow().id.unwrap();
+                    if self.has_proxy_in_prototype_chain(proto_id) {
+                        let receiver = obj_val.clone();
+                        match self.proxy_set(proto_id, &key, val, &receiver) {
+                            Ok(success) => {
+                                if !success && env.borrow().strict {
+                                    return Err(self.create_type_error(&format!(
+                                        "Cannot assign to read only property '{key}'"
+                                    )));
+                                }
+                                return Ok(());
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
                 }
             }
             let success = obj.borrow_mut().set_property_value(&key, val);
@@ -2898,7 +2942,9 @@ impl Interpreter {
             is_async: false,
         });
 
+        self.call_stack_envs.push(func_env.clone());
         let result = self.exec_statements(&body, &func_env);
+        self.call_stack_envs.pop();
         let _ctx = self.generator_context.take();
 
         match result {
@@ -4864,7 +4910,9 @@ impl Interpreter {
             is_async: true,
         });
 
+        self.call_stack_envs.push(func_env.clone());
         let result = self.exec_statements(&body, &func_env);
+        self.call_stack_envs.pop();
         let _ctx = self.generator_context.take();
 
         match result {
@@ -5441,7 +5489,9 @@ impl Interpreter {
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                         }
+                        self.call_stack_envs.push(func_env.clone());
                         let result = self.exec_statements(&body, &func_env);
+                        self.call_stack_envs.pop();
                         self.last_call_this_value = func_env.borrow().get("this");
                         match result {
                             Completion::Return(v) => {
@@ -5607,7 +5657,7 @@ impl Interpreter {
             match self.invoke_proxy_trap(
                 co.id,
                 "construct",
-                vec![target_val.clone(), args_array, new_target],
+                vec![target_val.clone(), args_array, new_target.clone()],
             ) {
                 Ok(Some(v)) => {
                     if matches!(v, JsValue::Object(_)) {
@@ -5618,8 +5668,12 @@ impl Interpreter {
                     );
                 }
                 Ok(None) => {
-                    // No trap, forward to target constructor (proxy-aware)
-                    return self.construct(&target_val, &evaluated_args);
+                    // No trap, forward to target with original newTarget
+                    return self.construct_with_new_target(
+                        &target_val,
+                        &evaluated_args,
+                        new_target,
+                    );
                 }
                 Err(e) => return Completion::Throw(e),
             }
@@ -5798,8 +5852,8 @@ impl Interpreter {
                     );
                 }
                 Ok(None) => {
-                    // No trap, forward to target constructor (proxy-aware)
-                    return self.construct(&target_val, args);
+                    // No trap, forward to target with original newTarget
+                    return self.construct_with_new_target(&target_val, args, new_target);
                 }
                 Err(e) => return Completion::Throw(e),
             }
@@ -5862,14 +5916,18 @@ impl Interpreter {
         } else {
             let new_obj = self.create_object();
             // Use new_target's .prototype for the new object's [[Prototype]]
-            if let JsValue::Object(nt_o) = &new_target
-                && let Some(nt_func) = self.get_object(nt_o.id)
-            {
-                let proto = nt_func.borrow().get_property_value("prototype");
-                if let Some(JsValue::Object(proto_obj)) = proto
-                    && let Some(proto_rc) = self.get_object(proto_obj.id)
-                {
-                    new_obj.borrow_mut().prototype = Some(proto_rc);
+            // Must use get_object_property to invoke proxy get traps
+            if let JsValue::Object(nt_o) = &new_target {
+                let nt_val = new_target.clone();
+                let proto = match self.get_object_property(nt_o.id, "prototype", &nt_val) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => JsValue::Undefined,
+                };
+                if let JsValue::Object(proto_obj) = proto {
+                    if let Some(proto_rc) = self.get_object(proto_obj.id) {
+                        new_obj.borrow_mut().prototype = Some(proto_rc);
+                    }
                 }
             }
             let new_obj_id = new_obj.borrow().id.unwrap();
@@ -5889,6 +5947,43 @@ impl Interpreter {
                 }
                 Completion::Normal(_) | Completion::Empty => Completion::Normal(final_this),
                 other => other,
+            }
+        }
+    }
+
+    // GetPrototypeFromConstructor: if new_target differs from intrinsic default,
+    // set obj's prototype to new_target.prototype (using getter-aware property access).
+    pub(crate) fn apply_new_target_prototype(
+        &mut self,
+        obj_id: u64,
+        default_proto_id: Option<u64>,
+    ) {
+        if let Some(ref nt) = self.new_target.clone() {
+            if let JsValue::Object(nt_o) = nt {
+                let nt_proto_id = if let Some(nt_obj) = self.get_object(nt_o.id) {
+                    nt_obj.borrow().id
+                } else {
+                    None
+                };
+                let same = if let Some(dp_id) = default_proto_id {
+                    nt_proto_id == Some(dp_id)
+                } else {
+                    false
+                };
+                if !same {
+                    let nt_val = nt.clone();
+                    let proto_val = match self.get_object_property(nt_o.id, "prototype", &nt_val) {
+                        Completion::Normal(v) => v,
+                        _ => return,
+                    };
+                    if let JsValue::Object(po) = proto_val {
+                        if let Some(proto_rc) = self.get_object(po.id) {
+                            if let Some(obj_rc) = self.get_object(obj_id) {
+                                obj_rc.borrow_mut().prototype = Some(proto_rc);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -5918,15 +6013,21 @@ impl Interpreter {
                 trap_name
             ))),
             Some((false, Some(_target_id), Some(handler_id))) => {
-                let trap_val = if let Some(handler) = self.get_object(handler_id) {
-                    handler.borrow().get_property(trap_name)
-                } else {
-                    JsValue::Undefined
+                let handler_val = JsValue::Object(crate::types::JsObject { id: handler_id });
+                let trap_val = match self.get_object_property(handler_id, trap_name, &handler_val) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
                 };
                 if matches!(trap_val, JsValue::Undefined | JsValue::Null) {
                     return Ok(None); // No trap, fall through to target
                 }
-                let handler_val = JsValue::Object(crate::types::JsObject { id: handler_id });
+                if !self.is_callable(&trap_val) {
+                    return Err(self.create_type_error(&format!(
+                        "proxy handler's {} trap is not a function",
+                        trap_name
+                    )));
+                }
                 match self.call_function(&trap_val, &handler_val, &args) {
                     Completion::Normal(v) => Ok(Some(v)),
                     Completion::Throw(e) => Err(e),
@@ -6237,19 +6338,46 @@ impl Interpreter {
             }
         }
 
-        let desc = if let Some(obj) = self.get_object(obj_id) {
-            obj.borrow().get_property_descriptor(key)
+        // TypedArray [[Get]]: canonical numeric index strings MUST NOT walk prototype
+        let is_typed_array_numeric = if let Some(obj) = self.get_object(obj_id) {
+            let b = obj.borrow();
+            b.typed_array_info.is_some()
+                && crate::interpreter::types::canonical_numeric_index_string(key).is_some()
+        } else {
+            false
+        };
+
+        // Check own property first, then walk prototype chain proxy-aware
+        let own_desc = if let Some(obj) = self.get_object(obj_id) {
+            obj.borrow().get_own_property_full(key)
         } else {
             None
         };
-        match desc {
+        match own_desc {
             Some(ref d) if d.get.is_some() && !matches!(d.get, Some(JsValue::Undefined)) => {
                 let getter = d.get.clone().unwrap();
                 self.call_function(&getter, this_val, &[])
             }
             Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::Undefined),
             Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
-            None => Completion::Normal(JsValue::Undefined),
+            None => {
+                // TypedArray: numeric index strings must not walk prototype chain
+                if is_typed_array_numeric {
+                    return Completion::Normal(JsValue::Undefined);
+                }
+                // Walk prototype chain with proxy awareness
+                let proto = if let Some(obj) = self.get_object(obj_id) {
+                    obj.borrow().prototype.clone()
+                } else {
+                    None
+                };
+                if let Some(proto_rc) = proto {
+                    let proto_id = proto_rc.borrow().id.unwrap();
+                    self.get_object_property(proto_id, key, this_val)
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
         }
     }
 
@@ -6291,7 +6419,16 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
-            Ok(obj.borrow().has_property(key))
+            if obj.borrow().has_own_property(key) {
+                return Ok(true);
+            }
+            // Walk prototype chain, checking for proxies
+            let proto = obj.borrow().prototype.clone();
+            if let Some(proto_rc) = proto {
+                let proto_id = proto_rc.borrow().id.unwrap();
+                return self.proxy_has_property(proto_id, key);
+            }
+            Ok(false)
         } else {
             Ok(false)
         }
@@ -6384,10 +6521,59 @@ impl Interpreter {
                     return Ok(true);
                 }
             }
+            // OrdinarySetWithOwnDescriptor
+            let own_desc = obj.borrow().get_own_property(key);
+            if let Some(ref desc) = own_desc {
+                if desc.is_accessor_descriptor() {
+                    // Call setter with receiver as this
+                    if let Some(ref setter) = desc.set {
+                        if !matches!(setter, JsValue::Undefined) {
+                            let setter = setter.clone();
+                            match self.call_function(&setter, receiver, &[value]) {
+                                Completion::Normal(_) => return Ok(true),
+                                Completion::Throw(e) => return Err(e),
+                                _ => return Ok(true),
+                            }
+                        }
+                    }
+                    return Ok(false);
+                }
+                // Data descriptor
+                if desc.writable == Some(false) {
+                    return Ok(false);
+                }
+                return Ok(obj.borrow_mut().set_property_value(key, value));
+            }
+            // No own property, walk prototype chain
+            let proto = obj.borrow().prototype.clone();
+            if let Some(proto_rc) = proto {
+                let proto_id = proto_rc.borrow().id.unwrap();
+                return self.proxy_set(proto_id, key, value, receiver);
+            }
+            // No prototype, create data property on receiver
+            if let JsValue::Object(recv_o) = receiver {
+                if let Some(recv_obj) = self.get_object(recv_o.id) {
+                    return Ok(recv_obj.borrow_mut().set_property_value(key, value));
+                }
+            }
             Ok(obj.borrow_mut().set_property_value(key, value))
         } else {
             Ok(false)
         }
+    }
+
+    fn has_proxy_in_prototype_chain(&self, obj_id: u64) -> bool {
+        if self.get_proxy_info(obj_id).is_some() {
+            return true;
+        }
+        if let Some(obj) = self.get_object(obj_id) {
+            if let Some(ref proto) = obj.borrow().prototype {
+                if let Some(pid) = proto.borrow().id {
+                    return self.has_proxy_in_prototype_chain(pid);
+                }
+            }
+        }
+        false
     }
 
     /// Proxy-aware [[Delete]] - checks proxy `deleteProperty` trap, recurses on target if no trap.
@@ -6543,6 +6729,12 @@ impl Interpreter {
                 vec![target_val.clone(), key_val],
             ) {
                 Ok(Some(v)) => {
+                    // Step 11: If Type(trapResultObj) is neither Object nor Undefined, throw TypeError
+                    if !matches!(v, JsValue::Object(_) | JsValue::Undefined) {
+                        return Err(self.create_type_error(
+                            "'getOwnPropertyDescriptor' on proxy: trap returned neither Object nor undefined",
+                        ));
+                    }
                     if let JsValue::Object(ref t) = target_val
                         && let Some(tobj) = self.get_object(t.id)
                     {
@@ -6617,9 +6809,9 @@ impl Interpreter {
             match self.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
                     if !matches!(v, JsValue::Object(_)) {
-                        return Err(self.create_type_error(
-                            "CreateListFromArrayLike called on non-object",
-                        ));
+                        return Err(
+                            self.create_type_error("CreateListFromArrayLike called on non-object")
+                        );
                     }
                     if let JsValue::Object(arr) = &v
                         && let Some(arr_obj) = self.get_object(arr.id)

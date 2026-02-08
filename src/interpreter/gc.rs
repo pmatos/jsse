@@ -86,6 +86,10 @@ impl Interpreter {
         for &obj_id in self.template_cache.values() {
             worklist.push(obj_id);
         }
+        // Trace active call stack environments
+        for env in &self.call_stack_envs {
+            Self::collect_env_roots(env, &mut worklist);
+        }
 
         // Mark phase (BFS)
         while let Some(id) = worklist.pop() {

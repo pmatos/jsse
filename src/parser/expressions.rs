@@ -576,6 +576,10 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Identifier("await".to_string()))
             }
+            Token::Keyword(Keyword::Let) if !self.strict => {
+                self.advance()?;
+                Ok(Expression::Identifier("let".to_string()))
+            }
             Token::Keyword(Keyword::Import) => {
                 self.advance()?;
                 if self.current == Token::Dot {
@@ -1132,6 +1136,24 @@ impl<'a> Parser<'a> {
             && self.current != Token::LeftParen
             && self.current != Token::Assign
         {
+            // In strict mode, future reserved words cannot be IdentifierReferences
+            if self.strict {
+                let n = name.as_str();
+                if matches!(
+                    n,
+                    "implements"
+                        | "interface"
+                        | "let"
+                        | "package"
+                        | "private"
+                        | "protected"
+                        | "public"
+                        | "static"
+                        | "yield"
+                ) {
+                    return Err(self.error(&format!("Unexpected strict mode reserved word '{n}'")));
+                }
+            }
             return Ok(Property {
                 value: Expression::Identifier(name.clone()),
                 key,
@@ -1405,6 +1427,9 @@ impl<'a> Parser<'a> {
     fn parse_class_expression(&mut self) -> Result<Expression, ParseError> {
         let source_start = self.current_token_start;
         self.advance()?; // class
+        // Class definitions are strict mode code — set strict before parsing name
+        let prev_strict = self.strict;
+        self.set_strict(true);
         let name = if self.current != Token::Keyword(Keyword::Extends)
             && self.current != Token::LeftBrace
         {
@@ -1423,6 +1448,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        self.set_strict(prev_strict);
         let body = self.parse_class_body()?;
         let source_text = Some(self.source_since(source_start));
         Ok(Expression::Class(ClassExpr {

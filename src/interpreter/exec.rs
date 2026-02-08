@@ -10,18 +10,11 @@ impl Interpreter {
         let is_global = var_scope.borrow().global_object.is_some();
         let is_block_scope = !Rc::ptr_eq(env, &var_scope);
         for stmt in stmts {
-            match stmt {
-                Statement::Variable(decl) if decl.kind == VarKind::Var => {
-                    for d in &decl.declarations {
-                        self.hoist_pattern(&d.pattern, &var_scope, is_global);
-                    }
-                }
-                _ => {
-                    // Check for function declarations (including inside labels)
-                    if let Some(f) = Self::unwrap_labeled_function(stmt) {
-                        self.hoist_function_decl(f, env, is_global);
-                    }
-                }
+            // Recursively hoist var declarations from all sub-statements
+            self.hoist_vars_from_stmt(stmt, &var_scope, is_global);
+            // Check for function declarations (including inside labels)
+            if let Some(f) = Self::unwrap_labeled_function(stmt) {
+                self.hoist_function_decl(f, env, is_global);
             }
         }
 
@@ -217,6 +210,88 @@ impl Interpreter {
                 self.hoist_pattern(inner, env, is_global);
             }
             Pattern::MemberExpression(_) => {}
+        }
+    }
+
+    fn hoist_vars_from_stmt(&self, stmt: &Statement, var_scope: &EnvRef, is_global: bool) {
+        match stmt {
+            Statement::Variable(decl) if decl.kind == VarKind::Var => {
+                for d in &decl.declarations {
+                    self.hoist_pattern(&d.pattern, var_scope, is_global);
+                }
+            }
+            Statement::Block(stmts) => {
+                for s in stmts {
+                    self.hoist_vars_from_stmt(s, var_scope, is_global);
+                }
+            }
+            Statement::If(i) => {
+                self.hoist_vars_from_stmt(&i.consequent, var_scope, is_global);
+                if let Some(alt) = &i.alternate {
+                    self.hoist_vars_from_stmt(alt, var_scope, is_global);
+                }
+            }
+            Statement::While(w) => self.hoist_vars_from_stmt(&w.body, var_scope, is_global),
+            Statement::DoWhile(d) => self.hoist_vars_from_stmt(&d.body, var_scope, is_global),
+            Statement::For(f) => {
+                if let Some(ForInit::Variable(decl)) = &f.init {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            self.hoist_pattern(&d.pattern, var_scope, is_global);
+                        }
+                    }
+                }
+                self.hoist_vars_from_stmt(&f.body, var_scope, is_global);
+            }
+            Statement::ForIn(fi) => {
+                if let ForInOfLeft::Variable(decl) = &fi.left {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            self.hoist_pattern(&d.pattern, var_scope, is_global);
+                        }
+                    }
+                }
+                self.hoist_vars_from_stmt(&fi.body, var_scope, is_global);
+            }
+            Statement::ForOf(fo) => {
+                if let ForInOfLeft::Variable(decl) = &fo.left {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            self.hoist_pattern(&d.pattern, var_scope, is_global);
+                        }
+                    }
+                }
+                self.hoist_vars_from_stmt(&fo.body, var_scope, is_global);
+            }
+            Statement::Switch(sw) => {
+                for case in &sw.cases {
+                    for s in &case.consequent {
+                        self.hoist_vars_from_stmt(s, var_scope, is_global);
+                    }
+                }
+            }
+            Statement::Try(t) => {
+                for s in &t.block {
+                    self.hoist_vars_from_stmt(s, var_scope, is_global);
+                }
+                if let Some(handler) = &t.handler {
+                    for s in &handler.body {
+                        self.hoist_vars_from_stmt(s, var_scope, is_global);
+                    }
+                }
+                if let Some(finalizer) = &t.finalizer {
+                    for s in finalizer {
+                        self.hoist_vars_from_stmt(s, var_scope, is_global);
+                    }
+                }
+            }
+            Statement::Labeled(_, inner) => {
+                self.hoist_vars_from_stmt(inner, var_scope, is_global);
+            }
+            Statement::With(_, inner) => {
+                self.hoist_vars_from_stmt(inner, var_scope, is_global);
+            }
+            _ => {}
         }
     }
 
@@ -990,10 +1065,31 @@ impl Interpreter {
     }
 
     fn exec_for_in(&mut self, fi: &ForInStatement, env: &EnvRef) -> Completion {
-        let obj_val = match self.eval_expr(&fi.right, env) {
+        // Per spec 14.7.5.6 ForIn/OfHeadEvaluation:
+        // If the LHS is a lexical declaration, create TDZ bindings before evaluating RHS
+        let is_lexical =
+            matches!(&fi.left, ForInOfLeft::Variable(decl) if decl.kind != VarKind::Var);
+        let eval_env = if is_lexical {
+            let tdz_env = Environment::new(Some(env.clone()));
+            if let ForInOfLeft::Variable(decl) = &fi.left {
+                if let Some(d) = decl.declarations.first() {
+                    let mut names = Vec::new();
+                    Self::collect_pattern_names(&d.pattern, &mut names);
+                    for name in &names {
+                        tdz_env.borrow_mut().declare(name, BindingKind::Let);
+                    }
+                }
+            }
+            tdz_env
+        } else {
+            env.clone()
+        };
+
+        let obj_val = match self.eval_expr(&fi.right, &eval_env) {
             Completion::Normal(v) => v,
             other => return other,
         };
+        // After evaluating expr, restore to oldEnv (use original env from here)
         if obj_val.is_nullish() {
             return Completion::Normal(JsValue::Undefined);
         }
@@ -1003,11 +1099,23 @@ impl Interpreter {
             _ => return Completion::Normal(JsValue::Undefined),
         };
         let mut v = JsValue::Undefined;
-        if let JsValue::Object(ref o) = obj_val
-            && let Some(obj) = self.get_object(o.id)
-        {
-            let keys = obj.borrow().enumerable_keys_with_proto();
+        if let JsValue::Object(ref o) = obj_val {
+            let obj_id = o.id;
+            let keys = if let Some(obj) = self.get_object(obj_id) {
+                obj.borrow().enumerable_keys_with_proto()
+            } else {
+                return Completion::Normal(JsValue::Undefined);
+            };
             for key in keys {
+                // Skip keys that have been deleted during iteration
+                let still_exists = if let Some(obj) = self.get_object(obj_id) {
+                    obj.borrow().has_property(&key)
+                } else {
+                    false
+                };
+                if !still_exists {
+                    continue;
+                }
                 let key_val = JsValue::String(JsString::from_str(&key));
                 let for_env = Environment::new(Some(env.clone()));
                 match &fi.left {
@@ -1044,7 +1152,13 @@ impl Interpreter {
                                 return Completion::Throw(e);
                             }
                         }
-                        _ => {}
+                        _ => {
+                            if let Err(e) =
+                                self.bind_pattern(pat, key_val, BindingKind::Let, &for_env)
+                            {
+                                return Completion::Throw(e);
+                            }
+                        }
                     },
                 }
                 let result = self.exec_statement(&fi.body, &for_env);

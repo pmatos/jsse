@@ -841,6 +841,79 @@ impl JsObjectData {
         None
     }
 
+    // Like get_property_descriptor but without prototype chain walk.
+    // Includes parameter_map and array_elements handling.
+    pub fn get_own_property_full(&self, key: &str) -> Option<PropertyDescriptor> {
+        if let Some(desc) = self.properties.get(key) {
+            let mut d = desc.clone();
+            if let Some(ref map) = self.parameter_map
+                && let Some((env_ref, param_name)) = map.get(key)
+                && let Some(val) = env_ref.borrow().get(param_name)
+            {
+                d.value = Some(val);
+            }
+            return Some(d);
+        }
+        if let Some(ref elems) = self.array_elements
+            && let Ok(idx) = key.parse::<usize>()
+            && idx < elems.len()
+        {
+            return Some(PropertyDescriptor {
+                value: Some(elems[idx].clone()),
+                writable: Some(true),
+                enumerable: Some(true),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            });
+        }
+        if let Some(ref ta) = self.typed_array_info {
+            if let Some(index) = canonical_numeric_index_string(key) {
+                if is_valid_integer_index(ta, index) {
+                    return Some(PropertyDescriptor {
+                        value: Some(typed_array_get_index(ta, index as usize)),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        get: None,
+                        set: None,
+                    });
+                }
+                return None;
+            }
+        }
+        if let Some(JsValue::String(ref s)) = self.primitive_value {
+            if self.class_name == "String" {
+                let units = &s.code_units;
+                if key == "length" {
+                    return Some(PropertyDescriptor {
+                        value: Some(JsValue::Number(units.len() as f64)),
+                        writable: Some(false),
+                        enumerable: Some(false),
+                        configurable: Some(false),
+                        get: None,
+                        set: None,
+                    });
+                }
+                if let Ok(idx) = key.parse::<usize>() {
+                    if idx < units.len() {
+                        return Some(PropertyDescriptor {
+                            value: Some(JsValue::String(crate::types::JsString {
+                                code_units: vec![units[idx]],
+                            })),
+                            writable: Some(false),
+                            enumerable: Some(true),
+                            configurable: Some(false),
+                            get: None,
+                            set: None,
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
     pub fn get_own_property(&self, key: &str) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             return Some(desc.clone());
@@ -916,6 +989,11 @@ impl JsObjectData {
     pub fn enumerable_keys_with_proto(&self) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut keys = Vec::new();
+
+        // Collect own keys, separating integer indices from string keys
+        let mut index_keys: Vec<(u32, String)> = Vec::new();
+        let mut string_keys: Vec<String> = Vec::new();
+
         // String exotic: indices come first (they are enumerable)
         if let Some(JsValue::String(ref s)) = self.primitive_value {
             if self.class_name == "String" {
@@ -923,20 +1001,36 @@ impl JsObjectData {
                 for i in 0..utf16_len {
                     let k = i.to_string();
                     if seen.insert(k.clone()) {
-                        keys.push(k);
+                        index_keys.push((i as u32, k));
                     }
                 }
             }
         }
-        // Own enumerable properties (in insertion order)
+
+        // Own properties: add ALL to seen set (even non-enumerable, to shadow proto)
         for k in &self.property_order {
-            if let Some(desc) = self.properties.get(k)
-                && desc.enumerable != Some(false)
-                && seen.insert(k.clone())
-            {
-                keys.push(k.clone());
+            if let Some(desc) = self.properties.get(k) {
+                let is_enumerable = desc.enumerable != Some(false);
+                if seen.insert(k.clone()) {
+                    if is_enumerable {
+                        if let Some(idx) = parse_array_index(k) {
+                            index_keys.push((idx, k.clone()));
+                        } else {
+                            string_keys.push(k.clone());
+                        }
+                    }
+                }
             }
         }
+
+        // Integer indices in ascending numeric order
+        index_keys.sort_by_key(|(idx, _)| *idx);
+        for (_, k) in index_keys {
+            keys.push(k);
+        }
+        // String keys in insertion order
+        keys.extend(string_keys);
+
         // Prototype chain
         if let Some(ref proto) = self.prototype {
             for k in proto.borrow().enumerable_keys_with_proto() {
@@ -1269,6 +1363,23 @@ impl JsObjectData {
 }
 
 // §7.1.4.1 CanonicalNumericIndexString
+/// Check if a string is an array index (non-negative integer < 2^32-1).
+fn parse_array_index(key: &str) -> Option<u32> {
+    if key.is_empty() {
+        return None;
+    }
+    // No leading zeros (except "0" itself)
+    if key.len() > 1 && key.starts_with('0') {
+        return None;
+    }
+    let n: u32 = key.parse().ok()?;
+    // Must be < 2^32 - 1 (0xFFFFFFFF is not an array index)
+    if n == u32::MAX {
+        return None;
+    }
+    Some(n)
+}
+
 pub(crate) fn canonical_numeric_index_string(key: &str) -> Option<f64> {
     if key == "-0" {
         return Some(-0.0_f64);

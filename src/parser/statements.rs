@@ -44,13 +44,31 @@ impl<'a> Parser<'a> {
                 "In strict mode code, functions can only be declared at top level or inside a block",
             ));
         }
-        if matches!(
-            &self.current,
-            Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const)
-        ) {
+        if matches!(&self.current, Token::Keyword(Keyword::Const)) {
             return Err(
                 self.error("Lexical declaration cannot appear in a single-statement context")
             );
+        }
+        // In strict mode, `let` is always a keyword (declaration not allowed in single-stmt).
+        // In sloppy mode, `let [` is always a SyntaxError per ExpressionStatement lookahead.
+        if matches!(&self.current, Token::Keyword(Keyword::Let)) {
+            if self.strict {
+                return Err(
+                    self.error("Lexical declaration cannot appear in a single-statement context")
+                );
+            }
+            // ExpressionStatement lookahead: `let [` is not allowed
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?;
+            let next_is_bracket = self.current == Token::LeftBracket;
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
+            if next_is_bracket {
+                return Err(
+                    self.error("Lexical declaration cannot appear in a single-statement context")
+                );
+            }
         }
         if matches!(&self.current, Token::Keyword(Keyword::Async)) {
             let saved_lt = self.prev_line_terminator;
@@ -220,6 +238,129 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn collect_var_declared_names(stmt: &Statement, names: &mut Vec<String>) {
+        match stmt {
+            Statement::Variable(decl) if decl.kind == VarKind::Var => {
+                for d in &decl.declarations {
+                    Self::bound_names_from_pattern(&d.pattern, names);
+                }
+            }
+            Statement::Block(stmts) => {
+                for s in stmts {
+                    Self::collect_var_declared_names(s, names);
+                }
+            }
+            Statement::If(i) => {
+                Self::collect_var_declared_names(&i.consequent, names);
+                if let Some(alt) = &i.alternate {
+                    Self::collect_var_declared_names(alt, names);
+                }
+            }
+            Statement::While(w) => Self::collect_var_declared_names(&w.body, names),
+            Statement::DoWhile(d) => Self::collect_var_declared_names(&d.body, names),
+            Statement::For(f) => {
+                if let Some(ForInit::Variable(decl)) = &f.init {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::bound_names_from_pattern(&d.pattern, names);
+                        }
+                    }
+                }
+                Self::collect_var_declared_names(&f.body, names);
+            }
+            Statement::ForIn(fi) => {
+                if let ForInOfLeft::Variable(decl) = &fi.left {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::bound_names_from_pattern(&d.pattern, names);
+                        }
+                    }
+                }
+                Self::collect_var_declared_names(&fi.body, names);
+            }
+            Statement::ForOf(fo) => {
+                if let ForInOfLeft::Variable(decl) = &fo.left {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::bound_names_from_pattern(&d.pattern, names);
+                        }
+                    }
+                }
+                Self::collect_var_declared_names(&fo.body, names);
+            }
+            Statement::Switch(sw) => {
+                for case in &sw.cases {
+                    for s in &case.consequent {
+                        Self::collect_var_declared_names(s, names);
+                    }
+                }
+            }
+            Statement::Try(t) => {
+                for s in &t.block {
+                    Self::collect_var_declared_names(s, names);
+                }
+                if let Some(handler) = &t.handler {
+                    for s in &handler.body {
+                        Self::collect_var_declared_names(s, names);
+                    }
+                }
+                if let Some(finalizer) = &t.finalizer {
+                    for s in finalizer {
+                        Self::collect_var_declared_names(s, names);
+                    }
+                }
+            }
+            Statement::Labeled(_, inner) => Self::collect_var_declared_names(inner, names),
+            Statement::With(_, inner) => Self::collect_var_declared_names(inner, names),
+            _ => {}
+        }
+    }
+
+    fn check_for_in_of_early_errors(
+        kind: VarKind,
+        decls: &[VariableDeclarator],
+        body: &Statement,
+    ) -> Result<(), ParseError> {
+        // Check duplicate bound names in ForDeclaration
+        let mut bound = Vec::new();
+        if let Some(d) = decls.first() {
+            Self::bound_names_from_pattern(&d.pattern, &mut bound);
+        }
+        // "let" cannot be a bound name in let/const declarations
+        if kind == VarKind::Let || kind == VarKind::Const {
+            for name in &bound {
+                if name == "let" {
+                    return Err(ParseError {
+                        message: "'let' is not allowed as a binding name in lexical declarations"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        for name in &bound {
+            if !seen.insert(name.as_str()) {
+                return Err(ParseError {
+                    message: format!(
+                        "Duplicate binding '{name}' in for-{} loop",
+                        if kind == VarKind::Let { "in" } else { "in" }
+                    ),
+                });
+            }
+        }
+        // Check body VarDeclaredNames don't overlap with head BoundNames
+        let mut var_names = Vec::new();
+        Self::collect_var_declared_names(body, &mut var_names);
+        for vn in &var_names {
+            if bound.contains(vn) {
+                return Err(ParseError {
+                    message: format!("Identifier '{vn}' has already been declared"),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn parse_if_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // if
         self.eat(&Token::LeftParen)?;
@@ -280,6 +421,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_iteration_body(&mut self) -> Result<Box<Statement>, ParseError> {
+        // Reject declarations in single-statement position before parsing
+        if matches!(
+            &self.current,
+            Token::Keyword(Keyword::Function) | Token::Keyword(Keyword::Class)
+        ) {
+            return Err(
+                self.error("Declaration not allowed in statement position of iteration statement")
+            );
+        }
+        // Reject `async function` in iteration body
+        if matches!(&self.current, Token::Keyword(Keyword::Async)) {
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?;
+            let is_async_fn =
+                self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
+            if is_async_fn {
+                return Err(self.error(
+                    "Declaration not allowed in statement position of iteration statement",
+                ));
+            }
+        }
         self.in_iteration += 1;
         let body = self.parse_statement();
         self.in_iteration -= 1;
@@ -417,6 +582,117 @@ impl<'a> Parser<'a> {
                     declarations: decls,
                 }))
             }
+            Token::Keyword(Keyword::Let) if !self.strict => {
+                // In sloppy mode, `let` might be used as an identifier.
+                // `for (let in ...)` → identifier
+                // `for (let [` → destructuring declaration
+                // `for (let ident` → let declaration
+                let saved_lt = self.prev_line_terminator;
+                let saved = self.advance()?; // consume `let`
+                if self.current == Token::Keyword(Keyword::In) {
+                    // `for (let in expr)` — `let` is an identifier
+                    self.push_back(self.current.clone(), self.prev_line_terminator);
+                    self.current = Token::Identifier("let".to_string());
+                    self.prev_line_terminator = saved_lt;
+                    // Fall through to expression path below
+                    self.no_in = true;
+                    let expr = self.parse_expression()?;
+                    self.no_in = false;
+                    if self.current == Token::Keyword(Keyword::In) {
+                        if is_await {
+                            return Err(
+                                self.error("for await...in is not valid; use for await...of")
+                            );
+                        }
+                        if matches!(&expr, Expression::Assign(_, _, _)) {
+                            return Err(self.error("Invalid left-hand side in for-in loop"));
+                        }
+                        self.advance()?;
+                        let right = self.parse_expression()?;
+                        self.eat(&Token::RightParen)?;
+                        let body = self.parse_iteration_body()?;
+                        return Ok(Statement::ForIn(ForInStatement {
+                            left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
+                            right,
+                            body,
+                        }));
+                    }
+                    if self.current == Token::Keyword(Keyword::Of) {
+                        self.advance()?;
+                        let right = self.parse_assignment_expression()?;
+                        self.eat(&Token::RightParen)?;
+                        let body = self.parse_iteration_body()?;
+                        return Ok(Statement::ForOf(ForOfStatement {
+                            left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
+                            right,
+                            body,
+                            is_await,
+                        }));
+                    }
+                    Some(ForInit::Expression(expr))
+                } else {
+                    // It's a let declaration
+                    self.push_back(self.current.clone(), self.prev_line_terminator);
+                    self.current = saved;
+                    self.prev_line_terminator = saved_lt;
+                    // Re-enter the let/const path properly
+                    let kind = VarKind::Let;
+                    self.advance()?;
+                    self.no_in = true;
+                    let decls = self.parse_variable_declaration_list()?;
+                    self.no_in = false;
+                    if self.current == Token::Keyword(Keyword::In) {
+                        if is_await {
+                            return Err(
+                                self.error("for await...in is not valid; use for await...of")
+                            );
+                        }
+                        if decls.len() != 1 || decls[0].init.is_some() {
+                            return Err(self.error(
+                                "for-in loop variable declaration may not have an initializer",
+                            ));
+                        }
+                        self.advance()?;
+                        let right = self.parse_expression()?;
+                        self.eat(&Token::RightParen)?;
+                        let body = self.parse_iteration_body()?;
+                        Self::check_for_in_of_early_errors(kind, &decls, &body)?;
+                        return Ok(Statement::ForIn(ForInStatement {
+                            left: ForInOfLeft::Variable(VariableDeclaration {
+                                kind,
+                                declarations: decls,
+                            }),
+                            right,
+                            body,
+                        }));
+                    }
+                    if self.current == Token::Keyword(Keyword::Of) {
+                        if decls.len() != 1 || decls[0].init.is_some() {
+                            return Err(self.error(
+                                "for-of loop variable declaration may not have an initializer",
+                            ));
+                        }
+                        self.advance()?;
+                        let right = self.parse_assignment_expression()?;
+                        self.eat(&Token::RightParen)?;
+                        let body = self.parse_iteration_body()?;
+                        Self::check_for_in_of_early_errors(kind, &decls, &body)?;
+                        return Ok(Statement::ForOf(ForOfStatement {
+                            left: ForInOfLeft::Variable(VariableDeclaration {
+                                kind,
+                                declarations: decls,
+                            }),
+                            right,
+                            body,
+                            is_await,
+                        }));
+                    }
+                    Some(ForInit::Variable(VariableDeclaration {
+                        kind,
+                        declarations: decls,
+                    }))
+                }
+            }
             Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const) => {
                 let kind = if self.current == Token::Keyword(Keyword::Let) {
                     VarKind::Let
@@ -440,6 +716,7 @@ impl<'a> Parser<'a> {
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
+                    Self::check_for_in_of_early_errors(kind, &decls, &body)?;
                     return Ok(Statement::ForIn(ForInStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind,
@@ -459,6 +736,7 @@ impl<'a> Parser<'a> {
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
+                    Self::check_for_in_of_early_errors(kind, &decls, &body)?;
                     return Ok(Statement::ForOf(ForOfStatement {
                         left: ForInOfLeft::Variable(VariableDeclaration {
                             kind,
