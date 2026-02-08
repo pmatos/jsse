@@ -1107,8 +1107,12 @@ impl Interpreter {
             } else {
                 step_result
             };
-            if self.iterator_complete(&step_result) {
-                break;
+            match self.iterator_complete(&step_result) {
+                Ok(true) => break,
+                Err(e) => {
+                    return Completion::Throw(e);
+                }
+                _ => {}
             }
             let val = match self.iterator_value(&step_result) {
                 Ok(v) => v,

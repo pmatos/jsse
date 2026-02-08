@@ -164,15 +164,16 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Map/` (204), `built-ins/MapIteratorPrototype/` (11), `built-ins/Set/` (383), `built-ins/SetIteratorPrototype/` (11), `built-ins/WeakMap/` (141), `built-ins/WeakSet/` (85)
 
 ### 9.7 Structured Data (§25)
-- [x] **ArrayBuffer** (§25.1) — **IMPLEMENTED** (89/196 = 45.4%)
-  - [x] `ArrayBuffer()` constructor
+- [x] **ArrayBuffer** (§25.1) — **IMPLEMENTED** (136/196 = 69.4%)
+  - [x] `ArrayBuffer()` constructor (NewTarget, OrdinaryCreateFromConstructor, ToIndex)
   - [x] `ArrayBuffer.isView()`
   - [x] `ArrayBuffer.prototype`: `byteLength`, `slice`
-  - [ ] `ArrayBuffer.prototype`: `detached`, `maxByteLength`, `resizable`, `resize`, `transfer`, `transferToFixedLength`
+  - [x] `ArrayBuffer.prototype`: `transfer`, `transferToFixedLength`
+  - [ ] `ArrayBuffer.prototype`: `detached`, `maxByteLength`, `resizable`, `resize`
 - [ ] **SharedArrayBuffer** (§25.2)
   - [ ] `SharedArrayBuffer()` constructor
   - [ ] `grow`, `growable`, `byteLength`, `maxByteLength`, `slice`
-- [x] **DataView** (§25.3) — **IMPLEMENTED** (293/561 = 52.2%)
+- [x] **DataView** (§25.3) — **IMPLEMENTED** (476/561 = 84.8%)
   - [x] `DataView()` constructor
   - [x] All get/set methods for each numeric type (Int8 through BigUint64, with endianness)
 - [ ] **Atomics** (§25.4)
@@ -198,7 +199,7 @@ Ordered roughly by dependency and importance.
 ### 9.9 Control Abstraction Objects (§27)
 - [x] **Iterator** (§27.1) — ✅ 436/510 (85%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose. Getter-aware iterator protocol, IteratorCloseAll, GetIteratorFlattenable.
 - [x] **AsyncIteratorPrototype** (§27.1.4) — ✅ [Symbol.asyncIterator] returns this
-- [x] **Promise** (§27.2) — ✅ 548/639 tests passing (86%)
+- [x] **Promise** (§27.2) — ✅ 599/639 tests passing (94%)
   - [x] `Promise()` constructor
   - [x] `Promise.all()`, `Promise.allSettled()`, `Promise.any()`, `Promise.race()`
   - [x] `Promise.reject()`, `Promise.resolve()`
@@ -220,7 +221,7 @@ Ordered roughly by dependency and importance.
 - [x] **Reflect** (§28.1) — ✅ 124/153 passing (81%)
   - [x] `Reflect.apply()`, `.construct()`, `.defineProperty()`, `.deleteProperty()`, `.get()`, `.getOwnPropertyDescriptor()`, `.getPrototypeOf()`, `.has()`, `.isExtensible()`, `.ownKeys()`, `.preventExtensions()`, `.set()`, `.setPrototypeOf()`
   - [x] Proxy trap delegation from Reflect methods
-- [x] **Proxy** (§28.2) — ✅ 181/311 passing (58%)
+- [x] **Proxy** (§28.2) — ✅ 203/311 passing (65%)
   - [x] `Proxy()` constructor
   - [x] `Proxy.revocable()`
   - [x] All 13 proxy handler traps

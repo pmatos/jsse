@@ -3,6 +3,20 @@ use crate::types::{JsBigInt, JsObject, JsString, JsValue};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+fn to_int32_modular(n: f64) -> i32 {
+    if n.is_nan() || n.is_infinite() || n == 0.0 {
+        return 0;
+    }
+    let n = n.trunc();
+    let n = n % 4294967296.0; // 2^32
+    let n = if n < 0.0 { n + 4294967296.0 } else { n };
+    if n >= 2147483648.0 {
+        (n - 4294967296.0) as i32
+    } else {
+        n as i32
+    }
+}
+
 impl Interpreter {
     pub(crate) fn setup_typedarray_builtins(&mut self) {
         self.setup_arraybuffer();
@@ -202,6 +216,153 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("slice".to_string(), slice_fn);
 
+        // transfer
+        let transfer_fn = self.create_function(JsFunction::native(
+            "transfer".to_string(),
+            0,
+            |interp, this_val, args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let (is_ab, is_detached, old_len) = {
+                        let obj_ref = obj.borrow();
+                        let is_ab = obj_ref.arraybuffer_data.is_some();
+                        let is_detached = obj_ref
+                            .arraybuffer_detached
+                            .as_ref()
+                            .is_some_and(|d| d.get());
+                        let old_len = obj_ref
+                            .arraybuffer_data
+                            .as_ref()
+                            .map(|b| b.borrow().len())
+                            .unwrap_or(0);
+                        (is_ab, is_detached, old_len)
+                    };
+                    if !is_ab {
+                        return Completion::Throw(
+                            interp.create_type_error("not an ArrayBuffer"),
+                        );
+                    }
+                    if is_detached {
+                        return Completion::Throw(
+                            interp.create_type_error("ArrayBuffer is detached"),
+                        );
+                    }
+                    let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
+                    let new_len = if matches!(new_len_arg, JsValue::Undefined) {
+                        old_len
+                    } else {
+                        match interp.to_index(new_len_arg) {
+                            Completion::Normal(JsValue::Number(n)) => n as usize,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => 0,
+                        }
+                    };
+                    // Copy data
+                    let old_data = {
+                        let obj_ref = obj.borrow();
+                        obj_ref
+                            .arraybuffer_data
+                            .as_ref()
+                            .unwrap()
+                            .borrow()
+                            .clone()
+                    };
+                    let mut new_data = vec![0u8; new_len];
+                    let copy_len = old_len.min(new_len);
+                    new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
+                    // Detach old buffer
+                    {
+                        let mut obj_ref = obj.borrow_mut();
+                        if let Some(ref det) = obj_ref.arraybuffer_detached {
+                            det.set(true);
+                        }
+                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
+                    }
+                    let new_ab = interp.create_arraybuffer(new_data);
+                    let id = new_ab.borrow().id.unwrap();
+                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                }
+                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            },
+        ));
+        ab_proto
+            .borrow_mut()
+            .insert_builtin("transfer".to_string(), transfer_fn);
+
+        // transferToFixedLength (identical to transfer for non-resizable buffers)
+        let transfer_fixed_fn = self.create_function(JsFunction::native(
+            "transferToFixedLength".to_string(),
+            0,
+            |interp, this_val, args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let (is_ab, is_detached, old_len) = {
+                        let obj_ref = obj.borrow();
+                        let is_ab = obj_ref.arraybuffer_data.is_some();
+                        let is_detached = obj_ref
+                            .arraybuffer_detached
+                            .as_ref()
+                            .is_some_and(|d| d.get());
+                        let old_len = obj_ref
+                            .arraybuffer_data
+                            .as_ref()
+                            .map(|b| b.borrow().len())
+                            .unwrap_or(0);
+                        (is_ab, is_detached, old_len)
+                    };
+                    if !is_ab {
+                        return Completion::Throw(
+                            interp.create_type_error("not an ArrayBuffer"),
+                        );
+                    }
+                    if is_detached {
+                        return Completion::Throw(
+                            interp.create_type_error("ArrayBuffer is detached"),
+                        );
+                    }
+                    let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
+                    let new_len = if matches!(new_len_arg, JsValue::Undefined) {
+                        old_len
+                    } else {
+                        match interp.to_index(new_len_arg) {
+                            Completion::Normal(JsValue::Number(n)) => n as usize,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => 0,
+                        }
+                    };
+                    let old_data = {
+                        let obj_ref = obj.borrow();
+                        obj_ref
+                            .arraybuffer_data
+                            .as_ref()
+                            .unwrap()
+                            .borrow()
+                            .clone()
+                    };
+                    let mut new_data = vec![0u8; new_len];
+                    let copy_len = old_len.min(new_len);
+                    new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
+                    {
+                        let mut obj_ref = obj.borrow_mut();
+                        if let Some(ref det) = obj_ref.arraybuffer_detached {
+                            det.set(true);
+                        }
+                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
+                    }
+                    let new_ab = interp.create_arraybuffer(new_data);
+                    let id = new_ab.borrow().id.unwrap();
+                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                }
+                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            },
+        ));
+        ab_proto.borrow_mut().insert_builtin(
+            "transferToFixedLength".to_string(),
+            transfer_fixed_fn,
+        );
+
         // @@toStringTag
         let tag = JsValue::String(JsString::from_str("ArrayBuffer"));
         let sym_key = "Symbol(Symbol.toStringTag)".to_string();
@@ -215,22 +376,45 @@ impl Interpreter {
             "ArrayBuffer".to_string(),
             1,
             move |interp, _this, args| {
-                let len_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let len = interp.to_number_coerce(&len_val);
-                if len.is_nan() || len < 0.0 || len.fract() != 0.0 || len > 2147483647.0 {
-                    return Completion::Throw(
-                        interp.create_type_error("Invalid array buffer length"),
-                    );
+                if interp.new_target.is_none() {
+                    return Completion::Throw(interp.create_type_error(
+                        "Constructor ArrayBuffer requires 'new'",
+                    ));
                 }
-                let len = len as usize;
+                let len_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let len = match interp.to_index(&len_val) {
+                    Completion::Normal(JsValue::Number(n)) => n as usize,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => 0,
+                };
                 let buf = vec![0u8; len];
                 let buf_rc = Rc::new(RefCell::new(buf));
                 let detached = Rc::new(Cell::new(false));
+                let proto = if let Some(ref nt) = interp.new_target {
+                    if let JsValue::Object(o) = nt
+                        && let Some(nt_obj) = interp.get_object(o.id)
+                    {
+                        let proto_val = nt_obj.borrow().get_property("prototype");
+                        if let JsValue::Object(po) = &proto_val {
+                            if let Some(p) = interp.get_object(po.id) {
+                                Some(p.clone())
+                            } else {
+                                Some(ab_proto_clone.clone())
+                            }
+                        } else {
+                            Some(ab_proto_clone.clone())
+                        }
+                    } else {
+                        Some(ab_proto_clone.clone())
+                    }
+                } else {
+                    Some(ab_proto_clone.clone())
+                };
                 let obj = interp.create_object();
                 {
                     let mut o = obj.borrow_mut();
                     o.class_name = "ArrayBuffer".to_string();
-                    o.prototype = Some(ab_proto_clone.clone());
+                    o.prototype = proto;
                     o.arraybuffer_data = Some(buf_rc);
                     o.arraybuffer_detached = Some(detached);
                 }
@@ -3109,12 +3293,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref dv) = obj_ref.data_view_info {
-                        if dv.is_detached.get() {
-                            return Completion::Throw(
-                                interp.create_type_error("DataView buffer is detached"),
-                            );
-                        }
+                    if obj_ref.data_view_info.is_some() {
                         let buf_val = obj_ref.get_property("__buffer__");
                         return Completion::Normal(buf_val);
                     }
@@ -3472,18 +3651,18 @@ impl Interpreter {
         }
 
         dv_set_method!("setInt8", 1, number, |buf: &mut [u8], n: f64, _le: bool| {
-            buf[0] = n as i32 as i8 as u8;
+            buf[0] = to_int32_modular(n) as i8 as u8;
         });
         dv_set_method!(
             "setUint8",
             1,
             number,
             |buf: &mut [u8], n: f64, _le: bool| {
-                buf[0] = n as i32 as u8;
+                buf[0] = to_int32_modular(n) as u8;
             }
         );
         dv_set_method!("setInt16", 2, number, |buf: &mut [u8], n: f64, le: bool| {
-            let v = n as i16;
+            let v = to_int32_modular(n) as i16;
             let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
             buf.copy_from_slice(&bytes);
         });
@@ -3492,13 +3671,13 @@ impl Interpreter {
             2,
             number,
             |buf: &mut [u8], n: f64, le: bool| {
-                let v = n as u16;
+                let v = to_int32_modular(n) as u16;
                 let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
                 buf.copy_from_slice(&bytes);
             }
         );
         dv_set_method!("setInt32", 4, number, |buf: &mut [u8], n: f64, le: bool| {
-            let v = n as i32;
+            let v = to_int32_modular(n);
             let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
             buf.copy_from_slice(&bytes);
         });
@@ -3507,7 +3686,7 @@ impl Interpreter {
             4,
             number,
             |buf: &mut [u8], n: f64, le: bool| {
-                let v = n as u32;
+                let v = to_int32_modular(n) as u32;
                 let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
                 buf.copy_from_slice(&bytes);
             }
@@ -3585,11 +3764,34 @@ impl Interpreter {
             "DataView".to_string(),
             1,
             move |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(interp.create_type_error(
+                        "Constructor DataView requires 'new'",
+                    ));
+                }
                 let buf_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &buf_arg
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let (buf_rc, detached_flag) = {
+                    let is_arraybuffer = {
+                        let obj_ref = obj.borrow();
+                        obj_ref.arraybuffer_data.is_some()
+                    };
+                    if !is_arraybuffer {
+                        return Completion::Throw(interp.create_type_error(
+                            "First argument to DataView constructor must be an ArrayBuffer",
+                        ));
+                    }
+                    // ToIndex(byteOffset) BEFORE detach check
+                    let byte_offset = match interp
+                        .to_index(args.get(1).unwrap_or(&JsValue::Undefined))
+                    {
+                        Completion::Normal(JsValue::Number(n)) => n as usize,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => 0,
+                    };
+                    // Now check detach + get buffer info
+                    let (buf_rc, detached_flag, buf_len) = {
                         let obj_ref = obj.borrow();
                         if let Some(ref det) = obj_ref.arraybuffer_detached {
                             if det.get() {
@@ -3598,34 +3800,38 @@ impl Interpreter {
                                 ));
                             }
                         }
-                        if let Some(ref buf) = obj_ref.arraybuffer_data {
-                            let det = obj_ref
-                                .arraybuffer_detached
-                                .clone()
-                                .unwrap_or_else(|| Rc::new(Cell::new(false)));
-                            (buf.clone(), det)
-                        } else {
-                            return Completion::Throw(interp.create_type_error(
-                                "First argument to DataView constructor must be an ArrayBuffer",
-                            ));
-                        }
+                        let buf = obj_ref.arraybuffer_data.as_ref().unwrap().clone();
+                        let det = obj_ref
+                            .arraybuffer_detached
+                            .clone()
+                            .unwrap_or_else(|| Rc::new(Cell::new(false)));
+                        let len = buf.borrow().len();
+                        (buf, det, len)
                     };
-                    let buf_len = buf_rc.borrow().len();
-                    let byte_offset = if args.len() > 1 {
-                        interp.to_number_coerce(&args[1]) as usize
-                    } else {
-                        0
-                    };
-                    let byte_length = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                        interp.to_number_coerce(&args[2]) as usize
-                    } else {
-                        buf_len - byte_offset
-                    };
-                    if byte_offset + byte_length > buf_len {
+                    if byte_offset > buf_len {
                         return Completion::Throw(
-                            interp.create_type_error("invalid DataView length"),
+                            interp.create_error("RangeError", "offset is outside the bounds of the buffer"),
                         );
                     }
+                    let byte_length_arg = args.get(2).unwrap_or(&JsValue::Undefined);
+                    let byte_length = if matches!(byte_length_arg, JsValue::Undefined) {
+                        buf_len - byte_offset
+                    } else {
+                        match interp.to_index(byte_length_arg) {
+                            Completion::Normal(JsValue::Number(n)) => {
+                                let bl = n as usize;
+                                if byte_offset + bl > buf_len {
+                                    return Completion::Throw(interp.create_error(
+                                        "RangeError",
+                                        "invalid DataView length",
+                                    ));
+                                }
+                                bl
+                            }
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => 0,
+                        }
+                    };
                     let dv_info = DataViewInfo {
                         buffer: buf_rc,
                         byte_offset,

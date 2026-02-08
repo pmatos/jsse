@@ -3052,7 +3052,10 @@ impl Interpreter {
             let result = self.iterator_next_with_value(&iterator, &sent_value);
             match result {
                 Ok(iter_result) => {
-                    let done = self.iterator_complete(&iter_result);
+                    let done = match self.iterator_complete(&iter_result) {
+                        Ok(d) => d,
+                        Err(e) => return Completion::Throw(e),
+                    };
                     let value = match self.iterator_value(&iter_result) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
@@ -3291,7 +3294,10 @@ impl Interpreter {
                             }
                         };
 
-                        let done = self.iterator_complete(&iter_result);
+                        let done = match self.iterator_complete(&iter_result) {
+                            Ok(d) => d,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let value = match self.iterator_value(&iter_result) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
@@ -3617,7 +3623,10 @@ impl Interpreter {
 
                 match self.iterator_return(&iterator, &value) {
                     Ok(Some(iter_result)) => {
-                        let done = self.iterator_complete(&iter_result);
+                        let done = match self.iterator_complete(&iter_result) {
+                            Ok(d) => d,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let result_value = match self.iterator_value(&iter_result) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
@@ -3767,7 +3776,10 @@ impl Interpreter {
 
                 match self.iterator_throw(&iterator, &exception) {
                     Ok(Some(iter_result)) => {
-                        let done = self.iterator_complete(&iter_result);
+                        let done = match self.iterator_complete(&iter_result) {
+                            Ok(d) => d,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let result_value = match self.iterator_value(&iter_result) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
@@ -3983,7 +3995,10 @@ impl Interpreter {
             let result = self.iterator_next_with_value(&iterator, &sent_value);
             match result {
                 Ok(iter_result) => {
-                    let done = self.iterator_complete(&iter_result);
+                    let done = match self.iterator_complete(&iter_result) {
+                        Ok(d) => d,
+                        Err(e) => return Completion::Throw(e),
+                    };
                     let value = match self.iterator_value(&iter_result) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
@@ -4361,7 +4376,10 @@ impl Interpreter {
                             _ => iter_result,
                         };
 
-                        let done = self.iterator_complete(&awaited_result);
+                        let done = match self.iterator_complete(&awaited_result) {
+                            Ok(d) => d,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let value = match self.iterator_value(&awaited_result) {
                             Ok(v) => v,
                             Err(e) => {
@@ -6598,7 +6616,11 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
-                    self.validate_ownkeys_invariant(&v, &target_val)?;
+                    if !matches!(v, JsValue::Object(_)) {
+                        return Err(self.create_type_error(
+                            "CreateListFromArrayLike called on non-object",
+                        ));
+                    }
                     if let JsValue::Object(arr) = &v
                         && let Some(arr_obj) = self.get_object(arr.id)
                     {
@@ -6609,6 +6631,23 @@ impl Interpreter {
                         let keys: Vec<JsValue> = (0..len)
                             .map(|i| arr_obj.borrow().get_property(&i.to_string()))
                             .collect();
+                        for key in &keys {
+                            if !matches!(key, JsValue::String(_) | JsValue::Symbol(_)) {
+                                return Err(self.create_type_error(
+                                    "'ownKeys' on proxy: trap returned non-string/symbol key",
+                                ));
+                            }
+                        }
+                        let mut seen = std::collections::HashSet::new();
+                        for key in &keys {
+                            let key_str = to_property_key_string(key);
+                            if !seen.insert(key_str) {
+                                return Err(self.create_type_error(
+                                    "'ownKeys' on proxy: trap returned duplicate entries",
+                                ));
+                            }
+                        }
+                        self.validate_ownkeys_invariant(&v, &target_val)?;
                         Ok(keys)
                     } else {
                         Ok(vec![])
@@ -6639,6 +6678,11 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "getPrototypeOf", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
+                    if !matches!(v, JsValue::Object(_) | JsValue::Null) {
+                        return Err(self.create_type_error(
+                            "'getPrototypeOf' on proxy: trap returned neither object nor null",
+                        ));
+                    }
                     if let JsValue::Object(ref t) = target_val
                         && let Some(tobj) = self.get_object(t.id)
                         && !tobj.borrow().extensible

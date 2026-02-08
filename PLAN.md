@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 36,484 / 48,257 run (75.60%)
+**Current pass rate:** 36,629 / 48,257 run (75.90%)
 
 ---
 
@@ -35,13 +35,13 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | String | 93% | 1,141/1,215 |
 | Function | 85% | 433/509 |
 | Iterator | 85% | 438/510 |
-| Promise | 89% | 571/639 |
+| Promise | 94% | 599/639 |
 | Map | 79% | 162/204 |
 | Set | 95% | 365/383 |
 | Date | 94% | 561/594 |
-| DataView | 80% | 454/561 |
+| DataView | 85% | 476/561 |
 | Reflect | 86% | 132/153 |
-| Proxy | 58% | 182/311 |
+| Proxy | 65% | 203/311 |
 | Symbol | 75% | 71/94 |
 | RegExp | 76% | 1,432/1,879 |
 | Number | 98% | 331/335 |

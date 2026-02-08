@@ -1775,8 +1775,10 @@ impl Interpreter {
                                         .create_type_error("Iterator result is not an object");
                                     return Completion::Throw(err);
                                 }
-                                if interp.iterator_complete(&v) {
-                                    state_next.borrow_mut().2 = false;
+                                match interp.iterator_complete(&v) {
+                                    Ok(true) => { state_next.borrow_mut().2 = false; }
+                                    Err(e) => return Completion::Throw(e),
+                                    _ => {}
                                 }
                                 Completion::Normal(v)
                             }

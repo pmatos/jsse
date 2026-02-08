@@ -3466,7 +3466,7 @@ impl Interpreter {
                         if let JsValue::Object(ref o) = obj_val {
                             if let Some(obj) = interp.get_object(o.id) {
                                 // Proxy getPrototypeOf trap
-                                if obj.borrow().is_proxy() {
+                                if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                                     match interp.proxy_get_prototype_of(o.id) {
                                         Ok(v) => return Completion::Normal(v),
                                         Err(e) => return Completion::Throw(e),
@@ -3507,7 +3507,7 @@ impl Interpreter {
                         // 4. Let status be ? O.[[SetPrototypeOf]](proto).
                         if let JsValue::Object(o) = this_val {
                             if let Some(obj) = interp.get_object(o.id) {
-                                if obj.borrow().is_proxy() {
+                                if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                                     match interp.proxy_set_prototype_of(o.id, &proto) {
                                         Ok(success) => {
                                             if !success {
@@ -3601,7 +3601,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy defineProperty trap
-                        if obj.borrow().is_proxy() {
+                        if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                             match interp.proxy_define_own_property(o.id, key, &desc_val) {
                                 Ok(success) => {
                                     if !success {
@@ -3794,7 +3794,7 @@ impl Interpreter {
                     if let JsValue::Object(ref o) = target {
                         // Proxy getOwnPropertyDescriptor trap
                         if let Some(obj) = interp.get_object(o.id)
-                            && obj.borrow().is_proxy()
+                            && { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }
                         {
                             match interp.proxy_get_own_property_descriptor(o.id, &key) {
                                 Ok(v) => return Completion::Normal(v),
@@ -3828,7 +3828,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy ownKeys trap
-                        if obj.borrow().is_proxy() {
+                        if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                             match interp.proxy_own_keys(o.id) {
                                 Ok(keys) => {
                                     let arr = interp.create_array(keys);
@@ -3900,7 +3900,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy getPrototypeOf trap
-                        if obj.borrow().is_proxy() {
+                        if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                             match interp.proxy_get_prototype_of(o.id) {
                                 Ok(v) => return Completion::Normal(v),
                                 Err(e) => return Completion::Throw(e),
@@ -4280,7 +4280,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy ownKeys trap (getOwnPropertyNames returns all keys)
-                        if obj.borrow().is_proxy() {
+                        if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                             match interp.proxy_own_keys(o.id) {
                                 Ok(keys) => {
                                     let arr = interp.create_array(keys);
@@ -4345,7 +4345,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy preventExtensions trap
-                        if obj.borrow().is_proxy() {
+                        if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                             match interp.proxy_prevent_extensions(o.id) {
                                 Ok(true) => return Completion::Normal(target),
                                 Ok(false) => {
@@ -4375,7 +4375,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy isExtensible trap
-                        if obj.borrow().is_proxy() {
+                        if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                             match interp.proxy_is_extensible(o.id) {
                                 Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                                 Err(e) => return Completion::Throw(e),
@@ -4496,7 +4496,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy setPrototypeOf trap
-                        if obj.borrow().is_proxy() {
+                        if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                             match interp.proxy_set_prototype_of(o.id, &proto) {
                                 Ok(success) => {
                                     if !success {
@@ -4955,14 +4955,16 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn iterator_complete(&self, result: &JsValue) -> bool {
-        if let JsValue::Object(o) = result
-            && let Some(obj) = self.get_object(o.id)
-        {
-            let done = obj.borrow().get_property("done");
-            return to_boolean(&done);
+    pub(crate) fn iterator_complete(&mut self, result: &JsValue) -> Result<bool, JsValue> {
+        if let JsValue::Object(o) = result {
+            let done = match self.get_object_property(o.id, "done", result) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            return Ok(to_boolean(&done));
         }
-        true
+        Ok(true)
     }
 
     pub(crate) fn iterator_value(&mut self, result: &JsValue) -> Result<JsValue, JsValue> {
@@ -4979,7 +4981,7 @@ impl Interpreter {
 
     pub(crate) fn iterator_step(&mut self, iterator: &JsValue) -> Result<Option<JsValue>, JsValue> {
         let result = self.iterator_next(iterator)?;
-        if self.iterator_complete(&result) {
+        if self.iterator_complete(&result)? {
             Ok(None)
         } else {
             Ok(Some(result))
@@ -5135,7 +5137,7 @@ impl Interpreter {
                 if !matches!(result, JsValue::Object(_)) {
                     return Err(self.create_type_error("Iterator result is not an object"));
                 }
-                if self.iterator_complete(&result) {
+                if self.iterator_complete(&result)? {
                     Ok(None)
                 } else {
                     Ok(Some(result))
@@ -5296,7 +5298,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().is_proxy() {
+                    if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                         match interp.proxy_define_own_property(o.id, key, &desc_val) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5333,7 +5335,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().is_proxy() {
+                    if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                         match interp.proxy_delete_property(o.id, &key) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5395,7 +5397,7 @@ impl Interpreter {
                     let key = args.get(1).map(to_property_key_string).unwrap_or_default();
                     if let JsValue::Object(ref o) = target {
                         if let Some(obj) = interp.get_object(o.id)
-                            && obj.borrow().is_proxy()
+                            && { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }
                         {
                             match interp.proxy_get_own_property_descriptor(o.id, &key) {
                                 Ok(v) => return Completion::Normal(v),
@@ -5429,7 +5431,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().is_proxy() {
+                    if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                         match interp.proxy_get_prototype_of(o.id) {
                             Ok(v) => return Completion::Normal(v),
                             Err(e) => return Completion::Throw(e),
@@ -5463,7 +5465,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().is_proxy() {
+                    if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                         match interp.proxy_has_property(o.id, &key) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5492,7 +5494,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().is_proxy() {
+                    if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                         match interp.proxy_is_extensible(o.id) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5521,7 +5523,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().is_proxy() {
+                    if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                         match interp.proxy_own_keys(o.id) {
                             Ok(keys) => {
                                 let arr = interp.create_array(keys);
@@ -5560,7 +5562,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().is_proxy() {
+                    if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                         match interp.proxy_prevent_extensions(o.id) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5592,7 +5594,7 @@ impl Interpreter {
                 // Check if target is a proxy
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().is_proxy()
+                    && { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }
                 {
                     match interp.proxy_set(o.id, &key, value.clone(), &receiver) {
                         Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
@@ -5643,7 +5645,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if obj.borrow().is_proxy() {
+                    if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
                         match interp.proxy_set_prototype_of(o.id, &proto) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
