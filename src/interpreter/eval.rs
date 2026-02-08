@@ -586,81 +586,7 @@ impl Interpreter {
                 if matches!(base_val, JsValue::Null | JsValue::Undefined) {
                     return Completion::Normal(JsValue::Undefined);
                 }
-                match prop.as_ref() {
-                    Expression::Identifier(name) => match &base_val {
-                        JsValue::Object(o) => self.get_object_property(o.id, name, &base_val),
-                        JsValue::String(s) => {
-                            if name == "length" {
-                                Completion::Normal(JsValue::Number(s.len() as f64))
-                            } else if let Some(ref sp) = self.string_prototype {
-                                Completion::Normal(sp.borrow().get_property(name))
-                            } else {
-                                Completion::Normal(JsValue::Undefined)
-                            }
-                        }
-                        _ => Completion::Normal(JsValue::Undefined),
-                    },
-                    Expression::Call(callee, args) => {
-                        if let Expression::Identifier(method_name) = callee.as_ref()
-                            && method_name.is_empty()
-                        {
-                            let mut evaluated_args = Vec::new();
-                            for arg in args {
-                                let val = match self.eval_expr(arg, env) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                evaluated_args.push(val);
-                            }
-                            return self.call_function(
-                                &base_val,
-                                &JsValue::Undefined,
-                                &evaluated_args,
-                            );
-                        }
-                        Completion::Normal(JsValue::Undefined)
-                    }
-                    Expression::Member(_, mp) => {
-                        if let MemberProperty::Private(name) = mp
-                            && let JsValue::Object(o) = &base_val
-                            && let Some(obj) = self.get_object(o.id)
-                        {
-                            let elem = obj.borrow().private_fields.get(name).cloned();
-                            return match elem {
-                                        Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
-                                            Completion::Normal(v)
-                                        }
-                                        Some(PrivateElement::Accessor { get, .. }) => {
-                                            if let Some(getter) = get {
-                                                self.call_function(&getter, &base_val, &[])
-                                            } else {
-                                                Completion::Throw(self.create_type_error(&format!(
-                                                    "Cannot read private member #{name} which has no getter"
-                                                )))
-                                            }
-                                        }
-                                        None => Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot read private member #{name} from an object whose class did not declare it"
-                                        ))),
-                                    };
-                        }
-                        Completion::Normal(JsValue::Undefined)
-                    }
-                    other => {
-                        let key_val = match self.eval_expr(other, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        let key = match self.to_property_key(&key_val) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match &base_val {
-                            JsValue::Object(o) => self.get_object_property(o.id, &key, &base_val),
-                            _ => Completion::Normal(JsValue::Undefined),
-                        }
-                    }
-                }
+                self.eval_optional_chain_tail(&base_val, prop, env)
             }
             Expression::TaggedTemplate(tag_expr, tmpl) => {
                 let (func_val, this_val) = match tag_expr.as_ref() {
@@ -719,6 +645,157 @@ impl Interpreter {
                 self.call_function(&func_val, &this_val, &call_args)
             }
             _ => Completion::Normal(JsValue::Undefined),
+        }
+    }
+
+    fn access_property_on_value(&mut self, base_val: &JsValue, name: &str) -> Completion {
+        match base_val {
+            JsValue::Object(o) => self.get_object_property(o.id, name, base_val),
+            JsValue::String(s) => {
+                if name == "length" {
+                    Completion::Normal(JsValue::Number(s.len() as f64))
+                } else if let Some(ref sp) = self.string_prototype {
+                    Completion::Normal(sp.borrow().get_property(name))
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
+            JsValue::Number(_) => {
+                if let Some(ref np) = self.number_prototype {
+                    Completion::Normal(np.borrow().get_property(name))
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
+            JsValue::Boolean(_) => {
+                if let Some(ref bp) = self.boolean_prototype {
+                    Completion::Normal(bp.borrow().get_property(name))
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
+            _ => Completion::Normal(JsValue::Undefined),
+        }
+    }
+
+    fn eval_optional_chain_tail(
+        &mut self,
+        base_val: &JsValue,
+        prop: &Expression,
+        env: &EnvRef,
+    ) -> Completion {
+        match self.eval_oc_tail_with_this(base_val, prop, env) {
+            Ok((v, _)) => Completion::Normal(v),
+            Err(c) => c,
+        }
+    }
+
+    /// Evaluate optional chain tail, returning (value, this_for_call).
+    fn eval_oc_tail_with_this(
+        &mut self,
+        base_val: &JsValue,
+        prop: &Expression,
+        env: &EnvRef,
+    ) -> Result<(JsValue, JsValue), Completion> {
+        match prop {
+            Expression::Identifier(name) => {
+                if name.is_empty() {
+                    // x?.() — direct call placeholder, base_val IS the value
+                    Ok((base_val.clone(), JsValue::Undefined))
+                } else {
+                    let val = match self.access_property_on_value(base_val, name) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(Completion::Throw(e)),
+                        other => return Err(other),
+                    };
+                    Ok((val, base_val.clone()))
+                }
+            }
+            Expression::Call(callee, args) => {
+                let (func_val, this_val) =
+                    self.eval_oc_tail_with_this(base_val, callee, env)?;
+                let evaluated_args = match self.eval_spread_args(args, env) {
+                    Ok(v) => v,
+                    Err(e) => return Err(Completion::Throw(e)),
+                };
+                match self.call_function(&func_val, &this_val, &evaluated_args) {
+                    Completion::Normal(v) => Ok((v, JsValue::Undefined)),
+                    other => Err(other),
+                }
+            }
+            Expression::Member(inner, mp) => {
+                let (inner_val, _) = self.eval_oc_tail_with_this(base_val, inner, env)?;
+                match mp {
+                    MemberProperty::Dot(name) => {
+                        let val = match self.access_property_on_value(&inner_val, name) {
+                            Completion::Normal(v) => v,
+                            other => return Err(other),
+                        };
+                        Ok((val, inner_val))
+                    }
+                    MemberProperty::Computed(expr) => {
+                        let key_val = match self.eval_expr(expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return Err(other),
+                        };
+                        let key = match self.to_property_key(&key_val) {
+                            Ok(s) => s,
+                            Err(e) => return Err(Completion::Throw(e)),
+                        };
+                        let val = match self.access_property_on_value(&inner_val, &key) {
+                            Completion::Normal(v) => v,
+                            other => return Err(other),
+                        };
+                        Ok((val, inner_val))
+                    }
+                    MemberProperty::Private(name) => {
+                        if let JsValue::Object(o) = &inner_val
+                            && let Some(obj) = self.get_object(o.id)
+                        {
+                            let elem = obj.borrow().private_fields.get(name).cloned();
+                            match elem {
+                                Some(PrivateElement::Field(v))
+                                | Some(PrivateElement::Method(v)) => {
+                                    Ok((v, inner_val))
+                                }
+                                Some(PrivateElement::Accessor { get, .. }) => {
+                                    if let Some(getter) = get {
+                                        match self.call_function(&getter, &inner_val, &[]) {
+                                            Completion::Normal(v) => Ok((v, inner_val)),
+                                            other => Err(other),
+                                        }
+                                    } else {
+                                        Err(Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot read private member #{name} which has no getter"
+                                        ))))
+                                    }
+                                }
+                                None => Err(Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot read private member #{name} from an object whose class did not declare it"
+                                )))),
+                            }
+                        } else {
+                            Ok((JsValue::Undefined, inner_val))
+                        }
+                    }
+                }
+            }
+            other => {
+                // Computed property access (e.g., x?.[expr])
+                let key_val = match self.eval_expr(other, env) {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                };
+                let key = match self.to_property_key(&key_val) {
+                    Ok(s) => s,
+                    Err(e) => return Err(Completion::Throw(e)),
+                };
+                let val = match self.access_property_on_value(base_val, &key) {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                };
+                Ok((val, base_val.clone()))
+            }
         }
     }
 
@@ -5401,26 +5478,7 @@ impl Interpreter {
                         }
                         let closure_strict = closure.borrow().strict;
                         let func_env = Environment::new_function_scope(Some(closure));
-                        // Bind parameters
-                        for (i, param) in params.iter().enumerate() {
-                            if let Pattern::Rest(inner) = param {
-                                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                let rest_arr = self.create_array(rest);
-                                if let Err(e) =
-                                    self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env)
-                                {
-                                    return Completion::Throw(e);
-                                }
-                                break;
-                            }
-                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                            if let Err(e) =
-                                self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                            {
-                                return Completion::Throw(e);
-                            }
-                        }
-                        // Arrow functions inherit `this` and `arguments` from closure
+                        // Bind `this` before parameters so default param exprs can access it
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
@@ -5488,6 +5546,25 @@ impl Interpreter {
                             );
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                        }
+                        // Bind parameters (after this so default exprs can access this)
+                        for (i, param) in params.iter().enumerate() {
+                            if let Pattern::Rest(inner) = param {
+                                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
+                                let rest_arr = self.create_array(rest);
+                                if let Err(e) =
+                                    self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env)
+                                {
+                                    return Completion::Throw(e);
+                                }
+                                break;
+                            }
+                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+                            if let Err(e) =
+                                self.bind_pattern(param, val, BindingKind::Var, &func_env)
+                            {
+                                return Completion::Throw(e);
+                            }
                         }
                         self.call_stack_envs.push(func_env.clone());
                         let result = self.exec_statements(&body, &func_env);

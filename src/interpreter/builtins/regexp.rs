@@ -1132,9 +1132,13 @@ fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
 }
 
 fn regex_captures(re: &CompiledRegex, text: &str) -> Option<RegexCaptures> {
+    regex_captures_at(re, text, 0)
+}
+
+fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
     match re {
         CompiledRegex::Fancy(r) => {
-            let caps = r.captures(text).ok()??;
+            let caps = r.captures_from_pos(text, pos).ok()??;
             let names: Vec<Option<String>> = r
                 .capture_names()
                 .map(|n| n.map(|s| s.to_string()))
@@ -1150,7 +1154,11 @@ fn regex_captures(re: &CompiledRegex, text: &str) -> Option<RegexCaptures> {
             Some(RegexCaptures { groups, names })
         }
         CompiledRegex::Standard(r) => {
-            let caps = r.captures(text)?;
+            let caps = if pos == 0 {
+                r.captures(text)?
+            } else {
+                r.captures_at(text, pos)?
+            };
             let names: Vec<Option<String>> = r
                 .capture_names()
                 .map(|n| n.map(|s| s.to_string()))
@@ -1538,7 +1546,7 @@ fn regexp_exec_raw(
         Err(_) => return Completion::Normal(JsValue::Null),
     };
 
-    let caps = match regex_captures(&re, &input[last_index_byte..]) {
+    let caps = match regex_captures_at(&re, input, last_index_byte) {
         Some(c) => c,
         None => {
             if global || sticky {
@@ -1551,12 +1559,11 @@ fn regexp_exec_raw(
     };
 
     let full_match = caps.get(0).unwrap();
-    // Convert byte offsets to UTF-16 code unit offsets
-    let slice = &input[last_index_byte..];
-    let match_start_utf16 = last_index_utf16 + byte_offset_to_utf16(slice, full_match.start);
-    let match_end_utf16 = last_index_utf16 + byte_offset_to_utf16(slice, full_match.end);
+    // Convert absolute byte offsets to UTF-16 code unit offsets
+    let match_start_utf16 = byte_offset_to_utf16(input, full_match.start);
+    let match_end_utf16 = byte_offset_to_utf16(input, full_match.end);
 
-    if sticky && full_match.start != 0 {
+    if sticky && full_match.start != last_index_byte {
         if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
             return Completion::Throw(e);
         }
@@ -1617,8 +1624,8 @@ fn regexp_exec_raw(
             for i in 0..caps.len() {
                 match caps.get(i) {
                     Some(m) => {
-                        let cap_start = last_index_utf16 + byte_offset_to_utf16(slice, m.start);
-                        let cap_end = last_index_utf16 + byte_offset_to_utf16(slice, m.end);
+                        let cap_start = byte_offset_to_utf16(input, m.start);
+                        let cap_end = byte_offset_to_utf16(input, m.end);
                         let pair = interp.create_array(vec![
                             JsValue::Number(cap_start as f64),
                             JsValue::Number(cap_end as f64),
@@ -1636,9 +1643,8 @@ fn regexp_exec_raw(
                     if let Some(name) = name_opt {
                         let val = match caps.get(i) {
                             Some(m) => {
-                                let cap_start =
-                                    last_index_utf16 + byte_offset_to_utf16(slice, m.start);
-                                let cap_end = last_index_utf16 + byte_offset_to_utf16(slice, m.end);
+                                let cap_start = byte_offset_to_utf16(input, m.start);
+                                let cap_end = byte_offset_to_utf16(input, m.end);
                                 interp.create_array(vec![
                                     JsValue::Number(cap_start as f64),
                                     JsValue::Number(cap_end as f64),
@@ -2826,7 +2832,7 @@ impl Interpreter {
                                     );
                                 }
 
-                                match regex_captures(&re, &string[last_index..]) {
+                                match regex_captures_at(&re, &string, last_index) {
                                     None => {
                                         obj.borrow_mut().iterator_state =
                                             Some(IteratorState::RegExpStringIterator {
@@ -2846,8 +2852,8 @@ impl Interpreter {
                                     }
                                     Some(caps) => {
                                         let full = caps.get(0).unwrap();
-                                        let match_start = last_index + full.start;
-                                        let match_end = last_index + full.end;
+                                        let match_start = full.start;
+                                        let match_end = full.end;
 
                                         let mut elements: Vec<JsValue> = Vec::new();
                                         elements

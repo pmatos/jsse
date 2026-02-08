@@ -447,7 +447,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::OptionalChain => {
                     self.advance()?;
-                    let prop = if self.current == Token::LeftParen {
+                    let mut prop = if self.current == Token::LeftParen {
                         let args = self.parse_arguments()?;
                         Expression::Call(Box::new(Expression::Identifier("".into())), args)
                     } else if self.current == Token::LeftBracket {
@@ -456,7 +456,6 @@ impl<'a> Parser<'a> {
                         self.eat(&Token::RightBracket)?;
                         p
                     } else if let Token::PrivateName(name) = &self.current {
-                        // Uses placeholder for base expr, similar to Call above
                         let name = name.clone();
                         self.advance()?;
                         Expression::Member(
@@ -471,6 +470,35 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         Expression::Identifier(name)
                     };
+                    // Continue consuming .prop, [expr], () as part of the same optional chain
+                    loop {
+                        match &self.current {
+                            Token::Dot => {
+                                self.advance()?;
+                                let mp = self.parse_dot_member_property()?;
+                                prop = Expression::Member(Box::new(prop), mp);
+                            }
+                            Token::LeftBracket => {
+                                self.advance()?;
+                                let p = self.parse_expression()?;
+                                self.eat(&Token::RightBracket)?;
+                                prop = Expression::Member(
+                                    Box::new(prop),
+                                    MemberProperty::Computed(Box::new(p)),
+                                );
+                            }
+                            Token::LeftParen => {
+                                let args = self.parse_arguments()?;
+                                prop = Expression::Call(Box::new(prop), args);
+                            }
+                            Token::NoSubstitutionTemplate(_, _)
+                            | Token::TemplateHead(_, _) => {
+                                let tmpl = self.parse_template_literal_expr(true)?;
+                                prop = Expression::TaggedTemplate(Box::new(prop), tmpl);
+                            }
+                            _ => break,
+                        }
+                    }
                     expr = Expression::OptionalChain(Box::new(expr), Box::new(prop));
                 }
                 _ => break,
