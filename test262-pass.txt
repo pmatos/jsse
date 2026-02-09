@@ -713,6 +713,7 @@ test262/test/built-ins/Array/S15.4.2.1_A1.3_T1.js
 test262/test/built-ins/Array/S15.4.2.1_A2.1_T1.js
 test262/test/built-ins/Array/S15.4.2.1_A2.2_T1.js
 test262/test/built-ins/Array/S15.4.3_A1.1_T1.js
+test262/test/built-ins/Array/S15.4.3_A1.1_T2.js
 test262/test/built-ins/Array/S15.4.3_A1.1_T3.js
 test262/test/built-ins/Array/S15.4.5.1_A2.1_T1.js
 test262/test/built-ins/Array/S15.4.5.1_A2.2_T1.js
@@ -4796,6 +4797,7 @@ test262/test/built-ins/Date/prototype/toISOString/15.9.5.43-0-8.js
 test262/test/built-ins/Date/prototype/toISOString/15.9.5.43-0-9.js
 test262/test/built-ins/Date/prototype/toISOString/name.js
 test262/test/built-ins/Date/prototype/toISOString/not-a-constructor.js
+test262/test/built-ins/Date/prototype/toJSON/builtin.js
 test262/test/built-ins/Date/prototype/toJSON/called-as-function.js
 test262/test/built-ins/Date/prototype/toJSON/invoke-abrupt.js
 test262/test/built-ins/Date/prototype/toJSON/invoke-arguments.js
@@ -4970,11 +4972,13 @@ test262/test/built-ins/Error/prototype/toString/15.11.4.4-6-2.js
 test262/test/built-ins/Error/prototype/toString/15.11.4.4-8-2.js
 test262/test/built-ins/Error/prototype/toString/15.11.4.4-9-1.js
 test262/test/built-ins/Error/prototype/toString/S15.11.4.4_A2.js
+test262/test/built-ins/Error/prototype/toString/called-as-function.js
 test262/test/built-ins/Error/prototype/toString/invalid-receiver.js
 test262/test/built-ins/Error/prototype/toString/length.js
 test262/test/built-ins/Error/prototype/toString/name.js
 test262/test/built-ins/Error/prototype/toString/not-a-constructor.js
 test262/test/built-ins/Error/prototype/toString/prop-desc.js
+test262/test/built-ins/Error/prototype/toString/undefined-props.js
 test262/test/built-ins/Error/the-initial-value-of-errorprototypemessage-is-the-empty-string.js
 test262/test/built-ins/Error/tostring-1.js
 test262/test/built-ins/FinalizationRegistry/constructor.js
@@ -5164,6 +5168,8 @@ test262/test/built-ins/Function/S15.3.3_A1.js
 test262/test/built-ins/Function/S15.3.3_A2_T1.js
 test262/test/built-ins/Function/S15.3.3_A2_T2.js
 test262/test/built-ins/Function/S15.3.3_A3.js
+test262/test/built-ins/Function/S15.3.5_A1_T1.js
+test262/test/built-ins/Function/S15.3.5_A1_T2.js
 test262/test/built-ins/Function/S15.3.5_A2_T1.js
 test262/test/built-ins/Function/S15.3.5_A2_T2.js
 test262/test/built-ins/Function/S15.3.5_A3_T1.js
@@ -5201,6 +5207,7 @@ test262/test/built-ins/Function/prototype/S15.3.3.1_A1.js
 test262/test/built-ins/Function/prototype/S15.3.3.1_A2.js
 test262/test/built-ins/Function/prototype/S15.3.3.1_A3.js
 test262/test/built-ins/Function/prototype/S15.3.3.1_A4.js
+test262/test/built-ins/Function/prototype/S15.3.4_A1.js
 test262/test/built-ins/Function/prototype/S15.3.4_A2_T1.js
 test262/test/built-ins/Function/prototype/S15.3.4_A2_T2.js
 test262/test/built-ins/Function/prototype/S15.3.4_A2_T3.js
@@ -5259,6 +5266,7 @@ test262/test/built-ins/Function/prototype/apply/not-a-constructor.js
 test262/test/built-ins/Function/prototype/apply/this-not-callable.js
 test262/test/built-ins/Function/prototype/arguments/prop-desc.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-0-1.js
+test262/test/built-ins/Function/prototype/bind/15.3.4.5-10-1.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-11-1.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-16-1.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-16-2.js
@@ -5296,6 +5304,7 @@ test262/test/built-ins/Function/prototype/bind/15.3.4.5-6-7.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-6-8.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-6-9.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-8-1.js
+test262/test/built-ins/Function/prototype/bind/15.3.4.5-8-2.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-9-1.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5-9-2.js
 test262/test/built-ins/Function/prototype/bind/15.3.4.5.1-4-1.js
@@ -5402,6 +5411,10 @@ test262/test/built-ins/Function/prototype/name.js
 test262/test/built-ins/Function/prototype/property-order.js
 test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A10.js
 test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A11.js
+test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A12.js
+test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A13.js
+test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A14.js
+test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A16.js
 test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A6.js
 test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A8.js
 test262/test/built-ins/Function/prototype/toString/S15.3.4.2_A9.js
@@ -5452,6 +5465,7 @@ test262/test/built-ins/Function/prototype/toString/private-method-class-statemen
 test262/test/built-ins/Function/prototype/toString/private-static-method-class-expression.js
 test262/test/built-ins/Function/prototype/toString/private-static-method-class-statement.js
 test262/test/built-ins/Function/prototype/toString/proxy-bound-function.js
+test262/test/built-ins/Function/prototype/toString/proxy-non-callable-throws.js
 test262/test/built-ins/Function/prototype/toString/setter-class-expression-static.js
 test262/test/built-ins/Function/prototype/toString/setter-class-expression.js
 test262/test/built-ins/Function/prototype/toString/setter-class-statement-static.js
@@ -5465,6 +5479,7 @@ test262/test/built-ins/GeneratorFunction/instance-construct-throws.js
 test262/test/built-ins/GeneratorFunction/instance-length.js
 test262/test/built-ins/GeneratorFunction/instance-name.js
 test262/test/built-ins/GeneratorFunction/instance-prototype.js
+test262/test/built-ins/GeneratorFunction/instance-restricted-properties.js
 test262/test/built-ins/GeneratorFunction/instance-yield-expr-in-param.js
 test262/test/built-ins/GeneratorFunction/invoked-as-constructor-no-arguments.js
 test262/test/built-ins/GeneratorFunction/invoked-as-function-multiple-arguments.js
@@ -5540,6 +5555,7 @@ test262/test/built-ins/Iterator/concat/get-value-after-done.js
 test262/test/built-ins/Iterator/concat/inner-iterator-created-in-order.js
 test262/test/built-ins/Iterator/concat/is-function.js
 test262/test/built-ins/Iterator/concat/iterable-primitive-wrapper-objects.js
+test262/test/built-ins/Iterator/concat/length.js
 test262/test/built-ins/Iterator/concat/many-arguments.js
 test262/test/built-ins/Iterator/concat/name.js
 test262/test/built-ins/Iterator/concat/next-method-called-with-zero-arguments.js
@@ -5557,6 +5573,8 @@ test262/test/built-ins/Iterator/concat/return-is-not-forwarded-after-exhaustion.
 test262/test/built-ins/Iterator/concat/return-is-not-forwarded-before-initial-start.js
 test262/test/built-ins/Iterator/concat/return-method-called-with-zero-arguments.js
 test262/test/built-ins/Iterator/concat/single-argument.js
+test262/test/built-ins/Iterator/concat/throws-typeerror-when-generator-is-running-next.js
+test262/test/built-ins/Iterator/concat/throws-typeerror-when-generator-is-running-return.js
 test262/test/built-ins/Iterator/concat/throws-typeerror-when-iterable-not-an-object.js
 test262/test/built-ins/Iterator/concat/throws-typeerror-when-iterator-method-not-callable.js
 test262/test/built-ins/Iterator/concat/throws-typeerror-when-iterator-not-an-object.js
@@ -5573,6 +5591,7 @@ test262/test/built-ins/Iterator/from/non-constructible.js
 test262/test/built-ins/Iterator/from/primitives.js
 test262/test/built-ins/Iterator/from/prop-desc.js
 test262/test/built-ins/Iterator/from/proto.js
+test262/test/built-ins/Iterator/from/result-proto.js
 test262/test/built-ins/Iterator/from/return-method-returns-iterator-result.js
 test262/test/built-ins/Iterator/from/return-method-throws-for-invalid-this.js
 test262/test/built-ins/Iterator/from/supports-iterable.js
@@ -5592,7 +5611,12 @@ test262/test/built-ins/Iterator/prototype/Symbol.iterator/length.js
 test262/test/built-ins/Iterator/prototype/Symbol.iterator/name.js
 test262/test/built-ins/Iterator/prototype/Symbol.iterator/prop-desc.js
 test262/test/built-ins/Iterator/prototype/Symbol.iterator/return-val.js
+test262/test/built-ins/Iterator/prototype/Symbol.toStringTag/prop-desc.js
+test262/test/built-ins/Iterator/prototype/Symbol.toStringTag/weird-setter.js
+test262/test/built-ins/Iterator/prototype/constructor/prop-desc.js
+test262/test/built-ins/Iterator/prototype/constructor/weird-setter.js
 test262/test/built-ins/Iterator/prototype/drop/argument-effect-order.js
+test262/test/built-ins/Iterator/prototype/drop/argument-validation-failure-closes-underlying.js
 test262/test/built-ins/Iterator/prototype/drop/callable.js
 test262/test/built-ins/Iterator/prototype/drop/exhaustion-does-not-call-return.js
 test262/test/built-ins/Iterator/prototype/drop/get-next-method-only-once.js
@@ -5614,12 +5638,14 @@ test262/test/built-ins/Iterator/prototype/drop/next-method-returns-throwing-valu
 test262/test/built-ins/Iterator/prototype/drop/next-method-throws.js
 test262/test/built-ins/Iterator/prototype/drop/non-constructible.js
 test262/test/built-ins/Iterator/prototype/drop/prop-desc.js
+test262/test/built-ins/Iterator/prototype/drop/proto.js
 test262/test/built-ins/Iterator/prototype/drop/result-is-iterator.js
 test262/test/built-ins/Iterator/prototype/drop/return-is-forwarded.js
 test262/test/built-ins/Iterator/prototype/drop/return-is-not-forwarded-after-exhaustion.js
 test262/test/built-ins/Iterator/prototype/drop/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/drop/this-non-object.js
 test262/test/built-ins/Iterator/prototype/drop/this-plain-iterator.js
+test262/test/built-ins/Iterator/prototype/drop/throws-typeerror-when-generator-is-running.js
 test262/test/built-ins/Iterator/prototype/drop/underlying-iterator-advanced-in-parallel.js
 test262/test/built-ins/Iterator/prototype/drop/underlying-iterator-closed-in-parallel.js
 test262/test/built-ins/Iterator/prototype/drop/underlying-iterator-closed.js
@@ -5628,9 +5654,11 @@ test262/test/built-ins/Iterator/prototype/every/argument-validation-failure-clos
 test262/test/built-ins/Iterator/prototype/every/callable.js
 test262/test/built-ins/Iterator/prototype/every/get-next-method-only-once.js
 test262/test/built-ins/Iterator/prototype/every/get-next-method-throws.js
+test262/test/built-ins/Iterator/prototype/every/get-return-method-throws.js
 test262/test/built-ins/Iterator/prototype/every/is-function.js
 test262/test/built-ins/Iterator/prototype/every/iterator-already-exhausted.js
 test262/test/built-ins/Iterator/prototype/every/iterator-has-no-return.js
+test262/test/built-ins/Iterator/prototype/every/iterator-return-method-throws.js
 test262/test/built-ins/Iterator/prototype/every/length.js
 test262/test/built-ins/Iterator/prototype/every/name.js
 test262/test/built-ins/Iterator/prototype/every/next-method-returns-non-object.js
@@ -5649,6 +5677,7 @@ test262/test/built-ins/Iterator/prototype/every/predicate-this.js
 test262/test/built-ins/Iterator/prototype/every/predicate-throws-then-closing-iterator-also-throws.js
 test262/test/built-ins/Iterator/prototype/every/predicate-throws.js
 test262/test/built-ins/Iterator/prototype/every/prop-desc.js
+test262/test/built-ins/Iterator/prototype/every/proto.js
 test262/test/built-ins/Iterator/prototype/every/result-is-boolean.js
 test262/test/built-ins/Iterator/prototype/every/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/every/this-non-object.js
@@ -5679,12 +5708,14 @@ test262/test/built-ins/Iterator/prototype/filter/predicate-this.js
 test262/test/built-ins/Iterator/prototype/filter/predicate-throws-then-closing-iterator-also-throws.js
 test262/test/built-ins/Iterator/prototype/filter/predicate-throws.js
 test262/test/built-ins/Iterator/prototype/filter/prop-desc.js
+test262/test/built-ins/Iterator/prototype/filter/proto.js
 test262/test/built-ins/Iterator/prototype/filter/result-is-iterator.js
 test262/test/built-ins/Iterator/prototype/filter/return-is-forwarded.js
 test262/test/built-ins/Iterator/prototype/filter/return-is-not-forwarded-after-exhaustion.js
 test262/test/built-ins/Iterator/prototype/filter/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/filter/this-non-object.js
 test262/test/built-ins/Iterator/prototype/filter/this-plain-iterator.js
+test262/test/built-ins/Iterator/prototype/filter/throws-typeerror-when-generator-is-running.js
 test262/test/built-ins/Iterator/prototype/filter/underlying-iterator-advanced-in-parallel.js
 test262/test/built-ins/Iterator/prototype/filter/underlying-iterator-closed-in-parallel.js
 test262/test/built-ins/Iterator/prototype/filter/underlying-iterator-closed.js
@@ -5693,9 +5724,11 @@ test262/test/built-ins/Iterator/prototype/find/argument-validation-failure-close
 test262/test/built-ins/Iterator/prototype/find/callable.js
 test262/test/built-ins/Iterator/prototype/find/get-next-method-only-once.js
 test262/test/built-ins/Iterator/prototype/find/get-next-method-throws.js
+test262/test/built-ins/Iterator/prototype/find/get-return-method-throws.js
 test262/test/built-ins/Iterator/prototype/find/is-function.js
 test262/test/built-ins/Iterator/prototype/find/iterator-already-exhausted.js
 test262/test/built-ins/Iterator/prototype/find/iterator-has-no-return.js
+test262/test/built-ins/Iterator/prototype/find/iterator-return-method-throws.js
 test262/test/built-ins/Iterator/prototype/find/length.js
 test262/test/built-ins/Iterator/prototype/find/name.js
 test262/test/built-ins/Iterator/prototype/find/next-method-returns-non-object.js
@@ -5714,6 +5747,7 @@ test262/test/built-ins/Iterator/prototype/find/predicate-this.js
 test262/test/built-ins/Iterator/prototype/find/predicate-throws-then-closing-iterator-also-throws.js
 test262/test/built-ins/Iterator/prototype/find/predicate-throws.js
 test262/test/built-ins/Iterator/prototype/find/prop-desc.js
+test262/test/built-ins/Iterator/prototype/find/proto.js
 test262/test/built-ins/Iterator/prototype/find/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/find/this-non-object.js
 test262/test/built-ins/Iterator/prototype/find/this-plain-iterator.js
@@ -5747,6 +5781,7 @@ test262/test/built-ins/Iterator/prototype/flatMap/next-method-throws.js
 test262/test/built-ins/Iterator/prototype/flatMap/non-callable-mapper.js
 test262/test/built-ins/Iterator/prototype/flatMap/non-constructible.js
 test262/test/built-ins/Iterator/prototype/flatMap/prop-desc.js
+test262/test/built-ins/Iterator/prototype/flatMap/proto.js
 test262/test/built-ins/Iterator/prototype/flatMap/result-is-iterator.js
 test262/test/built-ins/Iterator/prototype/flatMap/return-is-forwarded-to-mapper-result.js
 test262/test/built-ins/Iterator/prototype/flatMap/return-is-forwarded-to-underlying-iterator.js
@@ -5755,6 +5790,7 @@ test262/test/built-ins/Iterator/prototype/flatMap/strings-are-not-flattened.js
 test262/test/built-ins/Iterator/prototype/flatMap/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/flatMap/this-non-object.js
 test262/test/built-ins/Iterator/prototype/flatMap/this-plain-iterator.js
+test262/test/built-ins/Iterator/prototype/flatMap/throws-typeerror-when-generator-is-running.js
 test262/test/built-ins/Iterator/prototype/flatMap/underlying-iterator-advanced-in-parallel.js
 test262/test/built-ins/Iterator/prototype/flatMap/underlying-iterator-closed-in-parallel.js
 test262/test/built-ins/Iterator/prototype/flatMap/underlying-iterator-closed.js
@@ -5780,6 +5816,7 @@ test262/test/built-ins/Iterator/prototype/forEach/next-method-throws.js
 test262/test/built-ins/Iterator/prototype/forEach/non-callable-predicate.js
 test262/test/built-ins/Iterator/prototype/forEach/non-constructible.js
 test262/test/built-ins/Iterator/prototype/forEach/prop-desc.js
+test262/test/built-ins/Iterator/prototype/forEach/proto.js
 test262/test/built-ins/Iterator/prototype/forEach/result-is-undefined.js
 test262/test/built-ins/Iterator/prototype/forEach/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/forEach/this-non-object.js
@@ -5809,6 +5846,7 @@ test262/test/built-ins/Iterator/prototype/map/next-method-throws.js
 test262/test/built-ins/Iterator/prototype/map/non-callable-mapper.js
 test262/test/built-ins/Iterator/prototype/map/non-constructible.js
 test262/test/built-ins/Iterator/prototype/map/prop-desc.js
+test262/test/built-ins/Iterator/prototype/map/proto.js
 test262/test/built-ins/Iterator/prototype/map/result-is-iterator.js
 test262/test/built-ins/Iterator/prototype/map/return-is-forwarded-to-underlying-iterator.js
 test262/test/built-ins/Iterator/prototype/map/return-is-not-forwarded-after-exhaustion.js
@@ -5816,6 +5854,7 @@ test262/test/built-ins/Iterator/prototype/map/returned-iterator-yields-mapper-re
 test262/test/built-ins/Iterator/prototype/map/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/map/this-non-object.js
 test262/test/built-ins/Iterator/prototype/map/this-plain-iterator.js
+test262/test/built-ins/Iterator/prototype/map/throws-typeerror-when-generator-is-running.js
 test262/test/built-ins/Iterator/prototype/map/underlying-iterator-advanced-in-parallel.js
 test262/test/built-ins/Iterator/prototype/map/underlying-iterator-closed-in-parallel.js
 test262/test/built-ins/Iterator/prototype/map/underlying-iterator-closed.js
@@ -5839,6 +5878,7 @@ test262/test/built-ins/Iterator/prototype/reduce/next-method-throws.js
 test262/test/built-ins/Iterator/prototype/reduce/non-callable-reducer.js
 test262/test/built-ins/Iterator/prototype/reduce/non-constructible.js
 test262/test/built-ins/Iterator/prototype/reduce/prop-desc.js
+test262/test/built-ins/Iterator/prototype/reduce/proto.js
 test262/test/built-ins/Iterator/prototype/reduce/reducer-args-initial-value.js
 test262/test/built-ins/Iterator/prototype/reduce/reducer-args-no-initial-value.js
 test262/test/built-ins/Iterator/prototype/reduce/reducer-memo-can-be-any-type.js
@@ -5853,9 +5893,11 @@ test262/test/built-ins/Iterator/prototype/some/argument-validation-failure-close
 test262/test/built-ins/Iterator/prototype/some/callable.js
 test262/test/built-ins/Iterator/prototype/some/get-next-method-only-once.js
 test262/test/built-ins/Iterator/prototype/some/get-next-method-throws.js
+test262/test/built-ins/Iterator/prototype/some/get-return-method-throws.js
 test262/test/built-ins/Iterator/prototype/some/is-function.js
 test262/test/built-ins/Iterator/prototype/some/iterator-already-exhausted.js
 test262/test/built-ins/Iterator/prototype/some/iterator-has-no-return.js
+test262/test/built-ins/Iterator/prototype/some/iterator-return-method-throws.js
 test262/test/built-ins/Iterator/prototype/some/length.js
 test262/test/built-ins/Iterator/prototype/some/name.js
 test262/test/built-ins/Iterator/prototype/some/next-method-returns-non-object.js
@@ -5874,14 +5916,18 @@ test262/test/built-ins/Iterator/prototype/some/predicate-this.js
 test262/test/built-ins/Iterator/prototype/some/predicate-throws-then-closing-iterator-also-throws.js
 test262/test/built-ins/Iterator/prototype/some/predicate-throws.js
 test262/test/built-ins/Iterator/prototype/some/prop-desc.js
+test262/test/built-ins/Iterator/prototype/some/proto.js
 test262/test/built-ins/Iterator/prototype/some/result-is-boolean.js
 test262/test/built-ins/Iterator/prototype/some/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/some/this-non-object.js
 test262/test/built-ins/Iterator/prototype/some/this-plain-iterator.js
 test262/test/built-ins/Iterator/prototype/take/argument-effect-order.js
+test262/test/built-ins/Iterator/prototype/take/argument-validation-failure-closes-underlying.js
 test262/test/built-ins/Iterator/prototype/take/callable.js
+test262/test/built-ins/Iterator/prototype/take/exhaustion-calls-return.js
 test262/test/built-ins/Iterator/prototype/take/get-next-method-only-once.js
 test262/test/built-ins/Iterator/prototype/take/get-next-method-throws.js
+test262/test/built-ins/Iterator/prototype/take/get-return-method-throws.js
 test262/test/built-ins/Iterator/prototype/take/is-function.js
 test262/test/built-ins/Iterator/prototype/take/length.js
 test262/test/built-ins/Iterator/prototype/take/limit-greater-than-or-equal-to-total.js
@@ -5897,12 +5943,14 @@ test262/test/built-ins/Iterator/prototype/take/next-method-returns-throwing-valu
 test262/test/built-ins/Iterator/prototype/take/next-method-throws.js
 test262/test/built-ins/Iterator/prototype/take/non-constructible.js
 test262/test/built-ins/Iterator/prototype/take/prop-desc.js
+test262/test/built-ins/Iterator/prototype/take/proto.js
 test262/test/built-ins/Iterator/prototype/take/result-is-iterator.js
 test262/test/built-ins/Iterator/prototype/take/return-is-forwarded.js
 test262/test/built-ins/Iterator/prototype/take/return-is-not-forwarded-after-exhaustion.js
 test262/test/built-ins/Iterator/prototype/take/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/take/this-non-object.js
 test262/test/built-ins/Iterator/prototype/take/this-plain-iterator.js
+test262/test/built-ins/Iterator/prototype/take/throws-typeerror-when-generator-is-running.js
 test262/test/built-ins/Iterator/prototype/take/underlying-iterator-advanced-in-parallel.js
 test262/test/built-ins/Iterator/prototype/take/underlying-iterator-closed-in-parallel.js
 test262/test/built-ins/Iterator/prototype/take/underlying-iterator-closed.js
@@ -5920,6 +5968,7 @@ test262/test/built-ins/Iterator/prototype/toArray/next-method-returns-throwing-v
 test262/test/built-ins/Iterator/prototype/toArray/next-method-throws.js
 test262/test/built-ins/Iterator/prototype/toArray/non-constructible.js
 test262/test/built-ins/Iterator/prototype/toArray/prop-desc.js
+test262/test/built-ins/Iterator/prototype/toArray/proto.js
 test262/test/built-ins/Iterator/prototype/toArray/this-non-callable-next.js
 test262/test/built-ins/Iterator/prototype/toArray/this-non-object.js
 test262/test/built-ins/Iterator/prototype/toArray/this-plain-iterator.js
@@ -6041,6 +6090,7 @@ test262/test/built-ins/JSON/parse/15.12.2-2-7.js
 test262/test/built-ins/JSON/parse/15.12.2-2-8.js
 test262/test/built-ins/JSON/parse/15.12.2-2-9.js
 test262/test/built-ins/JSON/parse/S15.12.2_A1.js
+test262/test/built-ins/JSON/parse/builtin.js
 test262/test/built-ins/JSON/parse/duplicate-proto.js
 test262/test/built-ins/JSON/parse/invalid-whitespace.js
 test262/test/built-ins/JSON/parse/length.js
@@ -6085,6 +6135,7 @@ test262/test/built-ins/JSON/rawJSON/name.js
 test262/test/built-ins/JSON/rawJSON/not-a-constructor.js
 test262/test/built-ins/JSON/rawJSON/prop-desc.js
 test262/test/built-ins/JSON/rawJSON/returns-expected-object.js
+test262/test/built-ins/JSON/stringify/builtin.js
 test262/test/built-ins/JSON/stringify/length.js
 test262/test/built-ins/JSON/stringify/name.js
 test262/test/built-ins/JSON/stringify/not-a-constructor.js
@@ -10108,6 +10159,8 @@ test262/test/built-ins/Object/prototype/hasOwnProperty/8.12.1-1_6.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/8.12.1-1_7.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/8.12.1-1_8.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/8.12.1-1_9.js
+test262/test/built-ins/Object/prototype/hasOwnProperty/S15.2.4.5_A12.js
+test262/test/built-ins/Object/prototype/hasOwnProperty/S15.2.4.5_A13.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/S15.2.4.5_A1_T1.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/S15.2.4.5_A1_T2.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/S15.2.4.5_A1_T3.js
@@ -10116,6 +10169,7 @@ test262/test/built-ins/Object/prototype/hasOwnProperty/length.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/name.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/not-a-constructor.js
 test262/test/built-ins/Object/prototype/hasOwnProperty/symbol_own_property.js
+test262/test/built-ins/Object/prototype/isPrototypeOf/builtin.js
 test262/test/built-ins/Object/prototype/isPrototypeOf/length.js
 test262/test/built-ins/Object/prototype/isPrototypeOf/name.js
 test262/test/built-ins/Object/prototype/isPrototypeOf/not-a-constructor.js
@@ -10124,6 +10178,8 @@ test262/test/built-ins/Object/prototype/isPrototypeOf/this-value-is-in-prototype
 test262/test/built-ins/Object/prototype/isPrototypeOf/undefined-this-and-primitive-arg-returns-false.js
 test262/test/built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A10.js
 test262/test/built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A11.js
+test262/test/built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A12.js
+test262/test/built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A13.js
 test262/test/built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A1_T1.js
 test262/test/built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A2_T1.js
 test262/test/built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A2_T2.js
@@ -10153,6 +10209,7 @@ test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-boolean.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-date.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-error.js
+test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-function.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-null.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-number.js
 test262/test/built-ins/Object/prototype/toString/Object.prototype.toString.call-object.js
@@ -10165,9 +10222,18 @@ test262/test/built-ins/Object/prototype/toString/name.js
 test262/test/built-ins/Object/prototype/toString/no-prototype-property.js
 test262/test/built-ins/Object/prototype/toString/not-a-constructor.js
 test262/test/built-ins/Object/prototype/toString/prop-desc.js
+test262/test/built-ins/Object/prototype/toString/proxy-function-async.js
+test262/test/built-ins/Object/prototype/toString/proxy-function.js
 test262/test/built-ins/Object/prototype/toString/symbol-tag-array-builtin.js
+test262/test/built-ins/Object/prototype/toString/symbol-tag-generators-builtin.js
 test262/test/built-ins/Object/prototype/toString/symbol-tag-map-builtin.js
+test262/test/built-ins/Object/prototype/toString/symbol-tag-non-str-bigint.js
+test262/test/built-ins/Object/prototype/toString/symbol-tag-non-str-builtin.js
+test262/test/built-ins/Object/prototype/toString/symbol-tag-non-str-proxy-function.js
 test262/test/built-ins/Object/prototype/toString/symbol-tag-non-str.js
+test262/test/built-ins/Object/prototype/toString/symbol-tag-override-bigint.js
+test262/test/built-ins/Object/prototype/toString/symbol-tag-override-instances.js
+test262/test/built-ins/Object/prototype/toString/symbol-tag-override-primitives.js
 test262/test/built-ins/Object/prototype/toString/symbol-tag-promise-builtin.js
 test262/test/built-ins/Object/prototype/toString/symbol-tag-set-builtin.js
 test262/test/built-ins/Object/prototype/toString/symbol-tag-str.js
@@ -10917,8 +10983,12 @@ test262/test/built-ins/Proxy/apply/call-parameters.js
 test262/test/built-ins/Proxy/apply/call-result.js
 test262/test/built-ins/Proxy/apply/null-handler.js
 test262/test/built-ins/Proxy/apply/return-abrupt.js
+test262/test/built-ins/Proxy/apply/trap-is-missing-target-is-proxy.js
 test262/test/built-ins/Proxy/apply/trap-is-not-callable.js
+test262/test/built-ins/Proxy/apply/trap-is-null-target-is-proxy.js
 test262/test/built-ins/Proxy/apply/trap-is-null.js
+test262/test/built-ins/Proxy/apply/trap-is-undefined-no-property.js
+test262/test/built-ins/Proxy/apply/trap-is-undefined-target-is-proxy.js
 test262/test/built-ins/Proxy/apply/trap-is-undefined.js
 test262/test/built-ins/Proxy/construct/call-parameters-new-target.js
 test262/test/built-ins/Proxy/construct/call-parameters.js
@@ -10945,6 +11015,7 @@ test262/test/built-ins/Proxy/create-handler-not-object-throw-number.js
 test262/test/built-ins/Proxy/create-handler-not-object-throw-string.js
 test262/test/built-ins/Proxy/create-handler-not-object-throw-symbol.js
 test262/test/built-ins/Proxy/create-handler-not-object-throw-undefined.js
+test262/test/built-ins/Proxy/create-target-is-not-a-constructor.js
 test262/test/built-ins/Proxy/create-target-is-not-callable.js
 test262/test/built-ins/Proxy/create-target-is-revoked-function-proxy.js
 test262/test/built-ins/Proxy/create-target-is-revoked-proxy.js
@@ -10958,7 +11029,10 @@ test262/test/built-ins/Proxy/defineProperty/call-parameters.js
 test262/test/built-ins/Proxy/defineProperty/null-handler.js
 test262/test/built-ins/Proxy/defineProperty/return-boolean-and-define-target.js
 test262/test/built-ins/Proxy/defineProperty/return-is-abrupt.js
+test262/test/built-ins/Proxy/defineProperty/targetdesc-configurable-desc-not-configurable.js
 test262/test/built-ins/Proxy/defineProperty/targetdesc-not-compatible-descriptor-not-configurable-target.js
+test262/test/built-ins/Proxy/defineProperty/targetdesc-not-compatible-descriptor.js
+test262/test/built-ins/Proxy/defineProperty/targetdesc-not-configurable-writable-desc-not-writable.js
 test262/test/built-ins/Proxy/defineProperty/targetdesc-undefined-not-configurable-descriptor.js
 test262/test/built-ins/Proxy/defineProperty/targetdesc-undefined-target-is-not-extensible.js
 test262/test/built-ins/Proxy/defineProperty/trap-is-not-callable.js
@@ -11004,10 +11078,15 @@ test262/test/built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined-target
 test262/test/built-ins/Proxy/getOwnPropertyDescriptor/result-is-undefined.js
 test262/test/built-ins/Proxy/getOwnPropertyDescriptor/result-type-is-not-object-nor-undefined.js
 test262/test/built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-invalid-descriptor.js
+test262/test/built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-not-configurable-targetdesc-is-configurable.js
+test262/test/built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-is-not-configurable-targetdesc-is-undefined.js
 test262/test/built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-return-configurable.js
 test262/test/built-ins/Proxy/getOwnPropertyDescriptor/resultdesc-return-not-configurable.js
 test262/test/built-ins/Proxy/getOwnPropertyDescriptor/return-is-abrupt.js
 test262/test/built-ins/Proxy/getOwnPropertyDescriptor/trap-is-not-callable.js
+test262/test/built-ins/Proxy/getOwnPropertyDescriptor/trap-is-null-target-is-proxy.js
+test262/test/built-ins/Proxy/getOwnPropertyDescriptor/trap-is-undefined-target-is-proxy.js
+test262/test/built-ins/Proxy/getOwnPropertyDescriptor/trap-is-undefined.js
 test262/test/built-ins/Proxy/getPrototypeOf/call-parameters.js
 test262/test/built-ins/Proxy/getPrototypeOf/extensible-target-return-handlerproto.js
 test262/test/built-ins/Proxy/getPrototypeOf/not-extensible-not-same-proto-throws.js
@@ -11098,6 +11177,7 @@ test262/test/built-ins/Proxy/property-order.js
 test262/test/built-ins/Proxy/proxy-newtarget.js
 test262/test/built-ins/Proxy/proxy-undefined-newtarget.js
 test262/test/built-ins/Proxy/proxy.js
+test262/test/built-ins/Proxy/revocable/builtin.js
 test262/test/built-ins/Proxy/revocable/handler-is-revoked-proxy.js
 test262/test/built-ins/Proxy/revocable/length.js
 test262/test/built-ins/Proxy/revocable/name.js
@@ -11689,7 +11769,6 @@ test262/test/built-ins/RegExp/call_with_non_regexp_same_constructor.js
 test262/test/built-ins/RegExp/call_with_regexp_match_falsy.js
 test262/test/built-ins/RegExp/call_with_regexp_not_same_constructor.js
 test262/test/built-ins/RegExp/character-class-escape-non-whitespace-u180e.js
-test262/test/built-ins/RegExp/character-class-escape-non-whitespace.js
 test262/test/built-ins/RegExp/duplicate-flags.js
 test262/test/built-ins/RegExp/escape/escaped-control-characters.js
 test262/test/built-ins/RegExp/escape/escaped-lineterminator.js
@@ -12784,6 +12863,7 @@ test262/test/built-ins/Set/prototype/difference/add-not-called.js
 test262/test/built-ins/Set/prototype/difference/allows-set-like-class.js
 test262/test/built-ins/Set/prototype/difference/allows-set-like-object.js
 test262/test/built-ins/Set/prototype/difference/array-throws.js
+test262/test/built-ins/Set/prototype/difference/builtins.js
 test262/test/built-ins/Set/prototype/difference/called-with-object.js
 test262/test/built-ins/Set/prototype/difference/combines-Map.js
 test262/test/built-ins/Set/prototype/difference/combines-empty-sets.js
@@ -12888,6 +12968,7 @@ test262/test/built-ins/Set/prototype/intersection/add-not-called.js
 test262/test/built-ins/Set/prototype/intersection/allows-set-like-class.js
 test262/test/built-ins/Set/prototype/intersection/allows-set-like-object.js
 test262/test/built-ins/Set/prototype/intersection/array-throws.js
+test262/test/built-ins/Set/prototype/intersection/builtins.js
 test262/test/built-ins/Set/prototype/intersection/called-with-object.js
 test262/test/built-ins/Set/prototype/intersection/combines-Map.js
 test262/test/built-ins/Set/prototype/intersection/combines-empty-sets.js
@@ -12914,6 +12995,7 @@ test262/test/built-ins/Set/prototype/intersection/subclass.js
 test262/test/built-ins/Set/prototype/isDisjointFrom/allows-set-like-class.js
 test262/test/built-ins/Set/prototype/isDisjointFrom/allows-set-like-object.js
 test262/test/built-ins/Set/prototype/isDisjointFrom/array-throws.js
+test262/test/built-ins/Set/prototype/isDisjointFrom/builtins.js
 test262/test/built-ins/Set/prototype/isDisjointFrom/called-with-object.js
 test262/test/built-ins/Set/prototype/isDisjointFrom/compares-Map.js
 test262/test/built-ins/Set/prototype/isDisjointFrom/compares-empty-sets.js
@@ -12938,6 +13020,7 @@ test262/test/built-ins/Set/prototype/isDisjointFrom/subclass-receiver-methods.js
 test262/test/built-ins/Set/prototype/isSubsetOf/allows-set-like-class.js
 test262/test/built-ins/Set/prototype/isSubsetOf/allows-set-like-object.js
 test262/test/built-ins/Set/prototype/isSubsetOf/array-throws.js
+test262/test/built-ins/Set/prototype/isSubsetOf/builtins.js
 test262/test/built-ins/Set/prototype/isSubsetOf/called-with-object.js
 test262/test/built-ins/Set/prototype/isSubsetOf/compares-Map.js
 test262/test/built-ins/Set/prototype/isSubsetOf/compares-empty-sets.js
@@ -12960,6 +13043,7 @@ test262/test/built-ins/Set/prototype/isSubsetOf/subclass-receiver-methods.js
 test262/test/built-ins/Set/prototype/isSupersetOf/allows-set-like-class.js
 test262/test/built-ins/Set/prototype/isSupersetOf/allows-set-like-object.js
 test262/test/built-ins/Set/prototype/isSupersetOf/array-throws.js
+test262/test/built-ins/Set/prototype/isSupersetOf/builtins.js
 test262/test/built-ins/Set/prototype/isSupersetOf/called-with-object.js
 test262/test/built-ins/Set/prototype/isSupersetOf/compares-Map.js
 test262/test/built-ins/Set/prototype/isSupersetOf/compares-empty-sets.js
@@ -12992,6 +13076,7 @@ test262/test/built-ins/Set/prototype/symmetricDifference/add-not-called.js
 test262/test/built-ins/Set/prototype/symmetricDifference/allows-set-like-class.js
 test262/test/built-ins/Set/prototype/symmetricDifference/allows-set-like-object.js
 test262/test/built-ins/Set/prototype/symmetricDifference/array-throws.js
+test262/test/built-ins/Set/prototype/symmetricDifference/builtins.js
 test262/test/built-ins/Set/prototype/symmetricDifference/called-with-object.js
 test262/test/built-ins/Set/prototype/symmetricDifference/combines-Map.js
 test262/test/built-ins/Set/prototype/symmetricDifference/combines-empty-sets.js
@@ -13020,6 +13105,7 @@ test262/test/built-ins/Set/prototype/union/allows-set-like-class.js
 test262/test/built-ins/Set/prototype/union/allows-set-like-object.js
 test262/test/built-ins/Set/prototype/union/appends-new-values.js
 test262/test/built-ins/Set/prototype/union/array-throws.js
+test262/test/built-ins/Set/prototype/union/builtins.js
 test262/test/built-ins/Set/prototype/union/called-with-object.js
 test262/test/built-ins/Set/prototype/union/combines-Map.js
 test262/test/built-ins/Set/prototype/union/combines-empty-sets.js
@@ -13182,6 +13268,9 @@ test262/test/built-ins/String/prototype/S15.5.3.1_A1.js
 test262/test/built-ins/String/prototype/S15.5.3.1_A2.js
 test262/test/built-ins/String/prototype/S15.5.3.1_A3.js
 test262/test/built-ins/String/prototype/S15.5.3.1_A4.js
+test262/test/built-ins/String/prototype/S15.5.4_A1.js
+test262/test/built-ins/String/prototype/S15.5.4_A2.js
+test262/test/built-ins/String/prototype/S15.5.4_A3.js
 test262/test/built-ins/String/prototype/Symbol.iterator/length.js
 test262/test/built-ins/String/prototype/Symbol.iterator/name.js
 test262/test/built-ins/String/prototype/Symbol.iterator/not-a-constructor.js
@@ -13303,6 +13392,7 @@ test262/test/built-ins/String/prototype/endsWith/not-a-constructor.js
 test262/test/built-ins/String/prototype/endsWith/return-abrupt-from-position-as-symbol.js
 test262/test/built-ins/String/prototype/endsWith/return-abrupt-from-position.js
 test262/test/built-ins/String/prototype/endsWith/return-abrupt-from-searchstring-as-symbol.js
+test262/test/built-ins/String/prototype/endsWith/return-abrupt-from-searchstring-regexp-test.js
 test262/test/built-ins/String/prototype/endsWith/return-abrupt-from-searchstring.js
 test262/test/built-ins/String/prototype/endsWith/return-abrupt-from-this-as-symbol.js
 test262/test/built-ins/String/prototype/endsWith/return-abrupt-from-this.js
@@ -13329,6 +13419,7 @@ test262/test/built-ins/String/prototype/includes/not-a-constructor.js
 test262/test/built-ins/String/prototype/includes/return-abrupt-from-position-as-symbol.js
 test262/test/built-ins/String/prototype/includes/return-abrupt-from-position.js
 test262/test/built-ins/String/prototype/includes/return-abrupt-from-searchstring-as-symbol.js
+test262/test/built-ins/String/prototype/includes/return-abrupt-from-searchstring-regexp-test.js
 test262/test/built-ins/String/prototype/includes/return-abrupt-from-searchstring.js
 test262/test/built-ins/String/prototype/includes/return-abrupt-from-this-as-symbol.js
 test262/test/built-ins/String/prototype/includes/return-abrupt-from-this.js
@@ -13466,6 +13557,7 @@ test262/test/built-ins/String/prototype/match/S15.5.4.10_A6.js
 test262/test/built-ins/String/prototype/match/S15.5.4.10_A7.js
 test262/test/built-ins/String/prototype/match/S15.5.4.10_A8.js
 test262/test/built-ins/String/prototype/match/S15.5.4.10_A9.js
+test262/test/built-ins/String/prototype/match/cstm-matcher-get-err.js
 test262/test/built-ins/String/prototype/match/cstm-matcher-invocation.js
 test262/test/built-ins/String/prototype/match/cstm-matcher-is-null.js
 test262/test/built-ins/String/prototype/match/cstm-matcher-on-bigint-primitive.js
@@ -13492,6 +13584,7 @@ test262/test/built-ins/String/prototype/matchAll/prop-desc.js
 test262/test/built-ins/String/prototype/matchAll/regexp-get-matchAll-throws.js
 test262/test/built-ins/String/prototype/matchAll/regexp-is-null.js
 test262/test/built-ins/String/prototype/matchAll/regexp-is-undefined-or-null-invokes-matchAll.js
+test262/test/built-ins/String/prototype/matchAll/regexp-is-undefined.js
 test262/test/built-ins/String/prototype/matchAll/regexp-matchAll-invocation.js
 test262/test/built-ins/String/prototype/matchAll/regexp-matchAll-is-undefined-or-null.js
 test262/test/built-ins/String/prototype/matchAll/regexp-matchAll-not-callable.js
@@ -13502,6 +13595,7 @@ test262/test/built-ins/String/prototype/matchAll/regexp-prototype-matchAll-invoc
 test262/test/built-ins/String/prototype/matchAll/regexp-prototype-matchAll-throws.js
 test262/test/built-ins/String/prototype/matchAll/regexp-prototype-matchAll-v-u-flag.js
 test262/test/built-ins/String/prototype/matchAll/this-val-non-obj-coercible.js
+test262/test/built-ins/String/prototype/matchAll/toString-this-val.js
 test262/test/built-ins/String/prototype/normalize/form-is-not-valid-throws.js
 test262/test/built-ins/String/prototype/normalize/length.js
 test262/test/built-ins/String/prototype/normalize/name.js
@@ -13591,6 +13685,7 @@ test262/test/built-ins/String/prototype/replace/S15.5.4.11_A4_T4.js
 test262/test/built-ins/String/prototype/replace/S15.5.4.11_A5_T1.js
 test262/test/built-ins/String/prototype/replace/S15.5.4.11_A6.js
 test262/test/built-ins/String/prototype/replace/S15.5.4.11_A7.js
+test262/test/built-ins/String/prototype/replace/cstm-replace-get-err.js
 test262/test/built-ins/String/prototype/replace/cstm-replace-invocation.js
 test262/test/built-ins/String/prototype/replace/cstm-replace-is-null.js
 test262/test/built-ins/String/prototype/replace/cstm-replace-on-bigint-primitive.js
@@ -13628,6 +13723,7 @@ test262/test/built-ins/String/prototype/replaceAll/replaceValue-call-tostring-ab
 test262/test/built-ins/String/prototype/replaceAll/replaceValue-fn-skip-toString.js
 test262/test/built-ins/String/prototype/replaceAll/replaceValue-tostring-abrupt.js
 test262/test/built-ins/String/prototype/replaceAll/replaceValue-value-replaces-string.js
+test262/test/built-ins/String/prototype/replaceAll/replaceValue-value-tostring.js
 test262/test/built-ins/String/prototype/replaceAll/searchValue-empty-string-this-empty-string.js
 test262/test/built-ins/String/prototype/replaceAll/searchValue-empty-string.js
 test262/test/built-ins/String/prototype/replaceAll/searchValue-flags-no-g-throws.js
@@ -13677,6 +13773,7 @@ test262/test/built-ins/String/prototype/search/S15.5.4.12_A6.js
 test262/test/built-ins/String/prototype/search/S15.5.4.12_A7.js
 test262/test/built-ins/String/prototype/search/S15.5.4.12_A8.js
 test262/test/built-ins/String/prototype/search/S15.5.4.12_A9.js
+test262/test/built-ins/String/prototype/search/cstm-search-get-err.js
 test262/test/built-ins/String/prototype/search/cstm-search-invocation.js
 test262/test/built-ins/String/prototype/search/cstm-search-is-null.js
 test262/test/built-ins/String/prototype/search/cstm-search-on-bigint-primitive.js
@@ -13763,6 +13860,7 @@ test262/test/built-ins/String/prototype/split/call-split-1-100-instance-is-numbe
 test262/test/built-ins/String/prototype/split/call-split-1-2-instance-is-number.js
 test262/test/built-ins/String/prototype/split/call-split-1-boo-instance-is-number.js
 test262/test/built-ins/String/prototype/split/call-split-1-instance-is-number.js
+test262/test/built-ins/String/prototype/split/call-split-1-math-pow-2-32-1-instance-is-number.js
 test262/test/built-ins/String/prototype/split/call-split-1-void-0-instance-is-number.js
 test262/test/built-ins/String/prototype/split/call-split-123-instance-is-this123is123a123string123object.js
 test262/test/built-ins/String/prototype/split/call-split-2-instance-is-string-one-two-three-four-five.js
@@ -13801,6 +13899,7 @@ test262/test/built-ins/String/prototype/split/checking-if-enumerating-the-string
 test262/test/built-ins/String/prototype/split/checking-if-varying-the-string-prototype-split-length-property-fails.js
 test262/test/built-ins/String/prototype/split/checking-string-prototype-split-length.js
 test262/test/built-ins/String/prototype/split/checking-string-prototype-split-prototype.js
+test262/test/built-ins/String/prototype/split/cstm-split-get-err.js
 test262/test/built-ins/String/prototype/split/cstm-split-invocation.js
 test262/test/built-ins/String/prototype/split/cstm-split-is-null.js
 test262/test/built-ins/String/prototype/split/cstm-split-on-bigint-primitive.js
@@ -13835,7 +13934,9 @@ test262/test/built-ins/String/prototype/split/separator-regexp-comma-instance-is
 test262/test/built-ins/String/prototype/split/separator-regexp-limit-string-via-eval.js
 test262/test/built-ins/String/prototype/split/separator-regexp.js
 test262/test/built-ins/String/prototype/split/separator-string-instance-is-empty-string-object.js
+test262/test/built-ins/String/prototype/split/separator-tostring-error.js
 test262/test/built-ins/String/prototype/split/separator-undef-limit-custom.js
+test262/test/built-ins/String/prototype/split/separator-undef-limit-zero.js
 test262/test/built-ins/String/prototype/split/separator-undef.js
 test262/test/built-ins/String/prototype/split/this-value-not-obj-coercible.js
 test262/test/built-ins/String/prototype/split/this-value-tostring-error.js
@@ -13850,6 +13951,7 @@ test262/test/built-ins/String/prototype/startsWith/out-of-bounds-position.js
 test262/test/built-ins/String/prototype/startsWith/return-abrupt-from-position-as-symbol.js
 test262/test/built-ins/String/prototype/startsWith/return-abrupt-from-position.js
 test262/test/built-ins/String/prototype/startsWith/return-abrupt-from-searchstring-as-symbol.js
+test262/test/built-ins/String/prototype/startsWith/return-abrupt-from-searchstring-regexp-test.js
 test262/test/built-ins/String/prototype/startsWith/return-abrupt-from-searchstring.js
 test262/test/built-ins/String/prototype/startsWith/return-abrupt-from-this-as-symbol.js
 test262/test/built-ins/String/prototype/startsWith/return-abrupt-from-this.js
@@ -24480,6 +24582,7 @@ test262/test/language/expressions/generators/params-trailing-comma-multiple.js
 test262/test/language/expressions/generators/params-trailing-comma-single.js
 test262/test/language/expressions/generators/prototype-own-properties.js
 test262/test/language/expressions/generators/prototype-property-descriptor.js
+test262/test/language/expressions/generators/prototype-relation-to-function.js
 test262/test/language/expressions/generators/prototype-typeof.js
 test262/test/language/expressions/generators/prototype-uniqueness.js
 test262/test/language/expressions/generators/prototype-value.js
@@ -26277,6 +26380,7 @@ test262/test/language/expressions/property-accessors/S11.2.1_A4_T1.js
 test262/test/language/expressions/property-accessors/S11.2.1_A4_T2.js
 test262/test/language/expressions/property-accessors/S11.2.1_A4_T3.js
 test262/test/language/expressions/property-accessors/S11.2.1_A4_T4.js
+test262/test/language/expressions/property-accessors/S11.2.1_A4_T5.js
 test262/test/language/expressions/property-accessors/S11.2.1_A4_T6.js
 test262/test/language/expressions/property-accessors/S11.2.1_A4_T7.js
 test262/test/language/expressions/property-accessors/S11.2.1_A4_T8.js
@@ -28600,6 +28704,7 @@ test262/test/language/statements/await-using/fn-name-arrow.js
 test262/test/language/statements/await-using/fn-name-class.js
 test262/test/language/statements/await-using/fn-name-cover.js
 test262/test/language/statements/await-using/fn-name-fn.js
+test262/test/language/statements/await-using/fn-name-gen.js
 test262/test/language/statements/await-using/function-local-closure-get-before-initialization.js
 test262/test/language/statements/await-using/function-local-use-before-initialization-in-declaration-statement.js
 test262/test/language/statements/await-using/function-local-use-before-initialization-in-prior-statement.js
@@ -35864,11 +35969,13 @@ test262/test/language/statements/generators/params-trailing-comma-multiple.js
 test262/test/language/statements/generators/params-trailing-comma-single.js
 test262/test/language/statements/generators/prototype-own-properties.js
 test262/test/language/statements/generators/prototype-property-descriptor.js
+test262/test/language/statements/generators/prototype-relation-to-function.js
 test262/test/language/statements/generators/prototype-typeof.js
 test262/test/language/statements/generators/prototype-uniqueness.js
 test262/test/language/statements/generators/prototype-value.js
 test262/test/language/statements/generators/rest-param-strict-body.js
 test262/test/language/statements/generators/rest-params-trailing-comma-early-error.js
+test262/test/language/statements/generators/restricted-properties.js
 test262/test/language/statements/generators/return.js
 test262/test/language/statements/generators/scope-param-elem-var-close.js
 test262/test/language/statements/generators/scope-param-elem-var-open.js
@@ -36431,6 +36538,7 @@ test262/test/language/statements/using/fn-name-arrow.js
 test262/test/language/statements/using/fn-name-class.js
 test262/test/language/statements/using/fn-name-cover.js
 test262/test/language/statements/using/fn-name-fn.js
+test262/test/language/statements/using/fn-name-gen.js
 test262/test/language/statements/using/function-local-closure-get-before-initialization.js
 test262/test/language/statements/using/function-local-use-before-initialization-in-declaration-statement.js
 test262/test/language/statements/using/function-local-use-before-initialization-in-prior-statement.js

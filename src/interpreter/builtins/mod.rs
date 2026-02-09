@@ -495,17 +495,19 @@ impl Interpreter {
                 "toString".to_string(),
                 0,
                 |interp, this_val, _args| {
-                    if let JsValue::Object(o) = this_val
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let obj_ref = obj.borrow();
-                        let name = match obj_ref.get_property("name") {
-                            JsValue::Undefined => "Error".to_string(),
-                            v => to_js_string(&v),
+                    // §20.5.3.4 step 2: If Type(O) is not Object, throw TypeError
+                    if let JsValue::Object(o) = this_val {
+                        let name_val = interp.get_object_property(o.id, "name", this_val);
+                        let name = match name_val {
+                            Completion::Normal(JsValue::Undefined) => "Error".to_string(),
+                            Completion::Normal(v) => to_js_string(&v),
+                            other => return other,
                         };
-                        let msg = match obj_ref.get_property("message") {
-                            JsValue::Undefined => String::new(),
-                            v => to_js_string(&v),
+                        let msg_val = interp.get_object_property(o.id, "message", this_val);
+                        let msg = match msg_val {
+                            Completion::Normal(JsValue::Undefined) => String::new(),
+                            Completion::Normal(v) => to_js_string(&v),
+                            other => return other,
                         };
                         return if msg.is_empty() {
                             Completion::Normal(JsValue::String(JsString::from_str(&name)))
@@ -515,7 +517,9 @@ impl Interpreter {
                             ))))
                         };
                     }
-                    Completion::Normal(JsValue::String(JsString::from_str("Error")))
+                    Completion::Throw(
+                        interp.create_type_error("Error.prototype.toString requires that 'this' be an Object"),
+                    )
                 },
             ));
             ep.borrow_mut()
@@ -2313,6 +2317,10 @@ impl Interpreter {
                     if fp.borrow().prototype.is_none() {
                         fp.borrow_mut().prototype = self.object_prototype.clone();
                     }
+                    // Set function_prototype BEFORE installing methods so that
+                    // call/apply/bind themselves get Function.prototype as [[Prototype]]
+                    self.function_prototype = Some(fp.clone());
+
                     // Install call/apply/bind/toString on Function.prototype
                     self.setup_function_prototype(&fp);
 
@@ -2338,13 +2346,35 @@ impl Interpreter {
                         );
                     }
 
-                    self.function_prototype = Some(fp.clone());
-
                     // Retroactively fix [[Prototype]] of all functions created before
-                    // Function was registered. Walk global bindings AND their
-                    // properties (one level deep) to catch static methods like
-                    // Iterator.zip, Array.from, etc.
+                    // Function was registered. Walk global bindings 3 levels deep:
+                    // global → Constructor → prototype → method
+                    // Also fix accessor get/set functions.
                     let fp_id = fp.borrow().id;
+
+                    // Helper: fix a single object's prototype if it's callable
+                    let fix_callable =
+                        |obj: &Rc<RefCell<JsObjectData>>, fp: &Rc<RefCell<JsObjectData>>| {
+                            if obj.borrow().callable.is_some() {
+                                obj.borrow_mut().prototype = Some(fp.clone());
+                            }
+                        };
+
+                    // Collect all JsValue objects from a property descriptor (value + accessors)
+                    fn collect_pd_objects(pd: &PropertyDescriptor) -> Vec<JsValue> {
+                        let mut out = Vec::new();
+                        if let Some(ref v) = pd.value {
+                            out.push(v.clone());
+                        }
+                        if let Some(ref g) = pd.get {
+                            out.push(g.clone());
+                        }
+                        if let Some(ref s) = pd.set {
+                            out.push(s.clone());
+                        }
+                        out
+                    }
+
                     let bindings: Vec<JsValue> = self
                         .global_env
                         .borrow()
@@ -2356,32 +2386,100 @@ impl Interpreter {
                         if let JsValue::Object(o) = val
                             && let Some(obj) = self.get_object(o.id)
                         {
-                            let is_func = obj.borrow().callable.is_some();
-                            if is_func {
-                                obj.borrow_mut().prototype = Some(fp.clone());
-                            }
-                            // Also fix callable properties (static methods)
-                            let prop_vals: Vec<JsValue> = obj
+                            fix_callable(&obj, &fp);
+                            // Level 2: properties of global bindings (static methods, .prototype)
+                            let level2_vals: Vec<JsValue> = obj
                                 .borrow()
                                 .properties
                                 .values()
-                                .filter_map(|pd| pd.value.clone())
+                                .flat_map(collect_pd_objects)
                                 .collect();
-                            for pv in prop_vals {
-                                if let JsValue::Object(po) = &pv {
-                                    // Skip fp itself to avoid circular prototype chain
-                                    if Some(po.id) == fp_id {
-                                        continue;
-                                    }
-                                    if let Some(pobj) = self.get_object(po.id)
-                                        && pobj.borrow().callable.is_some()
-                                    {
-                                        pobj.borrow_mut().prototype = Some(fp.clone());
+                            for pv in &level2_vals {
+                                if let JsValue::Object(po) = pv {
+                                    if let Some(pobj) = self.get_object(po.id) {
+                                        // Don't set fp's own [[Prototype]] to itself
+                                        if Some(po.id) != fp_id {
+                                            fix_callable(&pobj, &fp);
+                                        }
+                                        // Level 3: always walk into properties (including fp's own)
+                                        let level3_vals: Vec<JsValue> = pobj
+                                            .borrow()
+                                            .properties
+                                            .values()
+                                            .flat_map(collect_pd_objects)
+                                            .collect();
+                                        for pv3 in &level3_vals {
+                                            if let JsValue::Object(po3) = pv3 {
+                                                if Some(po3.id) == fp_id {
+                                                    continue;
+                                                }
+                                                if let Some(pobj3) = self.get_object(po3.id) {
+                                                    fix_callable(&pobj3, &fp);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
+
+                    // Fix generator/async/async-generator function prototypes:
+                    // Their [[Prototype]] should be Function.prototype per spec
+                    // (§27.3.3, §27.7.3, §27.4.3) regardless of callability
+                    for special_proto in [
+                        self.generator_function_prototype.clone(),
+                        self.async_function_prototype.clone(),
+                        self.async_generator_function_prototype.clone(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        special_proto.borrow_mut().prototype = Some(fp.clone());
+                    }
+
+                    // Fix internal prototype fields (iterator protos, collection protos, etc.)
+                    // that aren't reachable through the global bindings walk above.
+                    let internal_protos: Vec<Rc<RefCell<JsObjectData>>> = [
+                        self.iterator_prototype.clone(),
+                        self.array_iterator_prototype.clone(),
+                        self.string_iterator_prototype.clone(),
+                        self.map_iterator_prototype.clone(),
+                        self.set_iterator_prototype.clone(),
+                        self.generator_prototype.clone(),
+                        self.async_iterator_prototype.clone(),
+                        self.async_generator_prototype.clone(),
+                        self.regexp_prototype.clone(),
+                        self.promise_prototype.clone(),
+                        self.arraybuffer_prototype.clone(),
+                        self.typed_array_prototype.clone(),
+                        self.dataview_prototype.clone(),
+                        self.weakref_prototype.clone(),
+                        self.finalization_registry_prototype.clone(),
+                        self.aggregate_error_prototype.clone(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    for proto in &internal_protos {
+                        let prop_vals: Vec<JsValue> = proto
+                            .borrow()
+                            .properties
+                            .values()
+                            .flat_map(collect_pd_objects)
+                            .collect();
+                        for pv in &prop_vals {
+                            if let JsValue::Object(po) = pv {
+                                if Some(po.id) == fp_id {
+                                    continue;
+                                }
+                                if let Some(pobj) = self.get_object(po.id) {
+                                    fix_callable(&pobj, &fp);
+                                }
+                            }
+                        }
+                    }
+
                     // Fix %ThrowTypeError% prototype (§10.2.4 step 11)
                     if let Some(JsValue::Object(ref te)) = self.throw_type_error
                         && let Some(te_obj) = self.get_object(te.id)
@@ -3188,18 +3286,27 @@ impl Interpreter {
                     }
                 }
 
-                // Add hasOwnProperty to Object.prototype
+                // Add hasOwnProperty to Object.prototype — §20.1.3.2
                 let has_own_fn = self.create_function(JsFunction::native(
                     "hasOwnProperty".to_string(),
                     1,
                     |interp, this_val, args| {
                         let key = args.first().map(to_property_key_string).unwrap_or_default();
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
-                        {
-                            return Completion::Normal(JsValue::Boolean(
-                                obj.borrow().has_own_property(&key),
-                            ));
+                        // ToObject(this value)
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let JsValue::Object(ref obj_ref) = o {
+                            // Use proxy-aware [[GetOwnProperty]]
+                            match interp.proxy_get_own_property_descriptor(obj_ref.id, &key) {
+                                Ok(desc_val) => {
+                                    return Completion::Normal(JsValue::Boolean(
+                                        !matches!(desc_val, JsValue::Undefined),
+                                    ));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
                         }
                         Completion::Normal(JsValue::Boolean(false))
                     },
@@ -3208,35 +3315,89 @@ impl Interpreter {
                     .borrow_mut()
                     .insert_builtin("hasOwnProperty".to_string(), has_own_fn);
 
-                // Object.prototype.toString
+                // Object.prototype.toString — §20.1.3.6
                 let obj_tostring_fn = self.create_function(JsFunction::native(
                     "toString".to_string(),
                     0,
                     |interp, this_val, _args| {
-                        let tag = match this_val {
-                            JsValue::Object(o) => {
-                                if let Some(obj) = interp.get_object(o.id) {
-                                    let cn = obj.borrow().class_name.clone();
-                                    if cn == "Object" && obj.borrow().callable.is_some() {
-                                        "Function".to_string()
-                                    } else {
-                                        cn
-                                    }
-                                } else {
-                                    "Object".to_string()
-                                }
-                            }
-                            JsValue::Undefined => "Undefined".to_string(),
-                            JsValue::Null => "Null".to_string(),
-                            JsValue::Boolean(_) => "Boolean".to_string(),
-                            JsValue::Number(_) => "Number".to_string(),
-                            JsValue::String(_) => "String".to_string(),
-                            JsValue::Symbol(_) => "Symbol".to_string(),
-                            JsValue::BigInt(_) => "BigInt".to_string(),
+                        // Steps 1-2: undefined/null
+                        if matches!(this_val, JsValue::Undefined) {
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                "[object Undefined]",
+                            )));
+                        }
+                        if matches!(this_val, JsValue::Null) {
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                "[object Null]",
+                            )));
+                        }
+                        // Step 3: Let O be ! ToObject(this value).
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
                         };
-                        Completion::Normal(JsValue::String(JsString::from_str(&format!(
-                            "[object {tag}]"
-                        ))))
+                        if let JsValue::Object(ref obj_ref) = o {
+                            // Steps 4-14: determine builtinTag from internal slots
+                            let builtin_tag = if let Some(obj) = interp.get_object(obj_ref.id) {
+                                let ob = obj.borrow();
+                                if ob.class_name == "Array" {
+                                    "Array"
+                                } else if ob.class_name == "Arguments" {
+                                    "Arguments"
+                                } else if ob.callable.is_some() {
+                                    "Function"
+                                } else if ob.class_name == "Error"
+                                    || ob.class_name == "TypeError"
+                                    || ob.class_name == "RangeError"
+                                    || ob.class_name == "ReferenceError"
+                                    || ob.class_name == "SyntaxError"
+                                    || ob.class_name == "URIError"
+                                    || ob.class_name == "EvalError"
+                                {
+                                    "Error"
+                                } else if ob.class_name == "Boolean"
+                                    && ob.primitive_value.is_some()
+                                {
+                                    "Boolean"
+                                } else if ob.class_name == "Number"
+                                    && ob.primitive_value.is_some()
+                                {
+                                    "Number"
+                                } else if ob.class_name == "String"
+                                    && ob.primitive_value.is_some()
+                                {
+                                    "String"
+                                } else if ob.class_name == "Date" {
+                                    "Date"
+                                } else if ob.class_name == "RegExp" {
+                                    "RegExp"
+                                } else {
+                                    "Object"
+                                }
+                            } else {
+                                "Object"
+                            };
+                            // Step 15: Let tag be ? Get(O, @@toStringTag).
+                            let tag_key = "Symbol(Symbol.toStringTag)".to_string();
+                            let tag_result =
+                                interp.get_object_property(obj_ref.id, &tag_key, &o);
+                            let tag = if let Completion::Normal(ref tag_val) = tag_result
+                                && let JsValue::String(s) = tag_val
+                            {
+                                // Step 16: If tag is a String, use it
+                                s.to_string()
+                            } else {
+                                // Step 17: Otherwise use builtinTag
+                                builtin_tag.to_string()
+                            };
+                            Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                                "[object {tag}]"
+                            ))))
+                        } else {
+                            Completion::Normal(JsValue::String(JsString::from_str(
+                                "[object Object]",
+                            )))
+                        }
                     },
                 ));
                 proto_obj
@@ -3289,19 +3450,33 @@ impl Interpreter {
                     .borrow_mut()
                     .insert_builtin("toLocaleString".to_string(), obj_tolocalestring_fn);
 
-                // Object.prototype.propertyIsEnumerable
+                // Object.prototype.propertyIsEnumerable — §20.1.3.4
                 let pie_fn = self.create_function(JsFunction::native(
                     "propertyIsEnumerable".to_string(),
                     1,
                     |interp, this_val, args| {
                         let key = args.first().map(to_property_key_string).unwrap_or_default();
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
-                            && let Some(desc) = obj.borrow().get_own_property(&key)
-                        {
-                            return Completion::Normal(JsValue::Boolean(
-                                desc.enumerable != Some(false),
-                            ));
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let JsValue::Object(ref obj_ref) = o {
+                            // Use proxy-aware [[GetOwnProperty]]
+                            match interp.proxy_get_own_property_descriptor(obj_ref.id, &key) {
+                                Ok(desc_val) => {
+                                    if matches!(desc_val, JsValue::Undefined) {
+                                        return Completion::Normal(JsValue::Boolean(false));
+                                    }
+                                    // Convert result to PropertyDescriptor to check enumerable
+                                    if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                        return Completion::Normal(JsValue::Boolean(
+                                            desc.enumerable != Some(false),
+                                        ));
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
                         }
                         Completion::Normal(JsValue::Boolean(false))
                     },
@@ -3595,7 +3770,6 @@ impl Interpreter {
                     ),
                 );
 
-                self.setup_function_prototype(&proto_obj);
             }
 
             // Add Object.defineProperty
@@ -6276,10 +6450,8 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("bind".to_string(), bind_fn);
 
-        // Merge Function.prototype.toString into Object.prototype.toString
-        // The existing Object.prototype.toString already handles [object Type] for non-functions.
-        // We override it with a combined version that handles both functions and objects.
-        let combined_tostring = self.create_function(JsFunction::native(
+        // Function.prototype.toString — §20.2.3.5
+        let fn_tostring = self.create_function(JsFunction::native(
             "toString".to_string(),
             0,
             |interp, this_val, _args: &[JsValue]| {
@@ -6320,70 +6492,15 @@ impl Interpreter {
                         };
                         return Completion::Normal(JsValue::String(JsString::from_str(&s)));
                     }
-                    // Check @@toStringTag (spec 20.1.3.6 steps 14-17)
-                    let tag_key = "Symbol(Symbol.toStringTag)".to_string();
-                    let tag_result = interp.get_object_property(o.id, &tag_key, this_val);
-                    if let Completion::Normal(ref tag_val) = tag_result
-                        && let JsValue::String(s) = tag_val
-                    {
-                        return Completion::Normal(JsValue::String(JsString::from_str(&format!(
-                            "[object {}]",
-                            s
-                        ))));
-                    }
-                    // builtinTag per spec: based on internal slots
-                    let builtin_tag = {
-                        let ob = obj.borrow();
-                        if ob.class_name == "Array" {
-                            "Array"
-                        } else if ob.class_name == "Arguments" {
-                            "Arguments"
-                        } else if ob.callable.is_some() {
-                            "Function"
-                        } else if ob.class_name == "Error"
-                            || ob.class_name == "TypeError"
-                            || ob.class_name == "RangeError"
-                            || ob.class_name == "ReferenceError"
-                            || ob.class_name == "SyntaxError"
-                            || ob.class_name == "URIError"
-                            || ob.class_name == "EvalError"
-                        {
-                            "Error"
-                        } else if ob.class_name == "Boolean" && ob.primitive_value.is_some() {
-                            "Boolean"
-                        } else if ob.class_name == "Number" && ob.primitive_value.is_some() {
-                            "Number"
-                        } else if ob.class_name == "String" && ob.primitive_value.is_some() {
-                            "String"
-                        } else if ob.class_name == "Date" {
-                            "Date"
-                        } else if ob.class_name == "RegExp" {
-                            "RegExp"
-                        } else {
-                            "Object"
-                        }
-                    };
-                    return Completion::Normal(JsValue::String(JsString::from_str(&format!(
-                        "[object {builtin_tag}]"
-                    ))));
                 }
-                let tag = match this_val {
-                    JsValue::Undefined => "Undefined",
-                    JsValue::Null => "Null",
-                    JsValue::Boolean(_) => "Boolean",
-                    JsValue::Number(_) => "Number",
-                    JsValue::String(_) => "String",
-                    JsValue::Symbol(_) => "Symbol",
-                    JsValue::BigInt(_) => "BigInt",
-                    JsValue::Object(_) => "Object",
-                };
-                Completion::Normal(JsValue::String(JsString::from_str(&format!(
-                    "[object {tag}]"
-                ))))
+                // Step 2: If this is not callable, throw TypeError
+                Completion::Throw(
+                    interp.create_type_error("Function.prototype.toString requires that 'this' be a Function"),
+                )
             },
         ));
         obj_proto
             .borrow_mut()
-            .insert_builtin("toString".to_string(), combined_tostring);
+            .insert_builtin("toString".to_string(), fn_tostring);
     }
 }

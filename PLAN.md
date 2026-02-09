@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 36,985 / 48,257 run (76.64%)
+**Current pass rate:** 37,093 / 48,257 run (76.87%)
 
 ---
 
@@ -30,19 +30,19 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
-| Object | 93% | 3,184/3,411 |
+| Object | 94% | 3,216/3,411 |
 | Array | 89% | 2,734/3,079 |
-| String | 93% | 1,141/1,215 |
-| Function | 85% | 433/509 |
-| Iterator | 85% | 438/510 |
+| String | 95% | 1,157/1,215 |
+| Function | 88% | 446/509 |
+| Iterator | 96% | 490/510 |
 | Promise | 94% | 599/639 |
 | Map | 99% | 203/204 |
-| Set | 95% | 365/383 |
+| Set | 97% | 372/383 |
 | Date | 94% | 561/594 |
 | DataView | 85% | 476/561 |
 | Reflect | 100% | 153/153 |
 | for-in | 94% | 108/115 |
-| Proxy | 74% | 231/311 |
+| Proxy | 79% | 245/311 |
 | Symbol | 75% | 71/94 |
 | RegExp | 74% | 1,398/1,879 |
 | Number | 98% | 331/335 |
@@ -141,6 +141,8 @@ These features block significant numbers of tests:
 
 53. ~~**Real-world app integration: Acorn, Marked, Prettier**~~ — ✅ Done (+79 net new passes, 76.25% → 76.42%).
 
+55. ~~**Conformance batch 22: String, Iterator helpers, Proxy/native fn prototype**~~ — Done (+108 new passes, 76.64% → 76.87%). Three orthogonal fixes: (1) String built-in fixes: getter-aware Symbol method lookups (match/replace/search/split), IsRegExp check, split ToUint32 limit, replaceAll upfront ToString, String.prototype as String wrapper object, matchAll fixes. String: 1,141→1,157/1,215 (95%). (2) Iterator helper fixes: re-entrancy detection via `running` flag, return method error propagation, take/drop argument validation with iterator close, concat.length=0, Iterator.from rewrite with WrapForValidIteratorPrototype, constructor/toStringTag as accessor properties. Iterator: 438→490/510 (96%). (3) Native function [[Prototype]] fix: `create_function()` uses `self.function_prototype` field directly, retroactive walk extended to cover internal prototype fields (iterator/collection/generator protos), generator/async function prototypes unconditionally fixed, Error.prototype.toString throws TypeError for non-object `this`. Function: 433→446/509 (88%), Proxy: 231→245/311 (79%), Object: 3,184→3,216/3,411 (94%), Set: 365→372/383 (97%).
+
 54. ~~**Conformance batch 21: Reflect, CanBeHeldWeakly, Proxy has+with**~~ — ✅ Done (+109 new passes, 76.42% → 76.64%). Three orthogonal features implemented in parallel: (1) Reflect built-in fixes: Reflect[Symbol.toStringTag], setPrototypeOf returns false (not throws) per spec §9.1.2, ownKeys property ordering (integer indices → strings → symbols per §9.1.12), Reflect.has.length=2, ToPropertyKey error propagation, CreateListFromArrayLike validation in apply/construct, Reflect.set accessor with receiver. Reflect: 132→153/153 (100%). (2) CanBeHeldWeakly + WeakRef/FinalizationRegistry: implemented CanBeHeldWeakly (§7.2.7) — objects and unregistered symbols can be held weakly, registered symbols and primitives cannot. Applied to WeakRef constructor, WeakMap.set, WeakSet.add, FinalizationRegistry register/unregister. Symbol tokens in FinalizationRegistry. OrdinaryCreateFromConstructor for NewTarget prototype. WeakRef: 24→28/29 (97%), FinalizationRegistry: 36→46/47 (98%). (3) Proxy `has` trap in `with` statement: Object Environment Record HasBinding now uses proxy-aware [[HasProperty]] for with-scope lookups. GetBindingValue uses get_object_property for proxy get trap. Proxy/has: 17→24/26 (92%), with: 121→124/181 (69%). Real-world JavaScript apps (Acorn parser, Marked markdown, Prettier formatter) exposed engine bugs fixed in feat/realapp branch. Key fixes: (1) Parser: `async`/`of` as contextual identifiers, `true`/`false`/`null` as dot member property names and object property keys, optional chaining continuation (`.prop`, `[expr]`, `()` after `?.`). (2) Array: GC rooting for intermediate arrays in concat/slice/map/filter/splice. (3) GC: module environment and promise data tracing, call stack environment rooting in exec_statements, private field definition tracing. (4) Eval: private field access on class instances, computed member access improvements. Post-merge fixes: array index bounds check (indices ≥ 2^32-1 are not valid array indices, density check for sparse arrays), exponentiation spec compliance (±1 ** ±∞ = NaN per §6.1.6.1.4), reserved word shorthand rejection (`({false})` is SyntaxError), RegExp `\d`/`\D`/`\w`/`\W` translated to ASCII-only character classes per spec. Note: 37 RegExp property-escape tests that were passing vacuously (broken buildString returned empty arrays) now correctly fail due to regex crate Unicode data version mismatch. Array: 2,711→2,734/3,079 (89%), RegExp: 1,432→1,398/1,879 (74%, -34 from vacuous property-escape fixes).
 
 ---
@@ -208,6 +210,6 @@ These are tracked across all phases:
 | M5 | Objects + prototypes | ~6,000 | ✅ |
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
-| M8 | Classes, iterators, generators, async/await | ~35,000 | ⬜ Partial |
+| M8 | Classes, iterators, generators, async/await | ~35,000 | ✅ 37,093 |
 | M9 | RegExp, Proxy, Reflect, Promise, modules | ~45,000 | ⬜ |
 | M10 | Full spec compliance | ~48,000+ | ⬜ |

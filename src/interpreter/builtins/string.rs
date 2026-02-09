@@ -43,6 +43,32 @@ fn this_string_value(interp: &mut Interpreter, this: &JsValue) -> Result<String,
     }
 }
 
+// Extract the raw JsString (preserving lone surrogates) from this value
+fn this_js_string(interp: &mut Interpreter, this: &JsValue) -> Result<JsString, Completion> {
+    match this {
+        JsValue::Null | JsValue::Undefined => Err(Completion::Throw(
+            interp.create_type_error("String.prototype method called on null or undefined"),
+        )),
+        JsValue::String(s) => Ok(s.clone()),
+        JsValue::Object(o) => {
+            if let Some(obj) = interp.get_object(o.id)
+                && obj.borrow().class_name == "String"
+                && let Some(JsValue::String(s)) = &obj.borrow().primitive_value
+            {
+                return Ok(s.clone());
+            }
+            match interp.to_string_value(this) {
+                Ok(s) => Ok(JsString::from_str(&s)),
+                Err(e) => Err(Completion::Throw(e)),
+            }
+        }
+        _ => match interp.to_string_value(this) {
+            Ok(s) => Ok(JsString::from_str(&s)),
+            Err(e) => Err(Completion::Throw(e)),
+        },
+    }
+}
+
 fn to_str(interp: &mut Interpreter, val: &JsValue) -> Result<String, Completion> {
     match interp.to_string_value(val) {
         Ok(s) => Ok(s),
@@ -66,6 +92,36 @@ fn utf16_units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
+// §7.1.7 ToUint32
+fn to_uint32(n: f64) -> u32 {
+    if n.is_nan() || n.is_infinite() || n == 0.0 {
+        return 0;
+    }
+    let int_val = n.signum() * n.abs().floor();
+    let two32: f64 = 4294967296.0; // 2^32
+    let int32bit = int_val % two32;
+    let int32bit = if int32bit < 0.0 { int32bit + two32 } else { int32bit };
+    int32bit as u32
+}
+
+// §7.2.8 IsRegExp(argument) — uses [[Get]] for Symbol.match (invokes getters)
+fn is_regexp(interp: &mut Interpreter, obj_id: u64, obj_val: &JsValue) -> Result<bool, JsValue> {
+    if let Some(match_key) = interp.get_symbol_key("match") {
+        match interp.get_object_property(obj_id, &match_key, obj_val) {
+            Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
+                return Ok(to_boolean(&v));
+            }
+            Completion::Normal(_) => {}
+            Completion::Throw(e) => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(interp
+        .get_object(obj_id)
+        .map(|obj| obj.borrow().class_name == "RegExp")
+        .unwrap_or(false))
+}
+
 fn utf16_substring(units: &[u16], from: usize, to: usize) -> String {
     let from = from.min(units.len());
     let to = to.min(units.len());
@@ -79,6 +135,7 @@ impl Interpreter {
     pub(crate) fn setup_string_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "String".to_string();
+        proto.borrow_mut().primitive_value = Some(JsValue::String(JsString::from_str("")));
 
         #[allow(clippy::type_complexity)]
         let methods: Vec<(
@@ -90,7 +147,7 @@ impl Interpreter {
                 "charAt",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
+                    let js_str = match this_js_string(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
@@ -101,20 +158,21 @@ impl Interpreter {
                         },
                         None => 0.0,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
                         return Completion::Normal(JsValue::String(JsString::from_str("")));
                     }
-                    let ch = String::from_utf16_lossy(&units[idx as usize..idx as usize + 1]);
-                    Completion::Normal(JsValue::String(JsString::from_str(&ch)))
+                    Completion::Normal(JsValue::String(JsString {
+                        code_units: vec![units[idx as usize]],
+                    }))
                 }),
             ),
             (
                 "charCodeAt",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
+                    let js_str = match this_js_string(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
@@ -125,7 +183,7 @@ impl Interpreter {
                         },
                         None => 0.0,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
@@ -137,7 +195,7 @@ impl Interpreter {
                 "codePointAt",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
+                    let js_str = match this_js_string(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
@@ -148,7 +206,7 @@ impl Interpreter {
                         },
                         None => 0.0,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
                         return Completion::Normal(JsValue::Undefined);
@@ -259,14 +317,16 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let search_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    // Throw if search is a RegExp
-                    if let JsValue::Object(ref o) = search_arg
-                        && let Some(obj) = interp.get_object(o.id)
-                        && obj.borrow().class_name == "RegExp"
-                    {
-                        return Completion::Throw(interp.create_type_error(
+                    if let JsValue::Object(ref o) = search_arg {
+                        match is_regexp(interp, o.id, &search_arg) {
+                            Ok(true) => {
+                                return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.includes must not be a regular expression",
                                 ));
+                            }
+                            Err(e) => return Completion::Throw(e),
+                            _ => {}
+                        }
                     }
                     let search = match to_str(interp, &search_arg) {
                         Ok(s) => s,
@@ -305,13 +365,16 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let search_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_arg
-                        && let Some(obj) = interp.get_object(o.id)
-                        && obj.borrow().class_name == "RegExp"
-                    {
-                        return Completion::Throw(interp.create_type_error(
+                    if let JsValue::Object(ref o) = search_arg {
+                        match is_regexp(interp, o.id, &search_arg) {
+                            Ok(true) => {
+                                return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.startsWith must not be a regular expression",
                                 ));
+                            }
+                            Err(e) => return Completion::Throw(e),
+                            _ => {}
+                        }
                     }
                     let search = match to_str(interp, &search_arg) {
                         Ok(s) => s,
@@ -344,13 +407,16 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let search_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_arg
-                        && let Some(obj) = interp.get_object(o.id)
-                        && obj.borrow().class_name == "RegExp"
-                    {
-                        return Completion::Throw(interp.create_type_error(
+                    if let JsValue::Object(ref o) = search_arg {
+                        match is_regexp(interp, o.id, &search_arg) {
+                            Ok(true) => {
+                                return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.endsWith must not be a regular expression",
                                 ));
+                            }
+                            Err(e) => return Completion::Throw(e),
+                            _ => {}
+                        }
                     }
                     let search = match to_str(interp, &search_arg) {
                         Ok(s) => s,
@@ -592,9 +658,7 @@ impl Interpreter {
                     let pad: Vec<u16> = fill_units.iter().copied().cycle().take(fill_len).collect();
                     let mut result = pad;
                     result.extend_from_slice(&s_units);
-                    Completion::Normal(JsValue::String(JsString::from_str(
-                        &String::from_utf16_lossy(&result),
-                    )))
+                    Completion::Normal(JsValue::String(JsString { code_units: result }))
                 }),
             ),
             (
@@ -630,9 +694,7 @@ impl Interpreter {
                     let pad: Vec<u16> = fill_units.iter().copied().cycle().take(fill_len).collect();
                     let mut result = s_units;
                     result.extend_from_slice(&pad);
-                    Completion::Normal(JsValue::String(JsString::from_str(
-                        &String::from_utf16_lossy(&result),
-                    )))
+                    Completion::Normal(JsValue::String(JsString { code_units: result }))
                 }),
             ),
             (
@@ -709,15 +771,18 @@ impl Interpreter {
                     }
                     let separator = args.first().cloned().unwrap_or(JsValue::Undefined);
                     // Check for Symbol.split on the separator
-                    if let JsValue::Object(ref o) = separator
-                        && let Some(key) = interp.get_symbol_key("split")
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let method = obj.borrow().get_property(&key);
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let this_str = this_val.clone();
-                            let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                            return interp.call_function(&method, &separator, &[this_str, limit]);
+                    if let JsValue::Object(ref o) = separator {
+                        if let Some(key) = interp.get_symbol_key("split") {
+                            let method = match interp.get_object_property(o.id, &key, &separator) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            };
+                            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                let this_str = this_val.clone();
+                                let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                return interp.call_function(&method, &separator, &[this_str, limit]);
+                            }
                         }
                     }
                     let s = match to_str(interp, this_val) {
@@ -725,26 +790,34 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let limit_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    // Per spec: ToUint32(limit) — NaN/Infinity/2^32/etc map to 0
                     let limit: u32 = if matches!(limit_arg, JsValue::Undefined) {
-                        u32::MAX
+                        0xFFFF_FFFF // 2^32 - 1
                     } else {
                         match to_num(interp, &limit_arg) {
-                            Ok(n) => n as u32,
+                            Ok(n) => to_uint32(n),
                             Err(c) => return c,
                         }
+                    };
+                    // Per spec step 7: ToString(separator) BEFORE limit check
+                    let sep_is_undef = matches!(separator, JsValue::Undefined);
+                    let sep_str = if !sep_is_undef {
+                        match to_str(interp, &separator) {
+                            Ok(s) => Some(s),
+                            Err(c) => return c,
+                        }
+                    } else {
+                        None
                     };
                     if limit == 0 {
                         return Completion::Normal(interp.create_array(vec![]));
                     }
-                    if matches!(separator, JsValue::Undefined) {
+                    if sep_is_undef {
                         return Completion::Normal(
                             interp.create_array(vec![JsValue::String(JsString::from_str(&s))]),
                         );
                     }
-                    let sep_str = match to_str(interp, &separator) {
-                        Ok(s) => s,
-                        Err(c) => return c,
-                    };
+                    let sep_str = sep_str.unwrap();
                     let s_units = utf16_units(&s);
                     let sep_units = utf16_units(&sep_str);
                     let s_len = s_units.len();
@@ -797,18 +870,21 @@ impl Interpreter {
                         ));
                     }
                     let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_value
-                        && let Some(key) = interp.get_symbol_key("replace")
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let method = obj.borrow().get_property(&key);
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let replace_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                            return interp.call_function(
-                                &method,
-                                &search_value,
-                                &[this_val.clone(), replace_val],
-                            );
+                    if let JsValue::Object(ref o) = search_value {
+                        if let Some(key) = interp.get_symbol_key("replace") {
+                            let method = match interp.get_object_property(o.id, &key, &search_value) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            };
+                            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                let replace_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                return interp.call_function(
+                                    &method,
+                                    &search_value,
+                                    &[this_val.clone(), replace_val],
+                                );
+                            }
                         }
                     }
                     let s = match to_str(interp, this_val) {
@@ -988,6 +1064,15 @@ impl Interpreter {
                     } else {
                         false
                     };
+                    // Per spec step 6a: if not functional, ToString(replaceValue) once upfront
+                    let replace_str = if !is_fn {
+                        match to_str(interp, &replace_arg) {
+                            Ok(s) => Some(s),
+                            Err(c) => return c,
+                        }
+                    } else {
+                        None
+                    };
                     let s_units = utf16_units(&s);
                     let search_units = utf16_units(&search);
                     let s_len = s_units.len();
@@ -1039,11 +1124,8 @@ impl Interpreter {
                             };
                             result.extend(rep.encode_utf16());
                         } else {
-                            let rep_str = match to_str(interp, &replace_arg) {
-                                Ok(s) => s,
-                                Err(c) => return c,
-                            };
-                            let rep = apply_replacement_pattern(&rep_str, &matched, &s, pos);
+                            let rep_str = replace_str.as_ref().unwrap();
+                            let rep = apply_replacement_pattern(rep_str, &matched, &s, pos);
                             result.extend(rep.encode_utf16());
                         }
                         last_end = pos + search_len;
@@ -1058,11 +1140,11 @@ impl Interpreter {
                 "at",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
+                    let js_str = match this_js_string(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let len = units.len() as i64;
                     let idx = match args.first() {
                         Some(v) => match to_num(interp, v) {
@@ -1075,8 +1157,9 @@ impl Interpreter {
                     if actual < 0 || actual >= len {
                         return Completion::Normal(JsValue::Undefined);
                     }
-                    let ch = String::from_utf16_lossy(&units[actual as usize..actual as usize + 1]);
-                    Completion::Normal(JsValue::String(JsString::from_str(&ch)))
+                    Completion::Normal(JsValue::String(JsString {
+                        code_units: vec![units[actual as usize]],
+                    }))
                 }),
             ),
             (
@@ -1089,14 +1172,17 @@ impl Interpreter {
                         ));
                     }
                     let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = regexp
-                        && let Some(key) = interp.get_symbol_key("search")
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let method = obj.borrow().get_property(&key);
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let this_str = this_val.clone();
-                            return interp.call_function(&method, &regexp, &[this_str]);
+                    if let JsValue::Object(ref o) = regexp {
+                        if let Some(key) = interp.get_symbol_key("search") {
+                            let method = match interp.get_object_property(o.id, &key, &regexp) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            };
+                            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                let this_str = this_val.clone();
+                                return interp.call_function(&method, &regexp, &[this_str]);
+                            }
                         }
                     }
                     let s = match to_str(interp, this_val) {
@@ -1142,14 +1228,17 @@ impl Interpreter {
                         ));
                     }
                     let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = regexp
-                        && let Some(key) = interp.get_symbol_key("match")
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let method = obj.borrow().get_property(&key);
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let this_str = this_val.clone();
-                            return interp.call_function(&method, &regexp, &[this_str]);
+                    if let JsValue::Object(ref o) = regexp {
+                        if let Some(key) = interp.get_symbol_key("match") {
+                            let method = match interp.get_object_property(o.id, &key, &regexp) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            };
+                            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                                let this_str = this_val.clone();
+                                return interp.call_function(&method, &regexp, &[this_str]);
+                            }
                         }
                     }
                     let s = match to_str(interp, this_val) {
@@ -1261,19 +1350,32 @@ impl Interpreter {
                             }
                         }
                     }
-                    // Create a RegExp with 'g' flag and call @@matchAll
-                    let source = match to_str(interp, &regexp) {
+                    // Step 3: Let S be ? ToString(O)
+                    let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
+                    };
+                    // Step 4: Let R be ? ToString(regexp)
+                    // Per spec: RegExpCreate(regexp, "g") — undefined -> empty pattern
+                    let source = if matches!(regexp, JsValue::Undefined) {
+                        String::new()
+                    } else {
+                        match to_str(interp, &regexp) {
+                            Ok(s) => s,
+                            Err(c) => return c,
+                        }
                     };
                     let rx = interp.create_regexp(&source, "g");
                     if let JsValue::Object(ref ro) = rx
                         && let Some(key) = interp.get_symbol_key("matchAll")
-                        && let Some(obj) = interp.get_object(ro.id)
                     {
-                        let method = obj.borrow().get_property(&key);
+                        let method = match interp.get_object_property(ro.id, &key, &rx) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            other => return other,
+                        };
                         if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let this_str = this_val.clone();
+                            let this_str = JsValue::String(JsString::from_str(&s));
                             return interp.call_function(&method, &rx, &[this_str]);
                         }
                     }
@@ -1334,11 +1436,11 @@ impl Interpreter {
                 "isWellFormed",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let s = match this_string_value(interp, this_val) {
+                    let js_str = match this_js_string(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let mut i = 0;
                     while i < units.len() {
                         let cu = units[i];
@@ -1360,11 +1462,11 @@ impl Interpreter {
                 "toWellFormed",
                 0,
                 Rc::new(|interp, this_val, _args| {
-                    let s = match this_string_value(interp, this_val) {
+                    let js_str = match this_js_string(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let mut result = Vec::with_capacity(units.len());
                     let mut i = 0;
                     while i < units.len() {
@@ -1386,9 +1488,7 @@ impl Interpreter {
                             i += 1;
                         }
                     }
-                    Completion::Normal(JsValue::String(JsString::from_str(
-                        &String::from_utf16_lossy(&result),
-                    )))
+                    Completion::Normal(JsValue::String(JsString { code_units: result }))
                 }),
             ),
         ];

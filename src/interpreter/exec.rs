@@ -1121,17 +1121,27 @@ impl Interpreter {
         let mut v = JsValue::Undefined;
         if let JsValue::Object(ref o) = obj_val {
             let obj_id = o.id;
-            let keys = if let Some(obj) = self.get_object(obj_id) {
-                obj.borrow().enumerable_keys_with_proto()
-            } else {
-                return Completion::Normal(JsValue::Undefined);
+            let keys = {
+                let is_proxy = self
+                    .get_object(obj_id)
+                    .map(|obj| obj.borrow().is_proxy())
+                    .unwrap_or(false);
+                if is_proxy {
+                    match self.proxy_enumerable_keys_with_proto(obj_id) {
+                        Ok(k) => k,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else if let Some(obj) = self.get_object(obj_id) {
+                    obj.borrow().enumerable_keys_with_proto()
+                } else {
+                    return Completion::Normal(JsValue::Undefined);
+                }
             };
             for key in keys {
-                // Skip keys that have been deleted during iteration
-                let still_exists = if let Some(obj) = self.get_object(obj_id) {
-                    obj.borrow().has_property(&key)
-                } else {
-                    false
+                // Skip keys that have been deleted during iteration (proxy-aware)
+                let still_exists = match self.proxy_has_property(obj_id, &key) {
+                    Ok(b) => b,
+                    Err(e) => return Completion::Throw(e),
                 };
                 if !still_exists {
                     continue;

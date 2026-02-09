@@ -448,22 +448,9 @@ impl Interpreter {
                 .clone()
                 .or(self.object_prototype.clone())
         } else {
-            // Look up Function.prototype dynamically to ensure identity matches
-            let fp = self.global_env.borrow().get("Function").and_then(|fv| {
-                if let JsValue::Object(fo) = fv {
-                    self.get_object(fo.id).and_then(|fd| {
-                        let pv = fd.borrow().get_property("prototype");
-                        if let JsValue::Object(pr) = pv {
-                            self.get_object(pr.id)
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                }
-            });
-            fp.or(self.object_prototype.clone())
+            self.function_prototype
+                .clone()
+                .or(self.object_prototype.clone())
         };
         obj_data.callable = Some(func);
         obj_data.class_name = if is_async_gen {
