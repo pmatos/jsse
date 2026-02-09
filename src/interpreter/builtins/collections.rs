@@ -1887,13 +1887,12 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let map_data = obj.borrow().map_data.clone();
-                    if let Some(entries) = map_data {
+                    if is_weakmap && let Some(entries) = map_data {
                         let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !matches!(key, JsValue::Object(_)) {
-                            let err =
-                                interp.create_type_error("Invalid value used as weak map key");
-                            return Completion::Throw(err);
+                        if !interp.can_be_held_weakly(&key) {
+                            return Completion::Normal(JsValue::Undefined);
                         }
                         for entry in entries.iter().flatten() {
                             if strict_equality(&entry.0, &key) {
@@ -1918,9 +1917,9 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let has_map = obj.borrow().map_data.is_some();
-                    if has_map {
+                    if has_map && obj.borrow().class_name == "WeakMap" {
                         let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !matches!(key, JsValue::Object(_)) {
+                        if !interp.can_be_held_weakly(&key) {
                             let err =
                                 interp.create_type_error("Invalid value used as weak map key");
                             return Completion::Throw(err);
@@ -1952,10 +1951,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let map_data = obj.borrow().map_data.clone();
-                    if let Some(entries) = map_data {
+                    if is_weakmap && let Some(entries) = map_data {
                         let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !matches!(key, JsValue::Object(_)) {
+                        if !interp.can_be_held_weakly(&key) {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                         for entry in entries.iter().flatten() {
@@ -1980,10 +1980,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let has_map = obj.borrow().map_data.is_some();
-                    if has_map {
+                    if is_weakmap && has_map {
                         let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !matches!(key, JsValue::Object(_)) {
+                        if !interp.can_be_held_weakly(&key) {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                         let mut borrowed = obj.borrow_mut();
@@ -2152,10 +2153,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_set = obj.borrow().set_data.is_some();
+                    let has_set =
+                        obj.borrow().set_data.is_some() && obj.borrow().class_name == "WeakSet";
                     if has_set {
                         let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !matches!(value, JsValue::Object(_)) {
+                        if !interp.can_be_held_weakly(&value) {
                             let err = interp.create_type_error("Invalid value used in weak set");
                             return Completion::Throw(err);
                         }
@@ -2184,10 +2186,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    let is_weakset = obj.borrow().class_name == "WeakSet";
                     let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
+                    if is_weakset && let Some(entries) = set_data {
                         let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !matches!(value, JsValue::Object(_)) {
+                        if !interp.can_be_held_weakly(&value) {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                         for entry in entries.iter().flatten() {
@@ -2212,10 +2215,11 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    let is_weakset = obj.borrow().class_name == "WeakSet";
                     let has_set = obj.borrow().set_data.is_some();
-                    if has_set {
+                    if is_weakset && has_set {
                         let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !matches!(value, JsValue::Object(_)) {
+                        if !interp.can_be_held_weakly(&value) {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                         let mut borrowed = obj.borrow_mut();
@@ -2355,16 +2359,17 @@ impl Interpreter {
             "deref".to_string(),
             0,
             |interp, this, _args| {
+                // Require this to be an object with [[WeakRefTarget]] internal slot
+                // (indicated by class_name == "WeakRef" AND primitive_value.is_some())
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().class_name == "WeakRef"
                 {
-                    return Completion::Normal(
-                        obj.borrow()
-                            .primitive_value
-                            .clone()
-                            .unwrap_or(JsValue::Undefined),
-                    );
+                    let b = obj.borrow();
+                    if b.class_name == "WeakRef" && b.primitive_value.is_some() {
+                        return Completion::Normal(
+                            b.primitive_value.clone().unwrap_or(JsValue::Undefined),
+                        );
+                    }
                 }
                 Completion::Throw(
                     interp.create_type_error("WeakRef.prototype.deref requires a WeakRef"),
@@ -2391,7 +2396,6 @@ impl Interpreter {
         }
 
         // WeakRef constructor
-        let proto_clone = proto.clone();
         let weakref_ctor = self.create_function(JsFunction::constructor(
             "WeakRef".to_string(),
             1,
@@ -2401,17 +2405,22 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                match &target {
-                    JsValue::Object(_) | JsValue::Symbol(_) => {}
-                    _ => {
-                        let err =
-                            interp.create_type_error("WeakRef requires a target object or symbol");
-                        return Completion::Throw(err);
-                    }
+                if !interp.can_be_held_weakly(&target) {
+                    return Completion::Throw(interp.create_type_error(
+                        "WeakRef: target must be an object or non-registered symbol",
+                    ));
                 }
+                // OrdinaryCreateFromConstructor(NewTarget, "%WeakRef.prototype%")
+                let default_proto = interp.weakref_prototype.clone();
+                let proto = match interp.get_prototype_from_new_target(&default_proto) {
+                    Ok(p) => p,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
                 obj.borrow_mut().class_name = "WeakRef".to_string();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                if let Some(p) = proto {
+                    obj.borrow_mut().prototype = Some(p);
+                }
                 obj.borrow_mut().primitive_value = Some(target);
                 let id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -2458,19 +2467,53 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().class_name == "FinalizationRegistry"
                 {
-                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    match &target {
-                        JsValue::Object(_) | JsValue::Symbol(_) => {}
-                        _ => {
+                    // Check [[Cells]] internal slot: class_name + map_data.is_some()
+                    let has_cells = {
+                        let b = obj.borrow();
+                        b.class_name == "FinalizationRegistry" && b.map_data.is_some()
+                    };
+                    if has_cells {
+                        let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        if !interp.can_be_held_weakly(&target) {
                             return Completion::Throw(interp.create_type_error(
-                                "FinalizationRegistry.register requires an object target",
+                                "FinalizationRegistry.register: target must be an object or non-registered symbol",
                             ));
                         }
+                        let held_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        // SameValue(target, heldValue) => TypeError
+                        if same_value(&target, &held_value) {
+                            return Completion::Throw(interp.create_type_error(
+                                "FinalizationRegistry.register: target and heldValue must not be the same",
+                            ));
+                        }
+                        let unregister_token = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                        // If CanBeHeldWeakly(unregisterToken) is false:
+                        //   If unregisterToken is not undefined, throw TypeError
+                        if !interp.can_be_held_weakly(&unregister_token) {
+                            if !matches!(unregister_token, JsValue::Undefined) {
+                                return Completion::Throw(interp.create_type_error(
+                                    "FinalizationRegistry.register: unregisterToken must be an object, non-registered symbol, or undefined",
+                                ));
+                            }
+                        }
+                        // Store cell: map_data stores (target, heldValue), set_data stores unregisterToken
+                        let token_entry = if matches!(unregister_token, JsValue::Undefined) {
+                            None
+                        } else {
+                            Some(unregister_token)
+                        };
+                        if let Some(obj_rc) = interp.get_object(o.id) {
+                            let mut b = obj_rc.borrow_mut();
+                            if let Some(ref mut cells) = b.map_data {
+                                cells.push(Some((target, held_value)));
+                            }
+                            if let Some(ref mut tokens) = b.set_data {
+                                tokens.push(token_entry);
+                            }
+                        }
+                        return Completion::Normal(JsValue::Undefined);
                     }
-                    // We store registrations but GC finalization callbacks are not triggered
-                    return Completion::Normal(JsValue::Undefined);
                 }
                 Completion::Throw(interp.create_type_error(
                     "FinalizationRegistry.prototype.register requires a FinalizationRegistry",
@@ -2488,18 +2531,44 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().class_name == "FinalizationRegistry"
                 {
-                    let token = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    match &token {
-                        JsValue::Object(_) | JsValue::Symbol(_) => {}
-                        _ => {
+                    let has_cells = {
+                        let b = obj.borrow();
+                        b.class_name == "FinalizationRegistry" && b.map_data.is_some()
+                    };
+                    if has_cells {
+                        let token = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        if !interp.can_be_held_weakly(&token) {
                             return Completion::Throw(interp.create_type_error(
-                                "FinalizationRegistry.unregister requires an object token",
+                                "FinalizationRegistry.unregister: unregisterToken must be an object or non-registered symbol",
                             ));
                         }
+                        // Remove cells whose unregisterToken matches
+                        let mut removed = false;
+                        if let Some(obj_rc) = interp.get_object(o.id) {
+                            let mut b = obj_rc.borrow_mut();
+                            let len = b.map_data.as_ref().map(|c| c.len()).unwrap_or(0);
+                            for i in 0..len {
+                                let tok_matches = b
+                                    .set_data
+                                    .as_ref()
+                                    .and_then(|t| t.get(i))
+                                    .and_then(|t| t.as_ref())
+                                    .is_some_and(|tok| same_value(tok, &token));
+                                let cell_some = b
+                                    .map_data
+                                    .as_ref()
+                                    .and_then(|c| c.get(i))
+                                    .is_some_and(|c| c.is_some());
+                                if cell_some && tok_matches {
+                                    b.map_data.as_mut().unwrap()[i] = None;
+                                    b.set_data.as_mut().unwrap()[i] = None;
+                                    removed = true;
+                                }
+                            }
+                        }
+                        return Completion::Normal(JsValue::Boolean(removed));
                     }
-                    return Completion::Normal(JsValue::Boolean(false));
                 }
                 Completion::Throw(interp.create_type_error(
                     "FinalizationRegistry.prototype.unregister requires a FinalizationRegistry",
@@ -2509,6 +2578,31 @@ impl Interpreter {
         proto
             .borrow_mut()
             .insert_builtin("unregister".to_string(), unregister_fn);
+
+        // FinalizationRegistry.prototype.cleanupSome
+        let cleanup_fn = self.create_function(JsFunction::native(
+            "cleanupSome".to_string(),
+            0,
+            |interp, this, _args| {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let has_cells = {
+                        let b = obj.borrow();
+                        b.class_name == "FinalizationRegistry" && b.map_data.is_some()
+                    };
+                    if has_cells {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                }
+                Completion::Throw(interp.create_type_error(
+                    "FinalizationRegistry.prototype.cleanupSome requires a FinalizationRegistry",
+                ))
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("cleanupSome".to_string(), cleanup_fn);
 
         // @@toStringTag
         {
@@ -2526,7 +2620,6 @@ impl Interpreter {
         }
 
         // FinalizationRegistry constructor
-        let proto_clone = proto.clone();
         let fr_ctor = self.create_function(JsFunction::constructor(
             "FinalizationRegistry".to_string(),
             1,
@@ -2542,7 +2635,6 @@ impl Interpreter {
                         "FinalizationRegistry requires a callable cleanup callback",
                     ));
                 }
-                // Check callable
                 if let JsValue::Object(ref o) = callback
                     && let Some(obj) = interp.get_object(o.id)
                     && obj.borrow().callable.is_none()
@@ -2551,10 +2643,21 @@ impl Interpreter {
                         "FinalizationRegistry requires a callable cleanup callback",
                     ));
                 }
+                // OrdinaryCreateFromConstructor(NewTarget, "%FinalizationRegistry.prototype%")
+                let default_proto = interp.finalization_registry_prototype.clone();
+                let proto = match interp.get_prototype_from_new_target(&default_proto) {
+                    Ok(p) => p,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
                 obj.borrow_mut().class_name = "FinalizationRegistry".to_string();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                if let Some(p) = proto {
+                    obj.borrow_mut().prototype = Some(p);
+                }
                 obj.borrow_mut().primitive_value = Some(callback);
+                // Initialize [[Cells]] as empty - map_data for (target, heldValue), set_data for tokens
+                obj.borrow_mut().map_data = Some(Vec::new());
+                obj.borrow_mut().set_data = Some(Vec::new());
                 let id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },

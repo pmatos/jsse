@@ -187,14 +187,16 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/ArrayBuffer/` (196), `built-ins/SharedArrayBuffer/` (104), `built-ins/DataView/` (561), `built-ins/Atomics/` (382), `built-ins/JSON/` (165)
 
 ### 9.8 Managing Memory (§26)
-- [x] **WeakRef** (§26.1) — ✅ 22/29 passing (76%)
-  - [x] `WeakRef()` constructor
+- [x] **WeakRef** (§26.1) — ✅ 28/29 passing (97%)
+  - [x] `WeakRef()` constructor (CanBeHeldWeakly validation)
   - [x] `WeakRef.prototype.deref()`
-- [x] **FinalizationRegistry** (§26.2) — ✅ 34/47 passing (72%)
+  - [x] OrdinaryCreateFromConstructor for NewTarget prototype
+- [x] **FinalizationRegistry** (§26.2) — ✅ 46/47 passing (98%)
   - [x] `FinalizationRegistry()` constructor
-  - [x] `register()`, `unregister()`
+  - [x] `register()`, `unregister()` (CanBeHeldWeakly validation, symbol tokens)
+  - [x] OrdinaryCreateFromConstructor for NewTarget prototype
 
-**Tests:** `built-ins/WeakRef/` (22/29), `built-ins/FinalizationRegistry/` (34/47)
+**Tests:** `built-ins/WeakRef/` (28/29), `built-ins/FinalizationRegistry/` (46/47)
 
 ### 9.9 Control Abstraction Objects (§27)
 - [x] **Iterator** (§27.1) — ✅ 436/510 (85%). Constructor, helpers (toArray/forEach/reduce/some/every/find/map/filter/take/drop/flatMap), Iterator.from, Iterator.concat, Iterator.zip, Iterator.zipKeyed, Symbol.dispose. Getter-aware iterator protocol, IteratorCloseAll, GetIteratorFlattenable.
@@ -218,16 +220,21 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Iterator/` (510), `built-ins/AsyncIteratorPrototype/` (13), `built-ins/Promise/` (639), `built-ins/GeneratorFunction/` (23), `built-ins/AsyncGeneratorFunction/` (23), `built-ins/GeneratorPrototype/` (61), `built-ins/AsyncGeneratorPrototype/` (48), `built-ins/AsyncFunction/` (18), `built-ins/AsyncFromSyncIteratorPrototype/` (38)
 
 ### 9.10 Reflection (§28)
-- [x] **Reflect** (§28.1) — ✅ 124/153 passing (81%)
+- [x] **Reflect** (§28.1) — ✅ 153/153 passing (100%)
   - [x] `Reflect.apply()`, `.construct()`, `.defineProperty()`, `.deleteProperty()`, `.get()`, `.getOwnPropertyDescriptor()`, `.getPrototypeOf()`, `.has()`, `.isExtensible()`, `.ownKeys()`, `.preventExtensions()`, `.set()`, `.setPrototypeOf()`
   - [x] Proxy trap delegation from Reflect methods
-- [x] **Proxy** (§28.2) — ✅ 224/311 passing (72%)
+  - [x] `Reflect[Symbol.toStringTag]` = "Reflect"
+  - [x] OrdinaryOwnPropertyKeys ordering (integer indices → strings → symbols)
+  - [x] CreateListFromArrayLike validation in apply/construct
+  - [x] ToPropertyKey error propagation
+  - [x] setPrototypeOf returns false (not throws) per spec
+- [x] **Proxy** (§28.2) — ✅ 231/311 passing (74%)
   - [x] `Proxy()` constructor
   - [x] `Proxy.revocable()`
   - [x] All 13 proxy handler traps
   - [x] Proxy invariant enforcement (get/set/has/delete/defineProperty/getOwnPropertyDescriptor/ownKeys/getPrototypeOf/setPrototypeOf/isExtensible/preventExtensions)
 
-**Tests:** `built-ins/Reflect/` (132/153), `built-ins/Proxy/` (224/311)
+**Tests:** `built-ins/Reflect/` (153/153), `built-ins/Proxy/` (231/311)
 
 ### 9.11 Resource Management
 - [x] **DisposableStack** (§Disposable) — ✅ 71/91 passing

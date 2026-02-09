@@ -458,9 +458,10 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
             .property_order
             .iter()
             .filter(|k| {
-                b.properties
-                    .get(*k)
-                    .is_some_and(|d| d.enumerable != Some(false))
+                !k.starts_with("Symbol(")
+                    && b.properties
+                        .get(*k)
+                        .is_some_and(|d| d.enumerable != Some(false))
             })
             .cloned()
             .collect();

@@ -595,6 +595,7 @@ impl Interpreter {
                             is_function_scope: false,
                             with_object: Some(WithObject {
                                 object: obj_data,
+                                obj_id: obj_ref.id,
                                 unscopables: unscopables_data,
                             }),
                             dispose_stack: None,

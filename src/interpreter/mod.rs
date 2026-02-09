@@ -199,6 +199,42 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn can_be_held_weakly(&self, val: &JsValue) -> bool {
+        match val {
+            JsValue::Object(_) => true,
+            JsValue::Symbol(sym) => !self
+                .global_symbol_registry
+                .values()
+                .any(|reg| reg.id == sym.id),
+            _ => false,
+        }
+    }
+
+    // GetPrototypeFromConstructor for built-in constructors.
+    // Returns the prototype to use, or an error if the getter throws.
+    pub(crate) fn get_prototype_from_new_target(
+        &mut self,
+        default_proto: &Option<Rc<RefCell<JsObjectData>>>,
+    ) -> Result<Option<Rc<RefCell<JsObjectData>>>, JsValue> {
+        let nt = match self.new_target.clone() {
+            Some(v) => v,
+            None => return Ok(default_proto.clone()),
+        };
+        if let JsValue::Object(nt_o) = &nt {
+            let proto_val = match self.get_object_property(nt_o.id, "prototype", &nt) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            if let JsValue::Object(po) = proto_val {
+                if let Some(proto_rc) = self.get_object(po.id) {
+                    return Ok(Some(proto_rc));
+                }
+            }
+        }
+        Ok(default_proto.clone())
+    }
+
     fn register_global_fn(&mut self, name: &str, kind: BindingKind, func: JsFunction) {
         let val = self.create_function(func);
         self.global_env.borrow_mut().declare(name, kind);
@@ -667,6 +703,56 @@ impl Interpreter {
         }
 
         result
+    }
+
+    /// Convert a symbol property key string (e.g. "Symbol(Symbol.toStringTag)" or "Symbol(desc)#42")
+    /// back to a JsValue::Symbol.
+    pub(crate) fn symbol_key_to_jsvalue(&self, key: &str) -> JsValue {
+        // Well-known symbols: "Symbol(Symbol.xyz)" — look up from Symbol constructor
+        if key.starts_with("Symbol(Symbol.") && key.ends_with(')') && !key.contains('#') {
+            // Extract the well-known name (e.g. "toStringTag" from "Symbol(Symbol.toStringTag)")
+            let inner = &key[7..key.len() - 1]; // "Symbol.toStringTag"
+            let name = &inner[7..]; // "toStringTag"
+            if let Some(sym_val) = self.global_env.borrow().get("Symbol") {
+                if let JsValue::Object(so) = sym_val {
+                    if let Some(sobj) = self.get_object(so.id) {
+                        let val = sobj.borrow().get_property(name);
+                        if let JsValue::Symbol(s) = val {
+                            return JsValue::Symbol(s);
+                        }
+                    }
+                }
+            }
+        }
+        // User symbols with id: "Symbol(desc)#id" or "Symbol()#id"
+        if let Some(hash_pos) = key.rfind('#') {
+            if let Ok(id) = key[hash_pos + 1..].parse::<u64>() {
+                let desc_part = &key[7..hash_pos]; // content between "Symbol(" and ")#id"
+                // desc_part should end with ')'
+                let desc = if desc_part.ends_with(')') {
+                    let inner = &desc_part[..desc_part.len() - 1];
+                    if inner.is_empty() {
+                        None
+                    } else {
+                        Some(JsString::from_str(inner))
+                    }
+                } else {
+                    None
+                };
+                // Check global_symbol_registry for Symbol.for() symbols
+                for (_reg_key, sym) in &self.global_symbol_registry {
+                    if sym.id == id {
+                        return JsValue::Symbol(sym.clone());
+                    }
+                }
+                return JsValue::Symbol(crate::types::JsSymbol {
+                    id,
+                    description: desc,
+                });
+            }
+        }
+        // Fallback: return as string
+        JsValue::String(JsString::from_str(key))
     }
 
     pub fn run(&mut self, program: &Program) -> Completion {

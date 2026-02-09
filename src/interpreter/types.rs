@@ -116,6 +116,7 @@ impl std::fmt::Debug for Environment {
 
 pub(crate) struct WithObject {
     pub(crate) object: Rc<RefCell<JsObjectData>>,
+    pub(crate) obj_id: u64,
     pub(crate) unscopables: Option<Rc<RefCell<JsObjectData>>>,
 }
 
@@ -1009,6 +1010,9 @@ impl JsObjectData {
 
         // Own properties: add ALL to seen set (even non-enumerable, to shadow proto)
         for k in &self.property_order {
+            if k.starts_with("Symbol(") {
+                continue;
+            }
             if let Some(desc) = self.properties.get(k) {
                 let is_enumerable = desc.enumerable != Some(false);
                 if seen.insert(k.clone()) {
@@ -1347,9 +1351,7 @@ impl JsObjectData {
             if !self.extensible {
                 return false;
             }
-            if !key.starts_with("Symbol(") {
-                self.property_order.push(key.to_string());
-            }
+            self.property_order.push(key.to_string());
             self.properties
                 .insert(key.to_string(), PropertyDescriptor::data_default(value));
             true
