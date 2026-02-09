@@ -184,7 +184,7 @@ impl Interpreter {
                             interp2.call_function(
                                 &wrapper_dispose,
                                 &JsValue::Undefined,
-                                &[wrapper_val.clone()],
+                                std::slice::from_ref(&wrapper_val),
                             )
                         },
                     ));
@@ -519,27 +519,24 @@ impl Interpreter {
                     // Try Symbol.asyncDispose first, then Symbol.dispose
                     let mut method = JsValue::Undefined;
                     let mut hint = DisposeHint::Async;
-                    if let Some(key) = interp.get_symbol_key("asyncDispose") {
-                        if let JsValue::Object(vo) = &value {
-                            if let Some(vobj) = interp.get_object(vo.id) {
-                                let m = vobj.borrow().get_property(&key);
-                                if !matches!(m, JsValue::Undefined) {
-                                    method = m;
-                                }
-                            }
+                    if let Some(key) = interp.get_symbol_key("asyncDispose")
+                        && let JsValue::Object(vo) = &value
+                        && let Some(vobj) = interp.get_object(vo.id)
+                    {
+                        let m = vobj.borrow().get_property(&key);
+                        if !matches!(m, JsValue::Undefined) {
+                            method = m;
                         }
                     }
-                    if matches!(method, JsValue::Undefined) {
-                        if let Some(key) = interp.get_symbol_key("dispose") {
-                            if let JsValue::Object(vo) = &value {
-                                if let Some(vobj) = interp.get_object(vo.id) {
-                                    let m = vobj.borrow().get_property(&key);
-                                    if !matches!(m, JsValue::Undefined) {
-                                        method = m;
-                                        hint = DisposeHint::Sync;
-                                    }
-                                }
-                            }
+                    if matches!(method, JsValue::Undefined)
+                        && let Some(key) = interp.get_symbol_key("dispose")
+                        && let JsValue::Object(vo) = &value
+                        && let Some(vobj) = interp.get_object(vo.id)
+                    {
+                        let m = vobj.borrow().get_property(&key);
+                        if !matches!(m, JsValue::Undefined) {
+                            method = m;
+                            hint = DisposeHint::Sync;
                         }
                     }
                     if matches!(method, JsValue::Undefined) {
@@ -612,7 +609,7 @@ impl Interpreter {
                             interp2.call_function(
                                 &wrapper_dispose,
                                 &JsValue::Undefined,
-                                &[wrapper_val.clone()],
+                                std::slice::from_ref(&wrapper_val),
                             )
                         },
                     ));

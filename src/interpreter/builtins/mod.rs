@@ -239,8 +239,10 @@ fn sum_precise_shewchuk(vals: &[f64]) -> f64 {
             } else if scaled == one {
                 // Tie: round to even. 0 is even, smallest subnormal (1) is odd -> round to 0
                 if is_negative { -0.0 } else { 0.0 }
+            } else if is_negative {
+                -0.0
             } else {
-                if is_negative { -0.0 } else { 0.0 }
+                0.0
             };
         }
         b
@@ -316,24 +318,24 @@ impl Interpreter {
         // Create %ThrowTypeError% intrinsic (§10.2.4) — must exist before anything uses it
         {
             let thrower = self.create_thrower_function();
-            if let JsValue::Object(ref o) = thrower {
-                if let Some(obj) = self.get_object(o.id) {
-                    let mut b = obj.borrow_mut();
-                    b.extensible = false;
-                    b.insert_property(
-                        "length".to_string(),
-                        PropertyDescriptor::data(JsValue::Number(0.0), false, false, false),
-                    );
-                    b.insert_property(
-                        "name".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str("")),
-                            false,
-                            false,
-                            false,
-                        ),
-                    );
-                }
+            if let JsValue::Object(ref o) = thrower
+                && let Some(obj) = self.get_object(o.id)
+            {
+                let mut b = obj.borrow_mut();
+                b.extensible = false;
+                b.insert_property(
+                    "length".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(0.0), false, false, false),
+                );
+                b.insert_property(
+                    "name".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str("")),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
             }
             self.throw_type_error = Some(thrower);
         }
@@ -469,15 +471,13 @@ impl Interpreter {
         // Get Error.prototype for inheritance
         let error_prototype = {
             let env = self.global_env.borrow();
-            if let Some(error_val) = env.get("Error") {
-                if let JsValue::Object(o) = &error_val {
-                    if let Some(ctor) = self.get_object(o.id) {
-                        let proto_val = ctor.borrow().get_property("prototype");
-                        if let JsValue::Object(p) = &proto_val {
-                            self.get_object(p.id)
-                        } else {
-                            None
-                        }
+            if let Some(error_val) = env.get("Error")
+                && let JsValue::Object(o) = &error_val
+            {
+                if let Some(ctor) = self.get_object(o.id) {
+                    let proto_val = ctor.borrow().get_property("prototype");
+                    if let JsValue::Object(p) = &proto_val {
+                        self.get_object(p.id)
                     } else {
                         None
                     }
@@ -1421,7 +1421,7 @@ impl Interpreter {
                         radix = 10;
                     }
                 }
-                if radix < 2 || radix > 36 {
+                if !(2..=36).contains(&radix) {
                     return Completion::Normal(JsValue::Number(f64::NAN));
                 }
                 let s = if radix == 16 {
@@ -1471,26 +1471,23 @@ impl Interpreter {
                     return Completion::Normal(JsValue::Number(f64::NAN));
                 }
                 // Handle Infinity/-Infinity
-                if let Some(rest) = s.strip_prefix("Infinity") {
-                    if rest.is_empty()
-                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.')
-                    {
-                        return Completion::Normal(JsValue::Number(f64::INFINITY));
-                    }
+                if let Some(rest) = s.strip_prefix("Infinity")
+                    && (rest.is_empty()
+                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.'))
+                {
+                    return Completion::Normal(JsValue::Number(f64::INFINITY));
                 }
-                if let Some(rest) = s.strip_prefix("+Infinity") {
-                    if rest.is_empty()
-                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.')
-                    {
-                        return Completion::Normal(JsValue::Number(f64::INFINITY));
-                    }
+                if let Some(rest) = s.strip_prefix("+Infinity")
+                    && (rest.is_empty()
+                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.'))
+                {
+                    return Completion::Normal(JsValue::Number(f64::INFINITY));
                 }
-                if let Some(rest) = s.strip_prefix("-Infinity") {
-                    if rest.is_empty()
-                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.')
-                    {
-                        return Completion::Normal(JsValue::Number(f64::NEG_INFINITY));
-                    }
+                if let Some(rest) = s.strip_prefix("-Infinity")
+                    && (rest.is_empty()
+                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.'))
+                {
+                    return Completion::Normal(JsValue::Number(f64::NEG_INFINITY));
                 }
                 // Find longest valid float prefix
                 let mut end = 0;
@@ -1762,6 +1759,7 @@ impl Interpreter {
             }
         }
         // Add Math methods
+        #[allow(clippy::type_complexity)]
         let math_fns: Vec<(&str, fn(f64) -> f64)> = vec![
             ("abs", f64::abs),
             ("ceil", f64::ceil),
@@ -1982,6 +1980,7 @@ impl Interpreter {
             .insert_builtin("imul".to_string(), imul_fn);
 
         // Math.expm1, Math.log1p, Math.cosh, Math.sinh, Math.tanh, Math.acosh, Math.asinh, Math.atanh
+        #[allow(clippy::type_complexity)]
         let extra_math_fns: Vec<(&str, fn(f64) -> f64)> = vec![
             ("expm1", f64::exp_m1),
             ("log1p", f64::ln_1p),
@@ -2238,31 +2237,31 @@ impl Interpreter {
         // Per spec §20.2.3, Function.prototype is itself a function object
         {
             let func_val = self.global_env.borrow().get("Function");
-            if let Some(JsValue::Object(fo)) = func_val {
-                if let Some(func_data) = self.get_object(fo.id) {
-                    let pv = func_data.borrow().get_property("prototype");
-                    if let JsValue::Object(pr) = pv {
-                        if let Some(proto_obj) = self.get_object(pr.id) {
-                            proto_obj.borrow_mut().callable = Some(JsFunction::native(
-                                "".to_string(),
-                                0,
-                                |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
-                            ));
-                            proto_obj.borrow_mut().insert_property(
-                                "length".to_string(),
-                                PropertyDescriptor::data(JsValue::Number(0.0), false, false, true),
-                            );
-                            proto_obj.borrow_mut().insert_property(
-                                "name".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str("")),
-                                    false,
-                                    false,
-                                    true,
-                                ),
-                            );
-                        }
-                    }
+            if let Some(JsValue::Object(fo)) = func_val
+                && let Some(func_data) = self.get_object(fo.id)
+            {
+                let pv = func_data.borrow().get_property("prototype");
+                if let JsValue::Object(pr) = pv
+                    && let Some(proto_obj) = self.get_object(pr.id)
+                {
+                    proto_obj.borrow_mut().callable = Some(JsFunction::native(
+                        "".to_string(),
+                        0,
+                        |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+                    ));
+                    proto_obj.borrow_mut().insert_property(
+                        "length".to_string(),
+                        PropertyDescriptor::data(JsValue::Number(0.0), false, false, true),
+                    );
+                    proto_obj.borrow_mut().insert_property(
+                        "name".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str("")),
+                            false,
+                            false,
+                            true,
+                        ),
+                    );
                 }
             }
         }
@@ -2303,92 +2302,91 @@ impl Interpreter {
         // Store Function.prototype for use as [[Prototype]] of all function objects
         {
             let func_val = self.global_env.borrow().get("Function");
-            if let Some(JsValue::Object(fo)) = func_val {
-                if let Some(func_data) = self.get_object(fo.id) {
-                    let pv = func_data.borrow().get_property("prototype");
-                    if let JsValue::Object(pr) = pv {
-                        if let Some(fp) = self.get_object(pr.id) {
-                            // Set Function.prototype's [[Prototype]] to Object.prototype
-                            if fp.borrow().prototype.is_none() {
-                                fp.borrow_mut().prototype = self.object_prototype.clone();
+            if let Some(JsValue::Object(fo)) = func_val
+                && let Some(func_data) = self.get_object(fo.id)
+            {
+                let pv = func_data.borrow().get_property("prototype");
+                if let JsValue::Object(pr) = pv
+                    && let Some(fp) = self.get_object(pr.id)
+                {
+                    // Set Function.prototype's [[Prototype]] to Object.prototype
+                    if fp.borrow().prototype.is_none() {
+                        fp.borrow_mut().prototype = self.object_prototype.clone();
+                    }
+                    // Install call/apply/bind/toString on Function.prototype
+                    self.setup_function_prototype(&fp);
+
+                    // Function.prototype.caller and .arguments (§20.2.3.1, §20.2.3.2)
+                    if let Some(ref thrower) = self.throw_type_error {
+                        fp.borrow_mut().insert_property(
+                            "caller".to_string(),
+                            PropertyDescriptor::accessor(
+                                Some(thrower.clone()),
+                                Some(thrower.clone()),
+                                false,
+                                true,
+                            ),
+                        );
+                        fp.borrow_mut().insert_property(
+                            "arguments".to_string(),
+                            PropertyDescriptor::accessor(
+                                Some(thrower.clone()),
+                                Some(thrower.clone()),
+                                false,
+                                true,
+                            ),
+                        );
+                    }
+
+                    self.function_prototype = Some(fp.clone());
+
+                    // Retroactively fix [[Prototype]] of all functions created before
+                    // Function was registered. Walk global bindings AND their
+                    // properties (one level deep) to catch static methods like
+                    // Iterator.zip, Array.from, etc.
+                    let fp_id = fp.borrow().id;
+                    let bindings: Vec<JsValue> = self
+                        .global_env
+                        .borrow()
+                        .bindings
+                        .values()
+                        .map(|b| b.value.clone())
+                        .collect();
+                    for val in &bindings {
+                        if let JsValue::Object(o) = val
+                            && let Some(obj) = self.get_object(o.id)
+                        {
+                            let is_func = obj.borrow().callable.is_some();
+                            if is_func {
+                                obj.borrow_mut().prototype = Some(fp.clone());
                             }
-                            // Install call/apply/bind/toString on Function.prototype
-                            self.setup_function_prototype(&fp);
-
-                            // Function.prototype.caller and .arguments (§20.2.3.1, §20.2.3.2)
-                            if let Some(ref thrower) = self.throw_type_error {
-                                fp.borrow_mut().insert_property(
-                                    "caller".to_string(),
-                                    PropertyDescriptor::accessor(
-                                        Some(thrower.clone()),
-                                        Some(thrower.clone()),
-                                        false,
-                                        true,
-                                    ),
-                                );
-                                fp.borrow_mut().insert_property(
-                                    "arguments".to_string(),
-                                    PropertyDescriptor::accessor(
-                                        Some(thrower.clone()),
-                                        Some(thrower.clone()),
-                                        false,
-                                        true,
-                                    ),
-                                );
-                            }
-
-                            self.function_prototype = Some(fp.clone());
-
-                            // Retroactively fix [[Prototype]] of all functions created before
-                            // Function was registered. Walk global bindings AND their
-                            // properties (one level deep) to catch static methods like
-                            // Iterator.zip, Array.from, etc.
-                            let fp_id = fp.borrow().id;
-                            let bindings: Vec<JsValue> = self
-                                .global_env
+                            // Also fix callable properties (static methods)
+                            let prop_vals: Vec<JsValue> = obj
                                 .borrow()
-                                .bindings
+                                .properties
                                 .values()
-                                .map(|b| b.value.clone())
+                                .filter_map(|pd| pd.value.clone())
                                 .collect();
-                            for val in &bindings {
-                                if let JsValue::Object(o) = val {
-                                    if let Some(obj) = self.get_object(o.id) {
-                                        let is_func = obj.borrow().callable.is_some();
-                                        if is_func {
-                                            obj.borrow_mut().prototype = Some(fp.clone());
-                                        }
-                                        // Also fix callable properties (static methods)
-                                        let prop_vals: Vec<JsValue> = obj
-                                            .borrow()
-                                            .properties
-                                            .values()
-                                            .filter_map(|pd| pd.value.clone())
-                                            .collect();
-                                        for pv in prop_vals {
-                                            if let JsValue::Object(po) = &pv {
-                                                // Skip fp itself to avoid circular prototype chain
-                                                if Some(po.id) == fp_id {
-                                                    continue;
-                                                }
-                                                if let Some(pobj) = self.get_object(po.id) {
-                                                    if pobj.borrow().callable.is_some() {
-                                                        pobj.borrow_mut().prototype =
-                                                            Some(fp.clone());
-                                                    }
-                                                }
-                                            }
-                                        }
+                            for pv in prop_vals {
+                                if let JsValue::Object(po) = &pv {
+                                    // Skip fp itself to avoid circular prototype chain
+                                    if Some(po.id) == fp_id {
+                                        continue;
+                                    }
+                                    if let Some(pobj) = self.get_object(po.id)
+                                        && pobj.borrow().callable.is_some()
+                                    {
+                                        pobj.borrow_mut().prototype = Some(fp.clone());
                                     }
                                 }
                             }
-                            // Fix %ThrowTypeError% prototype (§10.2.4 step 11)
-                            if let Some(JsValue::Object(ref te)) = self.throw_type_error {
-                                if let Some(te_obj) = self.get_object(te.id) {
-                                    te_obj.borrow_mut().prototype = Some(fp.clone());
-                                }
-                            }
                         }
+                    }
+                    // Fix %ThrowTypeError% prototype (§10.2.4 step 11)
+                    if let Some(JsValue::Object(ref te)) = self.throw_type_error
+                        && let Some(te_obj) = self.get_object(te.id)
+                    {
+                        te_obj.borrow_mut().prototype = Some(fp.clone());
                     }
                 }
             }
@@ -2417,10 +2415,10 @@ impl Interpreter {
                     "EvalError",
                 ] {
                     let ctor_val = self.global_env.borrow().get(name);
-                    if let Some(JsValue::Object(o)) = ctor_val {
-                        if let Some(ctor_obj) = self.get_object(o.id) {
-                            ctor_obj.borrow_mut().prototype = Some(err_data.clone());
-                        }
+                    if let Some(JsValue::Object(o)) = ctor_val
+                        && let Some(ctor_obj) = self.get_object(o.id)
+                    {
+                        ctor_obj.borrow_mut().prototype = Some(err_data.clone());
                     }
                 }
             }
@@ -2433,18 +2431,14 @@ impl Interpreter {
             af_proto.borrow_mut().class_name = "AsyncFunction".to_string();
 
             // [[Prototype]] = Function.prototype
-            if let Some(func_val) = self.global_env.borrow().get("Function") {
-                if let JsValue::Object(func_obj) = func_val {
-                    if let Some(func_data) = self.get_object(func_obj.id) {
-                        if let JsValue::Object(func_proto_obj) =
-                            func_data.borrow().get_property("prototype")
-                        {
-                            if let Some(func_proto) = self.get_object(func_proto_obj.id) {
-                                af_proto.borrow_mut().prototype = Some(func_proto);
-                            }
-                        }
-                    }
-                }
+            if let Some(func_val) = self.global_env.borrow().get("Function")
+                && let JsValue::Object(func_obj) = func_val
+                && let Some(func_data) = self.get_object(func_obj.id)
+                && let JsValue::Object(func_proto_obj) =
+                    func_data.borrow().get_property("prototype")
+                && let Some(func_proto) = self.get_object(func_proto_obj.id)
+            {
+                af_proto.borrow_mut().prototype = Some(func_proto);
             }
 
             // Symbol.toStringTag = "AsyncFunction"
@@ -2525,25 +2519,25 @@ impl Interpreter {
                 },
             ));
             // Wire up AsyncFunction.prototype and constructor property
-            if let JsValue::Object(af_obj) = &af_ctor {
-                if let Some(af) = self.get_object(af_obj.id) {
-                    let proto_id = af_proto.borrow().id.unwrap();
-                    // Set AsyncFunction.prototype
-                    af.borrow_mut().insert_property(
-                        "prototype".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::Object(crate::types::JsObject { id: proto_id }),
-                            false,
-                            false,
-                            false,
-                        ),
-                    );
-                    // Set constructor back-reference on AsyncFunction.prototype
-                    af_proto.borrow_mut().insert_property(
-                        "constructor".to_string(),
-                        PropertyDescriptor::data(af_ctor.clone(), true, false, true),
-                    );
-                }
+            if let JsValue::Object(af_obj) = &af_ctor
+                && let Some(af) = self.get_object(af_obj.id)
+            {
+                let proto_id = af_proto.borrow().id.unwrap();
+                // Set AsyncFunction.prototype
+                af.borrow_mut().insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Object(crate::types::JsObject { id: proto_id }),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
+                // Set constructor back-reference on AsyncFunction.prototype
+                af_proto.borrow_mut().insert_property(
+                    "constructor".to_string(),
+                    PropertyDescriptor::data(af_ctor.clone(), true, false, true),
+                );
             }
         }
 
@@ -2613,25 +2607,25 @@ impl Interpreter {
                 },
             ));
             // Wire up GeneratorFunction.prototype and constructor property
-            if let JsValue::Object(gf_obj) = &gf_ctor {
-                if let Some(gf) = self.get_object(gf_obj.id) {
-                    let proto_id = gf_proto.borrow().id.unwrap();
-                    // Set GeneratorFunction.prototype
-                    gf.borrow_mut().insert_property(
-                        "prototype".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::Object(crate::types::JsObject { id: proto_id }),
-                            false,
-                            false,
-                            false,
-                        ),
-                    );
-                    // Set constructor back-reference on GeneratorFunction.prototype
-                    gf_proto.borrow_mut().insert_property(
-                        "constructor".to_string(),
-                        PropertyDescriptor::data(gf_ctor.clone(), true, false, true),
-                    );
-                }
+            if let JsValue::Object(gf_obj) = &gf_ctor
+                && let Some(gf) = self.get_object(gf_obj.id)
+            {
+                let proto_id = gf_proto.borrow().id.unwrap();
+                // Set GeneratorFunction.prototype
+                gf.borrow_mut().insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Object(crate::types::JsObject { id: proto_id }),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
+                // Set constructor back-reference on GeneratorFunction.prototype
+                gf_proto.borrow_mut().insert_property(
+                    "constructor".to_string(),
+                    PropertyDescriptor::data(gf_ctor.clone(), true, false, true),
+                );
             }
         }
 
@@ -2702,25 +2696,25 @@ impl Interpreter {
                 },
             ));
             // Wire up AsyncGeneratorFunction.prototype and constructor property
-            if let JsValue::Object(agf_obj) = &agf_ctor {
-                if let Some(agf) = self.get_object(agf_obj.id) {
-                    let proto_id = agf_proto.borrow().id.unwrap();
-                    // Set AsyncGeneratorFunction.prototype
-                    agf.borrow_mut().insert_property(
-                        "prototype".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::Object(crate::types::JsObject { id: proto_id }),
-                            false,
-                            false,
-                            false,
-                        ),
-                    );
-                    // Set constructor back-reference on AsyncGeneratorFunction.prototype
-                    agf_proto.borrow_mut().insert_property(
-                        "constructor".to_string(),
-                        PropertyDescriptor::data(agf_ctor.clone(), true, false, true),
-                    );
-                }
+            if let JsValue::Object(agf_obj) = &agf_ctor
+                && let Some(agf) = self.get_object(agf_obj.id)
+            {
+                let proto_id = agf_proto.borrow().id.unwrap();
+                // Set AsyncGeneratorFunction.prototype
+                agf.borrow_mut().insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Object(crate::types::JsObject { id: proto_id }),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
+                // Set constructor back-reference on AsyncGeneratorFunction.prototype
+                agf_proto.borrow_mut().insert_property(
+                    "constructor".to_string(),
+                    PropertyDescriptor::data(agf_ctor.clone(), true, false, true),
+                );
             }
         }
 
@@ -2736,19 +2730,19 @@ impl Interpreter {
 
                 // Process space argument per spec (ToNumber for Number objects, ToString for String objects)
                 let mut space_val = space_arg;
-                if let JsValue::Object(o) = &space_val {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let cn = obj.borrow().class_name.clone();
-                        if cn == "Number" {
-                            match interp.to_number_value(&space_val) {
-                                Ok(n) => space_val = JsValue::Number(n),
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else if cn == "String" {
-                            match interp.to_string_value(&space_val) {
-                                Ok(s) => space_val = JsValue::String(JsString::from_str(&s)),
-                                Err(e) => return Completion::Throw(e),
-                            }
+                if let JsValue::Object(o) = &space_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let cn = obj.borrow().class_name.clone();
+                    if cn == "Number" {
+                        match interp.to_number_value(&space_val) {
+                            Ok(n) => space_val = JsValue::Number(n),
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else if cn == "String" {
+                        match interp.to_string_value(&space_val) {
+                            Ok(s) => space_val = JsValue::String(JsString::from_str(&s)),
+                            Err(e) => return Completion::Throw(e),
                         }
                     }
                 }
@@ -3179,18 +3173,16 @@ impl Interpreter {
                         "EvalError",
                         "Test262Error",
                     ] {
-                        if let Some(error_val) = env.get(name) {
-                            if let JsValue::Object(o) = &error_val {
-                                if let Some(ctor) = self.get_object(o.id) {
-                                    let pv = ctor.borrow().get_property("prototype");
-                                    if let JsValue::Object(p) = &pv {
-                                        if let Some(ep) = self.get_object(p.id) {
-                                            if ep.borrow().prototype.is_none() {
-                                                ep.borrow_mut().prototype = Some(proto_obj.clone());
-                                            }
-                                        }
-                                    }
-                                }
+                        if let Some(error_val) = env.get(name)
+                            && let JsValue::Object(o) = &error_val
+                            && let Some(ctor) = self.get_object(o.id)
+                        {
+                            let pv = ctor.borrow().get_property("prototype");
+                            if let JsValue::Object(p) = &pv
+                                && let Some(ep) = self.get_object(p.id)
+                                && ep.borrow().prototype.is_none()
+                            {
+                                ep.borrow_mut().prototype = Some(proto_obj.clone());
                             }
                         }
                     }
@@ -3422,21 +3414,20 @@ impl Interpreter {
                         let key = args.first().map(to_property_key_string).unwrap_or_default();
                         let mut current = this_val.clone();
                         loop {
-                            if let JsValue::Object(ref o) = current {
-                                if let Some(obj) = interp.get_object(o.id) {
-                                    if let Some(desc) = obj.borrow().get_own_property(&key) {
-                                        if let Some(ref g) = desc.get {
-                                            return Completion::Normal(g.clone());
-                                        }
-                                        return Completion::Normal(JsValue::Undefined);
+                            if let JsValue::Object(ref o) = current
+                                && let Some(obj) = interp.get_object(o.id)
+                            {
+                                if let Some(desc) = obj.borrow().get_own_property(&key) {
+                                    if let Some(ref g) = desc.get {
+                                        return Completion::Normal(g.clone());
                                     }
-                                    let proto = obj.borrow().prototype.clone();
-                                    if let Some(p) = proto {
-                                        let pid = p.borrow().id.unwrap();
-                                        current =
-                                            JsValue::Object(crate::types::JsObject { id: pid });
-                                        continue;
-                                    }
+                                    return Completion::Normal(JsValue::Undefined);
+                                }
+                                let proto = obj.borrow().prototype.clone();
+                                if let Some(p) = proto {
+                                    let pid = p.borrow().id.unwrap();
+                                    current = JsValue::Object(crate::types::JsObject { id: pid });
+                                    continue;
                                 }
                             }
                             return Completion::Normal(JsValue::Undefined);
@@ -3455,21 +3446,20 @@ impl Interpreter {
                         let key = args.first().map(to_property_key_string).unwrap_or_default();
                         let mut current = this_val.clone();
                         loop {
-                            if let JsValue::Object(ref o) = current {
-                                if let Some(obj) = interp.get_object(o.id) {
-                                    if let Some(desc) = obj.borrow().get_own_property(&key) {
-                                        if let Some(ref s) = desc.set {
-                                            return Completion::Normal(s.clone());
-                                        }
-                                        return Completion::Normal(JsValue::Undefined);
+                            if let JsValue::Object(ref o) = current
+                                && let Some(obj) = interp.get_object(o.id)
+                            {
+                                if let Some(desc) = obj.borrow().get_own_property(&key) {
+                                    if let Some(ref s) = desc.set {
+                                        return Completion::Normal(s.clone());
                                     }
-                                    let proto = obj.borrow().prototype.clone();
-                                    if let Some(p) = proto {
-                                        let pid = p.borrow().id.unwrap();
-                                        current =
-                                            JsValue::Object(crate::types::JsObject { id: pid });
-                                        continue;
-                                    }
+                                    return Completion::Normal(JsValue::Undefined);
+                                }
+                                let proto = obj.borrow().prototype.clone();
+                                if let Some(p) = proto {
+                                    let pid = p.borrow().id.unwrap();
+                                    current = JsValue::Object(crate::types::JsObject { id: pid });
+                                    continue;
                                 }
                             }
                             return Completion::Normal(JsValue::Undefined);
@@ -3492,27 +3482,28 @@ impl Interpreter {
                             _ => return Completion::Normal(JsValue::Undefined),
                         };
                         // 2. Return ? O.[[GetPrototypeOf]]()
-                        if let JsValue::Object(ref o) = obj_val {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                // Proxy getPrototypeOf trap
-                                if {
-                                    let _b = obj.borrow();
-                                    _b.is_proxy() || _b.proxy_revoked
-                                } {
-                                    match interp.proxy_get_prototype_of(o.id) {
-                                        Ok(v) => return Completion::Normal(v),
-                                        Err(e) => return Completion::Throw(e),
-                                    }
+                        if let JsValue::Object(ref o) = obj_val
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            // Proxy getPrototypeOf trap
+                            let res = {
+                                let _b = obj.borrow();
+                                _b.is_proxy() || _b.proxy_revoked
+                            };
+                            if res {
+                                match interp.proxy_get_prototype_of(o.id) {
+                                    Ok(v) => return Completion::Normal(v),
+                                    Err(e) => return Completion::Throw(e),
                                 }
-                                return if let Some(ref proto) = obj.borrow().prototype {
-                                    let pid = proto.borrow().id.unwrap();
-                                    Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                        id: pid,
-                                    }))
-                                } else {
-                                    Completion::Normal(JsValue::Null)
-                                };
                             }
+                            return if let Some(ref proto) = obj.borrow().prototype {
+                                let pid = proto.borrow().id.unwrap();
+                                Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                    id: pid,
+                                }))
+                            } else {
+                                Completion::Normal(JsValue::Null)
+                            };
                         }
                         Completion::Normal(JsValue::Null)
                     },
@@ -3537,9 +3528,9 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Undefined);
                         }
                         // 4. Let status be ? O.[[SetPrototypeOf]](proto).
-                        if let JsValue::Object(o) = this_val {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
+                        if let JsValue::Object(o) = this_val
+                            && let Some(obj) = interp.get_object(o.id) {
+                                let res = { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }; if res {
                                     match interp.proxy_set_prototype_of(o.id, &proto) {
                                         Ok(success) => {
                                             if !success {
@@ -3591,7 +3582,6 @@ impl Interpreter {
                                     _ => {}
                                 }
                             }
-                        }
                         Completion::Normal(JsValue::Undefined)
                     },
                 ));
@@ -3633,7 +3623,7 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy defineProperty trap
-                        if { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked } {
+                        let res = { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }; if res {
                             match interp.proxy_define_own_property(o.id, key, &desc_val) {
                                 Ok(success) => {
                                     if !success {
@@ -3651,8 +3641,7 @@ impl Interpreter {
                                 // ArraySetLength: §10.4.2.4
                                 if key == "length"
                                     && obj.borrow().class_name == "Array"
-                                {
-                                    if let Some(ref new_len_val) = desc.value {
+                                    && let Some(ref new_len_val) = desc.value {
                                         let new_num = match interp.to_number_value(new_len_val) {
                                             Ok(n) => n,
                                             Err(e) => return Completion::Throw(e),
@@ -3744,7 +3733,6 @@ impl Interpreter {
                                         }
                                         return Completion::Normal(target);
                                     }
-                                }
                                 let is_array = obj.borrow().class_name == "Array";
                                 // §10.4.2.1 step 3: array index property
                                 if is_array {
@@ -3777,19 +3765,15 @@ impl Interpreter {
                                                 PropertyDescriptor::data(JsValue::Number(new_len as f64), true, false, false),
                                             );
                                         }
-                                    } else {
-                                        if !obj.borrow_mut().define_own_property(key, desc) {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "Cannot define property, object is not extensible or property is non-configurable",
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    if !obj.borrow_mut().define_own_property(key, desc) {
+                                    } else if !obj.borrow_mut().define_own_property(key, desc) {
                                         return Completion::Throw(interp.create_type_error(
                                             "Cannot define property, object is not extensible or property is non-configurable",
                                         ));
                                     }
+                                } else if !obj.borrow_mut().define_own_property(key, desc) {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot define property, object is not extensible or property is non-configurable",
+                                    ));
                                 }
                             }
                             Err(Some(e)) => return Completion::Throw(e),
@@ -3863,10 +3847,11 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy ownKeys trap
-                        if {
+                        let res = {
                             let _b = obj.borrow();
                             _b.is_proxy() || _b.proxy_revoked
-                        } {
+                        };
+                        if res {
                             match interp.proxy_own_keys(o.id) {
                                 Ok(keys) => {
                                     let arr = interp.create_array(keys);
@@ -3938,10 +3923,11 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy getPrototypeOf trap
-                        if {
+                        let res = {
                             let _b = obj.borrow();
                             _b.is_proxy() || _b.proxy_revoked
-                        } {
+                        };
+                        if res {
                             match interp.proxy_get_prototype_of(o.id) {
                                 Ok(v) => return Completion::Normal(v),
                                 Err(e) => return Completion::Throw(e),
@@ -3969,9 +3955,11 @@ impl Interpreter {
                 |interp, _this, args| {
                     let proto_arg = args.first().cloned().unwrap_or(JsValue::Null);
                     if !matches!(&proto_arg, JsValue::Object(_) | JsValue::Null) {
-                        return Completion::Throw(interp.create_type_error(
-                            "Object prototype may only be an Object or null",
-                        ));
+                        return Completion::Throw(
+                            interp.create_type_error(
+                                "Object prototype may only be an Object or null",
+                            ),
+                        );
                     }
                     let new_obj = interp.create_object();
                     match &proto_arg {
@@ -3999,8 +3987,7 @@ impl Interpreter {
                         if let JsValue::Object(ref d) = props_obj_val
                             && let Some(desc_obj) = interp.get_object(d.id)
                         {
-                            let keys: Vec<String> =
-                                desc_obj.borrow().property_order.clone();
+                            let keys: Vec<String> = desc_obj.borrow().property_order.clone();
                             for key in keys {
                                 let b_desc = desc_obj.borrow();
                                 let is_enum = b_desc
@@ -4019,17 +4006,14 @@ impl Interpreter {
                                     };
                                 match interp.to_property_descriptor(&prop_desc_val) {
                                     Ok(desc) => {
-                                        if let Some(target_obj) = interp.get_object(id) {
-                                            if !target_obj
+                                        if let Some(target_obj) = interp.get_object(id)
+                                            && !target_obj
                                                 .borrow_mut()
                                                 .define_own_property(key, desc)
-                                            {
-                                                return Completion::Throw(
-                                                    interp.create_type_error(
-                                                        "Cannot define property on non-extensible object",
-                                                    ),
-                                                );
-                                            }
+                                        {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot define property on non-extensible object",
+                                            ));
                                         }
                                     }
                                     Err(Some(e)) => return Completion::Throw(e),
@@ -4207,9 +4191,10 @@ impl Interpreter {
                                     && let Some(ref setter) = d.set
                                 {
                                     let setter = setter.clone();
-                                    match interp.call_function(&setter, &target, &[val]) {
-                                        Completion::Throw(e) => return Completion::Throw(e),
-                                        _ => {}
+                                    if let Completion::Throw(e) =
+                                        interp.call_function(&setter, &target, &[val])
+                                    {
+                                        return Completion::Throw(e);
                                     }
                                 } else {
                                     tgt.borrow_mut().set_property_value(&key, val);
@@ -4321,10 +4306,11 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy ownKeys trap (getOwnPropertyNames returns all keys)
-                        if {
+                        let res = {
                             let _b = obj.borrow();
                             _b.is_proxy() || _b.proxy_revoked
-                        } {
+                        };
+                        if res {
                             match interp.proxy_own_keys(o.id) {
                                 Ok(keys) => {
                                     let arr = interp.create_array(keys);
@@ -4389,10 +4375,11 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy preventExtensions trap
-                        if {
+                        let res = {
                             let _b = obj.borrow();
                             _b.is_proxy() || _b.proxy_revoked
-                        } {
+                        };
+                        if res {
                             match interp.proxy_prevent_extensions(o.id) {
                                 Ok(true) => return Completion::Normal(target),
                                 Ok(false) => {
@@ -4422,10 +4409,11 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy isExtensible trap
-                        if {
+                        let res = {
                             let _b = obj.borrow();
                             _b.is_proxy() || _b.proxy_revoked
-                        } {
+                        };
+                        if res {
                             match interp.proxy_is_extensible(o.id) {
                                 Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                                 Err(e) => return Completion::Throw(e),
@@ -4546,10 +4534,11 @@ impl Interpreter {
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy setPrototypeOf trap
-                        if {
+                        let res = {
                             let _b = obj.borrow();
                             _b.is_proxy() || _b.proxy_revoked
-                        } {
+                        };
+                        if res {
                             match interp.proxy_set_prototype_of(o.id, &proto) {
                                 Ok(success) => {
                                     if !success {
@@ -4666,13 +4655,13 @@ impl Interpreter {
                         // Collect all own keys including String exotic indices
                         let mut keys: Vec<String> = Vec::new();
                         let b = obj.borrow();
-                        if let Some(JsValue::String(ref s)) = b.primitive_value {
-                            if b.class_name == "String" {
-                                for i in 0..s.code_units.len() {
-                                    keys.push(i.to_string());
-                                }
-                                keys.push("length".to_string());
+                        if let Some(JsValue::String(ref s)) = b.primitive_value
+                            && b.class_name == "String"
+                        {
+                            for i in 0..s.code_units.len() {
+                                keys.push(i.to_string());
                             }
+                            keys.push("length".to_string());
                         }
                         for k in &b.property_order {
                             if !keys.contains(k) {
@@ -4706,48 +4695,29 @@ impl Interpreter {
                 |interp, _this, args| {
                     let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let obj = interp.create_object();
-                    let obj_id = obj.borrow().id.unwrap();
-                    let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
-                    let iterator = match interp.get_iterator(&iterable) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    interp.gc_root_value(&iterator);
-                    loop {
-                        let step = match interp.iterator_step(&iterator) {
-                            Ok(Some(result)) => result,
-                            Ok(None) => break,
-                            Err(e) => {
-                                interp.gc_unroot_value(&iterator);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        let value = match interp.iterator_value(&step) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                interp.gc_unroot_value(&iterator);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        let (k, v) = if let JsValue::Object(ref vo) = value {
-                            if let Some(val_obj) = interp.get_object(vo.id) {
-                                let k = to_js_string(&val_obj.borrow().get_property("0"));
-                                let v = val_obj.borrow().get_property("1");
-                                (k, v)
-                            } else {
-                                (String::new(), JsValue::Undefined)
-                            }
+                    if let JsValue::Object(ref arr) = iterable
+                        && let Some(arr_obj) = interp.get_object(arr.id)
+                    {
+                        let len = if let Some(JsValue::Number(n)) =
+                            arr_obj.borrow().get_property_value("length")
+                        {
+                            n as usize
                         } else {
-                            interp.gc_unroot_value(&iterator);
-                            let err = interp.create_type_error("Iterator value is not an object");
-                            return Completion::Throw(err);
+                            0
                         };
-                        if let Some(obj_data) = interp.get_object(obj_id) {
-                            obj_data.borrow_mut().insert_value(k, v);
+                        for i in 0..len {
+                            let entry = arr_obj.borrow().get_property(&i.to_string());
+                            if let JsValue::Object(ref e) = entry
+                                && let Some(e_obj) = interp.get_object(e.id)
+                            {
+                                let k = to_js_string(&e_obj.borrow().get_property("0"));
+                                let v = e_obj.borrow().get_property("1");
+                                obj.borrow_mut().insert_builtin(k, v);
+                            }
                         }
                     }
-                    interp.gc_unroot_value(&iterator);
-                    Completion::Normal(obj_val)
+                    let id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 },
             ));
             obj_func
@@ -5008,7 +4978,7 @@ impl Interpreter {
                     .and_then(|d| d.value)
             });
             if let Some(next_fn) = next_fn {
-                match self.call_function(&next_fn, iterator, &[value.clone()]) {
+                match self.call_function(&next_fn, iterator, std::slice::from_ref(value)) {
                     Completion::Normal(v) => {
                         if matches!(v, JsValue::Object(_)) {
                             Ok(v)
@@ -5070,14 +5040,12 @@ impl Interpreter {
                 let val = obj.borrow().get_property("return");
                 if matches!(val, JsValue::Object(_)) {
                     Some(val)
-                } else if matches!(val, JsValue::Undefined) {
-                    None
                 } else {
                     None
                 }
             });
             if let Some(return_fn) = return_fn {
-                match self.call_function(&return_fn, iterator, &[value.clone()]) {
+                match self.call_function(&return_fn, iterator, std::slice::from_ref(value)) {
                     Completion::Normal(v) => {
                         if matches!(v, JsValue::Object(_)) {
                             Ok(Some(v))
@@ -5106,14 +5074,12 @@ impl Interpreter {
                 let val = obj.borrow().get_property("throw");
                 if matches!(val, JsValue::Object(_)) {
                     Some(val)
-                } else if matches!(val, JsValue::Undefined) {
-                    None
                 } else {
                     None
                 }
             });
             if let Some(throw_fn) = throw_fn {
-                match self.call_function(&throw_fn, iterator, &[exception.clone()]) {
+                match self.call_function(&throw_fn, iterator, std::slice::from_ref(exception)) {
                     Completion::Normal(v) => {
                         if matches!(v, JsValue::Object(_)) {
                             Ok(Some(v))
@@ -5174,6 +5140,7 @@ impl Interpreter {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn get_iterator_direct(&mut self, obj: &JsValue) -> Result<(JsValue, JsValue), JsValue> {
         match obj {
             JsValue::Object(o) => {
@@ -5223,11 +5190,8 @@ impl Interpreter {
     pub(crate) fn iterate_to_vec(&mut self, iterable: &JsValue) -> Result<Vec<JsValue>, JsValue> {
         let iterator = self.get_iterator(iterable)?;
         let mut values = Vec::new();
-        loop {
-            match self.iterator_step(&iterator)? {
-                Some(result) => values.push(self.iterator_value(&result)?),
-                None => break,
-            }
+        while let Some(result) = self.iterator_step(&iterator)? {
+            values.push(self.iterator_value(&result)?);
         }
         Ok(values)
     }
@@ -5321,10 +5285,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if {
+                    let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
-                    } {
+                    };
+                    if res {
                         match interp.proxy_define_own_property(o.id, key, &desc_val) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5361,10 +5326,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if {
+                    let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
-                    } {
+                    };
+                    if res {
                         match interp.proxy_delete_property(o.id, &key) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5463,10 +5429,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if {
+                    let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
-                    } {
+                    };
+                    if res {
                         match interp.proxy_get_prototype_of(o.id) {
                             Ok(v) => return Completion::Normal(v),
                             Err(e) => return Completion::Throw(e),
@@ -5500,10 +5467,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if {
+                    let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
-                    } {
+                    };
+                    if res {
                         match interp.proxy_has_property(o.id, &key) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5532,10 +5500,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if {
+                    let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
-                    } {
+                    };
+                    if res {
                         match interp.proxy_is_extensible(o.id) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5564,10 +5533,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if {
+                    let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
-                    } {
+                    };
+                    if res {
                         match interp.proxy_own_keys(o.id) {
                             Ok(keys) => {
                                 let arr = interp.create_array(keys);
@@ -5606,10 +5576,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if {
+                    let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
-                    } {
+                    };
+                    if res {
                         match interp.proxy_prevent_extensions(o.id) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -5695,10 +5666,11 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    if {
+                    let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
-                    } {
+                    };
+                    if res {
                         match interp.proxy_set_prototype_of(o.id, &proto) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
@@ -6064,13 +6036,14 @@ impl Interpreter {
                     }
                     // Check @@toStringTag (spec 20.1.3.6 steps 14-17)
                     let tag_key = "Symbol(Symbol.toStringTag)".to_string();
-                    let tag_result = interp.get_object_property(o.id, &tag_key, &this_val);
-                    if let Completion::Normal(ref tag_val) = tag_result {
-                        if let JsValue::String(s) = tag_val {
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                &format!("[object {}]", s),
-                            )));
-                        }
+                    let tag_result = interp.get_object_property(o.id, &tag_key, this_val);
+                    if let Completion::Normal(ref tag_val) = tag_result
+                        && let JsValue::String(s) = tag_val
+                    {
+                        return Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                            "[object {}]",
+                            s
+                        ))));
                     }
                     // builtinTag per spec: based on internal slots
                     let builtin_tag = {

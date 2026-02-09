@@ -15,6 +15,7 @@ pub struct Program {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ModuleItem {
     Statement(Statement),
     ImportDeclaration(ImportDeclaration),
@@ -146,6 +147,7 @@ pub enum Expression {
     New(Box<Expression>, Vec<Expression>),
     Member(Box<Expression>, MemberProperty),
     OptionalChain(Box<Expression>, Box<Expression>),
+    #[allow(dead_code)]
     Comma(Vec<Expression>),
     Spread(Box<Expression>),
     Yield(Option<Box<Expression>>, bool), // expr, delegate
@@ -413,6 +415,7 @@ pub struct ClassMethod {
     pub kind: ClassMethodKind,
     pub value: FunctionExpr,
     pub is_static: bool,
+    #[allow(dead_code)]
     pub computed: bool,
 }
 
@@ -429,6 +432,7 @@ pub struct ClassProperty {
     pub key: PropertyKey,
     pub value: Option<Expression>,
     pub is_static: bool,
+    #[allow(dead_code)]
     pub computed: bool,
 }
 
@@ -437,9 +441,9 @@ impl Expression {
     /// expressions that have no binding name of their own.
     pub fn is_anonymous_function_definition(&self) -> bool {
         match self {
-            Expression::Function(f) => f.name.as_ref().map_or(true, |n| n.is_empty()),
+            Expression::Function(f) => f.name.as_ref().is_none_or(|n| n.is_empty()),
             Expression::ArrowFunction(_) => true,
-            Expression::Class(c) => c.name.as_ref().map_or(true, |n| n.is_empty()),
+            Expression::Class(c) => c.name.as_ref().is_none_or(|n| n.is_empty()),
             _ => false,
         }
     }

@@ -176,15 +176,6 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(PropertyKey::Identifier(name))
             }
-            Token::BooleanLiteral(b) => {
-                let name = if *b { "true" } else { "false" }.to_string();
-                self.advance()?;
-                Ok(PropertyKey::Identifier(name))
-            }
-            Token::NullLiteral => {
-                self.advance()?;
-                Ok(PropertyKey::Identifier("null".to_string()))
-            }
             _ => Err(self.error("Expected property name in object pattern")),
         }
     }
@@ -574,16 +565,10 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok((PropertyKey::Number(n), false))
         } else if let Token::Keyword(kw) = &self.current {
+            // Keywords can be property names
             let name = kw.to_string();
             self.advance()?;
             Ok((PropertyKey::Identifier(name), false))
-        } else if let Token::BooleanLiteral(b) = &self.current {
-            let name = if *b { "true" } else { "false" }.to_string();
-            self.advance()?;
-            Ok((PropertyKey::Identifier(name), false))
-        } else if self.current == Token::NullLiteral {
-            self.advance()?;
-            Ok((PropertyKey::Identifier("null".to_string()), false))
         } else {
             Err(self.error(format!("Expected property name, got {:?}", self.current)))
         }
@@ -738,6 +723,7 @@ impl<'a> Parser<'a> {
         Ok((stmts, was_strict))
     }
 
+    #[allow(dead_code)]
     fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
         self.parse_function_body_with_context(false, false)
     }

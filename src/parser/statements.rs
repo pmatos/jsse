@@ -259,31 +259,31 @@ impl<'a> Parser<'a> {
             Statement::While(w) => Self::collect_var_declared_names(&w.body, names),
             Statement::DoWhile(d) => Self::collect_var_declared_names(&d.body, names),
             Statement::For(f) => {
-                if let Some(ForInit::Variable(decl)) = &f.init {
-                    if decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            Self::bound_names_from_pattern(&d.pattern, names);
-                        }
+                if let Some(ForInit::Variable(decl)) = &f.init
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        Self::bound_names_from_pattern(&d.pattern, names);
                     }
                 }
                 Self::collect_var_declared_names(&f.body, names);
             }
             Statement::ForIn(fi) => {
-                if let ForInOfLeft::Variable(decl) = &fi.left {
-                    if decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            Self::bound_names_from_pattern(&d.pattern, names);
-                        }
+                if let ForInOfLeft::Variable(decl) = &fi.left
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        Self::bound_names_from_pattern(&d.pattern, names);
                     }
                 }
                 Self::collect_var_declared_names(&fi.body, names);
             }
             Statement::ForOf(fo) => {
-                if let ForInOfLeft::Variable(decl) = &fo.left {
-                    if decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            Self::bound_names_from_pattern(&d.pattern, names);
-                        }
+                if let ForInOfLeft::Variable(decl) = &fo.left
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        Self::bound_names_from_pattern(&d.pattern, names);
                     }
                 }
                 Self::collect_var_declared_names(&fo.body, names);
@@ -341,10 +341,7 @@ impl<'a> Parser<'a> {
         for name in &bound {
             if !seen.insert(name.as_str()) {
                 return Err(ParseError {
-                    message: format!(
-                        "Duplicate binding '{name}' in for-{} loop",
-                        if kind == VarKind::Let { "in" } else { "in" }
-                    ),
+                    message: format!("Duplicate binding '{name}' in for-in loop"),
                 });
             }
         }
@@ -369,14 +366,13 @@ impl<'a> Parser<'a> {
         let consequent = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
             // B.3.4: function declaration in if-body (sloppy mode)
             let fdecl = self.parse_function_declaration()?;
-            if let Statement::FunctionDeclaration(ref f) = fdecl {
-                if f.is_generator {
-                    return Err(ParseError {
-                        message:
-                            "Generators can only be declared at the top level or inside a block"
-                                .to_string(),
-                    });
-                }
+            if let Statement::FunctionDeclaration(ref f) = fdecl
+                && f.is_generator
+            {
+                return Err(ParseError {
+                    message: "Generators can only be declared at the top level or inside a block"
+                        .to_string(),
+                });
             }
             Box::new(Statement::Block(vec![fdecl]))
         } else {
@@ -389,14 +385,14 @@ impl<'a> Parser<'a> {
             self.advance()?;
             if !self.strict && self.current == Token::Keyword(Keyword::Function) {
                 let fdecl = self.parse_function_declaration()?;
-                if let Statement::FunctionDeclaration(ref f) = fdecl {
-                    if f.is_generator {
-                        return Err(ParseError {
-                            message:
-                                "Generators can only be declared at the top level or inside a block"
-                                    .to_string(),
-                        });
-                    }
+                if let Statement::FunctionDeclaration(ref f) = fdecl
+                    && f.is_generator
+                {
+                    return Err(ParseError {
+                        message:
+                            "Generators can only be declared at the top level or inside a block"
+                                .to_string(),
+                    });
                 }
                 Some(Box::new(Statement::Block(vec![fdecl])))
             } else {

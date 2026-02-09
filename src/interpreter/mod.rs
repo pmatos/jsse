@@ -18,6 +18,7 @@ mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
 
+#[allow(clippy::type_complexity)]
 pub struct Interpreter {
     global_env: EnvRef,
     objects: Vec<Option<Rc<RefCell<JsObjectData>>>>,
@@ -81,8 +82,6 @@ pub struct Interpreter {
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
     pub(crate) call_stack_envs: Vec<EnvRef>,
-    pub(crate) gc_temp_roots: Vec<u64>,
-    pub(crate) microtask_roots: Vec<JsValue>,
 }
 
 pub struct LoadedModule {
@@ -177,8 +176,6 @@ impl Interpreter {
             last_call_this_value: None,
             constructing_derived: false,
             call_stack_envs: Vec::new(),
-            gc_temp_roots: Vec::new(),
-            microtask_roots: Vec::new(),
         };
         interp.setup_globals();
         interp
@@ -190,6 +187,7 @@ impl Interpreter {
         let _ = self.global_env.borrow_mut().set(name, val);
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn to_property_descriptor(
         &mut self,
         val: &JsValue,
@@ -278,6 +276,7 @@ impl Interpreter {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
         let result = self.create_object();
         let is_accessor = desc.get.is_some() || desc.set.is_some();
@@ -444,17 +443,19 @@ impl Interpreter {
             is_async,
             ..
         }) = &obj_data.callable
+            && !*is_strict
+            && !*is_arrow
+            && !*is_generator
+            && !*is_async
         {
-            if !*is_strict && !*is_arrow && !*is_generator && !*is_async {
-                obj_data.insert_property(
-                    "caller".to_string(),
-                    PropertyDescriptor::data(JsValue::Null, false, false, true),
-                );
-                obj_data.insert_property(
-                    "arguments".to_string(),
-                    PropertyDescriptor::data(JsValue::Null, false, false, true),
-                );
-            }
+            obj_data.insert_property(
+                "caller".to_string(),
+                PropertyDescriptor::data(JsValue::Null, false, false, true),
+            );
+            obj_data.insert_property(
+                "arguments".to_string(),
+                PropertyDescriptor::data(JsValue::Null, false, false, true),
+            );
         }
         let is_constructable = match &obj_data.callable {
             Some(JsFunction::User {
@@ -462,7 +463,7 @@ impl Interpreter {
                 is_async,
                 is_generator,
                 ..
-            }) => !is_arrow && !(*is_async && !*is_generator),
+            }) => !is_arrow && (!*is_async || *is_generator),
             Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
             None => false,
         };
@@ -501,34 +502,34 @@ impl Interpreter {
     }
 
     pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
-        if let JsValue::Object(o) = val {
-            if let Some(obj) = self.get_object(o.id) {
-                let obj_ref = obj.borrow();
-                if obj_ref.callable.is_none() {
+        if let JsValue::Object(o) = val
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let obj_ref = obj.borrow();
+            if obj_ref.callable.is_none() {
+                return;
+            }
+            if let Some(prop) = obj_ref.properties.get("name")
+                && let Some(ref v) = prop.value
+            {
+                if let JsValue::String(s) = v {
+                    if !s.to_string().is_empty() {
+                        return;
+                    }
+                } else {
                     return;
                 }
-                if let Some(prop) = obj_ref.properties.get("name") {
-                    if let Some(ref v) = prop.value {
-                        if let JsValue::String(s) = v {
-                            if !s.to_string().is_empty() {
-                                return;
-                            }
-                        } else {
-                            return;
-                        }
-                    }
-                }
-                drop(obj_ref);
-                obj.borrow_mut().insert_property(
-                    "name".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(name)),
-                        false,
-                        false,
-                        true,
-                    ),
-                );
             }
+            drop(obj_ref);
+            obj.borrow_mut().insert_property(
+                "name".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str(name)),
+                    false,
+                    false,
+                    true,
+                ),
+            );
         }
     }
 
@@ -650,20 +651,6 @@ impl Interpreter {
         result
     }
 
-    pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
-        if let JsValue::Object(o) = val {
-            self.gc_temp_roots.push(o.id);
-        }
-    }
-
-    pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
-        if let JsValue::Object(o) = val {
-            if let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id) {
-                self.gc_temp_roots.remove(pos);
-            }
-        }
-    }
-
     pub fn run(&mut self, program: &Program) -> Completion {
         self.maybe_gc();
         let result = match program.source_type {
@@ -684,6 +671,7 @@ impl Interpreter {
         result
     }
 
+    #[allow(dead_code)]
     pub fn get_current_module_path(&self) -> Option<&Path> {
         self.current_module_path.as_deref()
     }
@@ -744,24 +732,22 @@ impl Interpreter {
 
         // Second pass: process imports (after hoisting)
         for item in &program.module_items {
-            if let ModuleItem::ImportDeclaration(import) = item {
-                if let Err(e) = self.process_import(import, &module_env) {
-                    self.current_module_path = prev_module_path;
-                    return Completion::Throw(e);
-                }
+            if let ModuleItem::ImportDeclaration(import) = item
+                && let Err(e) = self.process_import(import, &module_env)
+            {
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(e);
             }
         }
 
         // Third pass: process re-exports (export * from)
         for item in &program.module_items {
             if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-            {
-                if let Err(e) =
+                && let Err(e) =
                     self.process_star_reexport(source, exported.as_ref(), &loaded_module)
-                {
-                    self.current_module_path = prev_module_path;
-                    return Completion::Throw(e);
-                }
+            {
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(e);
             }
         }
 
@@ -773,11 +759,10 @@ impl Interpreter {
                     source: Some(source),
                     ..
                 }) = item
+                    && let Err(e) = self.validate_named_reexports(canon_path, source, specifiers)
                 {
-                    if let Err(e) = self.validate_named_reexports(canon_path, source, specifiers) {
-                        self.current_module_path = prev_module_path;
-                        return Completion::Throw(e);
-                    }
+                    self.current_module_path = prev_module_path;
+                    return Completion::Throw(e);
                 }
             }
         }
@@ -1158,16 +1143,15 @@ impl Interpreter {
                     // Re-export: get values from source module
                     let module_path = self.current_module_path.clone();
                     if let Ok(resolved) = self.resolve_module_specifier(src, module_path.as_deref())
+                        && let Ok(source_mod) = self.load_module(&resolved)
                     {
-                        if let Ok(source_mod) = self.load_module(&resolved) {
-                            let source_exports = source_mod.borrow().exports.clone();
-                            for spec in specifiers {
-                                if let Some(val) = source_exports.get(&spec.local) {
-                                    module
-                                        .borrow_mut()
-                                        .exports
-                                        .insert(spec.exported.clone(), val.clone());
-                                }
+                        let source_exports = source_mod.borrow().exports.clone();
+                        for spec in specifiers {
+                            if let Some(val) = source_exports.get(&spec.local) {
+                                module
+                                    .borrow_mut()
+                                    .exports
+                                    .insert(spec.exported.clone(), val.clone());
                             }
                         }
                     }
@@ -1205,13 +1189,13 @@ impl Interpreter {
                         .exports
                         .insert("default".to_string(), val);
                 }
-                if !f.name.is_empty() {
-                    if let Some(val) = env.borrow().get(&f.name) {
-                        module
-                            .borrow_mut()
-                            .exports
-                            .insert("default".to_string(), val);
-                    }
+                if !f.name.is_empty()
+                    && let Some(val) = env.borrow().get(&f.name)
+                {
+                    module
+                        .borrow_mut()
+                        .exports
+                        .insert("default".to_string(), val);
                 }
             }
             ExportDeclaration::DefaultClass(c) => {
@@ -1221,13 +1205,13 @@ impl Interpreter {
                         .exports
                         .insert("default".to_string(), val);
                 }
-                if !c.name.is_empty() {
-                    if let Some(val) = env.borrow().get(&c.name) {
-                        module
-                            .borrow_mut()
-                            .exports
-                            .insert("default".to_string(), val);
-                    }
+                if !c.name.is_empty()
+                    && let Some(val) = env.borrow().get(&c.name)
+                {
+                    module
+                        .borrow_mut()
+                        .exports
+                        .insert("default".to_string(), val);
                 }
             }
             ExportDeclaration::All { .. } => {
@@ -1420,6 +1404,7 @@ impl Interpreter {
         }
     }
 
+    #[allow(dead_code)]
     fn get_export_names(&self, export: &ExportDeclaration) -> Vec<String> {
         let mut names = Vec::new();
         match export {
@@ -1536,12 +1521,10 @@ impl Interpreter {
                 }
             }
             Pattern::Array(elems) => {
-                for elem in elems {
-                    if let Some(e) = elem {
-                        match e {
-                            ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
-                                self.get_pattern_names(p, names);
-                            }
+                for e in elems.iter().flatten() {
+                    match e {
+                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                            self.get_pattern_names(p, names);
                         }
                     }
                 }
@@ -1633,7 +1616,6 @@ impl Interpreter {
             let job = self.microtask_queue.remove(0);
             let _ = job(self);
         }
-        self.microtask_roots.clear();
     }
 
     pub fn format_value(&self, val: &JsValue) -> String {

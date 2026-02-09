@@ -410,15 +410,6 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(MemberProperty::Dot(name))
             }
-            Token::BooleanLiteral(b) => {
-                let name = if *b { "true" } else { "false" }.to_string();
-                self.advance()?;
-                Ok(MemberProperty::Dot(name))
-            }
-            Token::NullLiteral => {
-                self.advance()?;
-                Ok(MemberProperty::Dot("null".to_string()))
-            }
             _ => Err(self.error("Expected identifier after '.'")),
         }
     }
@@ -456,18 +447,16 @@ impl<'a> Parser<'a> {
                 }
                 Token::OptionalChain => {
                     self.advance()?;
-                    let mut prop = if self.current == Token::LeftParen {
+                    let prop = if self.current == Token::LeftParen {
                         let args = self.parse_arguments()?;
                         Expression::Call(Box::new(Expression::Identifier("".into())), args)
                     } else if self.current == Token::LeftBracket {
                         self.advance()?;
                         let p = self.parse_expression()?;
                         self.eat(&Token::RightBracket)?;
-                        Expression::Member(
-                            Box::new(Expression::Identifier("".into())),
-                            MemberProperty::Computed(Box::new(p)),
-                        )
+                        p
                     } else if let Token::PrivateName(name) = &self.current {
+                        // Uses placeholder for base expr, similar to Call above
                         let name = name.clone();
                         self.advance()?;
                         Expression::Member(
@@ -482,35 +471,6 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         Expression::Identifier(name)
                     };
-                    // Continue consuming .prop, [expr], () as part of the same optional chain
-                    loop {
-                        match &self.current {
-                            Token::Dot => {
-                                self.advance()?;
-                                let mp = self.parse_dot_member_property()?;
-                                prop = Expression::Member(Box::new(prop), mp);
-                            }
-                            Token::LeftBracket => {
-                                self.advance()?;
-                                let p = self.parse_expression()?;
-                                self.eat(&Token::RightBracket)?;
-                                prop = Expression::Member(
-                                    Box::new(prop),
-                                    MemberProperty::Computed(Box::new(p)),
-                                );
-                            }
-                            Token::LeftParen => {
-                                let args = self.parse_arguments()?;
-                                prop = Expression::Call(Box::new(prop), args);
-                            }
-                            Token::NoSubstitutionTemplate(_, _)
-                            | Token::TemplateHead(_, _) => {
-                                let tmpl = self.parse_template_literal_expr(true)?;
-                                prop = Expression::TaggedTemplate(Box::new(prop), tmpl);
-                            }
-                            _ => break,
-                        }
-                    }
                     expr = Expression::OptionalChain(Box::new(expr), Box::new(prop));
                 }
                 _ => break,
@@ -929,10 +889,6 @@ impl<'a> Parser<'a> {
                 let tmpl = self.parse_template_literal_expr(false)?;
                 Ok(Expression::Template(tmpl))
             }
-            Token::Keyword(Keyword::Of) => {
-                self.advance()?;
-                Ok(Expression::Identifier("of".to_string()))
-            }
             _ => Err(self.error(format!("Unexpected token: {:?}", self.current))),
         }
     }
@@ -1195,7 +1151,7 @@ impl<'a> Parser<'a> {
                         | "static"
                         | "yield"
                 ) {
-                    return Err(self.error(&format!("Unexpected strict mode reserved word '{n}'")));
+                    return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
                 }
             }
             return Ok(Property {

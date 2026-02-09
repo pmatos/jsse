@@ -333,10 +333,10 @@ fn validate_unicode_property_escape(content: &str) -> Result<(), String> {
             return Err(format!("Invalid property escape: \\p{{{}}}", content));
         }
         // For General_Category, validate the value
-        if prop_name == "General_Category" || prop_name == "gc" {
-            if !VALID_GC_VALUES.contains(&prop_value) {
-                return Err(format!("Invalid property escape: \\p{{{}}}", content));
-            }
+        if (prop_name == "General_Category" || prop_name == "gc")
+            && !VALID_GC_VALUES.contains(&prop_value)
+        {
+            return Err(format!("Invalid property escape: \\p{{{}}}", content));
         }
         // For Script/Script_Extensions, let fancy_regex validate the value
         Ok(())
@@ -469,10 +469,10 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
                             octal_count += 1;
                         }
                         let octal_str: String = chars[i + 1..octal_end].iter().collect();
-                        if let Ok(val) = u32::from_str_radix(&octal_str, 8) {
-                            if let Some(ch) = char::from_u32(val) {
-                                push_literal_char(&mut result, ch, in_char_class);
-                            }
+                        if let Ok(val) = u32::from_str_radix(&octal_str, 8)
+                            && let Some(ch) = char::from_u32(val)
+                        {
+                            push_literal_char(&mut result, ch, in_char_class);
                         }
                         i = octal_end;
                     } else {
@@ -492,10 +492,10 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
                     && chars[i + 3].is_ascii_hexdigit() =>
                 {
                     let hex: String = chars[i + 2..i + 4].iter().collect();
-                    if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                        if let Some(ch) = char::from_u32(cp) {
-                            push_literal_char(&mut result, ch, in_char_class);
-                        }
+                    if let Ok(cp) = u32::from_str_radix(&hex, 16)
+                        && let Some(ch) = char::from_u32(cp)
+                    {
+                        push_literal_char(&mut result, ch, in_char_class);
                     }
                     i += 4;
                 }
@@ -506,10 +506,10 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
                         let start = i + 3;
                         if let Some(end) = chars[start..].iter().position(|&c| c == '}') {
                             let hex: String = chars[start..start + end].iter().collect();
-                            if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                                if let Some(ch) = char::from_u32(cp) {
-                                    push_literal_char(&mut result, ch, in_char_class);
-                                }
+                            if let Ok(cp) = u32::from_str_radix(&hex, 16)
+                                && let Some(ch) = char::from_u32(cp)
+                            {
+                                push_literal_char(&mut result, ch, in_char_class);
                             }
                             i = start + end + 1;
                         } else {
@@ -523,10 +523,10 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
                         && chars[i + 5].is_ascii_hexdigit()
                     {
                         let hex: String = chars[i + 2..i + 6].iter().collect();
-                        if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                            if let Some(ch) = char::from_u32(cp) {
-                                push_literal_char(&mut result, ch, in_char_class);
-                            }
+                        if let Ok(cp) = u32::from_str_radix(&hex, 16)
+                            && let Some(ch) = char::from_u32(cp)
+                        {
+                            push_literal_char(&mut result, ch, in_char_class);
                         }
                         i += 6;
                     } else {
@@ -694,10 +694,8 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
         }
 
         // Count capturing groups: '(' not followed by '?'
-        if c == '(' && !in_char_class {
-            if i + 1 >= len || chars[i + 1] != '?' {
-                groups_seen += 1;
-            }
+        if c == '(' && !in_char_class && (i + 1 >= len || chars[i + 1] != '?') {
+            groups_seen += 1;
         }
 
         result.push(c);
@@ -836,27 +834,25 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 }
             } else if after_escape == 'c' && i < len && chars[i].is_ascii_alphabetic() {
                 i += 1;
-            } else if after_escape == 'p' || after_escape == 'P' {
-                if i < len && chars[i] == '{' {
-                    let start = i + 1;
-                    let mut end = start;
-                    while end < len && chars[end] != '}' {
-                        end += 1;
+            } else if (after_escape == 'p' || after_escape == 'P') && i < len && chars[i] == '{' {
+                let start = i + 1;
+                let mut end = start;
+                while end < len && chars[end] != '}' {
+                    end += 1;
+                }
+                if end < len {
+                    if _unicode {
+                        let content: String = chars[start..end].iter().collect();
+                        validate_unicode_property_escape(&content).map_err(|_| {
+                            format!(
+                                "Invalid regular expression: /{}/ : Invalid property name",
+                                source
+                            )
+                        })?;
                     }
-                    if end < len {
-                        if _unicode {
-                            let content: String = chars[start..end].iter().collect();
-                            validate_unicode_property_escape(&content).map_err(|_| {
-                                format!(
-                                    "Invalid regular expression: /{}/ : Invalid property name",
-                                    source
-                                )
-                            })?;
-                        }
-                        i = end + 1;
-                    } else {
-                        i = end;
-                    }
+                    i = end + 1;
+                } else {
+                    i = end;
                 }
             }
             continue;
@@ -887,13 +883,13 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
                 if expecting_range_end {
                     expecting_range_end = false;
-                    if let (Some(start_val), Some(end_val)) = (prev_value, val) {
-                        if start_val > end_val {
-                            return Err(format!(
-                                "Invalid regular expression: /{}/ : Range out of order in character class",
-                                source
-                            ));
-                        }
+                    if let (Some(start_val), Some(end_val)) = (prev_value, val)
+                        && start_val > end_val
+                    {
+                        return Err(format!(
+                            "Invalid regular expression: /{}/ : Range out of order in character class",
+                            source
+                        ));
                     }
                     prev_value = val;
                     continue;
@@ -1007,13 +1003,12 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                             // Check min <= max
                             if let (Ok(min_val), Ok(max_val)) =
                                 (parts[0].parse::<u64>(), parts[1].parse::<u64>())
+                                && max_val < min_val
                             {
-                                if max_val < min_val {
-                                    return Err(format!(
-                                        "Invalid regular expression: /{}/ : numbers out of order in {{}} quantifier",
-                                        source
-                                    ));
-                                }
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : numbers out of order in {{}} quantifier",
+                                    source
+                                ));
                             }
                         }
                         a_ok && b_ok
@@ -1088,6 +1083,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     Ok(())
 }
 
+#[allow(dead_code)]
 fn build_fancy_regex(source: &str, flags: &str) -> Result<fancy_regex::Regex, String> {
     let pattern = translate_js_pattern(source, flags)?;
     fancy_regex::Regex::new(&pattern).map_err(|e| e.to_string())
@@ -1132,13 +1128,9 @@ fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
 }
 
 fn regex_captures(re: &CompiledRegex, text: &str) -> Option<RegexCaptures> {
-    regex_captures_at(re, text, 0)
-}
-
-fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
     match re {
         CompiledRegex::Fancy(r) => {
-            let caps = r.captures_from_pos(text, pos).ok()??;
+            let caps = r.captures(text).ok()??;
             let names: Vec<Option<String>> = r
                 .capture_names()
                 .map(|n| n.map(|s| s.to_string()))
@@ -1154,11 +1146,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
             Some(RegexCaptures { groups, names })
         }
         CompiledRegex::Standard(r) => {
-            let caps = if pos == 0 {
-                r.captures(text)?
-            } else {
-                r.captures_at(text, pos)?
-            };
+            let caps = r.captures(text)?;
             let names: Vec<Option<String>> = r
                 .capture_names()
                 .map(|n| n.map(|s| s.to_string()))
@@ -1176,6 +1164,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
     }
 }
 
+#[allow(dead_code)]
 fn regex_is_match(re: &CompiledRegex, text: &str) -> bool {
     match re {
         CompiledRegex::Fancy(r) => r.is_match(text).unwrap_or(false),
@@ -1183,6 +1172,7 @@ fn regex_is_match(re: &CompiledRegex, text: &str) -> bool {
     }
 }
 
+#[allow(dead_code)]
 fn build_rust_regex(source: &str, flags: &str) -> Result<regex::Regex, String> {
     let mut pattern = String::new();
     if flags.contains('i') {
@@ -1220,6 +1210,7 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
     }
 }
 
+#[allow(dead_code)]
 fn get_last_index(interp: &Interpreter, obj_id: u64) -> f64 {
     if let Some(obj) = interp.get_object(obj_id) {
         to_number(&obj.borrow().get_property("lastIndex"))
@@ -1228,6 +1219,7 @@ fn get_last_index(interp: &Interpreter, obj_id: u64) -> f64 {
     }
 }
 
+#[allow(dead_code)]
 fn set_last_index(interp: &Interpreter, obj_id: u64, val: f64) {
     if let Some(obj) = interp.get_object(obj_id) {
         obj.borrow_mut()
@@ -1546,34 +1538,35 @@ fn regexp_exec_raw(
         Err(_) => return Completion::Normal(JsValue::Null),
     };
 
-    let caps = match regex_captures_at(&re, input, last_index_byte) {
+    let caps = match regex_captures(&re, &input[last_index_byte..]) {
         Some(c) => c,
         None => {
-            if global || sticky {
-                if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
-                    return Completion::Throw(e);
-                }
+            if (global || sticky)
+                && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
+            {
+                return Completion::Throw(e);
             }
             return Completion::Normal(JsValue::Null);
         }
     };
 
     let full_match = caps.get(0).unwrap();
-    // Convert absolute byte offsets to UTF-16 code unit offsets
-    let match_start_utf16 = byte_offset_to_utf16(input, full_match.start);
-    let match_end_utf16 = byte_offset_to_utf16(input, full_match.end);
+    // Convert byte offsets to UTF-16 code unit offsets
+    let slice = &input[last_index_byte..];
+    let match_start_utf16 = last_index_utf16 + byte_offset_to_utf16(slice, full_match.start);
+    let match_end_utf16 = last_index_utf16 + byte_offset_to_utf16(slice, full_match.end);
 
-    if sticky && full_match.start != last_index_byte {
+    if sticky && full_match.start != 0 {
         if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
             return Completion::Throw(e);
         }
         return Completion::Normal(JsValue::Null);
     }
 
-    if global || sticky {
-        if let Err(e) = set_last_index_strict(interp, this_id, match_end_utf16 as f64) {
-            return Completion::Throw(e);
-        }
+    if (global || sticky)
+        && let Err(e) = set_last_index_strict(interp, this_id, match_end_utf16 as f64)
+    {
+        return Completion::Throw(e);
     }
 
     let mut elements: Vec<JsValue> = Vec::new();
@@ -1624,8 +1617,8 @@ fn regexp_exec_raw(
             for i in 0..caps.len() {
                 match caps.get(i) {
                     Some(m) => {
-                        let cap_start = byte_offset_to_utf16(input, m.start);
-                        let cap_end = byte_offset_to_utf16(input, m.end);
+                        let cap_start = last_index_utf16 + byte_offset_to_utf16(slice, m.start);
+                        let cap_end = last_index_utf16 + byte_offset_to_utf16(slice, m.end);
                         let pair = interp.create_array(vec![
                             JsValue::Number(cap_start as f64),
                             JsValue::Number(cap_end as f64),
@@ -1643,8 +1636,9 @@ fn regexp_exec_raw(
                     if let Some(name) = name_opt {
                         let val = match caps.get(i) {
                             Some(m) => {
-                                let cap_start = byte_offset_to_utf16(input, m.start);
-                                let cap_end = byte_offset_to_utf16(input, m.end);
+                                let cap_start =
+                                    last_index_utf16 + byte_offset_to_utf16(slice, m.start);
+                                let cap_end = last_index_utf16 + byte_offset_to_utf16(slice, m.end);
                                 interp.create_array(vec![
                                     JsValue::Number(cap_start as f64),
                                     JsValue::Number(cap_end as f64),
@@ -1707,12 +1701,12 @@ impl Interpreter {
                         ));
                     }
                 };
-                if let Some(obj) = interp.get_object(obj_id) {
-                    if obj.borrow().class_name != "RegExp" {
-                        return Completion::Throw(interp.create_type_error(
-                            "RegExp.prototype.exec requires that 'this' be a RegExp object",
-                        ));
-                    }
+                if let Some(obj) = interp.get_object(obj_id)
+                    && obj.borrow().class_name != "RegExp"
+                {
+                    return Completion::Throw(interp.create_type_error(
+                        "RegExp.prototype.exec requires that 'this' be a RegExp object",
+                    ));
                 }
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let input = match interp.to_string_value(&arg) {
@@ -1941,11 +1935,10 @@ impl Interpreter {
 
                 // 5. If SameValue(previousLastIndex, +0𝔽) is false, then
                 //    a. Perform ? Set(rx, "lastIndex", +0𝔽, true).
-                if !same_value(&previous_last_index, &JsValue::Number(0.0)) {
-                    if let Err(e) = spec_set(interp, rx_id, "lastIndex", JsValue::Number(0.0), true)
-                    {
-                        return Completion::Throw(e);
-                    }
+                if !same_value(&previous_last_index, &JsValue::Number(0.0))
+                    && let Err(e) = spec_set(interp, rx_id, "lastIndex", JsValue::Number(0.0), true)
+                {
+                    return Completion::Throw(e);
                 }
 
                 // 6. Let result be ? RegExpExec(rx, S).
@@ -1964,11 +1957,10 @@ impl Interpreter {
 
                 // 8. If SameValue(currentLastIndex, previousLastIndex) is false, then
                 //    a. Perform ? Set(rx, "lastIndex", previousLastIndex, true).
-                if !same_value(&current_last_index, &previous_last_index) {
-                    if let Err(e) = spec_set(interp, rx_id, "lastIndex", previous_last_index, true)
-                    {
-                        return Completion::Throw(e);
-                    }
+                if !same_value(&current_last_index, &previous_last_index)
+                    && let Err(e) = spec_set(interp, rx_id, "lastIndex", previous_last_index, true)
+                {
+                    return Completion::Throw(e);
                 }
 
                 // 9. If result is null, return -1𝔽.
@@ -2832,7 +2824,7 @@ impl Interpreter {
                                     );
                                 }
 
-                                match regex_captures_at(&re, &string, last_index) {
+                                match regex_captures(&re, &string[last_index..]) {
                                     None => {
                                         obj.borrow_mut().iterator_state =
                                             Some(IteratorState::RegExpStringIterator {
@@ -2852,8 +2844,8 @@ impl Interpreter {
                                     }
                                     Some(caps) => {
                                         let full = caps.get(0).unwrap();
-                                        let match_start = full.start;
-                                        let match_end = full.end;
+                                        let match_start = last_index + full.start;
+                                        let match_end = last_index + full.end;
 
                                         let mut elements: Vec<JsValue> = Vec::new();
                                         elements
@@ -3157,27 +3149,25 @@ impl Interpreter {
                 };
 
                 // §22.2.3.1 step 2: If NewTarget is undefined (called as function, not new)
-                if interp.new_target.is_none() {
-                    if is_regexp_obj && matches!(flags_arg, JsValue::Undefined) {
-                        if let JsValue::Object(ref o) = pattern_arg {
-                            // Get pattern.constructor
-                            let ctor =
-                                match interp.get_object_property(o.id, "constructor", &pattern_arg)
-                                {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => JsValue::Undefined,
-                                };
-                            // Get the active function object (RegExp constructor)
-                            let regexp_fn = interp
-                                .global_env
-                                .borrow()
-                                .get("RegExp")
-                                .unwrap_or(JsValue::Undefined);
-                            if same_value(&regexp_fn, &ctor) {
-                                return Completion::Normal(pattern_arg.clone());
-                            }
-                        }
+                if interp.new_target.is_none()
+                    && is_regexp_obj
+                    && matches!(flags_arg, JsValue::Undefined)
+                    && let JsValue::Object(ref o) = pattern_arg
+                {
+                    // Get pattern.constructor
+                    let ctor = match interp.get_object_property(o.id, "constructor", &pattern_arg) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => JsValue::Undefined,
+                    };
+                    // Get the active function object (RegExp constructor)
+                    let regexp_fn = interp
+                        .global_env
+                        .borrow()
+                        .get("RegExp")
+                        .unwrap_or(JsValue::Undefined);
+                    if same_value(&regexp_fn, &ctor) {
+                        return Completion::Normal(pattern_arg.clone());
                     }
                 }
 

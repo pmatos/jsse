@@ -81,7 +81,6 @@ impl Interpreter {
             }
         }
 
-        self.call_stack_envs.push(env.clone());
         let mut result = Completion::Empty;
         for stmt in stmts {
             self.maybe_gc();
@@ -90,28 +89,24 @@ impl Interpreter {
                 Completion::Normal(val) => result = Completion::Normal(val),
                 Completion::Empty => {} // keep previous result (UpdateEmpty semantics)
                 Completion::Break(label, break_val) => {
+                    // UpdateEmpty: only replace if break's value is empty (None)
                     let val = match break_val {
                         None => Some(result.value_or(JsValue::Undefined)),
                         some => some,
                     };
-                    self.call_stack_envs.pop();
                     return Completion::Break(label, val);
                 }
                 Completion::Continue(label, cont_val) => {
+                    // UpdateEmpty: only replace if continue's value is empty (None)
                     let val = match cont_val {
                         None => Some(result.value_or(JsValue::Undefined)),
                         some => some,
                     };
-                    self.call_stack_envs.pop();
                     return Completion::Continue(label, val);
                 }
-                other => {
-                    self.call_stack_envs.pop();
-                    return other;
-                }
+                other => return other,
             }
         }
-        self.call_stack_envs.pop();
         result
     }
 
@@ -239,31 +234,31 @@ impl Interpreter {
             Statement::While(w) => self.hoist_vars_from_stmt(&w.body, var_scope, is_global),
             Statement::DoWhile(d) => self.hoist_vars_from_stmt(&d.body, var_scope, is_global),
             Statement::For(f) => {
-                if let Some(ForInit::Variable(decl)) = &f.init {
-                    if decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            self.hoist_pattern(&d.pattern, var_scope, is_global);
-                        }
+                if let Some(ForInit::Variable(decl)) = &f.init
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        self.hoist_pattern(&d.pattern, var_scope, is_global);
                     }
                 }
                 self.hoist_vars_from_stmt(&f.body, var_scope, is_global);
             }
             Statement::ForIn(fi) => {
-                if let ForInOfLeft::Variable(decl) = &fi.left {
-                    if decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            self.hoist_pattern(&d.pattern, var_scope, is_global);
-                        }
+                if let ForInOfLeft::Variable(decl) = &fi.left
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        self.hoist_pattern(&d.pattern, var_scope, is_global);
                     }
                 }
                 self.hoist_vars_from_stmt(&fi.body, var_scope, is_global);
             }
             Statement::ForOf(fo) => {
-                if let ForInOfLeft::Variable(decl) = &fo.left {
-                    if decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            self.hoist_pattern(&d.pattern, var_scope, is_global);
-                        }
+                if let ForInOfLeft::Variable(decl) = &fo.left
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        self.hoist_pattern(&d.pattern, var_scope, is_global);
                     }
                 }
                 self.hoist_vars_from_stmt(&fo.body, var_scope, is_global);
@@ -332,15 +327,14 @@ impl Interpreter {
                     // Check function declarations in this block
                     // Only regular functions (not generators or async) per Annex B.3.3
                     for s in inner {
-                        if let Statement::FunctionDeclaration(f) = s {
-                            if !f.is_generator
-                                && !f.is_async
-                                && !names.contains(&f.name)
-                                && !blocked.contains(&f.name)
-                                && !block_lexicals.contains(&f.name)
-                            {
-                                names.push(f.name.clone());
-                            }
+                        if let Statement::FunctionDeclaration(f) = s
+                            && !f.is_generator
+                            && !f.is_async
+                            && !names.contains(&f.name)
+                            && !blocked.contains(&f.name)
+                            && !block_lexicals.contains(&f.name)
+                        {
+                            names.push(f.name.clone());
                         }
                     }
                     // Recurse with block lexicals added to blocked set
@@ -379,11 +373,11 @@ impl Interpreter {
                 }
                 Statement::For(f) => {
                     let prev_len = blocked.len();
-                    if let Some(ForInit::Variable(decl)) = &f.init {
-                        if matches!(decl.kind, VarKind::Let | VarKind::Const) {
-                            for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, blocked);
-                            }
+                    if let Some(ForInit::Variable(decl)) = &f.init
+                        && matches!(decl.kind, VarKind::Let | VarKind::Const)
+                    {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, blocked);
                         }
                     }
                     Self::collect_annexb_function_names(
@@ -395,11 +389,11 @@ impl Interpreter {
                 }
                 Statement::ForIn(fi) => {
                     let prev_len = blocked.len();
-                    if let ForInOfLeft::Variable(decl) = &fi.left {
-                        if matches!(decl.kind, VarKind::Let | VarKind::Const) {
-                            for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, blocked);
-                            }
+                    if let ForInOfLeft::Variable(decl) = &fi.left
+                        && matches!(decl.kind, VarKind::Let | VarKind::Const)
+                    {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, blocked);
                         }
                     }
                     Self::collect_annexb_function_names(
@@ -411,11 +405,11 @@ impl Interpreter {
                 }
                 Statement::ForOf(fo) => {
                     let prev_len = blocked.len();
-                    if let ForInOfLeft::Variable(decl) = &fo.left {
-                        if matches!(decl.kind, VarKind::Let | VarKind::Const) {
-                            for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, blocked);
-                            }
+                    if let ForInOfLeft::Variable(decl) = &fo.left
+                        && matches!(decl.kind, VarKind::Let | VarKind::Const)
+                    {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, blocked);
                         }
                     }
                     Self::collect_annexb_function_names(
@@ -457,15 +451,14 @@ impl Interpreter {
                     }
                     for case in &s.cases {
                         for cs in &case.consequent {
-                            if let Statement::FunctionDeclaration(f) = cs {
-                                if !f.is_generator
-                                    && !f.is_async
-                                    && !names.contains(&f.name)
-                                    && !blocked.contains(&f.name)
-                                    && !switch_lexicals.contains(&f.name)
-                                {
-                                    names.push(f.name.clone());
-                                }
+                            if let Statement::FunctionDeclaration(f) = cs
+                                && !f.is_generator
+                                && !f.is_async
+                                && !names.contains(&f.name)
+                                && !blocked.contains(&f.name)
+                                && !switch_lexicals.contains(&f.name)
+                            {
+                                names.push(f.name.clone());
                             }
                         }
                     }
@@ -682,13 +675,12 @@ impl Interpreter {
             } else {
                 JsValue::Undefined
             };
-            if let Pattern::Identifier(ref name) = d.pattern {
-                if d.init
+            if let Pattern::Identifier(ref name) = d.pattern
+                && d.init
                     .as_ref()
                     .is_some_and(|e| e.is_anonymous_function_definition())
-                {
-                    self.set_function_name(&val, name);
-                }
+            {
+                self.set_function_name(&val, name);
             }
             if is_using {
                 let hint = if decl.kind == VarKind::AwaitUsing {
@@ -737,18 +729,15 @@ impl Interpreter {
                 } else {
                     val
                 };
-                if let Pattern::Identifier(ref name) = **inner {
-                    if default.is_anonymous_function_definition() {
-                        self.set_function_name(&v, name);
-                    }
+                if let Pattern::Identifier(ref name) = **inner
+                    && default.is_anonymous_function_definition()
+                {
+                    self.set_function_name(&v, name);
                 }
                 self.bind_pattern(inner, v, kind, env)
             }
             Pattern::Array(elements) => {
                 let iterator = self.get_iterator(&val)?;
-                if let JsValue::Object(o) = &iterator {
-                    self.gc_temp_roots.push(o.id);
-                }
                 let mut done = false;
                 let mut error: Option<JsValue> = None;
                 for elem in elements {
@@ -836,24 +825,13 @@ impl Interpreter {
                         }
                     }
                 }
-                let unroot_iter = |s: &mut Self| {
-                    if let JsValue::Object(o) = &iterator {
-                        if let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id) {
-                            s.gc_temp_roots.remove(pos);
-                        }
-                    }
-                };
                 if !done {
                     if let Some(err) = error {
                         let _ = self.iterator_close_result(&iterator);
-                        unroot_iter(self);
                         return Err(err);
                     }
-                    let r = self.iterator_close_result(&iterator);
-                    unroot_iter(self);
-                    return r;
+                    return self.iterator_close_result(&iterator);
                 }
-                unroot_iter(self);
                 if let Some(err) = error {
                     return Err(err);
                 }
@@ -921,24 +899,24 @@ impl Interpreter {
                         }
                         ObjectPatternProperty::Rest(pat) => {
                             let rest_obj = self.create_object();
-                            if let JsValue::Object(o) = &obj_val {
-                                if let Some(src) = self.get_object(o.id) {
-                                    let keys: Vec<String> = src.borrow().property_order.clone();
-                                    for key in &keys {
-                                        if !excluded_keys.contains(key) {
-                                            let desc = src.borrow().get_own_property(key);
-                                            if let Some(ref d) = desc
-                                                && d.enumerable.unwrap_or(true)
+                            if let JsValue::Object(o) = &obj_val
+                                && let Some(src) = self.get_object(o.id)
+                            {
+                                let keys: Vec<String> = src.borrow().property_order.clone();
+                                for key in &keys {
+                                    if !excluded_keys.contains(key) {
+                                        let desc = src.borrow().get_own_property(key);
+                                        if let Some(ref d) = desc
+                                            && d.enumerable.unwrap_or(true)
+                                        {
+                                            let v = match self
+                                                .get_object_property(o.id, key, &obj_val)
                                             {
-                                                let v = match self
-                                                    .get_object_property(o.id, key, &obj_val)
-                                                {
-                                                    Completion::Normal(v) => v,
-                                                    Completion::Throw(e) => return Err(e),
-                                                    _ => JsValue::Undefined,
-                                                };
-                                                rest_obj.borrow_mut().insert_value(key.clone(), v);
-                                            }
+                                                Completion::Normal(v) => v,
+                                                Completion::Throw(e) => return Err(e),
+                                                _ => JsValue::Undefined,
+                                            };
+                                            rest_obj.borrow_mut().insert_value(key.clone(), v);
                                         }
                                     }
                                 }
@@ -1090,13 +1068,13 @@ impl Interpreter {
             matches!(&fi.left, ForInOfLeft::Variable(decl) if decl.kind != VarKind::Var);
         let eval_env = if is_lexical {
             let tdz_env = Environment::new(Some(env.clone()));
-            if let ForInOfLeft::Variable(decl) = &fi.left {
-                if let Some(d) = decl.declarations.first() {
-                    let mut names = Vec::new();
-                    Self::collect_pattern_names(&d.pattern, &mut names);
-                    for name in &names {
-                        tdz_env.borrow_mut().declare(name, BindingKind::Let);
-                    }
+            if let ForInOfLeft::Variable(decl) = &fi.left
+                && let Some(d) = decl.declarations.first()
+            {
+                let mut names = Vec::new();
+                Self::collect_pattern_names(&d.pattern, &mut names);
+                for name in &names {
+                    tdz_env.borrow_mut().declare(name, BindingKind::Let);
                 }
             }
             tdz_env
@@ -1222,13 +1200,6 @@ impl Interpreter {
             }
         };
 
-        self.gc_root_value(&iterator);
-        let result = self.exec_for_of_loop(fo, env, &iterator);
-        self.gc_unroot_value(&iterator);
-        result
-    }
-
-    fn exec_for_of_loop(&mut self, fo: &ForOfStatement, env: &EnvRef, iterator: &JsValue) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
             let step_result = match self.iterator_next(&iterator) {
@@ -1403,24 +1374,24 @@ impl Interpreter {
         // (only regular functions, not generators/async — those stay block-scoped)
         for case in &s.cases {
             for stmt in &case.consequent {
-                if let Statement::FunctionDeclaration(f) = stmt {
-                    if !f.is_generator && !f.is_async {
-                        switch_env.borrow_mut().declare(&f.name, BindingKind::Var);
-                        let func = JsFunction::User {
-                            name: Some(f.name.clone()),
-                            params: f.params.clone(),
-                            body: f.body.clone(),
-                            closure: switch_env.clone(),
-                            is_arrow: false,
-                            is_strict: Self::is_strict_mode_body(&f.body)
-                                || switch_env.borrow().strict,
-                            is_generator: f.is_generator,
-                            is_async: f.is_async,
-                            source_text: f.source_text.clone(),
-                        };
-                        let val = self.create_function(func);
-                        let _ = switch_env.borrow_mut().set(&f.name, val);
-                    }
+                if let Statement::FunctionDeclaration(f) = stmt
+                    && !f.is_generator
+                    && !f.is_async
+                {
+                    switch_env.borrow_mut().declare(&f.name, BindingKind::Var);
+                    let func = JsFunction::User {
+                        name: Some(f.name.clone()),
+                        params: f.params.clone(),
+                        body: f.body.clone(),
+                        closure: switch_env.clone(),
+                        is_arrow: false,
+                        is_strict: Self::is_strict_mode_body(&f.body) || switch_env.borrow().strict,
+                        is_generator: f.is_generator,
+                        is_async: f.is_async,
+                        source_text: f.source_text.clone(),
+                    };
+                    let val = self.create_function(func);
+                    let _ = switch_env.borrow_mut().set(&f.name, val);
                 }
             }
         }
@@ -1446,10 +1417,10 @@ impl Interpreter {
                 if let Some(r) = self.exec_switch_cases(&s.cases[i..a_end], &switch_env, &mut v) {
                     return r;
                 }
-                if let Some(di) = default_idx {
-                    if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v) {
-                        return r;
-                    }
+                if let Some(di) = default_idx
+                    && let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v)
+                {
+                    return r;
                 }
                 return Completion::Normal(v);
             }
@@ -1528,27 +1499,25 @@ impl Interpreter {
 
         let mut method = JsValue::Undefined;
 
-        if let Some(ref key) = sym_key {
-            if let JsValue::Object(o) = value {
-                if let Some(obj) = self.get_object(o.id) {
-                    let val = obj.borrow().get_property(key);
-                    if !matches!(val, JsValue::Undefined) {
-                        method = val;
-                    }
-                }
+        if let Some(ref key) = sym_key
+            && let JsValue::Object(o) = value
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let val = obj.borrow().get_property(key);
+            if !matches!(val, JsValue::Undefined) {
+                method = val;
             }
         }
 
-        if matches!(method, JsValue::Undefined) && hint == DisposeHint::Async {
-            if let Some(sync_key) = self.get_symbol_key("dispose") {
-                if let JsValue::Object(o) = value {
-                    if let Some(obj) = self.get_object(o.id) {
-                        let val = obj.borrow().get_property(&sync_key);
-                        if !matches!(val, JsValue::Undefined) {
-                            method = val;
-                        }
-                    }
-                }
+        if matches!(method, JsValue::Undefined)
+            && hint == DisposeHint::Async
+            && let Some(sync_key) = self.get_symbol_key("dispose")
+            && let JsValue::Object(o) = value
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let val = obj.borrow().get_property(&sync_key);
+            if !matches!(val, JsValue::Undefined) {
+                method = val;
             }
         }
 
@@ -1590,7 +1559,6 @@ impl Interpreter {
             Completion::Throw(e) => Some(e.clone()),
             _ => None,
         };
-        let had_error = current_error.is_some();
 
         for resource in &stack {
             let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
@@ -1614,11 +1582,7 @@ impl Interpreter {
         }
 
         if let Some(err) = current_error {
-            if had_error {
-                Completion::Throw(err)
-            } else {
-                Completion::Throw(err)
-            }
+            Completion::Throw(err)
         } else {
             completion
         }

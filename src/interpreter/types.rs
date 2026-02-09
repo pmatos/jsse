@@ -47,8 +47,11 @@ pub(crate) struct GeneratorContext {
 
 #[derive(Debug, Clone)]
 pub enum GeneratorExecutionState {
+    #[allow(dead_code)]
     SuspendedStart,
-    SuspendedYield { target_yield: usize },
+    SuspendedYield {
+        target_yield: usize,
+    },
     Executing,
     Completed,
 }
@@ -65,6 +68,7 @@ pub enum StateMachineExecutionState {
 pub struct TryContextInfo {
     pub catch_state: Option<usize>,
     pub finally_state: Option<usize>,
+    #[allow(dead_code)]
     pub after_state: usize,
     pub entered_catch: bool,
     pub entered_finally: bool,
@@ -217,12 +221,12 @@ impl Environment {
                     "Assignment to constant variable.",
                 )));
             }
-            if binding.kind == BindingKind::Var {
-                if let Some(ref global_obj) = self.global_object {
-                    global_obj
-                        .borrow_mut()
-                        .set_property_value(name, value.clone());
-                }
+            if binding.kind == BindingKind::Var
+                && let Some(ref global_obj) = self.global_object
+            {
+                global_obj
+                    .borrow_mut()
+                    .set_property_value(name, value.clone());
             }
             binding.value = value;
             binding.initialized = true;
@@ -333,6 +337,7 @@ pub enum JsFunction {
         is_async: bool,
         source_text: Option<String>,
     },
+    #[allow(clippy::type_complexity)]
     Native(
         String,
         usize,
@@ -522,6 +527,7 @@ pub enum IteratorState {
         func_env: EnvRef,
         is_strict: bool,
         execution_state: StateMachineExecutionState,
+        #[allow(dead_code)]
         sent_value: JsValue,
         try_stack: Vec<TryContextInfo>,
         pending_binding: Option<SentValueBinding>,
@@ -539,6 +545,7 @@ pub enum IteratorState {
         func_env: EnvRef,
         is_strict: bool,
         execution_state: StateMachineExecutionState,
+        #[allow(dead_code)]
         sent_value: JsValue,
         try_stack: Vec<TryContextInfo>,
         pending_binding: Option<SentValueBinding>,
@@ -653,6 +660,7 @@ pub struct JsObjectData {
 #[derive(Clone)]
 pub(crate) struct ModuleNamespaceData {
     pub env: EnvRef,
+    #[allow(dead_code)]
     pub export_names: Vec<String>,
     pub export_to_binding: HashMap<String, String>,
     pub module_path: Option<std::path::PathBuf>,
@@ -703,19 +711,19 @@ impl JsObjectData {
     }
 
     fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
-                let units = &s.code_units;
-                if key == "length" {
-                    return Some(JsValue::Number(units.len() as f64));
-                }
-                if let Ok(idx) = key.parse::<usize>() {
-                    if idx < units.len() {
-                        return Some(JsValue::String(crate::types::JsString {
-                            code_units: vec![units[idx]],
-                        }));
-                    }
-                }
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            let units = &s.code_units;
+            if key == "length" {
+                return Some(JsValue::Number(units.len() as f64));
+            }
+            if let Ok(idx) = key.parse::<usize>()
+                && idx < units.len()
+            {
+                return Some(JsValue::String(crate::types::JsString {
+                    code_units: vec![units[idx]],
+                }));
             }
         }
         None
@@ -723,14 +731,14 @@ impl JsObjectData {
 
     pub fn get_property(&self, key: &str) -> JsValue {
         // Module namespace: look up live binding from environment
-        if let Some(ref ns_data) = self.module_namespace {
-            if let Some(binding_name) = ns_data.export_to_binding.get(key) {
-                return ns_data
-                    .env
-                    .borrow()
-                    .get(binding_name)
-                    .unwrap_or(JsValue::Undefined);
-            }
+        if let Some(ref ns_data) = self.module_namespace
+            && let Some(binding_name) = ns_data.export_to_binding.get(key)
+        {
+            return ns_data
+                .env
+                .borrow()
+                .get(binding_name)
+                .unwrap_or(JsValue::Undefined);
         }
         if let Some(ref map) = self.parameter_map
             && let Some((env_ref, param_name)) = map.get(key)
@@ -750,13 +758,13 @@ impl JsObjectData {
         {
             return elems[idx].clone();
         }
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
-                if is_valid_integer_index(ta, index) {
-                    return typed_array_get_index(ta, index as usize);
-                }
-                return JsValue::Undefined;
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                return typed_array_get_index(ta, index as usize);
             }
+            return JsValue::Undefined;
         }
         if let Some(val) = self.string_exotic_value(key) {
             return val;
@@ -791,48 +799,48 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
-                if is_valid_integer_index(ta, index) {
-                    return Some(PropertyDescriptor {
-                        value: Some(typed_array_get_index(ta, index as usize)),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(false),
-                        get: None,
-                        set: None,
-                    });
-                }
-                return None;
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                return Some(PropertyDescriptor {
+                    value: Some(typed_array_get_index(ta, index as usize)),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
             }
+            return None;
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
-                let units = &s.code_units;
-                if key == "length" {
-                    return Some(PropertyDescriptor {
-                        value: Some(JsValue::Number(units.len() as f64)),
-                        writable: Some(false),
-                        enumerable: Some(false),
-                        configurable: Some(false),
-                        get: None,
-                        set: None,
-                    });
-                }
-                if let Ok(idx) = key.parse::<usize>() {
-                    if idx < units.len() {
-                        return Some(PropertyDescriptor {
-                            value: Some(JsValue::String(crate::types::JsString {
-                                code_units: vec![units[idx]],
-                            })),
-                            writable: Some(false),
-                            enumerable: Some(true),
-                            configurable: Some(false),
-                            get: None,
-                            set: None,
-                        });
-                    }
-                }
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            let units = &s.code_units;
+            if key == "length" {
+                return Some(PropertyDescriptor {
+                    value: Some(JsValue::Number(units.len() as f64)),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
+            }
+            if let Ok(idx) = key.parse::<usize>()
+                && idx < units.len()
+            {
+                return Some(PropertyDescriptor {
+                    value: Some(JsValue::String(crate::types::JsString {
+                        code_units: vec![units[idx]],
+                    })),
+                    writable: Some(false),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
             }
         }
         if let Some(proto) = &self.prototype {
@@ -867,48 +875,48 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
-                if is_valid_integer_index(ta, index) {
-                    return Some(PropertyDescriptor {
-                        value: Some(typed_array_get_index(ta, index as usize)),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    });
-                }
-                return None;
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                return Some(PropertyDescriptor {
+                    value: Some(typed_array_get_index(ta, index as usize)),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                });
             }
+            return None;
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
-                let units = &s.code_units;
-                if key == "length" {
-                    return Some(PropertyDescriptor {
-                        value: Some(JsValue::Number(units.len() as f64)),
-                        writable: Some(false),
-                        enumerable: Some(false),
-                        configurable: Some(false),
-                        get: None,
-                        set: None,
-                    });
-                }
-                if let Ok(idx) = key.parse::<usize>() {
-                    if idx < units.len() {
-                        return Some(PropertyDescriptor {
-                            value: Some(JsValue::String(crate::types::JsString {
-                                code_units: vec![units[idx]],
-                            })),
-                            writable: Some(false),
-                            enumerable: Some(true),
-                            configurable: Some(false),
-                            get: None,
-                            set: None,
-                        });
-                    }
-                }
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            let units = &s.code_units;
+            if key == "length" {
+                return Some(PropertyDescriptor {
+                    value: Some(JsValue::Number(units.len() as f64)),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
+            }
+            if let Ok(idx) = key.parse::<usize>()
+                && idx < units.len()
+            {
+                return Some(PropertyDescriptor {
+                    value: Some(JsValue::String(crate::types::JsString {
+                        code_units: vec![units[idx]],
+                    })),
+                    writable: Some(false),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
             }
         }
         None
@@ -919,45 +927,45 @@ impl JsObjectData {
             return Some(desc.clone());
         }
         // TypedArray: §10.4.5.1
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
-                if is_valid_integer_index(ta, index) {
-                    return Some(PropertyDescriptor {
-                        value: Some(typed_array_get_index(ta, index as usize)),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
-                    });
-                }
-                return None;
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                return Some(PropertyDescriptor {
+                    value: Some(typed_array_get_index(ta, index as usize)),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                });
             }
+            return None;
         }
         // String exotic: §10.4.3.1
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
-                if key == "length" {
-                    return Some(PropertyDescriptor::data(
-                        JsValue::Number(s.code_units.len() as f64),
-                        false,
-                        false,
-                        false,
-                    ));
-                }
-                if let Ok(idx) = key.parse::<usize>() {
-                    if idx < s.code_units.len() {
-                        let ch = std::char::from_u32(s.code_units[idx] as u32)
-                            .map(|c| c.to_string())
-                            .unwrap_or_else(|| String::from_utf16_lossy(&[s.code_units[idx]]));
-                        return Some(PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&ch)),
-                            false,
-                            true,
-                            false,
-                        ));
-                    }
-                }
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            if key == "length" {
+                return Some(PropertyDescriptor::data(
+                    JsValue::Number(s.code_units.len() as f64),
+                    false,
+                    false,
+                    false,
+                ));
+            }
+            if let Ok(idx) = key.parse::<usize>()
+                && idx < s.code_units.len()
+            {
+                let ch = std::char::from_u32(s.code_units[idx] as u32)
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| String::from_utf16_lossy(&[s.code_units[idx]]));
+                return Some(PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str(&ch)),
+                    false,
+                    true,
+                    false,
+                ));
             }
         }
         None
@@ -968,19 +976,19 @@ impl JsObjectData {
             return true;
         }
         // TypedArray: §10.4.5.2
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
-                return is_valid_integer_index(ta, index);
-            }
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            return is_valid_integer_index(ta, index);
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
-                if key == "length" {
-                    return true;
-                }
-                if let Ok(idx) = key.parse::<usize>() {
-                    return idx < s.code_units.len();
-                }
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            if key == "length" {
+                return true;
+            }
+            if let Ok(idx) = key.parse::<usize>() {
+                return idx < s.code_units.len();
             }
         }
         false
@@ -995,14 +1003,14 @@ impl JsObjectData {
         let mut string_keys: Vec<String> = Vec::new();
 
         // String exotic: indices come first (they are enumerable)
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
-                let utf16_len = s.code_units.len();
-                for i in 0..utf16_len {
-                    let k = i.to_string();
-                    if seen.insert(k.clone()) {
-                        index_keys.push((i as u32, k));
-                    }
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            let utf16_len = s.code_units.len();
+            for i in 0..utf16_len {
+                let k = i.to_string();
+                if seen.insert(k.clone()) {
+                    index_keys.push((i as u32, k));
                 }
             }
         }
@@ -1011,13 +1019,11 @@ impl JsObjectData {
         for k in &self.property_order {
             if let Some(desc) = self.properties.get(k) {
                 let is_enumerable = desc.enumerable != Some(false);
-                if seen.insert(k.clone()) {
-                    if is_enumerable {
-                        if let Some(idx) = parse_array_index(k) {
-                            index_keys.push((idx, k.clone()));
-                        } else {
-                            string_keys.push(k.clone());
-                        }
+                if seen.insert(k.clone()) && is_enumerable {
+                    if let Some(idx) = parse_array_index(k) {
+                        index_keys.push((idx, k.clone()));
+                    } else {
+                        string_keys.push(k.clone());
                     }
                 }
             }
@@ -1054,31 +1060,31 @@ impl JsObjectData {
 
     pub fn define_own_property(&mut self, key: String, desc: PropertyDescriptor) -> bool {
         // TypedArray: §10.4.5.3 [[DefineOwnProperty]]
-        if self.typed_array_info.is_some() {
-            if let Some(index) = canonical_numeric_index_string(&key) {
-                let ta = self.typed_array_info.as_ref().unwrap();
-                if !is_valid_integer_index(ta, index) {
-                    return false;
-                }
-                // If accessor descriptor, reject
-                if desc.get.is_some() || desc.set.is_some() {
-                    return false;
-                }
-                if desc.configurable == Some(false) {
-                    return false;
-                }
-                if desc.enumerable == Some(false) {
-                    return false;
-                }
-                if desc.writable == Some(false) {
-                    return false;
-                }
-                if let Some(ref value) = desc.value {
-                    let ta_clone = ta.clone();
-                    typed_array_set_index(&ta_clone, index as usize, value);
-                }
-                return true;
+        if self.typed_array_info.is_some()
+            && let Some(index) = canonical_numeric_index_string(&key)
+        {
+            let ta = self.typed_array_info.as_ref().unwrap();
+            if !is_valid_integer_index(ta, index) {
+                return false;
             }
+            // If accessor descriptor, reject
+            if desc.get.is_some() || desc.set.is_some() {
+                return false;
+            }
+            if desc.configurable == Some(false) {
+                return false;
+            }
+            if desc.enumerable == Some(false) {
+                return false;
+            }
+            if desc.writable == Some(false) {
+                return false;
+            }
+            if let Some(ref value) = desc.value {
+                let ta_clone = ta.clone();
+                typed_array_set_index(&ta_clone, index as usize, value);
+            }
+            return true;
         }
         // Check array_elements for existing array index properties
         let current_from_array = if !self.properties.contains_key(&key) {
@@ -1293,14 +1299,14 @@ impl JsObjectData {
     }
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
-                if is_valid_integer_index(ta, index) {
-                    let ta_clone = ta.clone();
-                    return typed_array_set_index(&ta_clone, index as usize, &value);
-                }
-                return false;
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                let ta_clone = ta.clone();
+                return typed_array_set_index(&ta_clone, index as usize, &value);
             }
+            return false;
         }
         if let Some(ref map) = self.parameter_map
             && let Some((env_ref, param_name)) = map.get(key)
@@ -1308,23 +1314,11 @@ impl JsObjectData {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
         }
         // Keep array_elements in sync with properties for numeric indices
-        if let Some(ref mut elements) = self.array_elements {
-            if let Ok(idx) = key.parse::<usize>() {
-                if idx < elements.len() {
-                    elements[idx] = value.clone();
-                } else {
-                    // Extend array_elements for out-of-bounds index assignment
-                    while elements.len() < idx {
-                        elements.push(JsValue::Undefined);
-                    }
-                    elements.push(value.clone());
-                    // Update length property
-                    let new_len = elements.len();
-                    if let Some(len_desc) = self.properties.get_mut("length") {
-                        len_desc.value = Some(JsValue::Number(new_len as f64));
-                    }
-                }
-            }
+        if let Some(ref mut elements) = self.array_elements
+            && let Ok(idx) = key.parse::<usize>()
+            && idx < elements.len()
+        {
+            elements[idx] = value.clone();
         }
         if let Some(desc) = self.properties.get_mut(key) {
             if desc.writable == Some(false) {
@@ -1560,9 +1554,7 @@ fn to_uint8(v: &JsValue) -> u8 {
 }
 fn to_uint8_clamped(v: &JsValue) -> u8 {
     let n = to_number(v);
-    if n.is_nan() {
-        0
-    } else if n <= 0.0 {
+    if n.is_nan() || n <= 0.0 {
         0
     } else if n >= 255.0 {
         255
@@ -1664,6 +1656,7 @@ pub(crate) struct SetRecord {
     pub(crate) size: f64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ModuleStatus {
     Unlinked,
@@ -1687,6 +1680,7 @@ impl PartialEq for ModuleStatus {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ImportEntry {
     pub module_request: String,
@@ -1694,6 +1688,7 @@ pub struct ImportEntry {
     pub local_name: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ImportName {
     Star,
@@ -1701,6 +1696,7 @@ pub enum ImportName {
     Named(String),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ExportEntry {
     pub export_name: Option<String>,
@@ -1709,12 +1705,14 @@ pub struct ExportEntry {
     pub local_name: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ExportImportName {
     Star,
     Named(String),
 }
 
+#[allow(dead_code)]
 pub struct ModuleRecord {
     pub specifier: String,
     pub status: ModuleStatus,

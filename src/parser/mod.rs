@@ -131,6 +131,7 @@ impl<'a> Parser<'a> {
         self.pushback = Some((old_current, old_lt, old_ts, old_te));
     }
 
+    #[allow(dead_code)]
     fn peek(&self) -> &Token {
         &self.current
     }
@@ -264,8 +265,6 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(Keyword::Await) if !self.in_async => Some("await".to_string()),
             Token::Keyword(Keyword::Let) if !self.strict => Some("let".to_string()),
-            Token::Keyword(Keyword::Async) => Some("async".to_string()),
-            Token::Keyword(Keyword::Of) => Some("of".to_string()),
             _ => None,
         }
     }
@@ -556,7 +555,7 @@ impl<'a> Parser<'a> {
             if let ModuleItem::ExportDeclaration(ref export) = item {
                 for name in self.get_exported_names(export) {
                     if !exported_names.insert(name.clone()) {
-                        return Err(self.error(&format!("Duplicate export of '{}'", name)));
+                        return Err(self.error(format!("Duplicate export of '{}'", name)));
                     }
                 }
             }

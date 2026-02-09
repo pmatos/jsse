@@ -469,10 +469,11 @@ impl Interpreter {
                         let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         // CanonicalizeKeyedCollectionKey: normalize -0 to +0
-                        if let JsValue::Number(n) = &key {
-                            if *n == 0.0 && n.is_sign_negative() {
-                                key = JsValue::Number(0.0);
-                            }
+                        if let JsValue::Number(n) = &key
+                            && *n == 0.0
+                            && n.is_sign_negative()
+                        {
+                            key = JsValue::Number(0.0);
                         }
                         // Search existing entries
                         {
@@ -520,11 +521,10 @@ impl Interpreter {
                             return Completion::Throw(err);
                         }
                         // CanonicalizeKeyedCollectionKey: normalize -0 to +0
-                        if let JsValue::Number(n) = &key {
-                            if *n == 0.0 && n.is_sign_negative() {
+                        if let JsValue::Number(n) = &key
+                            && *n == 0.0 && n.is_sign_negative() {
                                 key = JsValue::Number(0.0);
                             }
-                        }
                         // Step 5: Search existing entries
                         {
                             let borrowed = obj.borrow();
@@ -797,19 +797,19 @@ impl Interpreter {
 
                             if let Some(idx) = existing_idx {
                                 // Append to existing array
-                                if let Some((_, arr_val)) = entries[idx].as_ref() {
-                                    if let JsValue::Object(arr_obj) = arr_val {
-                                        let arr_id = arr_obj.id;
-                                        drop(borrowed);
-                                        if let Some(arr) = interp.get_object(arr_id) {
-                                            let len_val = arr.borrow().get_property("length");
-                                            let len = interp.to_number_coerce(&len_val) as usize;
-                                            arr.borrow_mut().insert_builtin(len.to_string(), value);
-                                            arr.borrow_mut().insert_builtin(
-                                                "length".to_string(),
-                                                JsValue::Number((len + 1) as f64),
-                                            );
-                                        }
+                                if let Some((_, arr_val)) = entries[idx].as_ref()
+                                    && let JsValue::Object(arr_obj) = arr_val
+                                {
+                                    let arr_id = arr_obj.id;
+                                    drop(borrowed);
+                                    if let Some(arr) = interp.get_object(arr_id) {
+                                        let len_val = arr.borrow().get_property("length");
+                                        let len = interp.to_number_coerce(&len_val) as usize;
+                                        arr.borrow_mut().insert_builtin(len.to_string(), value);
+                                        arr.borrow_mut().insert_builtin(
+                                            "length".to_string(),
+                                            JsValue::Number((len + 1) as f64),
+                                        );
                                     }
                                 }
                             } else {
@@ -1320,10 +1320,11 @@ impl Interpreter {
         }
 
         fn canonicalize_key(val: JsValue) -> JsValue {
-            if let JsValue::Number(n) = &val {
-                if *n == 0.0 && n.is_sign_negative() {
-                    return JsValue::Number(0.0);
-                }
+            if let JsValue::Number(n) = &val
+                && *n == 0.0
+                && n.is_sign_negative()
+            {
+                return JsValue::Number(0.0);
             }
             val
         }
@@ -1411,7 +1412,7 @@ impl Interpreter {
                             let has_result = match interp.call_function(
                                 &other_rec.has,
                                 &other,
-                                &[entry.clone()],
+                                std::slice::from_ref(entry),
                             ) {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -1475,7 +1476,7 @@ impl Interpreter {
                             let has_result = match interp.call_function(
                                 &other_rec.has,
                                 &other,
-                                &[entry.clone()],
+                                std::slice::from_ref(entry),
                             ) {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -1781,9 +1782,24 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iterator = match interp.get_iterator(&iterable) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
+                    let iter_key = interp.get_symbol_iterator_key();
+                    let iterator_fn = if let Some(ref key) = iter_key {
+                        if let JsValue::Object(io) = &iterable {
+                            if let Some(iter_obj) = interp.get_object(io.id) {
+                                let v = iter_obj.borrow().get_property(key);
+                                if v.is_undefined() { JsValue::Undefined } else { v }
+                            } else { JsValue::Undefined }
+                        } else { JsValue::Undefined }
+                    } else { JsValue::Undefined };
+
+                    if iterator_fn.is_undefined() {
+                        let err = interp.create_type_error("object is not iterable");
+                        return Completion::Throw(err);
+                    }
+
+                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
+                        Completion::Normal(v) => v,
+                        other => return other,
                     };
 
                     loop {
@@ -2031,9 +2047,24 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iterator = match interp.get_iterator(&iterable) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
+                    let iter_key = interp.get_symbol_iterator_key();
+                    let iterator_fn = if let Some(ref key) = iter_key {
+                        if let JsValue::Object(io) = &iterable {
+                            if let Some(iter_obj) = interp.get_object(io.id) {
+                                let v = iter_obj.borrow().get_property(key);
+                                if v.is_undefined() { JsValue::Undefined } else { v }
+                            } else { JsValue::Undefined }
+                        } else { JsValue::Undefined }
+                    } else { JsValue::Undefined };
+
+                    if iterator_fn.is_undefined() {
+                        let err = interp.create_type_error("object is not iterable");
+                        return Completion::Throw(err);
+                    }
+
+                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
+                        Completion::Normal(v) => v,
+                        other => return other,
                     };
 
                     loop {
@@ -2248,9 +2279,24 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
 
-                    let iterator = match interp.get_iterator(&iterable) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
+                    let iter_key = interp.get_symbol_iterator_key();
+                    let iterator_fn = if let Some(ref key) = iter_key {
+                        if let JsValue::Object(io) = &iterable {
+                            if let Some(iter_obj) = interp.get_object(io.id) {
+                                let v = iter_obj.borrow().get_property(key);
+                                if v.is_undefined() { JsValue::Undefined } else { v }
+                            } else { JsValue::Undefined }
+                        } else { JsValue::Undefined }
+                    } else { JsValue::Undefined };
+
+                    if iterator_fn.is_undefined() {
+                        let err = interp.create_type_error("object is not iterable");
+                        return Completion::Throw(err);
+                    }
+
+                    let iterator = match interp.call_function(&iterator_fn, &iterable, &[]) {
+                        Completion::Normal(v) => v,
+                        other => return other,
                     };
 
                     loop {
@@ -2309,17 +2355,16 @@ impl Interpreter {
             "deref".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().class_name == "WeakRef" {
-                            return Completion::Normal(
-                                obj.borrow()
-                                    .primitive_value
-                                    .clone()
-                                    .unwrap_or(JsValue::Undefined),
-                            );
-                        }
-                    }
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().class_name == "WeakRef"
+                {
+                    return Completion::Normal(
+                        obj.borrow()
+                            .primitive_value
+                            .clone()
+                            .unwrap_or(JsValue::Undefined),
+                    );
                 }
                 Completion::Throw(
                     interp.create_type_error("WeakRef.prototype.deref requires a WeakRef"),
@@ -2373,20 +2418,20 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ref ctor_obj) = weakref_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::Object(crate::types::JsObject {
-                            id: proto.borrow().id.unwrap(),
-                        }),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
-            }
+        if let JsValue::Object(ref ctor_obj) = weakref_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(crate::types::JsObject {
+                        id: proto.borrow().id.unwrap(),
+                    }),
+                    false,
+                    false,
+                    false,
+                ),
+            );
         }
 
         proto.borrow_mut().insert_property(
@@ -2411,22 +2456,21 @@ impl Interpreter {
             "register".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().class_name == "FinalizationRegistry" {
-                            let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            match &target {
-                                JsValue::Object(_) | JsValue::Symbol(_) => {}
-                                _ => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "FinalizationRegistry.register requires an object target",
-                                    ));
-                                }
-                            }
-                            // We store registrations but GC finalization callbacks are not triggered
-                            return Completion::Normal(JsValue::Undefined);
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().class_name == "FinalizationRegistry"
+                {
+                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    match &target {
+                        JsValue::Object(_) | JsValue::Symbol(_) => {}
+                        _ => {
+                            return Completion::Throw(interp.create_type_error(
+                                "FinalizationRegistry.register requires an object target",
+                            ));
                         }
                     }
+                    // We store registrations but GC finalization callbacks are not triggered
+                    return Completion::Normal(JsValue::Undefined);
                 }
                 Completion::Throw(interp.create_type_error(
                     "FinalizationRegistry.prototype.register requires a FinalizationRegistry",
@@ -2442,21 +2486,20 @@ impl Interpreter {
             "unregister".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().class_name == "FinalizationRegistry" {
-                            let token = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            match &token {
-                                JsValue::Object(_) | JsValue::Symbol(_) => {}
-                                _ => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "FinalizationRegistry.unregister requires an object token",
-                                    ));
-                                }
-                            }
-                            return Completion::Normal(JsValue::Boolean(false));
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().class_name == "FinalizationRegistry"
+                {
+                    let token = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    match &token {
+                        JsValue::Object(_) | JsValue::Symbol(_) => {}
+                        _ => {
+                            return Completion::Throw(interp.create_type_error(
+                                "FinalizationRegistry.unregister requires an object token",
+                            ));
                         }
                     }
+                    return Completion::Normal(JsValue::Boolean(false));
                 }
                 Completion::Throw(interp.create_type_error(
                     "FinalizationRegistry.prototype.unregister requires a FinalizationRegistry",
@@ -2500,14 +2543,13 @@ impl Interpreter {
                     ));
                 }
                 // Check callable
-                if let JsValue::Object(ref o) = callback {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        if obj.borrow().callable.is_none() {
-                            return Completion::Throw(interp.create_type_error(
-                                "FinalizationRegistry requires a callable cleanup callback",
-                            ));
-                        }
-                    }
+                if let JsValue::Object(ref o) = callback
+                    && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().callable.is_none()
+                {
+                    return Completion::Throw(interp.create_type_error(
+                        "FinalizationRegistry requires a callable cleanup callback",
+                    ));
                 }
                 let obj = interp.create_object();
                 obj.borrow_mut().class_name = "FinalizationRegistry".to_string();
@@ -2518,20 +2560,20 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ref ctor_obj) = fr_ctor {
-            if let Some(obj) = self.get_object(ctor_obj.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::Object(crate::types::JsObject {
-                            id: proto.borrow().id.unwrap(),
-                        }),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
-            }
+        if let JsValue::Object(ref ctor_obj) = fr_ctor
+            && let Some(obj) = self.get_object(ctor_obj.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(crate::types::JsObject {
+                        id: proto.borrow().id.unwrap(),
+                    }),
+                    false,
+                    false,
+                    false,
+                ),
+            );
         }
 
         proto.borrow_mut().insert_property(
