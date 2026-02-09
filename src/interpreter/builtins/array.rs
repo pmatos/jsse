@@ -1829,16 +1829,18 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                interp.gc_root_value(&a);
                 for i in 0..actual_delete_count {
                     let from = (actual_start + i).to_string();
                     if obj_has(interp, &o, &from) {
                         let val = match obj_get(interp, &o, &from) {
                             Ok(v) => v,
-                            Err(c) => return c,
+                            Err(c) => { interp.gc_unroot_value(&a); return c; }
                         };
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &i.to_string(), val)
                         {
+                            interp.gc_unroot_value(&a);
                             return Completion::Throw(e);
                         }
                     }
@@ -1851,17 +1853,19 @@ impl Interpreter {
                         let to = (k + insert_count).to_string();
                         let from_present = match obj_has_throw(interp, &o, &from) {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => { interp.gc_unroot_value(&a); return Completion::Throw(e); }
                         };
                         if from_present {
                             let val = match obj_get(interp, &o, &from) {
                                 Ok(v) => v,
-                                Err(c) => return c,
+                                Err(c) => { interp.gc_unroot_value(&a); return c; }
                             };
                             if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                                interp.gc_unroot_value(&a);
                                 return Completion::Throw(e);
                             }
                         } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                            interp.gc_unroot_value(&a);
                             return Completion::Throw(e);
                         }
                     }
@@ -1869,6 +1873,7 @@ impl Interpreter {
                         ((len as usize - actual_delete_count + insert_count)..(len as usize)).rev()
                     {
                         if let Err(e) = obj_delete_throw(interp, &o, &k.to_string()) {
+                            interp.gc_unroot_value(&a);
                             return Completion::Throw(e);
                         }
                     }
@@ -1878,17 +1883,19 @@ impl Interpreter {
                         let to = (k + insert_count).to_string();
                         let from_present = match obj_has_throw(interp, &o, &from) {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => { interp.gc_unroot_value(&a); return Completion::Throw(e); }
                         };
                         if from_present {
                             let val = match obj_get(interp, &o, &from) {
                                 Ok(v) => v,
-                                Err(c) => return c,
+                                Err(c) => { interp.gc_unroot_value(&a); return c; }
                             };
                             if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                                interp.gc_unroot_value(&a);
                                 return Completion::Throw(e);
                             }
                         } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                            interp.gc_unroot_value(&a);
                             return Completion::Throw(e);
                         }
                     }
@@ -1896,13 +1903,16 @@ impl Interpreter {
                 for (j, item) in items.into_iter().enumerate() {
                     if let Err(e) = obj_set_throw(interp, &o, &(actual_start + j).to_string(), item)
                     {
+                        interp.gc_unroot_value(&a);
                         return Completion::Throw(e);
                     }
                 }
                 let new_len = (len as usize) - actual_delete_count + insert_count;
                 if let Err(e) = set_length_throw(interp, &o, new_len) {
+                    interp.gc_unroot_value(&a);
                     return Completion::Throw(e);
                 }
+                interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
         ));

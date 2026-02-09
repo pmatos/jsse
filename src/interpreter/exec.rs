@@ -81,7 +81,7 @@ impl Interpreter {
             }
         }
 
-        self.active_envs.push(env.clone());
+        self.call_stack_envs.push(env.clone());
         let mut result = Completion::Empty;
         for stmt in stmts {
             self.maybe_gc();
@@ -94,7 +94,7 @@ impl Interpreter {
                         None => Some(result.value_or(JsValue::Undefined)),
                         some => some,
                     };
-                    self.active_envs.pop();
+                    self.call_stack_envs.pop();
                     return Completion::Break(label, val);
                 }
                 Completion::Continue(label, cont_val) => {
@@ -102,16 +102,16 @@ impl Interpreter {
                         None => Some(result.value_or(JsValue::Undefined)),
                         some => some,
                     };
-                    self.active_envs.pop();
+                    self.call_stack_envs.pop();
                     return Completion::Continue(label, val);
                 }
                 other => {
-                    self.active_envs.pop();
+                    self.call_stack_envs.pop();
                     return other;
                 }
             }
         }
-        self.active_envs.pop();
+        self.call_stack_envs.pop();
         result
     }
 
