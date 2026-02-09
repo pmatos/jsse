@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 36,797 / 48,257 run (76.25%)
+**Current pass rate:** 36,876 / 48,257 run (76.42%)
 
 ---
 
@@ -31,7 +31,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | Built-in | Pass Rate | Tests |
 |----------|-----------|-------|
 | Object | 93% | 3,184/3,411 |
-| Array | 88% | 2,711/3,079 |
+| Array | 89% | 2,734/3,079 |
 | String | 93% | 1,141/1,215 |
 | Function | 85% | 433/509 |
 | Iterator | 85% | 438/510 |
@@ -44,7 +44,7 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 | for-in | 94% | 108/115 |
 | Proxy | 72% | 224/311 |
 | Symbol | 75% | 71/94 |
-| RegExp | 76% | 1,432/1,879 |
+| RegExp | 74% | 1,398/1,879 |
 | Number | 98% | 331/335 |
 | Math | 96% | 316/327 |
 | WeakRef | 82% | 24/29 |
@@ -139,6 +139,8 @@ These features block significant numbers of tests:
 
 52. ~~**Conformance batch 18: Number/Symbol coercion, constructor fix, RegExp patterns**~~ — ✅ Done (+71 new passes, 75.46% → 75.60%). Three orthogonal fixes implemented in parallel: (1) Number/Symbol: Number prototype methods (toString, toFixed, toExponential, toPrecision) now use `to_number_value()` for argument coercion with proper ToPrimitive/Symbol TypeError. Argument coercion order fixed (coerce BEFORE NaN/Infinity check). `toFixed` returns ToString(x) for |x|>=10^21. `string_to_number` rejects case-insensitive "infinity". Symbol()/Symbol.for() use `to_string_value()` for description coercion. Number() constructor propagates ToPrimitive errors. Number: 331/335 (98%). (2) Constructor own property: removed spurious `constructor` own property set on every `new` object instance — `constructor` is now properly inherited from prototype chain only. Object: 3,181→3,184/3,411 (93%). (3) RegExp: quantifier-at-start validation (SyntaxError for `*`/`+`/`?`/`{}` at pattern start or after `(`/`|`), forward backreference handling (\N matches empty string when group not yet captured), octal escape handling for non-Unicode mode. RegExp: 1,389→1,432/1,879 (76%).
 
+53. ~~**Real-world app integration: Acorn, Marked, Prettier**~~ — ✅ Done (+79 net new passes, 76.25% → 76.42%). Real-world JavaScript apps (Acorn parser, Marked markdown, Prettier formatter) exposed engine bugs fixed in feat/realapp branch. Key fixes: (1) Parser: `async`/`of` as contextual identifiers, `true`/`false`/`null` as dot member property names and object property keys, optional chaining continuation (`.prop`, `[expr]`, `()` after `?.`). (2) Array: GC rooting for intermediate arrays in concat/slice/map/filter/splice. (3) GC: module environment and promise data tracing, call stack environment rooting in exec_statements, private field definition tracing. (4) Eval: private field access on class instances, computed member access improvements. Post-merge fixes: array index bounds check (indices ≥ 2^32-1 are not valid array indices, density check for sparse arrays), exponentiation spec compliance (±1 ** ±∞ = NaN per §6.1.6.1.4), reserved word shorthand rejection (`({false})` is SyntaxError), RegExp `\d`/`\D`/`\w`/`\W` translated to ASCII-only character classes per spec. Note: 37 RegExp property-escape tests that were passing vacuously (broken buildString returned empty arrays) now correctly fail due to regex crate Unicode data version mismatch. Array: 2,711→2,734/3,079 (89%), RegExp: 1,432→1,398/1,879 (74%, -34 from vacuous property-escape fixes).
+
 ---
 
 ## Cross-Cutting Concerns
@@ -183,7 +185,7 @@ These are tracked across all phases:
 | `built-ins/Temporal` | 4,482 | Stage 3 — optional |
 | `built-ins/Object` | 3,411 | |
 | `built-ins/Array` | 3,079 | |
-| `built-ins/RegExp` | 1,879 | 1,289 (68.6%) |
+| `built-ins/RegExp` | 1,879 | 1,398 (74.4%) |
 | `built-ins/TypedArray` | 1,438 | 786 |
 | `built-ins/String` | 1,215 | |
 | `built-ins/` (rest) | ~8,000+ | All other built-ins |

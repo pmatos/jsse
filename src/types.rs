@@ -193,6 +193,10 @@ pub mod number_ops {
     }
 
     pub fn exponentiate(base: f64, exp: f64) -> f64 {
+        // §6.1.6.1.4: If abs(base) is 1 and exponent is +/-∞, result is NaN
+        if (base == 1.0 || base == -1.0) && exp.is_infinite() {
+            return f64::NAN;
+        }
         base.powf(exp)
     }
 

@@ -100,7 +100,7 @@ Ordered roughly by dependency and importance.
   - [x] RequireObjectCoercible on `this` for all methods, UTF-16 code unit indexing, proper argument coercion via ToPrimitive
   - [ ] `String.prototype[@@iterator]`
   - [ ] String HTML methods (Annex B): `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup`
-- [x] **RegExp** (§22.2) — 1,433/1,879 (76.3%)
+- [x] **RegExp** (§22.2) — 1,398/1,879 (74.4%)
   - [x] `RegExp()` constructor
   - [x] `RegExp.prototype.exec()` (TypeError for non-object `this`)
   - [x] `RegExp.prototype.test()` (TypeError for non-object `this`)
@@ -124,7 +124,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/String/` (1,215), `built-ins/RegExp/` (1,879), `built-ins/StringIteratorPrototype/` (7), `built-ins/RegExpStringIteratorPrototype/` (17)
 
 ### 9.5 Indexed Collections (§23)
-- [x] **Array** (§23.1) — 81% pass rate (2,496/3,079 tests)
+- [x] **Array** (§23.1) — 89% pass rate (2,734/3,079 tests)
   - [x] `Array()` constructor
   - [x] `Array.from()`, `Array.isArray()`, `Array.of()`
   - [x] `Array.prototype` methods: `at`, `concat`, `copyWithin`, `entries`, `every`, `fill`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `flat`, `flatMap`, `forEach`, `includes`, `indexOf`, `join`, `keys`, `lastIndexOf`, `map`, `pop`, `push`, `reduce`, `reduceRight`, `reverse`, `shift`, `slice`, `some`, `sort`, `splice`, `toReversed`, `toSorted`, `toSpliced`, `toString`, `unshift`, `values`, `with`

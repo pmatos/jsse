@@ -474,13 +474,22 @@ impl Interpreter {
                     let result = loop {
                         let next_result = match self.iterator_next(&iterator) {
                             Ok(v) => v,
-                            Err(e) => { self.gc_unroot_value(&iterator); return Completion::Throw(e); }
+                            Err(e) => {
+                                self.gc_unroot_value(&iterator);
+                                return Completion::Throw(e);
+                            }
                         };
                         let next_result = if is_async_gen {
                             match self.await_value(&next_result) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => { self.gc_unroot_value(&iterator); return Completion::Throw(e); }
-                                other => { self.gc_unroot_value(&iterator); return other; }
+                                Completion::Throw(e) => {
+                                    self.gc_unroot_value(&iterator);
+                                    return Completion::Throw(e);
+                                }
+                                other => {
+                                    self.gc_unroot_value(&iterator);
+                                    return other;
+                                }
                             }
                         } else {
                             next_result
@@ -611,8 +620,7 @@ impl Interpreter {
                                 if let JsValue::Object(ref o) = obj_val
                                     && let Some(obj) = self.get_object(o.id)
                                 {
-                                    let elem =
-                                        obj.borrow().private_fields.get(name).cloned();
+                                    let elem = obj.borrow().private_fields.get(name).cloned();
                                     match elem {
                                         Some(PrivateElement::Field(v))
                                         | Some(PrivateElement::Method(v)) => {
@@ -622,21 +630,19 @@ impl Interpreter {
                                             ) {
                                                 Completion::Normal(JsValue::Undefined)
                                             } else {
-                                                match self.eval_oc_tail_with_this(
-                                                    &v, prop, env,
-                                                ) {
-                                                    Ok((result, _)) => {
-                                                        Completion::Normal(result)
-                                                    }
+                                                match self.eval_oc_tail_with_this(&v, prop, env) {
+                                                    Ok((result, _)) => Completion::Normal(result),
                                                     Err(c) => c,
                                                 }
                                             };
                                         }
                                         Some(PrivateElement::Accessor { get, .. }) => {
                                             if let Some(getter) = get {
-                                                let v = match self
-                                                    .call_function(&getter, &obj_val, &[])
-                                                {
+                                                let v = match self.call_function(
+                                                    &getter,
+                                                    &obj_val,
+                                                    &[],
+                                                ) {
                                                     Completion::Normal(v) => v,
                                                     other => return other,
                                                 };
@@ -646,9 +652,8 @@ impl Interpreter {
                                                 ) {
                                                     Completion::Normal(JsValue::Undefined)
                                                 } else {
-                                                    match self.eval_oc_tail_with_this(
-                                                        &v, prop, env,
-                                                    ) {
+                                                    match self.eval_oc_tail_with_this(&v, prop, env)
+                                                    {
                                                         Ok((result, _)) => {
                                                             Completion::Normal(result)
                                                         }
@@ -659,11 +664,9 @@ impl Interpreter {
                                             return Completion::Normal(JsValue::Undefined);
                                         }
                                         None => {
-                                            return Completion::Throw(
-                                                self.create_type_error(&format!(
-                                                    "Cannot read private member #{name}"
-                                                )),
-                                            );
+                                            return Completion::Throw(self.create_type_error(
+                                                &format!("Cannot read private member #{name}"),
+                                            ));
                                         }
                                     }
                                 } else {
@@ -671,11 +674,10 @@ impl Interpreter {
                                 }
                             }
                         };
-                        let prop_val =
-                            match self.access_property_on_value(&obj_val, &key) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
+                        let prop_val = match self.access_property_on_value(&obj_val, &key) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
                         (prop_val, obj_val)
                     }
                     _ => {
@@ -689,9 +691,7 @@ impl Interpreter {
                 if matches!(base_val, JsValue::Null | JsValue::Undefined) {
                     return Completion::Normal(JsValue::Undefined);
                 }
-                self.eval_optional_chain_tail_with_base_this(
-                    &base_val, &base_this, prop, env,
-                )
+                self.eval_optional_chain_tail_with_base_this(&base_val, &base_this, prop, env)
             }
             Expression::TaggedTemplate(tag_expr, tmpl) => {
                 let (func_val, this_val) = match tag_expr.as_ref() {
@@ -859,7 +859,8 @@ impl Interpreter {
                 }
             }
             Expression::Member(inner, mp) => {
-                let (inner_val, _) = self.eval_oc_tail_with_this_ctx(base_val, chain_this, inner, env)?;
+                let (inner_val, _) =
+                    self.eval_oc_tail_with_this_ctx(base_val, chain_this, inner, env)?;
                 match mp {
                     MemberProperty::Dot(name) => {
                         let val = match self.access_property_on_value(&inner_val, name) {
@@ -3015,9 +3016,7 @@ impl Interpreter {
                     let oid = o.id;
                     let ov = obj_val.clone();
                     match self.get_object_property(oid, &key, &ov) {
-                        Completion::Normal(method) => {
-                            (method, obj_val)
-                        }
+                        Completion::Normal(method) => (method, obj_val),
                         other => return other,
                     }
                 } else if let JsValue::String(_) = &obj_val {
@@ -5446,12 +5445,16 @@ impl Interpreter {
                         // Root args and this_val so GC doesn't collect them
                         // during native function execution (e.g. Array.prototype.map callback)
                         self.gc_root_value(_this_val);
-                        for a in args.iter() { self.gc_root_value(a); }
+                        for a in args.iter() {
+                            self.gc_root_value(a);
+                        }
                         let saved_this = self.last_call_this_value.take();
                         let result = f(self, _this_val, args);
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
-                        for a in args.iter().rev() { self.gc_unroot_value(a); }
+                        for a in args.iter().rev() {
+                            self.gc_unroot_value(a);
+                        }
                         self.gc_unroot_value(_this_val);
                         result
                     }
@@ -5762,8 +5765,17 @@ impl Interpreter {
                 if let Some(obj) = self.get_object(o.id) {
                     let class = obj.borrow().class_name.clone();
                     let has_callable = obj.borrow().callable.is_some();
-                    let keys: Vec<String> = obj.borrow().property_order.iter().take(10).cloned().collect();
-                    format!("object (class={}, callable={}, id={}, keys={:?}) is not a function", class, has_callable, o.id, keys)
+                    let keys: Vec<String> = obj
+                        .borrow()
+                        .property_order
+                        .iter()
+                        .take(10)
+                        .cloned()
+                        .collect();
+                    format!(
+                        "object (class={}, callable={}, id={}, keys={:?}) is not a function",
+                        class, has_callable, o.id, keys
+                    )
                 } else {
                     format!("object (id={}, GC'd?) is not a function", o.id)
                 }
@@ -5785,7 +5797,9 @@ impl Interpreter {
                 let val = match self.eval_expr(inner, env) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => {
-                        for v in &evaluated { self.gc_unroot_value(v); }
+                        for v in &evaluated {
+                            self.gc_unroot_value(v);
+                        }
                         return Err(e);
                     }
                     _ => JsValue::Undefined,
@@ -5793,17 +5807,23 @@ impl Interpreter {
                 let items = match self.iterate_to_vec(&val) {
                     Ok(items) => items,
                     Err(e) => {
-                        for v in &evaluated { self.gc_unroot_value(v); }
+                        for v in &evaluated {
+                            self.gc_unroot_value(v);
+                        }
                         return Err(e);
                     }
                 };
-                for item in &items { self.gc_root_value(item); }
+                for item in &items {
+                    self.gc_root_value(item);
+                }
                 evaluated.extend(items);
             } else {
                 let val = match self.eval_expr(arg, env) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => {
-                        for v in &evaluated { self.gc_unroot_value(v); }
+                        for v in &evaluated {
+                            self.gc_unroot_value(v);
+                        }
                         return Err(e);
                     }
                     _ => JsValue::Undefined,
@@ -5812,7 +5832,9 @@ impl Interpreter {
                 evaluated.push(val);
             }
         }
-        for v in &evaluated { self.gc_unroot_value(v); }
+        for v in &evaluated {
+            self.gc_unroot_value(v);
+        }
         Ok(evaluated)
     }
 

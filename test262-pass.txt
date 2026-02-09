@@ -114,6 +114,7 @@ test262/test/annexB/built-ins/String/prototype/substr/length-undef.js
 test262/test/annexB/built-ins/String/prototype/substr/length.js
 test262/test/annexB/built-ins/String/prototype/substr/name.js
 test262/test/annexB/built-ins/String/prototype/substr/not-a-constructor.js
+test262/test/annexB/built-ins/String/prototype/substr/start-and-length-as-numbers.js
 test262/test/annexB/built-ins/String/prototype/substr/start-negative.js
 test262/test/annexB/built-ins/String/prototype/substr/start-to-int-err.js
 test262/test/annexB/built-ins/String/prototype/substr/this-non-obj-coerce.js
@@ -715,6 +716,10 @@ test262/test/built-ins/Array/S15.4.3_A1.1_T1.js
 test262/test/built-ins/Array/S15.4.3_A1.1_T3.js
 test262/test/built-ins/Array/S15.4.5.1_A2.1_T1.js
 test262/test/built-ins/Array/S15.4.5.1_A2.2_T1.js
+test262/test/built-ins/Array/S15.4.5.1_A2.3_T1.js
+test262/test/built-ins/Array/S15.4.5.2_A1_T1.js
+test262/test/built-ins/Array/S15.4.5.2_A1_T2.js
+test262/test/built-ins/Array/S15.4.5.2_A2_T1.js
 test262/test/built-ins/Array/S15.4.5.2_A3_T1.js
 test262/test/built-ins/Array/S15.4_A1.1_T10.js
 test262/test/built-ins/Array/S15.4_A1.1_T4.js
@@ -1725,6 +1730,7 @@ test262/test/built-ins/Array/prototype/includes/name.js
 test262/test/built-ins/Array/prototype/includes/no-arg.js
 test262/test/built-ins/Array/prototype/includes/not-a-constructor.js
 test262/test/built-ins/Array/prototype/includes/prop-desc.js
+test262/test/built-ins/Array/prototype/includes/resizable-buffer-special-float-values.js
 test262/test/built-ins/Array/prototype/includes/return-abrupt-get-length.js
 test262/test/built-ins/Array/prototype/includes/return-abrupt-get-prop.js
 test262/test/built-ins/Array/prototype/includes/return-abrupt-tointeger-fromindex-symbol.js
@@ -1755,6 +1761,7 @@ test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-6.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-7.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-8.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-1-9.js
+test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-10-1.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-10-2.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-1.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-2-10.js
@@ -1864,6 +1871,7 @@ test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-5.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-6.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-7.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-8.js
+test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-9.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-1.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-11.js
 test262/test/built-ins/Array/prototype/indexOf/15.4.4.14-9-a-12.js
@@ -1929,7 +1937,10 @@ test262/test/built-ins/Array/prototype/indexOf/length.js
 test262/test/built-ins/Array/prototype/indexOf/name.js
 test262/test/built-ins/Array/prototype/indexOf/not-a-constructor.js
 test262/test/built-ins/Array/prototype/indexOf/prop-desc.js
+test262/test/built-ins/Array/prototype/indexOf/resizable-buffer-special-float-values.js
 test262/test/built-ins/Array/prototype/join/S15.4.4.5_A1.1_T1.js
+test262/test/built-ins/Array/prototype/join/S15.4.4.5_A1.2_T1.js
+test262/test/built-ins/Array/prototype/join/S15.4.4.5_A1.2_T2.js
 test262/test/built-ins/Array/prototype/join/S15.4.4.5_A1.3_T1.js
 test262/test/built-ins/Array/prototype/join/S15.4.4.5_A2_T1.js
 test262/test/built-ins/Array/prototype/join/S15.4.4.5_A2_T2.js
@@ -2027,9 +2038,11 @@ test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-4-9.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-1.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-10.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-11.js
+test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-12.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-13.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-14.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-15.js
+test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-16.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-17.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-18.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-19.js
@@ -2075,6 +2088,7 @@ test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-5.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-6.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-7.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-8.js
+test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-9.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-1.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-11.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-a-12.js
@@ -2131,6 +2145,7 @@ test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-b-ii-8.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-b-ii-9.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-b-iii-1.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-8-b-iii-2.js
+test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-9-1.js
 test262/test/built-ins/Array/prototype/lastIndexOf/15.4.4.15-9-2.js
 test262/test/built-ins/Array/prototype/lastIndexOf/call-with-boolean.js
 test262/test/built-ins/Array/prototype/lastIndexOf/calls-only-has-on-prototype-after-length-zeroed.js
@@ -2283,7 +2298,6 @@ test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-5.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-6.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-7.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-i-9.js
-test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-ii-1.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-ii-10.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-ii-11.js
 test262/test/built-ins/Array/prototype/map/15.4.4.19-8-c-ii-12.js
@@ -2343,6 +2357,7 @@ test262/test/built-ins/Array/prototype/map/target-array-with-non-configurable-pr
 test262/test/built-ins/Array/prototype/map/target-array-with-non-writable-property.js
 test262/test/built-ins/Array/prototype/methods-called-as-functions.js
 test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A1.1_T1.js
+test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A1.2_T1.js
 test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A2_T1.js
 test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A2_T2.js
 test262/test/built-ins/Array/prototype/pop/S15.4.4.6_A2_T3.js
@@ -2365,6 +2380,7 @@ test262/test/built-ins/Array/prototype/pop/throws-with-string-receiver.js
 test262/test/built-ins/Array/prototype/prop-desc.js
 test262/test/built-ins/Array/prototype/proto.js
 test262/test/built-ins/Array/prototype/push/S15.4.4.7_A1_T1.js
+test262/test/built-ins/Array/prototype/push/S15.4.4.7_A1_T2.js
 test262/test/built-ins/Array/prototype/push/S15.4.4.7_A2_T1.js
 test262/test/built-ins/Array/prototype/push/S15.4.4.7_A2_T2.js
 test262/test/built-ins/Array/prototype/push/S15.4.4.7_A2_T3.js
@@ -2863,6 +2879,7 @@ test262/test/built-ins/Array/prototype/reduceRight/name.js
 test262/test/built-ins/Array/prototype/reduceRight/not-a-constructor.js
 test262/test/built-ins/Array/prototype/reduceRight/prop-desc.js
 test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A1_T1.js
+test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A1_T2.js
 test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A2_T1.js
 test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A2_T2.js
 test262/test/built-ins/Array/prototype/reverse/S15.4.4.8_A2_T3.js
@@ -2875,6 +2892,7 @@ test262/test/built-ins/Array/prototype/reverse/name.js
 test262/test/built-ins/Array/prototype/reverse/not-a-constructor.js
 test262/test/built-ins/Array/prototype/reverse/prop-desc.js
 test262/test/built-ins/Array/prototype/shift/S15.4.4.9_A1.1_T1.js
+test262/test/built-ins/Array/prototype/shift/S15.4.4.9_A1.2_T1.js
 test262/test/built-ins/Array/prototype/shift/S15.4.4.9_A2_T1.js
 test262/test/built-ins/Array/prototype/shift/S15.4.4.9_A2_T2.js
 test262/test/built-ins/Array/prototype/shift/S15.4.4.9_A2_T3.js
@@ -3354,6 +3372,7 @@ test262/test/built-ins/Array/prototype/toSpliced/this-value-boolean.js
 test262/test/built-ins/Array/prototype/toSpliced/this-value-nullish.js
 test262/test/built-ins/Array/prototype/toSpliced/unmodified.js
 test262/test/built-ins/Array/prototype/toString/S15.4.4.2_A1_T1.js
+test262/test/built-ins/Array/prototype/toString/S15.4.4.2_A1_T2.js
 test262/test/built-ins/Array/prototype/toString/S15.4.4.2_A1_T3.js
 test262/test/built-ins/Array/prototype/toString/S15.4.4.2_A1_T4.js
 test262/test/built-ins/Array/prototype/toString/S15.4.4.2_A3_T1.js
@@ -3363,6 +3382,7 @@ test262/test/built-ins/Array/prototype/toString/name.js
 test262/test/built-ins/Array/prototype/toString/not-a-constructor.js
 test262/test/built-ins/Array/prototype/toString/prop-desc.js
 test262/test/built-ins/Array/prototype/unshift/S15.4.4.13_A1_T1.js
+test262/test/built-ins/Array/prototype/unshift/S15.4.4.13_A1_T2.js
 test262/test/built-ins/Array/prototype/unshift/S15.4.4.13_A2_T1.js
 test262/test/built-ins/Array/prototype/unshift/S15.4.4.13_A2_T2.js
 test262/test/built-ins/Array/prototype/unshift/S15.4.4.13_A2_T3.js
@@ -5942,6 +5962,7 @@ test262/test/built-ins/Iterator/zipKeyed/options-mode.js
 test262/test/built-ins/Iterator/zipKeyed/options-padding.js
 test262/test/built-ins/Iterator/zipKeyed/options.js
 test262/test/built-ins/Iterator/zipKeyed/padding-iteration-get-abrupt-completion.js
+test262/test/built-ins/Iterator/zipKeyed/padding-iteration.js
 test262/test/built-ins/Iterator/zipKeyed/prop-desc.js
 test262/test/built-ins/Iterator/zipKeyed/proto.js
 test262/test/built-ins/Iterator/zipKeyed/result-is-iterator.js
@@ -9145,6 +9166,7 @@ test262/test/built-ins/Object/defineProperty/8.12.9-9-c-i_1.js
 test262/test/built-ins/Object/defineProperty/8.12.9-9-c-i_2.js
 test262/test/built-ins/Object/defineProperty/S15.2.3.6_A1.js
 test262/test/built-ins/Object/defineProperty/S15.2.3.6_A2.js
+test262/test/built-ins/Object/defineProperty/coerced-P-shrink.js
 test262/test/built-ins/Object/defineProperty/name.js
 test262/test/built-ins/Object/defineProperty/not-a-constructor.js
 test262/test/built-ins/Object/defineProperty/property-description-must-be-an-object-not-bigint.js
@@ -9223,14 +9245,22 @@ test262/test/built-ins/Object/freeze/frozen-object-contains-symbol-properties-st
 test262/test/built-ins/Object/freeze/name.js
 test262/test/built-ins/Object/freeze/not-a-constructor.js
 test262/test/built-ins/Object/fromEntries/empty-iterable.js
+test262/test/built-ins/Object/fromEntries/iterator-not-closed-for-next-returning-non-object.js
+test262/test/built-ins/Object/fromEntries/iterator-not-closed-for-throwing-done-accessor.js
+test262/test/built-ins/Object/fromEntries/iterator-not-closed-for-throwing-next.js
+test262/test/built-ins/Object/fromEntries/iterator-not-closed-for-uncallable-next.js
 test262/test/built-ins/Object/fromEntries/key-order.js
 test262/test/built-ins/Object/fromEntries/length.js
 test262/test/built-ins/Object/fromEntries/name.js
 test262/test/built-ins/Object/fromEntries/not-a-constructor.js
 test262/test/built-ins/Object/fromEntries/prototype.js
+test262/test/built-ins/Object/fromEntries/requires-argument.js
+test262/test/built-ins/Object/fromEntries/simple-properties.js
 test262/test/built-ins/Object/fromEntries/string-entry-object-succeeds.js
+test262/test/built-ins/Object/fromEntries/string-entry-primitive-throws.js
 test262/test/built-ins/Object/fromEntries/string-entry-string-object-succeeds.js
 test262/test/built-ins/Object/fromEntries/uses-define-semantics.js
+test262/test/built-ins/Object/fromEntries/uses-keys-not-iterator.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-0-1.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-1-1.js
 test262/test/built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-1-2.js
@@ -10286,6 +10316,7 @@ test262/test/built-ins/Promise/all/invoke-resolve-get-error-reject.js
 test262/test/built-ins/Promise/all/invoke-resolve-get-error.js
 test262/test/built-ins/Promise/all/invoke-resolve-get-once-multiple-calls.js
 test262/test/built-ins/Promise/all/invoke-resolve-get-once-no-calls.js
+test262/test/built-ins/Promise/all/invoke-resolve-on-promises-every-iteration-of-custom.js
 test262/test/built-ins/Promise/all/invoke-resolve-on-promises-every-iteration-of-promise.js
 test262/test/built-ins/Promise/all/invoke-resolve-on-values-every-iteration-of-promise.js
 test262/test/built-ins/Promise/all/invoke-resolve-return.js
@@ -10362,6 +10393,7 @@ test262/test/built-ins/Promise/allSettled/invoke-resolve-get-error-reject.js
 test262/test/built-ins/Promise/allSettled/invoke-resolve-get-error.js
 test262/test/built-ins/Promise/allSettled/invoke-resolve-get-once-multiple-calls.js
 test262/test/built-ins/Promise/allSettled/invoke-resolve-get-once-no-calls.js
+test262/test/built-ins/Promise/allSettled/invoke-resolve-on-promises-every-iteration-of-custom.js
 test262/test/built-ins/Promise/allSettled/invoke-resolve-on-promises-every-iteration-of-promise.js
 test262/test/built-ins/Promise/allSettled/invoke-resolve-on-values-every-iteration-of-promise.js
 test262/test/built-ins/Promise/allSettled/invoke-resolve-return.js
@@ -10458,7 +10490,9 @@ test262/test/built-ins/Promise/any/invoke-resolve-get-error-reject.js
 test262/test/built-ins/Promise/any/invoke-resolve-get-error.js
 test262/test/built-ins/Promise/any/invoke-resolve-get-once-multiple-calls.js
 test262/test/built-ins/Promise/any/invoke-resolve-get-once-no-calls.js
+test262/test/built-ins/Promise/any/invoke-resolve-on-promises-every-iteration-of-custom.js
 test262/test/built-ins/Promise/any/invoke-resolve-on-promises-every-iteration-of-promise.js
+test262/test/built-ins/Promise/any/invoke-resolve-on-values-every-iteration-of-custom.js
 test262/test/built-ins/Promise/any/invoke-resolve-on-values-every-iteration-of-promise.js
 test262/test/built-ins/Promise/any/invoke-resolve-return.js
 test262/test/built-ins/Promise/any/invoke-resolve.js
@@ -10572,13 +10606,18 @@ test262/test/built-ins/Promise/prototype/finally/length.js
 test262/test/built-ins/Promise/prototype/finally/name.js
 test262/test/built-ins/Promise/prototype/finally/not-a-constructor.js
 test262/test/built-ins/Promise/prototype/finally/prop-desc.js
+test262/test/built-ins/Promise/prototype/finally/rejected-observable-then-calls-PromiseResolve.js
 test262/test/built-ins/Promise/prototype/finally/rejected-observable-then-calls-argument.js
 test262/test/built-ins/Promise/prototype/finally/rejected-observable-then-calls.js
 test262/test/built-ins/Promise/prototype/finally/rejection-reason-no-fulfill.js
 test262/test/built-ins/Promise/prototype/finally/rejection-reason-override-with-throw.js
 test262/test/built-ins/Promise/prototype/finally/resolution-value-no-override.js
+test262/test/built-ins/Promise/prototype/finally/resolved-observable-then-calls-PromiseResolve.js
 test262/test/built-ins/Promise/prototype/finally/resolved-observable-then-calls-argument.js
 test262/test/built-ins/Promise/prototype/finally/resolved-observable-then-calls.js
+test262/test/built-ins/Promise/prototype/finally/species-constructor.js
+test262/test/built-ins/Promise/prototype/finally/subclass-reject-count.js
+test262/test/built-ins/Promise/prototype/finally/subclass-resolve-count.js
 test262/test/built-ins/Promise/prototype/finally/subclass-species-constructor-reject-count.js
 test262/test/built-ins/Promise/prototype/finally/subclass-species-constructor-resolve-count.js
 test262/test/built-ins/Promise/prototype/finally/this-value-non-object.js
@@ -10605,6 +10644,8 @@ test262/test/built-ins/Promise/prototype/then/S25.4.5.3_A4.2_T2.js
 test262/test/built-ins/Promise/prototype/then/S25.4.5.3_A5.1_T1.js
 test262/test/built-ins/Promise/prototype/then/S25.4.5.3_A5.2_T1.js
 test262/test/built-ins/Promise/prototype/then/S25.4.5.3_A5.3_T1.js
+test262/test/built-ins/Promise/prototype/then/capability-executor-called-twice.js
+test262/test/built-ins/Promise/prototype/then/capability-executor-not-callable.js
 test262/test/built-ins/Promise/prototype/then/context-check-on-entry.js
 test262/test/built-ins/Promise/prototype/then/ctor-access-count.js
 test262/test/built-ins/Promise/prototype/then/ctor-custom.js
@@ -10612,6 +10653,7 @@ test262/test/built-ins/Promise/prototype/then/ctor-null.js
 test262/test/built-ins/Promise/prototype/then/ctor-poisoned.js
 test262/test/built-ins/Promise/prototype/then/ctor-throws.js
 test262/test/built-ins/Promise/prototype/then/ctor-undef.js
+test262/test/built-ins/Promise/prototype/then/deferred-is-resolved-value.js
 test262/test/built-ins/Promise/prototype/then/length.js
 test262/test/built-ins/Promise/prototype/then/name.js
 test262/test/built-ins/Promise/prototype/then/not-a-constructor.js
@@ -10691,6 +10733,7 @@ test262/test/built-ins/Promise/race/invoke-resolve-get-error-reject.js
 test262/test/built-ins/Promise/race/invoke-resolve-get-error.js
 test262/test/built-ins/Promise/race/invoke-resolve-get-once-multiple-calls.js
 test262/test/built-ins/Promise/race/invoke-resolve-get-once-no-calls.js
+test262/test/built-ins/Promise/race/invoke-resolve-on-promises-every-iteration-of-custom.js
 test262/test/built-ins/Promise/race/invoke-resolve-on-promises-every-iteration-of-promise.js
 test262/test/built-ins/Promise/race/invoke-resolve-on-values-every-iteration-of-promise.js
 test262/test/built-ins/Promise/race/invoke-resolve-return.js
@@ -11661,48 +11704,35 @@ test262/test/built-ins/RegExp/prop-desc.js
 test262/test/built-ins/RegExp/property-escapes/character-class.js
 test262/test/built-ins/RegExp/property-escapes/generated/ASCII.js
 test262/test/built-ins/RegExp/property-escapes/generated/ASCII_Hex_Digit.js
-test262/test/built-ins/RegExp/property-escapes/generated/Alphabetic.js
 test262/test/built-ins/RegExp/property-escapes/generated/Any.js
 test262/test/built-ins/RegExp/property-escapes/generated/Bidi_Control.js
 test262/test/built-ins/RegExp/property-escapes/generated/Bidi_Mirrored.js
-test262/test/built-ins/RegExp/property-escapes/generated/Cased.js
-test262/test/built-ins/RegExp/property-escapes/generated/Changes_When_Casemapped.js
 test262/test/built-ins/RegExp/property-escapes/generated/Dash.js
 test262/test/built-ins/RegExp/property-escapes/generated/Default_Ignorable_Code_Point.js
 test262/test/built-ins/RegExp/property-escapes/generated/Deprecated.js
 test262/test/built-ins/RegExp/property-escapes/generated/Emoji_Component.js
 test262/test/built-ins/RegExp/property-escapes/generated/Emoji_Modifier.js
 test262/test/built-ins/RegExp/property-escapes/generated/Emoji_Modifier_Base.js
-test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Cased_Letter.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Close_Punctuation.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Connector_Punctuation.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Control.js
-test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Currency_Symbol.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Dash_Punctuation.js
-test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Decimal_Number.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Enclosing_Mark.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Final_Punctuation.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Format.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Initial_Punctuation.js
-test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Letter.js
-test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Letter_Number.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Line_Separator.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Modifier_Symbol.js
-test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Number.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Open_Punctuation.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Other_Number.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Paragraph_Separator.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Private_Use.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Separator.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Space_Separator.js
-test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Surrogate.js
 test262/test/built-ins/RegExp/property-escapes/generated/General_Category_-_Titlecase_Letter.js
 test262/test/built-ins/RegExp/property-escapes/generated/Hex_Digit.js
 test262/test/built-ins/RegExp/property-escapes/generated/IDS_Binary_Operator.js
 test262/test/built-ins/RegExp/property-escapes/generated/IDS_Trinary_Operator.js
-test262/test/built-ins/RegExp/property-escapes/generated/ID_Continue.js
-test262/test/built-ins/RegExp/property-escapes/generated/ID_Start.js
-test262/test/built-ins/RegExp/property-escapes/generated/Ideographic.js
 test262/test/built-ins/RegExp/property-escapes/generated/Join_Control.js
 test262/test/built-ins/RegExp/property-escapes/generated/Logical_Order_Exception.js
 test262/test/built-ins/RegExp/property-escapes/generated/Noncharacter_Code_Point.js
@@ -11714,7 +11744,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Regional_Indicator.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Adlam.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Ahom.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Anatolian_Hieroglyphs.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Arabic.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Armenian.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Avestan.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Balinese.js
@@ -11722,7 +11751,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Bamum.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Bassa_Vah.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Batak.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Bengali.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Beria_Erfe.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Bhaiksuki.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Bopomofo.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Brahmi.js
@@ -11760,7 +11788,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Gujarati.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Gunjala_Gondi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Gurmukhi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Gurung_Khema.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Han.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Hangul.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Hanifi_Rohingya.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Hanunoo.js
@@ -11768,12 +11795,10 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Hatran.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Hebrew.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Hiragana.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Imperial_Aramaic.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Inherited.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Inscriptional_Pahlavi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Inscriptional_Parthian.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Javanese.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Kaithi.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Kannada.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Katakana.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Kawi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Kayah_Li.js
@@ -11784,7 +11809,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Khojki.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Khudawadi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Kirat_Rai.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Lao.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Latin.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Lepcha.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Limbu.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Linear_A.js
@@ -11843,10 +11867,8 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Rejang.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Runic.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Samaritan.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Saurashtra.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Sharada.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Shavian.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Siddham.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Sidetic.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_SignWriting.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Sinhala.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Sogdian.js
@@ -11864,15 +11886,12 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tai_Viet.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Takri.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tamil.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tangsa.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tangut.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Telugu.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Thaana.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Thai.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tibetan.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tifinagh.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tirhuta.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Todhri.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tolong_Siki.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Toto.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Tulu_Tigalari.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Ugaritic.js
@@ -11886,7 +11905,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_-_Zanabazar_Squa
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Adlam.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Ahom.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Anatolian_Hieroglyphs.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Arabic.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Armenian.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Avestan.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Balinese.js
@@ -11894,7 +11912,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Bam
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Bassa_Vah.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Batak.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Bengali.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Beria_Erfe.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Bhaiksuki.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Bopomofo.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Brahmi.js
@@ -11932,7 +11949,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Guj
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Gunjala_Gondi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Gurmukhi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Gurung_Khema.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Han.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hangul.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hanifi_Rohingya.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hanunoo.js
@@ -11940,12 +11956,10 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hat
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hebrew.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Hiragana.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Imperial_Aramaic.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Inherited.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Inscriptional_Pahlavi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Inscriptional_Parthian.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Javanese.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Kaithi.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Kannada.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Katakana.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Kawi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Kayah_Li.js
@@ -11956,7 +11970,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Kho
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Khudawadi.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Kirat_Rai.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Lao.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Latin.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Lepcha.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Limbu.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Linear_A.js
@@ -12015,7 +12028,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Sam
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Saurashtra.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Shavian.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Siddham.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Sidetic.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_SignWriting.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Sinhala.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Sogdian.js
@@ -12024,7 +12036,6 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Soy
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Sundanese.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Sunuwar.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Syloti_Nagri.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Syriac.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tagalog.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tagbanwa.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tai_Le.js
@@ -12033,12 +12044,10 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tai
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Takri.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tamil.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tangsa.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tangut.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Thaana.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Thai.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tibetan.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Todhri.js
-test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tolong_Siki.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Toto.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Tulu_Tigalari.js
 test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Ugaritic.js
@@ -12052,11 +12061,8 @@ test262/test/built-ins/RegExp/property-escapes/generated/Script_Extensions_-_Zan
 test262/test/built-ins/RegExp/property-escapes/generated/Sentence_Terminal.js
 test262/test/built-ins/RegExp/property-escapes/generated/Soft_Dotted.js
 test262/test/built-ins/RegExp/property-escapes/generated/Terminal_Punctuation.js
-test262/test/built-ins/RegExp/property-escapes/generated/Unified_Ideograph.js
 test262/test/built-ins/RegExp/property-escapes/generated/Variation_Selector.js
 test262/test/built-ins/RegExp/property-escapes/generated/White_Space.js
-test262/test/built-ins/RegExp/property-escapes/generated/XID_Continue.js
-test262/test/built-ins/RegExp/property-escapes/generated/XID_Start.js
 test262/test/built-ins/RegExp/property-escapes/special-property-value-Script_Extensions-Unknown.js
 test262/test/built-ins/RegExp/prototype/15.10.6.js
 test262/test/built-ins/RegExp/prototype/S15.10.5.1_A1.js
@@ -12533,7 +12539,9 @@ test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-affects-backref
 test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-affects-characterClasses.js
 test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-affects-characterEscapes.js
 test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-affects-slash-lower-p.js
+test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-affects-slash-lower-w.js
 test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-affects-slash-upper-p.js
+test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-affects-slash-upper-w.js
 test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-does-not-affect-alternatives-outside.js
 test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-does-not-affect-dotAll-flag.js
 test262/test/built-ins/RegExp/regexp-modifiers/remove-ignoreCase-does-not-affect-ignoreCase-property.js
@@ -14252,6 +14260,7 @@ test262/test/built-ins/Symbol/replace/prop-desc.js
 test262/test/built-ins/Symbol/search/prop-desc.js
 test262/test/built-ins/Symbol/species/basic.js
 test262/test/built-ins/Symbol/species/builtin-getter-name.js
+test262/test/built-ins/Symbol/species/subclassing.js
 test262/test/built-ins/Symbol/split/prop-desc.js
 test262/test/built-ins/Symbol/symbol.js
 test262/test/built-ins/Symbol/toPrimitive/prop-desc.js
@@ -14289,6 +14298,7 @@ test262/test/built-ins/TypedArray/from/this-is-not-constructor.js
 test262/test/built-ins/TypedArray/invoked.js
 test262/test/built-ins/TypedArray/length.js
 test262/test/built-ins/TypedArray/name.js
+test262/test/built-ins/TypedArray/of/invoked-as-func.js
 test262/test/built-ins/TypedArray/of/invoked-as-method.js
 test262/test/built-ins/TypedArray/of/length.js
 test262/test/built-ins/TypedArray/of/name.js
@@ -14346,6 +14356,7 @@ test262/test/built-ins/TypedArray/prototype/byteLength/invoked-as-func.js
 test262/test/built-ins/TypedArray/prototype/byteLength/length.js
 test262/test/built-ins/TypedArray/prototype/byteLength/name.js
 test262/test/built-ins/TypedArray/prototype/byteLength/prop-desc.js
+test262/test/built-ins/TypedArray/prototype/byteLength/resizable-buffer-assorted.js
 test262/test/built-ins/TypedArray/prototype/byteLength/return-bytelength.js
 test262/test/built-ins/TypedArray/prototype/byteLength/this-has-no-typedarrayname-internal.js
 test262/test/built-ins/TypedArray/prototype/byteLength/this-is-not-object.js
@@ -14709,6 +14720,7 @@ test262/test/built-ins/TypedArray/prototype/includes/length.js
 test262/test/built-ins/TypedArray/prototype/includes/name.js
 test262/test/built-ins/TypedArray/prototype/includes/not-a-constructor.js
 test262/test/built-ins/TypedArray/prototype/includes/prop-desc.js
+test262/test/built-ins/TypedArray/prototype/includes/resizable-buffer-special-float-values.js
 test262/test/built-ins/TypedArray/prototype/includes/samevaluezero.js
 test262/test/built-ins/TypedArray/prototype/includes/search-found-returns-true.js
 test262/test/built-ins/TypedArray/prototype/includes/search-not-found-returns-false.js
@@ -14727,6 +14739,7 @@ test262/test/built-ins/TypedArray/prototype/indexOf/BigInt/no-arg.js
 test262/test/built-ins/TypedArray/prototype/indexOf/BigInt/search-found-returns-index.js
 test262/test/built-ins/TypedArray/prototype/indexOf/BigInt/search-not-found-returns-minus-one.js
 test262/test/built-ins/TypedArray/prototype/indexOf/BigInt/tointeger-fromindex.js
+test262/test/built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-grow.js
 test262/test/built-ins/TypedArray/prototype/indexOf/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js
 test262/test/built-ins/TypedArray/prototype/indexOf/detached-buffer.js
 test262/test/built-ins/TypedArray/prototype/indexOf/fromIndex-equal-or-greater-length-returns-minus-one.js
@@ -14741,6 +14754,7 @@ test262/test/built-ins/TypedArray/prototype/indexOf/name.js
 test262/test/built-ins/TypedArray/prototype/indexOf/no-arg.js
 test262/test/built-ins/TypedArray/prototype/indexOf/not-a-constructor.js
 test262/test/built-ins/TypedArray/prototype/indexOf/prop-desc.js
+test262/test/built-ins/TypedArray/prototype/indexOf/resizable-buffer-special-float-values.js
 test262/test/built-ins/TypedArray/prototype/indexOf/search-found-returns-index.js
 test262/test/built-ins/TypedArray/prototype/indexOf/search-not-found-returns-minus-one.js
 test262/test/built-ins/TypedArray/prototype/indexOf/strict-comparison.js
@@ -14793,6 +14807,7 @@ test262/test/built-ins/TypedArray/prototype/lastIndexOf/BigInt/no-arg.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/BigInt/search-found-returns-index.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/BigInt/search-not-found-returns-minus-one.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/BigInt/tointeger-fromindex.js
+test262/test/built-ins/TypedArray/prototype/lastIndexOf/coerced-position-grow.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/detached-buffer.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/fromIndex-infinity.js
@@ -14806,6 +14821,7 @@ test262/test/built-ins/TypedArray/prototype/lastIndexOf/name.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/no-arg.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/not-a-constructor.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/prop-desc.js
+test262/test/built-ins/TypedArray/prototype/lastIndexOf/resizable-buffer-special-float-values.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/search-found-returns-index.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/search-not-found-returns-minus-one.js
 test262/test/built-ins/TypedArray/prototype/lastIndexOf/strict-comparison.js
@@ -14820,6 +14836,7 @@ test262/test/built-ins/TypedArray/prototype/length/invoked-as-func.js
 test262/test/built-ins/TypedArray/prototype/length/length.js
 test262/test/built-ins/TypedArray/prototype/length/name.js
 test262/test/built-ins/TypedArray/prototype/length/prop-desc.js
+test262/test/built-ins/TypedArray/prototype/length/resizable-buffer-assorted.js
 test262/test/built-ins/TypedArray/prototype/length/return-length.js
 test262/test/built-ins/TypedArray/prototype/length/this-has-no-typedarrayname-internal.js
 test262/test/built-ins/TypedArray/prototype/length/this-is-not-object.js
@@ -15413,6 +15430,7 @@ test262/test/built-ins/TypedArrayConstructors/ctors/buffer-arg/is-referenced.js
 test262/test/built-ins/TypedArrayConstructors/ctors/buffer-arg/length-access-throws.js
 test262/test/built-ins/TypedArrayConstructors/ctors/buffer-arg/length-is-symbol-throws.js
 test262/test/built-ins/TypedArrayConstructors/ctors/buffer-arg/new-instance-extensibility.js
+test262/test/built-ins/TypedArrayConstructors/ctors/buffer-arg/resizable-out-of-bounds.js
 test262/test/built-ins/TypedArrayConstructors/ctors/buffer-arg/returns-new-instance.js
 test262/test/built-ins/TypedArrayConstructors/ctors/buffer-arg/toindex-bytelength.js
 test262/test/built-ins/TypedArrayConstructors/ctors/buffer-arg/toindex-byteoffset.js
@@ -15652,12 +15670,14 @@ test262/test/built-ins/TypedArrayConstructors/internals/Set/tonumber-value-throw
 test262/test/built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-does-not-instantiate-ta-throws.js
 test262/test/built-ins/TypedArrayConstructors/of/BigInt/custom-ctor-returns-smaller-instance-throws.js
 test262/test/built-ins/TypedArrayConstructors/of/BigInt/inherited.js
+test262/test/built-ins/TypedArrayConstructors/of/BigInt/invoked-as-func.js
 test262/test/built-ins/TypedArrayConstructors/of/BigInt/new-instance-empty.js
 test262/test/built-ins/TypedArrayConstructors/of/BigInt/new-instance.js
 test262/test/built-ins/TypedArrayConstructors/of/BigInt/this-is-not-constructor.js
 test262/test/built-ins/TypedArrayConstructors/of/custom-ctor-does-not-instantiate-ta-throws.js
 test262/test/built-ins/TypedArrayConstructors/of/custom-ctor-returns-smaller-instance-throws.js
 test262/test/built-ins/TypedArrayConstructors/of/inherited.js
+test262/test/built-ins/TypedArrayConstructors/of/invoked-as-func.js
 test262/test/built-ins/TypedArrayConstructors/of/nan-conversion.js
 test262/test/built-ins/TypedArrayConstructors/of/new-instance-empty.js
 test262/test/built-ins/TypedArrayConstructors/of/new-instance-from-zero.js
@@ -15725,6 +15745,7 @@ test262/test/built-ins/TypedArrayConstructors/prototype/values/bigint-inherited.
 test262/test/built-ins/TypedArrayConstructors/prototype/values/inherited.js
 test262/test/built-ins/Uint8Array/fromBase64/alphabet.js
 test262/test/built-ins/Uint8Array/fromBase64/descriptor.js
+test262/test/built-ins/Uint8Array/fromBase64/ignores-receiver.js
 test262/test/built-ins/Uint8Array/fromBase64/illegal-characters.js
 test262/test/built-ins/Uint8Array/fromBase64/last-chunk-handling.js
 test262/test/built-ins/Uint8Array/fromBase64/last-chunk-invalid.js
@@ -15736,6 +15757,7 @@ test262/test/built-ins/Uint8Array/fromBase64/results.js
 test262/test/built-ins/Uint8Array/fromBase64/string-coercion.js
 test262/test/built-ins/Uint8Array/fromBase64/whitespace.js
 test262/test/built-ins/Uint8Array/fromHex/descriptor.js
+test262/test/built-ins/Uint8Array/fromHex/ignores-receiver.js
 test262/test/built-ins/Uint8Array/fromHex/illegal-characters.js
 test262/test/built-ins/Uint8Array/fromHex/length.js
 test262/test/built-ins/Uint8Array/fromHex/name.js
@@ -15982,6 +16004,12 @@ test262/test/built-ins/WeakSet/prototype/has/this-not-object-throw-undefined.js
 test262/test/built-ins/WeakSet/prototype/prototype-attributes.js
 test262/test/built-ins/WeakSet/undefined-newtarget.js
 test262/test/built-ins/WeakSet/weakset.js
+test262/test/built-ins/decodeURI/S15.1.3.1_A1.10_T1.js
+test262/test/built-ins/decodeURI/S15.1.3.1_A1.11_T1.js
+test262/test/built-ins/decodeURI/S15.1.3.1_A1.11_T2.js
+test262/test/built-ins/decodeURI/S15.1.3.1_A1.12_T1.js
+test262/test/built-ins/decodeURI/S15.1.3.1_A1.12_T2.js
+test262/test/built-ins/decodeURI/S15.1.3.1_A1.12_T3.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.13_T1.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.13_T2.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.14_T1.js
@@ -15995,6 +16023,8 @@ test262/test/built-ins/decodeURI/S15.1.3.1_A1.15_T4.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.15_T5.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.15_T6.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.1_T1.js
+test262/test/built-ins/decodeURI/S15.1.3.1_A1.2_T1.js
+test262/test/built-ins/decodeURI/S15.1.3.1_A1.2_T2.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.3_T1.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.3_T2.js
 test262/test/built-ins/decodeURI/S15.1.3.1_A1.4_T1.js
@@ -16028,6 +16058,12 @@ test262/test/built-ins/decodeURI/S15.1.3.1_A5.7.js
 test262/test/built-ins/decodeURI/name.js
 test262/test/built-ins/decodeURI/not-a-constructor.js
 test262/test/built-ins/decodeURI/prop-desc.js
+test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.10_T1.js
+test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.11_T1.js
+test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.11_T2.js
+test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.12_T1.js
+test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.12_T2.js
+test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.12_T3.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.13_T1.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.13_T2.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.14_T1.js
@@ -16041,6 +16077,8 @@ test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.15_T4.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.15_T5.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.15_T6.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.1_T1.js
+test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.2_T1.js
+test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.2_T2.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.3_T1.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.3_T2.js
 test262/test/built-ins/decodeURIComponent/S15.1.3.2_A1.4_T1.js
@@ -16079,6 +16117,7 @@ test262/test/built-ins/encodeURI/S15.1.3.3_A1.1_T1.js
 test262/test/built-ins/encodeURI/S15.1.3.3_A1.1_T2.js
 test262/test/built-ins/encodeURI/S15.1.3.3_A1.2_T1.js
 test262/test/built-ins/encodeURI/S15.1.3.3_A1.2_T2.js
+test262/test/built-ins/encodeURI/S15.1.3.3_A1.3_T1.js
 test262/test/built-ins/encodeURI/S15.1.3.3_A2.1_T1.js
 test262/test/built-ins/encodeURI/S15.1.3.3_A2.2_T1.js
 test262/test/built-ins/encodeURI/S15.1.3.3_A2.3_T1.js
@@ -16108,6 +16147,7 @@ test262/test/built-ins/encodeURIComponent/S15.1.3.4_A1.1_T1.js
 test262/test/built-ins/encodeURIComponent/S15.1.3.4_A1.1_T2.js
 test262/test/built-ins/encodeURIComponent/S15.1.3.4_A1.2_T1.js
 test262/test/built-ins/encodeURIComponent/S15.1.3.4_A1.2_T2.js
+test262/test/built-ins/encodeURIComponent/S15.1.3.4_A1.3_T1.js
 test262/test/built-ins/encodeURIComponent/S15.1.3.4_A2.1_T1.js
 test262/test/built-ins/encodeURIComponent/S15.1.3.4_A2.2_T1.js
 test262/test/built-ins/encodeURIComponent/S15.1.3.4_A2.3_T1.js
@@ -22111,6 +22151,7 @@ test262/test/language/expressions/class/elements/private-derived-cls-indirect-ev
 test262/test/language/expressions/class/elements/private-derived-cls-indirect-eval-err-contains-supercall.js
 test262/test/language/expressions/class/elements/private-field-access-on-inner-arrow-function.js
 test262/test/language/expressions/class/elements/private-field-access-on-inner-function.js
+test262/test/language/expressions/class/elements/private-field-after-optional-chain.js
 test262/test/language/expressions/class/elements/private-field-as-arrow-function.js
 test262/test/language/expressions/class/elements/private-field-as-async-arrow-function.js
 test262/test/language/expressions/class/elements/private-field-as-async-function.js
@@ -22779,7 +22820,9 @@ test262/test/language/expressions/class/name.js
 test262/test/language/expressions/class/params-dflt-gen-meth-args-unmapped.js
 test262/test/language/expressions/class/params-dflt-gen-meth-static-args-unmapped.js
 test262/test/language/expressions/class/params-dflt-meth-args-unmapped.js
+test262/test/language/expressions/class/params-dflt-meth-ref-arguments.js
 test262/test/language/expressions/class/params-dflt-meth-static-args-unmapped.js
+test262/test/language/expressions/class/params-dflt-meth-static-ref-arguments.js
 test262/test/language/expressions/class/poisoned-underscore-proto.js
 test262/test/language/expressions/class/restricted-properties.js
 test262/test/language/expressions/class/scope-gen-meth-paramsbody-var-close.js
@@ -23324,6 +23367,8 @@ test262/test/language/expressions/division/bigint-errors.js
 test262/test/language/expressions/division/bigint-toprimitive.js
 test262/test/language/expressions/division/bigint-wrapped-values.js
 test262/test/language/expressions/division/line-terminator.js
+test262/test/language/expressions/division/no-magic-asi-from-block-eval.js
+test262/test/language/expressions/division/no-magic-asi.js
 test262/test/language/expressions/does-not-equals/S11.9.2_A1.js
 test262/test/language/expressions/does-not-equals/S11.9.2_A2.1_T1.js
 test262/test/language/expressions/does-not-equals/S11.9.2_A2.1_T2.js
@@ -23867,6 +23912,8 @@ test262/test/language/expressions/exponentiation/exp-operator-precedence-update-
 test262/test/language/expressions/exponentiation/exp-operator.js
 test262/test/language/expressions/exponentiation/int32_min-exponent.js
 test262/test/language/expressions/function/S10.1.1_A1_T2.js
+test262/test/language/expressions/function/arguments-with-arguments-fn.js
+test262/test/language/expressions/function/arguments-with-arguments-lex.js
 test262/test/language/expressions/function/array-destructuring-param-strict-body.js
 test262/test/language/expressions/function/dflt-params-abrupt.js
 test262/test/language/expressions/function/dflt-params-arg-val-not-undefined.js
@@ -24093,6 +24140,7 @@ test262/test/language/expressions/function/param-eval-non-strict.js
 test262/test/language/expressions/function/param-eval-strict-body.js
 test262/test/language/expressions/function/param-eval-stricteval.js
 test262/test/language/expressions/function/params-dflt-args-unmapped.js
+test262/test/language/expressions/function/params-dflt-ref-arguments.js
 test262/test/language/expressions/function/params-trailing-comma-multiple.js
 test262/test/language/expressions/function/params-trailing-comma-single.js
 test262/test/language/expressions/function/rest-param-strict-body.js
@@ -24918,6 +24966,8 @@ test262/test/language/expressions/object/S11.1.5_A1.3.js
 test262/test/language/expressions/object/S11.1.5_A1.4.js
 test262/test/language/expressions/object/S11.1.5_A2.js
 test262/test/language/expressions/object/S11.1.5_A3.js
+test262/test/language/expressions/object/S11.1.5_A4.1.js
+test262/test/language/expressions/object/S11.1.5_A4.2.js
 test262/test/language/expressions/object/S11.1.5_A4.3.js
 test262/test/language/expressions/object/__proto__-duplicate-computed.js
 test262/test/language/expressions/object/__proto__-duplicate.js
@@ -24931,6 +24981,7 @@ test262/test/language/expressions/object/__proto__-value-obj.js
 test262/test/language/expressions/object/accessor-name-computed-err-evaluation.js
 test262/test/language/expressions/object/accessor-name-computed-err-to-prop-key.js
 test262/test/language/expressions/object/accessor-name-computed-err-unresolvable.js
+test262/test/language/expressions/object/accessor-name-computed-in.js
 test262/test/language/expressions/object/accessor-name-computed-yield-expr.js
 test262/test/language/expressions/object/accessor-name-computed-yield-id.js
 test262/test/language/expressions/object/accessor-name-computed.js
@@ -25901,6 +25952,7 @@ test262/test/language/expressions/object/method-definition/name-super-prop-body.
 test262/test/language/expressions/object/method-definition/object-method-returns-promise.js
 test262/test/language/expressions/object/method-definition/params-dflt-gen-meth-args-unmapped.js
 test262/test/language/expressions/object/method-definition/params-dflt-meth-args-unmapped.js
+test262/test/language/expressions/object/method-definition/params-dflt-meth-ref-arguments.js
 test262/test/language/expressions/object/method-definition/setter-use-strict-with-non-simple-param.js
 test262/test/language/expressions/object/method-definition/static-init-await-binding-accessor.js
 test262/test/language/expressions/object/method-definition/static-init-await-binding-generator.js
@@ -25974,13 +26026,17 @@ test262/test/language/expressions/optional-chaining/iteration-statement-while.js
 test262/test/language/expressions/optional-chaining/member-expression-async-identifier.js
 test262/test/language/expressions/optional-chaining/member-expression-async-this.js
 test262/test/language/expressions/optional-chaining/new-target-optional-call.js
+test262/test/language/expressions/optional-chaining/optional-chain-async-optional-chain-square-brackets.js
 test262/test/language/expressions/optional-chaining/optional-chain-async-square-brackets.js
 test262/test/language/expressions/optional-chaining/optional-chain-expression-optional-expression.js
+test262/test/language/expressions/optional-chaining/optional-chain-prod-arguments.js
+test262/test/language/expressions/optional-chaining/optional-chain-prod-expression.js
 test262/test/language/expressions/optional-chaining/optional-chain-prod-identifiername.js
 test262/test/language/expressions/optional-chaining/optional-chain.js
 test262/test/language/expressions/optional-chaining/optional-expression.js
 test262/test/language/expressions/optional-chaining/punctuator-decimal-lookahead.js
 test262/test/language/expressions/optional-chaining/runtime-semantics-evaluation.js
+test262/test/language/expressions/optional-chaining/short-circuiting.js
 test262/test/language/expressions/optional-chaining/static-semantics-simple-assignment.js
 test262/test/language/expressions/optional-chaining/update-expression-postfix.js
 test262/test/language/expressions/optional-chaining/update-expression-prefix.js
@@ -27414,6 +27470,7 @@ test262/test/language/literals/regexp/mongolian-vowel-separator-eval.js
 test262/test/language/literals/regexp/mongolian-vowel-separator.js
 test262/test/language/literals/regexp/u-astral-char-class-invert.js
 test262/test/language/literals/regexp/u-null-character-escape.js
+test262/test/language/literals/regexp/y-assertion-start.js
 test262/test/language/literals/string/S7.8.4_A1.1_T1.js
 test262/test/language/literals/string/S7.8.4_A1.1_T2.js
 test262/test/language/literals/string/S7.8.4_A1.2_T1.js
@@ -27970,6 +28027,8 @@ test262/test/language/reserved-words/ident-name-keyword-memberexpr-str.js
 test262/test/language/reserved-words/ident-name-keyword-memberexpr.js
 test262/test/language/reserved-words/ident-name-keyword-prop-name.js
 test262/test/language/reserved-words/ident-name-reserved-word-literal-memberexpr-str.js
+test262/test/language/reserved-words/ident-name-reserved-word-literal-memberexpr.js
+test262/test/language/reserved-words/ident-name-reserved-word-literal-prop-name.js
 test262/test/language/reserved-words/ident-reference-false-escaped.js
 test262/test/language/reserved-words/ident-reference-false.js
 test262/test/language/reserved-words/ident-reference-null-escaped.js
@@ -28960,6 +29019,7 @@ test262/test/language/statements/class/definition/methods-named-eval-arguments.j
 test262/test/language/statements/class/definition/methods-restricted-properties.js
 test262/test/language/statements/class/definition/prototype-property.js
 test262/test/language/statements/class/definition/setters-restricted-ids.js
+test262/test/language/statements/class/definition/side-effects-in-extends.js
 test262/test/language/statements/class/definition/side-effects-in-property-define.js
 test262/test/language/statements/class/dstr/async-gen-meth-ary-init-iter-close.js
 test262/test/language/statements/class/dstr/async-gen-meth-ary-init-iter-get-err-array-prototype.js
@@ -31641,6 +31701,7 @@ test262/test/language/statements/class/elements/private-derived-cls-indirect-eva
 test262/test/language/statements/class/elements/private-derived-cls-indirect-eval-err-contains-supercall.js
 test262/test/language/statements/class/elements/private-field-access-on-inner-arrow-function.js
 test262/test/language/statements/class/elements/private-field-access-on-inner-function.js
+test262/test/language/statements/class/elements/private-field-after-optional-chain.js
 test262/test/language/statements/class/elements/private-field-as-arrow-function.js
 test262/test/language/statements/class/elements/private-field-as-async-arrow-function.js
 test262/test/language/statements/class/elements/private-field-as-async-function.js
@@ -32359,7 +32420,9 @@ test262/test/language/statements/class/name.js
 test262/test/language/statements/class/params-dflt-gen-meth-args-unmapped.js
 test262/test/language/statements/class/params-dflt-gen-meth-static-args-unmapped.js
 test262/test/language/statements/class/params-dflt-meth-args-unmapped.js
+test262/test/language/statements/class/params-dflt-meth-ref-arguments.js
 test262/test/language/statements/class/params-dflt-meth-static-args-unmapped.js
+test262/test/language/statements/class/params-dflt-meth-static-ref-arguments.js
 test262/test/language/statements/class/poisoned-underscore-proto.js
 test262/test/language/statements/class/restricted-properties.js
 test262/test/language/statements/class/scope-gen-meth-paramsbody-var-close.js
@@ -32515,6 +32578,9 @@ test262/test/language/statements/class/super/in-constructor.js
 test262/test/language/statements/class/super/in-getter.js
 test262/test/language/statements/class/super/in-methods.js
 test262/test/language/statements/class/super/in-setter.js
+test262/test/language/statements/class/super/in-static-getter.js
+test262/test/language/statements/class/super/in-static-methods.js
+test262/test/language/statements/class/super/in-static-setter.js
 test262/test/language/statements/class/syntax/class-body-has-direct-super-class-heritage.js
 test262/test/language/statements/class/syntax/class-declaration-binding-identifier-class-element-list.js
 test262/test/language/statements/class/syntax/class-declaration-computed-method-definition.js
@@ -34606,7 +34672,10 @@ test262/test/language/statements/for-of/head-let-bound-names-let.js
 test262/test/language/statements/for-of/head-let-destructuring.js
 test262/test/language/statements/for-of/head-let-fresh-binding-per-iteration.js
 test262/test/language/statements/for-of/head-let-init.js
+test262/test/language/statements/for-of/head-lhs-async-dot.js
+test262/test/language/statements/for-of/head-lhs-async-escaped.js
 test262/test/language/statements/for-of/head-lhs-async-invalid.js
+test262/test/language/statements/for-of/head-lhs-async-parens.js
 test262/test/language/statements/for-of/head-lhs-cover-non-asnmt-trgt.js
 test262/test/language/statements/for-of/head-lhs-cover.js
 test262/test/language/statements/for-of/head-lhs-invalid-asnmt-ptrn-ary.js
@@ -34665,6 +34734,7 @@ test262/test/language/statements/for-of/string-bmp.js
 test262/test/language/statements/for-of/throw-from-catch.js
 test262/test/language/statements/for-of/throw-from-finally.js
 test262/test/language/statements/for-of/throw.js
+test262/test/language/statements/for-of/typedarray-backed-by-resizable-buffer.js
 test262/test/language/statements/for-of/uint16array.js
 test262/test/language/statements/for-of/uint32array.js
 test262/test/language/statements/for-of/uint8array.js
@@ -35024,6 +35094,7 @@ test262/test/language/statements/for/dstr/var-obj-ptrn-rest-getter.js
 test262/test/language/statements/for/dstr/var-obj-ptrn-rest-skip-non-enumerable.js
 test262/test/language/statements/for/dstr/var-obj-ptrn-rest-val-obj.js
 test262/test/language/statements/for/head-const-fresh-binding-per-iteration.js
+test262/test/language/statements/for/head-init-async-of.js
 test262/test/language/statements/for/head-init-expr-check-empty-inc-empty-completion.js
 test262/test/language/statements/for/head-init-expr-check-empty-inc-empty-syntax.js
 test262/test/language/statements/for/head-init-var-check-empty-inc-empty-completion.js
@@ -35186,7 +35257,9 @@ test262/test/language/statements/function/S13_A12_T2.js
 test262/test/language/statements/function/S13_A13_T1.js
 test262/test/language/statements/function/S13_A13_T2.js
 test262/test/language/statements/function/S13_A13_T3.js
+test262/test/language/statements/function/S13_A15_T1.js
 test262/test/language/statements/function/S13_A15_T2.js
+test262/test/language/statements/function/S13_A15_T3.js
 test262/test/language/statements/function/S13_A15_T4.js
 test262/test/language/statements/function/S13_A15_T5.js
 test262/test/language/statements/function/S13_A17_T1.js
@@ -35213,6 +35286,8 @@ test262/test/language/statements/function/S13_A9.js
 test262/test/language/statements/function/S14_A3.js
 test262/test/language/statements/function/S14_A5_T1.js
 test262/test/language/statements/function/S14_A5_T2.js
+test262/test/language/statements/function/arguments-with-arguments-fn.js
+test262/test/language/statements/function/arguments-with-arguments-lex.js
 test262/test/language/statements/function/array-destructuring-param-strict-body.js
 test262/test/language/statements/function/cptn-decl.js
 test262/test/language/statements/function/dflt-params-abrupt.js
@@ -35454,6 +35529,7 @@ test262/test/language/statements/function/param-eval-strict-body.js
 test262/test/language/statements/function/param-eval-strict.js
 test262/test/language/statements/function/param-eval-stricteval.js
 test262/test/language/statements/function/params-dflt-args-unmapped.js
+test262/test/language/statements/function/params-dflt-ref-arguments.js
 test262/test/language/statements/function/params-trailing-comma-multiple.js
 test262/test/language/statements/function/params-trailing-comma-single.js
 test262/test/language/statements/function/rest-param-strict-body.js
@@ -36046,6 +36122,7 @@ test262/test/language/statements/throw/S12.13_A2_T7.js
 test262/test/language/statements/throw/S12.13_A3_T1.js
 test262/test/language/statements/throw/S12.13_A3_T2.js
 test262/test/language/statements/throw/S12.13_A3_T3.js
+test262/test/language/statements/throw/S12.13_A3_T4.js
 test262/test/language/statements/throw/S12.13_A3_T5.js
 test262/test/language/statements/throw/S12.13_A3_T6.js
 test262/test/language/statements/try/12.14-10.js
@@ -36101,6 +36178,7 @@ test262/test/language/statements/try/S12.14_A18_T3.js
 test262/test/language/statements/try/S12.14_A18_T4.js
 test262/test/language/statements/try/S12.14_A18_T5.js
 test262/test/language/statements/try/S12.14_A18_T6.js
+test262/test/language/statements/try/S12.14_A18_T7.js
 test262/test/language/statements/try/S12.14_A2.js
 test262/test/language/statements/try/S12.14_A3.js
 test262/test/language/statements/try/S12.14_A4.js
@@ -36263,6 +36341,7 @@ test262/test/language/statements/using/syntax/block-scope-syntax-using-declarati
 test262/test/language/statements/using/syntax/block-scope-syntax-using-declarations-without-initializer.js
 test262/test/language/statements/using/syntax/using-allows-bindingidentifier.js
 test262/test/language/statements/using/syntax/using-allows-multiple-bindings.js
+test262/test/language/statements/using/syntax/using-for-using-of-of.js
 test262/test/language/statements/using/syntax/using-invalid-arraybindingpattern-after-bindingidentifier.js
 test262/test/language/statements/using/syntax/using-invalid-arraybindingpattern-does-not-break-element-access.js
 test262/test/language/statements/using/syntax/using-invalid-arraybindingpattern.js

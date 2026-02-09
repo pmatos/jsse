@@ -1228,7 +1228,12 @@ impl Interpreter {
         result
     }
 
-    fn exec_for_of_loop(&mut self, fo: &ForOfStatement, env: &EnvRef, iterator: &JsValue) -> Completion {
+    fn exec_for_of_loop(
+        &mut self,
+        fo: &ForOfStatement,
+        env: &EnvRef,
+        iterator: &JsValue,
+    ) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
             let step_result = match self.iterator_next(&iterator) {

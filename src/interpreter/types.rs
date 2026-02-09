@@ -1310,20 +1310,31 @@ impl JsObjectData {
         // Keep array_elements in sync with properties for numeric indices
         if let Some(ref mut elements) = self.array_elements {
             if let Ok(idx) = key.parse::<usize>() {
+                // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
                 if idx < elements.len() {
                     elements[idx] = value.clone();
-                } else {
-                    // Extend array_elements for out-of-bounds index assignment
+                } else if idx < 0xFFFF_FFFF && idx <= elements.len() + 1024 {
+                    // Extend for small gaps and valid array indices only
                     while elements.len() < idx {
                         elements.push(JsValue::Undefined);
                     }
                     elements.push(value.clone());
-                    // Update length property
                     let new_len = elements.len();
                     if let Some(len_desc) = self.properties.get_mut("length") {
                         len_desc.value = Some(JsValue::Number(new_len as f64));
                     }
+                } else if idx < 0xFFFF_FFFF {
+                    // Valid array index but too sparse for array_elements — update length
+                    let new_len = (idx + 1) as f64;
+                    if let Some(len_desc) = self.properties.get_mut("length") {
+                        if let Some(JsValue::Number(cur_len)) = &len_desc.value {
+                            if new_len > *cur_len {
+                                len_desc.value = Some(JsValue::Number(new_len));
+                            }
+                        }
+                    }
                 }
+                // idx >= 0xFFFFFFFF: not a valid array index, stored as named property
             }
         }
         if let Some(desc) = self.properties.get_mut(key) {

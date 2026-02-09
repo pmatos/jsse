@@ -503,8 +503,7 @@ impl<'a> Parser<'a> {
                                 let args = self.parse_arguments()?;
                                 prop = Expression::Call(Box::new(prop), args);
                             }
-                            Token::NoSubstitutionTemplate(_, _)
-                            | Token::TemplateHead(_, _) => {
+                            Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                                 let tmpl = self.parse_template_literal_expr(true)?;
                                 prop = Expression::TaggedTemplate(Box::new(prop), tmpl);
                             }
@@ -1180,6 +1179,10 @@ impl<'a> Parser<'a> {
             && self.current != Token::LeftParen
             && self.current != Token::Assign
         {
+            // Reserved words cannot be used as shorthand IdentifierReferences
+            if matches!(name.as_str(), "true" | "false" | "null") {
+                return Err(self.error(format!("Unexpected token '{name}'")));
+            }
             // In strict mode, future reserved words cannot be IdentifierReferences
             if self.strict {
                 let n = name.as_str();

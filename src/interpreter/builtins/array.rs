@@ -952,7 +952,10 @@ impl Interpreter {
                     if spreadable {
                         let len = match length_of_array_like(interp, item) {
                             Ok(v) => v,
-                            Err(c) => { interp.gc_unroot_value(&a); return c; }
+                            Err(c) => {
+                                interp.gc_unroot_value(&a);
+                                return c;
+                            }
                         };
                         if (n as u64) + (len as u64) > 9007199254740991 {
                             interp.gc_unroot_value(&a);
@@ -967,13 +970,22 @@ impl Interpreter {
                                 let val = if let JsValue::Object(obj_ref) = item {
                                     match interp.get_object_property(obj_ref.id, &pk, item) {
                                         Completion::Normal(v) => v,
-                                        Completion::Throw(e) => { interp.gc_unroot_value(&a); return Completion::Throw(e); }
-                                        other => { interp.gc_unroot_value(&a); return other; }
+                                        Completion::Throw(e) => {
+                                            interp.gc_unroot_value(&a);
+                                            return Completion::Throw(e);
+                                        }
+                                        other => {
+                                            interp.gc_unroot_value(&a);
+                                            return other;
+                                        }
                                     }
                                 } else {
                                     match obj_get(interp, item, &pk) {
                                         Ok(v) => v,
-                                        Err(c) => { interp.gc_unroot_value(&a); return c; }
+                                        Err(c) => {
+                                            interp.gc_unroot_value(&a);
+                                            return c;
+                                        }
                                     }
                                 };
                                 if let Err(e) =
@@ -1066,7 +1078,10 @@ impl Interpreter {
                     if obj_has(interp, &o, &pk) {
                         let val = match obj_get(interp, &o, &pk) {
                             Ok(v) => v,
-                            Err(c) => { interp.gc_unroot_value(&a); return c; }
+                            Err(c) => {
+                                interp.gc_unroot_value(&a);
+                                return c;
+                            }
                         };
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &n.to_string(), val)
@@ -1835,7 +1850,10 @@ impl Interpreter {
                     if obj_has(interp, &o, &from) {
                         let val = match obj_get(interp, &o, &from) {
                             Ok(v) => v,
-                            Err(c) => { interp.gc_unroot_value(&a); return c; }
+                            Err(c) => {
+                                interp.gc_unroot_value(&a);
+                                return c;
+                            }
                         };
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &i.to_string(), val)
@@ -1853,12 +1871,18 @@ impl Interpreter {
                         let to = (k + insert_count).to_string();
                         let from_present = match obj_has_throw(interp, &o, &from) {
                             Ok(v) => v,
-                            Err(e) => { interp.gc_unroot_value(&a); return Completion::Throw(e); }
+                            Err(e) => {
+                                interp.gc_unroot_value(&a);
+                                return Completion::Throw(e);
+                            }
                         };
                         if from_present {
                             let val = match obj_get(interp, &o, &from) {
                                 Ok(v) => v,
-                                Err(c) => { interp.gc_unroot_value(&a); return c; }
+                                Err(c) => {
+                                    interp.gc_unroot_value(&a);
+                                    return c;
+                                }
                             };
                             if let Err(e) = obj_set_throw(interp, &o, &to, val) {
                                 interp.gc_unroot_value(&a);
@@ -1883,12 +1907,18 @@ impl Interpreter {
                         let to = (k + insert_count).to_string();
                         let from_present = match obj_has_throw(interp, &o, &from) {
                             Ok(v) => v,
-                            Err(e) => { interp.gc_unroot_value(&a); return Completion::Throw(e); }
+                            Err(e) => {
+                                interp.gc_unroot_value(&a);
+                                return Completion::Throw(e);
+                            }
                         };
                         if from_present {
                             let val = match obj_get(interp, &o, &from) {
                                 Ok(v) => v,
-                                Err(c) => { interp.gc_unroot_value(&a); return c; }
+                                Err(c) => {
+                                    interp.gc_unroot_value(&a);
+                                    return c;
+                                }
                             };
                             if let Err(e) = obj_set_throw(interp, &o, &to, val) {
                                 interp.gc_unroot_value(&a);

@@ -552,12 +552,37 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
                     } else if next == 'S' {
                         let js_ws = "\\x{09}\\x{0A}\\x{0B}\\x{0C}\\x{0D}\\x{20}\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{FEFF}";
                         if in_char_class {
-                            // \S inside char class is hard; use Rust \S as approximation
                             result.push_str("\\S");
                         } else {
                             result.push_str("[^");
                             result.push_str(js_ws);
                             result.push(']');
+                        }
+                    } else if next == 'd' {
+                        // ES spec: \d = [0-9] always (Rust \d matches Unicode digits)
+                        if in_char_class {
+                            result.push_str("0-9");
+                        } else {
+                            result.push_str("[0-9]");
+                        }
+                    } else if next == 'D' {
+                        if in_char_class {
+                            result.push_str("\\x{00}-\\x{2F}\\x{3A}-\\x{10FFFF}");
+                        } else {
+                            result.push_str("[^0-9]");
+                        }
+                    } else if next == 'w' {
+                        // ES spec: \w = [A-Za-z0-9_] always
+                        if in_char_class {
+                            result.push_str("A-Za-z0-9_");
+                        } else {
+                            result.push_str("[A-Za-z0-9_]");
+                        }
+                    } else if next == 'W' {
+                        if in_char_class {
+                            result.push_str("\\x{00}-\\x{2F}\\x{3A}-\\x{40}\\x{5B}-\\x{5E}\\x{60}\\x{7B}-\\x{10FFFF}");
+                        } else {
+                            result.push_str("[^A-Za-z0-9_]");
                         }
                     } else {
                         result.push('\\');

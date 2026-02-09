@@ -239,7 +239,11 @@ impl Interpreter {
                     }
                     crate::interpreter::types::PromiseState::Pending => {}
                 }
-                for reaction in pd.fulfill_reactions.iter().chain(pd.reject_reactions.iter()) {
+                for reaction in pd
+                    .fulfill_reactions
+                    .iter()
+                    .chain(pd.reject_reactions.iter())
+                {
                     if let Some(ref h) = reaction.handler {
                         Self::collect_value_roots(h, &mut worklist);
                     }
