@@ -297,10 +297,14 @@ impl Interpreter {
                         }
                     };
                     if this_id == ip_id {
-                        let err = interp.create_type_error("Cannot set Symbol.toStringTag on Iterator.prototype");
+                        let err = interp.create_type_error(
+                            "Cannot set Symbol.toStringTag on Iterator.prototype",
+                        );
                         return Completion::Throw(err);
                     }
-                    let prop_key = tst_key_for_setter.clone().unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+                    let prop_key = tst_key_for_setter
+                        .clone()
+                        .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
                     let has_own = if let Some(od) = interp.get_object(this_id) {
                         od.borrow().properties.contains_key(&prop_key)
                     } else {
@@ -310,7 +314,9 @@ impl Interpreter {
                         if let Some(od) = interp.get_object(this_id) {
                             let frozen = !od.borrow().extensible;
                             if frozen {
-                                let err = interp.create_type_error("Cannot define property on a non-extensible object");
+                                let err = interp.create_type_error(
+                                    "Cannot define property on a non-extensible object",
+                                );
                                 return Completion::Throw(err);
                             }
                             od.borrow_mut().insert_property(
@@ -421,9 +427,7 @@ impl Interpreter {
             let getter = self.create_function(JsFunction::native(
                 "get constructor".to_string(),
                 0,
-                move |_interp, _this, _args| {
-                    Completion::Normal(ctor_val.clone())
-                },
+                move |_interp, _this, _args| Completion::Normal(ctor_val.clone()),
             ));
             let ip_id = iter_proto_id;
             let setter = self.create_function(JsFunction::native(
@@ -441,7 +445,8 @@ impl Interpreter {
                     };
                     // Step 2: If this is home (Iterator.prototype), throw TypeError
                     if this_id == ip_id {
-                        let err = interp.create_type_error("Cannot set constructor on Iterator.prototype");
+                        let err = interp
+                            .create_type_error("Cannot set constructor on Iterator.prototype");
                         return Completion::Throw(err);
                     }
                     // Step 3: Check if this has own "constructor" property
@@ -455,7 +460,9 @@ impl Interpreter {
                         if let Some(od) = interp.get_object(this_id) {
                             let frozen = !od.borrow().extensible;
                             if frozen {
-                                let err = interp.create_type_error("Cannot define property constructor on a non-extensible object");
+                                let err = interp.create_type_error(
+                                    "Cannot define property constructor on a non-extensible object",
+                                );
                                 return Completion::Throw(err);
                             }
                             od.borrow_mut().insert_property(
@@ -467,7 +474,8 @@ impl Interpreter {
                         // Set(this, "constructor", v, true)
                         if let Some(od) = interp.get_object(this_id) {
                             if !od.borrow_mut().set_property_value("constructor", v) {
-                                let err = interp.create_type_error("Cannot set property constructor");
+                                let err =
+                                    interp.create_type_error("Cannot set property constructor");
                                 return Completion::Throw(err);
                             }
                         }
@@ -1956,7 +1964,9 @@ impl Interpreter {
                 }
             },
         ));
-        wrap_valid_proto.borrow_mut().insert_builtin("next".to_string(), wrap_next_fn);
+        wrap_valid_proto
+            .borrow_mut()
+            .insert_builtin("next".to_string(), wrap_next_fn);
 
         let map_for_ret = wrap_state_map.clone();
         let wrap_return_fn = self.create_function(JsFunction::native(
@@ -2002,13 +2012,13 @@ impl Interpreter {
                     }
                     interp.call_function(&return_method, &iter, &[])
                 } else {
-                    Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
-                    )
+                    Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true))
                 }
             },
         ));
-        wrap_valid_proto.borrow_mut().insert_builtin("return".to_string(), wrap_return_fn);
+        wrap_valid_proto
+            .borrow_mut()
+            .insert_builtin("return".to_string(), wrap_return_fn);
 
         let wrap_valid_proto_rc = Some(wrap_valid_proto);
 
@@ -2061,7 +2071,9 @@ impl Interpreter {
                 wrapper.borrow_mut().class_name = "Iterator".to_string();
 
                 let wrapper_id = wrapper.borrow().id.unwrap();
-                map_for_from.borrow_mut().insert(wrapper_id, (iter_val, next_method, true));
+                map_for_from
+                    .borrow_mut()
+                    .insert(wrapper_id, (iter_val, next_method, true));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: wrapper_id }))
             },

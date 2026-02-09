@@ -1599,7 +1599,13 @@ impl Interpreter {
             if let Some(ref func) = obj.borrow().callable {
                 return match func {
                     JsFunction::Native(_, _, _, is_ctor) => *is_ctor,
-                    JsFunction::User { .. } => true,
+                    JsFunction::User {
+                        is_arrow,
+                        is_method,
+                        is_async,
+                        is_generator,
+                        ..
+                    } => !is_arrow && !is_method && (!*is_async || *is_generator),
                 };
             }
             // Proxy wrapping a constructor is a constructor

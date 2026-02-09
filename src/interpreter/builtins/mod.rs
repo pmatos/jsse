@@ -517,9 +517,9 @@ impl Interpreter {
                             ))))
                         };
                     }
-                    Completion::Throw(
-                        interp.create_type_error("Error.prototype.toString requires that 'this' be an Object"),
-                    )
+                    Completion::Throw(interp.create_type_error(
+                        "Error.prototype.toString requires that 'this' be an Object",
+                    ))
                 },
             ));
             ep.borrow_mut()
@@ -2227,6 +2227,7 @@ impl Interpreter {
                         is_strict,
                         is_generator: false,
                         is_async: false,
+                        is_method: false,
                         source_text: Some(fn_source_text),
                     };
                     Completion::Normal(interp.create_function(js_func))
@@ -2606,6 +2607,7 @@ impl Interpreter {
                             is_strict,
                             is_generator: false,
                             is_async: true,
+                            is_method: false,
                             source_text: Some(fn_source_text),
                         };
                         Completion::Normal(interp.create_function(js_func))
@@ -2694,6 +2696,7 @@ impl Interpreter {
                             is_strict,
                             is_generator: true,
                             is_async: false,
+                            is_method: false,
                             source_text: Some(fn_source_text),
                         };
                         Completion::Normal(interp.create_function(js_func))
@@ -2782,6 +2785,7 @@ impl Interpreter {
                             is_strict,
                             is_generator: true,
                             is_async: true,
+                            is_method: false,
                             source_text: Some(fn_source_text),
                         };
                         Completion::Normal(interp.create_function(js_func))
@@ -3301,9 +3305,10 @@ impl Interpreter {
                             // Use proxy-aware [[GetOwnProperty]]
                             match interp.proxy_get_own_property_descriptor(obj_ref.id, &key) {
                                 Ok(desc_val) => {
-                                    return Completion::Normal(JsValue::Boolean(
-                                        !matches!(desc_val, JsValue::Undefined),
-                                    ));
+                                    return Completion::Normal(JsValue::Boolean(!matches!(
+                                        desc_val,
+                                        JsValue::Undefined
+                                    )));
                                 }
                                 Err(e) => return Completion::Throw(e),
                             }
@@ -3355,16 +3360,13 @@ impl Interpreter {
                                     || ob.class_name == "EvalError"
                                 {
                                     "Error"
-                                } else if ob.class_name == "Boolean"
-                                    && ob.primitive_value.is_some()
+                                } else if ob.class_name == "Boolean" && ob.primitive_value.is_some()
                                 {
                                     "Boolean"
-                                } else if ob.class_name == "Number"
-                                    && ob.primitive_value.is_some()
+                                } else if ob.class_name == "Number" && ob.primitive_value.is_some()
                                 {
                                     "Number"
-                                } else if ob.class_name == "String"
-                                    && ob.primitive_value.is_some()
+                                } else if ob.class_name == "String" && ob.primitive_value.is_some()
                                 {
                                     "String"
                                 } else if ob.class_name == "Date" {
@@ -3379,8 +3381,7 @@ impl Interpreter {
                             };
                             // Step 15: Let tag be ? Get(O, @@toStringTag).
                             let tag_key = "Symbol(Symbol.toStringTag)".to_string();
-                            let tag_result =
-                                interp.get_object_property(obj_ref.id, &tag_key, &o);
+                            let tag_result = interp.get_object_property(obj_ref.id, &tag_key, &o);
                             let tag = if let Completion::Normal(ref tag_val) = tag_result
                                 && let JsValue::String(s) = tag_val
                             {
@@ -3769,7 +3770,6 @@ impl Interpreter {
                         true,
                     ),
                 );
-
             }
 
             // Add Object.defineProperty
@@ -6494,9 +6494,9 @@ impl Interpreter {
                     }
                 }
                 // Step 2: If this is not callable, throw TypeError
-                Completion::Throw(
-                    interp.create_type_error("Function.prototype.toString requires that 'this' be a Function"),
-                )
+                Completion::Throw(interp.create_type_error(
+                    "Function.prototype.toString requires that 'this' be a Function",
+                ))
             },
         ));
         obj_proto

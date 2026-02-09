@@ -503,12 +503,16 @@ impl Interpreter {
                 is_arrow,
                 is_async,
                 is_generator,
+                is_method,
                 ..
-            }) => !is_arrow && (!*is_async || *is_generator),
+            }) => !is_arrow && !is_method && (!*is_async || *is_generator),
             Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
             None => false,
         };
-        if is_constructable {
+        // Generators/async-generators always need .prototype (for generator prototype chain)
+        // even when they are class methods (non-constructable)
+        let needs_prototype = is_constructable || is_gen || is_async_gen;
+        if needs_prototype {
             let proto = self.create_object();
             if is_async_gen {
                 proto.borrow_mut().prototype = self.async_generator_prototype.clone();
@@ -1456,6 +1460,7 @@ impl Interpreter {
                     is_strict: true, // Module code is always strict
                     is_generator: f.is_generator,
                     is_async: f.is_async,
+                    is_method: false,
                     source_text: f.source_text.clone(),
                 };
                 let val = self.create_function(func);
@@ -1485,6 +1490,7 @@ impl Interpreter {
                         is_strict: true,
                         is_generator: f.is_generator,
                         is_async: f.is_async,
+                        is_method: false,
                         source_text: f.source_text.clone(),
                     };
                     let val = self.create_function(func);
@@ -1660,6 +1666,7 @@ impl Interpreter {
                     is_strict: Self::is_strict_mode_body(&func.body) || env.borrow().strict,
                     is_generator: func.is_generator,
                     is_async: func.is_async,
+                    is_method: false,
                     source_text: func.source_text.clone(),
                 };
                 let fn_obj = self.create_function(js_func);

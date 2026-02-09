@@ -332,6 +332,7 @@ pub enum JsFunction {
         is_strict: bool,
         is_generator: bool,
         is_async: bool,
+        is_method: bool,
         source_text: Option<String>,
     },
     Native(
@@ -372,6 +373,7 @@ impl Clone for JsFunction {
                 is_strict,
                 is_generator,
                 is_async,
+                is_method,
                 source_text,
             } => JsFunction::User {
                 name: name.clone(),
@@ -382,6 +384,7 @@ impl Clone for JsFunction {
                 is_strict: *is_strict,
                 is_generator: *is_generator,
                 is_async: *is_async,
+                is_method: *is_method,
                 source_text: source_text.clone(),
             },
             JsFunction::Native(name, arity, f, is_ctor) => {

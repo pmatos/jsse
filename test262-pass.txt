@@ -3644,8 +3644,12 @@ test262/test/built-ins/AsyncFromSyncIteratorPrototype/next/iterator-result-unwra
 test262/test/built-ins/AsyncFromSyncIteratorPrototype/next/return-promise.js
 test262/test/built-ins/AsyncFromSyncIteratorPrototype/return/absent-value-not-passed.js
 test262/test/built-ins/AsyncFromSyncIteratorPrototype/return/iterator-result.js
+test262/test/built-ins/AsyncFromSyncIteratorPrototype/return/poisoned-return.js
 test262/test/built-ins/AsyncFromSyncIteratorPrototype/return/return-undefined.js
+test262/test/built-ins/AsyncFromSyncIteratorPrototype/throw/iterator-result-poisoned-value.js
+test262/test/built-ins/AsyncFromSyncIteratorPrototype/throw/iterator-result-unwrap-promise.js
 test262/test/built-ins/AsyncFromSyncIteratorPrototype/throw/iterator-result.js
+test262/test/built-ins/AsyncFromSyncIteratorPrototype/throw/poisoned-throw.js
 test262/test/built-ins/AsyncFunction/AsyncFunction-construct.js
 test262/test/built-ins/AsyncFunction/AsyncFunction-is-extensible.js
 test262/test/built-ins/AsyncFunction/AsyncFunction-length.js
@@ -22923,6 +22927,8 @@ test262/test/language/expressions/class/gen-method/yield-as-label-identifier-esc
 test262/test/language/expressions/class/gen-method/yield-as-label-identifier.js
 test262/test/language/expressions/class/gen-method/yield-identifier-spread-strict.js
 test262/test/language/expressions/class/gen-method/yield-identifier-strict.js
+test262/test/language/expressions/class/heritage-arrow-function.js
+test262/test/language/expressions/class/heritage-async-arrow-function.js
 test262/test/language/expressions/class/ident-name-method-def-break-escaped.js
 test262/test/language/expressions/class/ident-name-method-def-case-escaped.js
 test262/test/language/expressions/class/ident-name-method-def-catch-escaped.js
@@ -29187,6 +29193,7 @@ test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-pr
 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-string-literal.js
 test262/test/language/statements/class/cpn-class-decl-fields-methods-computed-property-name-from-yield-expression.js
 test262/test/language/statements/class/cptn-decl.js
+test262/test/language/statements/class/definition/accessors.js
 test262/test/language/statements/class/definition/basics.js
 test262/test/language/statements/class/definition/class-method-returns-promise.js
 test262/test/language/statements/class/definition/constructor-property.js
@@ -29205,6 +29212,7 @@ test262/test/language/statements/class/definition/fn-length-static-precedence-or
 test262/test/language/statements/class/definition/fn-length-static-precedence.js
 test262/test/language/statements/class/definition/fn-name-static-precedence-order.js
 test262/test/language/statements/class/definition/fn-name-static-precedence.js
+test262/test/language/statements/class/definition/getters-prop-desc.js
 test262/test/language/statements/class/definition/getters-restricted-ids.js
 test262/test/language/statements/class/definition/implicit-constructor.js
 test262/test/language/statements/class/definition/invalid-extends.js
@@ -29228,7 +29236,9 @@ test262/test/language/statements/class/definition/methods-gen-yield-star-before-
 test262/test/language/statements/class/definition/methods-gen-yield-weak-binding.js
 test262/test/language/statements/class/definition/methods-named-eval-arguments.js
 test262/test/language/statements/class/definition/methods-restricted-properties.js
+test262/test/language/statements/class/definition/methods.js
 test262/test/language/statements/class/definition/prototype-property.js
+test262/test/language/statements/class/definition/setters-prop-desc.js
 test262/test/language/statements/class/definition/setters-restricted-ids.js
 test262/test/language/statements/class/definition/side-effects-in-extends.js
 test262/test/language/statements/class/definition/side-effects-in-property-define.js
@@ -32781,6 +32791,7 @@ test262/test/language/statements/class/subclass/derived-class-return-override-wi
 test262/test/language/statements/class/subclass/derived-class-return-override-with-symbol.js
 test262/test/language/statements/class/subclass/derived-class-return-override-with-this.js
 test262/test/language/statements/class/subclass/derived-class-return-override-with-undefined.js
+test262/test/language/statements/class/subclass/superclass-arrow-function.js
 test262/test/language/statements/class/subclass/superclass-bound-function.js
 test262/test/language/statements/class/subclass/superclass-prototype-setter-constructor.js
 test262/test/language/statements/class/subclass/superclass-prototype-setter-method-override.js

@@ -100,7 +100,11 @@ fn to_uint32(n: f64) -> u32 {
     let int_val = n.signum() * n.abs().floor();
     let two32: f64 = 4294967296.0; // 2^32
     let int32bit = int_val % two32;
-    let int32bit = if int32bit < 0.0 { int32bit + two32 } else { int32bit };
+    let int32bit = if int32bit < 0.0 {
+        int32bit + two32
+    } else {
+        int32bit
+    };
     int32bit as u32
 }
 
@@ -781,7 +785,11 @@ impl Interpreter {
                             if !matches!(method, JsValue::Undefined | JsValue::Null) {
                                 let this_str = this_val.clone();
                                 let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                                return interp.call_function(&method, &separator, &[this_str, limit]);
+                                return interp.call_function(
+                                    &method,
+                                    &separator,
+                                    &[this_str, limit],
+                                );
                             }
                         }
                     }
@@ -872,13 +880,15 @@ impl Interpreter {
                     let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = search_value {
                         if let Some(key) = interp.get_symbol_key("replace") {
-                            let method = match interp.get_object_property(o.id, &key, &search_value) {
+                            let method = match interp.get_object_property(o.id, &key, &search_value)
+                            {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 other => return other,
                             };
                             if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                                let replace_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                let replace_val =
+                                    args.get(1).cloned().unwrap_or(JsValue::Undefined);
                                 return interp.call_function(
                                     &method,
                                     &search_value,
