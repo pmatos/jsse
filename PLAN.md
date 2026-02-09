@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 37,104 / 48,257 run (76.89%)
+**Current pass rate:** 37,307 / 48,257 run (77.31%)
 
 ---
 
@@ -142,6 +142,8 @@ These features block significant numbers of tests:
 53. ~~**Real-world app integration: Acorn, Marked, Prettier**~~ — ✅ Done (+79 net new passes, 76.25% → 76.42%).
 
 55. ~~**Conformance batch 22: String, Iterator helpers, Proxy/native fn prototype**~~ — Done (+108 new passes, 76.64% → 76.87%). Three orthogonal fixes: (1) String built-in fixes: getter-aware Symbol method lookups (match/replace/search/split), IsRegExp check, split ToUint32 limit, replaceAll upfront ToString, String.prototype as String wrapper object, matchAll fixes. String: 1,141→1,157/1,215 (95%). (2) Iterator helper fixes: re-entrancy detection via `running` flag, return method error propagation, take/drop argument validation with iterator close, concat.length=0, Iterator.from rewrite with WrapForValidIteratorPrototype, constructor/toStringTag as accessor properties. Iterator: 438→490/510 (96%). (3) Native function [[Prototype]] fix: `create_function()` uses `self.function_prototype` field directly, retroactive walk extended to cover internal prototype fields (iterator/collection/generator protos), generator/async function prototypes unconditionally fixed, Error.prototype.toString throws TypeError for non-object `this`. Function: 433→446/509 (88%), Proxy: 231→245/311 (79%), Object: 3,184→3,216/3,411 (94%), Set: 365→372/383 (97%).
+
+57. ~~**Dynamic import from scripts fix**~~ — ✅ Done (+203 new passes, 76.89% → 77.31%). Two fixes: (1) jsse: `run_with_path()` now sets `current_module_path` for scripts (not just modules), enabling `import()` to resolve relative specifiers from script files. (2) Test runner: temp files for non-module tests now written in the same directory as the original test file (not `/tmp/`), so FIXTURE module files resolve correctly.
 
 56. ~~**Conformance batch 23: Async generator yield* delegation, class method constructability**~~ — ✅ Done (+11 new passes, 76.87% → 76.89%). Two fixes: (1) Async generator yield* delegation: continuation path now awaits iterator result before extracting done/value (matching initial setup path), return/throw forwarding to inner iterator during yield* delegation, IteratorValue error propagation into generator try/catch via catch state jump. (2) Class method constructability: added `is_method` flag to `JsFunction::User`, class methods marked non-constructable (no `.prototype`, TypeError on `new`), generator/async-generator methods retain `.prototype` for generator prototype chain, `is_constructor` check updated in eval_new/create_function/promise.rs.
 

@@ -759,7 +759,13 @@ impl Interpreter {
     pub fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
         self.maybe_gc();
         let result = match program.source_type {
-            SourceType::Script => self.exec_statements(&program.body, &self.global_env.clone()),
+            SourceType::Script => {
+                let prev = self.current_module_path.take();
+                self.current_module_path = Some(path.to_path_buf());
+                let r = self.exec_statements(&program.body, &self.global_env.clone());
+                self.current_module_path = prev;
+                r
+            }
             SourceType::Module => self.run_module(program, Some(path.to_path_buf())),
         };
         self.drain_microtasks();

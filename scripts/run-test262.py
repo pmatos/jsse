@@ -253,7 +253,8 @@ def run_single_test(
             return (test_file_str, False, "harness_error")
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".js", delete=False, encoding="utf-8"
+            mode="w", suffix=".js", delete=False, encoding="utf-8",
+            dir=str(test_file.parent)
         ) as tmp:
             tmp.write(combined)
             tmp_path = tmp.name
