@@ -41,10 +41,10 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if let Some(ref buf) = obj_ref.arraybuffer_data {
-                        if let Some(ref det) = obj_ref.arraybuffer_detached {
-                            if det.get() {
-                                return Completion::Normal(JsValue::Number(0.0));
-                            }
+                        if let Some(ref det) = obj_ref.arraybuffer_detached
+                            && det.get()
+                        {
+                            return Completion::Normal(JsValue::Number(0.0));
                         }
                         return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
                     }
@@ -134,10 +134,10 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if let Some(ref buf) = obj_ref.arraybuffer_data {
-                        if let Some(ref det) = obj_ref.arraybuffer_detached {
-                            if det.get() {
-                                return Completion::Normal(JsValue::Number(0.0));
-                            }
+                        if let Some(ref det) = obj_ref.arraybuffer_detached
+                            && det.get()
+                        {
+                            return Completion::Normal(JsValue::Number(0.0));
                         }
                         return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
                     }
@@ -167,12 +167,12 @@ impl Interpreter {
                 {
                     let (buf_data, buf_len) = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached {
-                            if det.get() {
-                                return Completion::Throw(
-                                    interp.create_type_error("ArrayBuffer is detached"),
-                                );
-                            }
+                        if let Some(ref det) = obj_ref.arraybuffer_detached
+                            && det.get()
+                        {
+                            return Completion::Throw(
+                                interp.create_type_error("ArrayBuffer is detached"),
+                            );
                         }
                         if let Some(ref buf) = obj_ref.arraybuffer_data {
                             let b = buf.borrow();
@@ -484,16 +484,16 @@ impl Interpreter {
     }
 
     pub(crate) fn detach_arraybuffer(&mut self, ab_val: &JsValue) -> Completion {
-        if let JsValue::Object(o) = ab_val {
-            if let Some(obj) = self.get_object(o.id) {
-                let mut obj_ref = obj.borrow_mut();
-                if obj_ref.arraybuffer_data.is_some() {
-                    if let Some(ref det) = obj_ref.arraybuffer_detached {
-                        det.set(true);
-                    }
-                    obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
-                    return Completion::Normal(JsValue::Undefined);
+        if let JsValue::Object(o) = ab_val
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let mut obj_ref = obj.borrow_mut();
+            if obj_ref.arraybuffer_data.is_some() {
+                if let Some(ref det) = obj_ref.arraybuffer_detached {
+                    det.set(true);
                 }
+                obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
+                return Completion::Normal(JsValue::Undefined);
             }
         }
         Completion::Throw(self.create_type_error("not an ArrayBuffer"))
@@ -1208,20 +1208,20 @@ impl Interpreter {
                         }
                     };
                     let comparefn = args.first().cloned();
-                    if let Some(ref cmp) = comparefn {
-                        if !matches!(cmp, JsValue::Undefined) {
-                            let is_callable = if let JsValue::Object(co) = cmp {
-                                interp
-                                    .get_object(co.id)
-                                    .is_some_and(|obj| obj.borrow().callable.is_some())
-                            } else {
-                                false
-                            };
-                            if !is_callable {
-                                return Completion::Throw(
-                                    interp.create_type_error("comparefn is not a function"),
-                                );
-                            }
+                    if let Some(ref cmp) = comparefn
+                        && !matches!(cmp, JsValue::Undefined)
+                    {
+                        let is_callable = if let JsValue::Object(co) = cmp {
+                            interp
+                                .get_object(co.id)
+                                .is_some_and(|obj| obj.borrow().callable.is_some())
+                        } else {
+                            false
+                        };
+                        if !is_callable {
+                            return Completion::Throw(
+                                interp.create_type_error("comparefn is not a function"),
+                            );
                         }
                     }
                     let mut elems: Vec<JsValue> = (0..ta.array_length)
@@ -1511,20 +1511,20 @@ impl Interpreter {
                         }
                     };
                     let comparefn = args.first().cloned();
-                    if let Some(ref cmp) = comparefn {
-                        if !matches!(cmp, JsValue::Undefined) {
-                            let is_callable = if let JsValue::Object(co) = cmp {
-                                interp
-                                    .get_object(co.id)
-                                    .is_some_and(|obj| obj.borrow().callable.is_some())
-                            } else {
-                                false
-                            };
-                            if !is_callable {
-                                return Completion::Throw(
-                                    interp.create_type_error("comparefn is not a function"),
-                                );
-                            }
+                    if let Some(ref cmp) = comparefn
+                        && !matches!(cmp, JsValue::Undefined)
+                    {
+                        let is_callable = if let JsValue::Object(co) = cmp {
+                            interp
+                                .get_object(co.id)
+                                .is_some_and(|obj| obj.borrow().callable.is_some())
+                        } else {
+                            false
+                        };
+                        if !is_callable {
+                            return Completion::Throw(
+                                interp.create_type_error("comparefn is not a function"),
+                            );
                         }
                     }
                     let mut elems: Vec<JsValue> = (0..ta.array_length)
@@ -1623,18 +1623,18 @@ impl Interpreter {
                                         .get_property_descriptor("valueOf")
                                         .and_then(|d| d.value)
                                 };
-                                if let Some(func) = method {
-                                    if interp.is_callable(&func) {
-                                        match interp.call_function(&func, val, &[]) {
-                                            Completion::Normal(v)
-                                                if !matches!(v, JsValue::Object(_)) =>
-                                            {
-                                                return to_number_throwing(interp, &v);
-                                            }
-                                            Completion::Normal(_) => {}
-                                            Completion::Throw(e) => return Err(e),
-                                            _ => {}
+                                if let Some(func) = method
+                                    && interp.is_callable(&func)
+                                {
+                                    match interp.call_function(&func, val, &[]) {
+                                        Completion::Normal(v)
+                                            if !matches!(v, JsValue::Object(_)) =>
+                                        {
+                                            return to_number_throwing(interp, &v);
                                         }
+                                        Completion::Normal(_) => {}
+                                        Completion::Throw(e) => return Err(e),
+                                        _ => {}
                                     }
                                 }
                                 let tostring_method = {
@@ -1643,18 +1643,18 @@ impl Interpreter {
                                         .get_property_descriptor("toString")
                                         .and_then(|d| d.value)
                                 };
-                                if let Some(func) = tostring_method {
-                                    if interp.is_callable(&func) {
-                                        match interp.call_function(&func, val, &[]) {
-                                            Completion::Normal(v)
-                                                if !matches!(v, JsValue::Object(_)) =>
-                                            {
-                                                return to_number_throwing(interp, &v);
-                                            }
-                                            Completion::Normal(_) => {}
-                                            Completion::Throw(e) => return Err(e),
-                                            _ => {}
+                                if let Some(func) = tostring_method
+                                    && interp.is_callable(&func)
+                                {
+                                    match interp.call_function(&func, val, &[]) {
+                                        Completion::Normal(v)
+                                            if !matches!(v, JsValue::Object(_)) =>
+                                        {
+                                            return to_number_throwing(interp, &v);
                                         }
+                                        Completion::Normal(_) => {}
+                                        Completion::Throw(e) => return Err(e),
+                                        _ => {}
                                     }
                                 }
                             }
@@ -1687,18 +1687,18 @@ impl Interpreter {
                                         .get_property_descriptor("valueOf")
                                         .and_then(|d| d.value)
                                 };
-                                if let Some(func) = method {
-                                    if interp.is_callable(&func) {
-                                        match interp.call_function(&func, val, &[]) {
-                                            Completion::Normal(v)
-                                                if !matches!(v, JsValue::Object(_)) =>
-                                            {
-                                                return to_bigint_throwing(interp, &v);
-                                            }
-                                            Completion::Normal(_) => {}
-                                            Completion::Throw(e) => return Err(e),
-                                            _ => {}
+                                if let Some(func) = method
+                                    && interp.is_callable(&func)
+                                {
+                                    match interp.call_function(&func, val, &[]) {
+                                        Completion::Normal(v)
+                                            if !matches!(v, JsValue::Object(_)) =>
+                                        {
+                                            return to_bigint_throwing(interp, &v);
                                         }
+                                        Completion::Normal(_) => {}
+                                        Completion::Throw(e) => return Err(e),
+                                        _ => {}
                                     }
                                 }
                             }
@@ -2591,13 +2591,12 @@ impl Interpreter {
                                 let src_ref = src_obj.borrow();
                                 // Case: new XArray(arraybuffer, byteOffset?, length?)
                                 if src_ref.arraybuffer_data.is_some() {
-                                    if let Some(ref det) = src_ref.arraybuffer_detached {
-                                        if det.get() {
+                                    if let Some(ref det) = src_ref.arraybuffer_detached
+                                        && det.get() {
                                             return Completion::Throw(interp.create_type_error(
                                                 "Cannot construct TypedArray from detached ArrayBuffer"
                                             ));
                                         }
-                                    }
                                     let buf_rc = src_ref.arraybuffer_data.as_ref().unwrap().clone();
                                     let detached = src_ref.arraybuffer_detached.clone()
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
@@ -2855,13 +2854,13 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(o) = &uint8_ctor {
-            if let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("fromBase64".to_string(), from_base64_fn);
-                obj.borrow_mut()
-                    .insert_builtin("fromHex".to_string(), from_hex_fn);
-            }
+        if let JsValue::Object(o) = &uint8_ctor
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("fromBase64".to_string(), from_base64_fn);
+            obj.borrow_mut()
+                .insert_builtin("fromHex".to_string(), from_hex_fn);
         }
 
         // --- Instance methods on Uint8Array.prototype ---
@@ -3211,14 +3210,10 @@ impl Interpreter {
                     _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
                 };
                 let mut values = Vec::new();
-                loop {
-                    let next_fn = if let JsValue::Object(io) = &iter {
-                        match self.get_object_property(io.id, "next", &iter) {
-                            Completion::Normal(v) => v,
-                            _ => break,
-                        }
-                    } else {
-                        break;
+                while let JsValue::Object(io) = &iter {
+                    let next_fn = match self.get_object_property(io.id, "next", &iter) {
+                        Completion::Normal(v) => v,
+                        _ => break,
                     };
                     let result = match self.call_function(&next_fn, &iter, &[]) {
                         Completion::Normal(v) => v,
@@ -3777,12 +3772,12 @@ impl Interpreter {
                     // Now check detach + get buffer info
                     let (buf_rc, detached_flag, buf_len) = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached {
-                            if det.get() {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Cannot construct DataView from detached ArrayBuffer",
-                                ));
-                            }
+                        if let Some(ref det) = obj_ref.arraybuffer_detached
+                            && det.get()
+                        {
+                            return Completion::Throw(interp.create_type_error(
+                                "Cannot construct DataView from detached ArrayBuffer",
+                            ));
                         }
                         let buf = obj_ref.arraybuffer_data.as_ref().unwrap().clone();
                         let det = obj_ref
@@ -4082,22 +4077,22 @@ fn validate_uint8array(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    if let JsValue::Object(o) = this_val {
-        if let Some(obj) = interp.get_object(o.id) {
-            let obj_ref = obj.borrow();
-            if let Some(ref ta) = obj_ref.typed_array_info {
-                if !matches!(ta.kind, TypedArrayKind::Uint8) {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("not a Uint8Array"),
-                    ));
-                }
-                if ta.is_detached.get() {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("typed array is detached"),
-                    ));
-                }
-                return Ok(ta.clone());
+    if let JsValue::Object(o) = this_val
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let obj_ref = obj.borrow();
+        if let Some(ref ta) = obj_ref.typed_array_info {
+            if !matches!(ta.kind, TypedArrayKind::Uint8) {
+                return Err(Completion::Throw(
+                    interp.create_type_error("not a Uint8Array"),
+                ));
             }
+            if ta.is_detached.get() {
+                return Err(Completion::Throw(
+                    interp.create_type_error("typed array is detached"),
+                ));
+            }
+            return Ok(ta.clone());
         }
     }
     Err(Completion::Throw(
@@ -4109,17 +4104,17 @@ fn validate_uint8array_no_detach_check(
     interp: &mut Interpreter,
     this_val: &JsValue,
 ) -> Result<TypedArrayInfo, Completion> {
-    if let JsValue::Object(o) = this_val {
-        if let Some(obj) = interp.get_object(o.id) {
-            let obj_ref = obj.borrow();
-            if let Some(ref ta) = obj_ref.typed_array_info {
-                if !matches!(ta.kind, TypedArrayKind::Uint8) {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("not a Uint8Array"),
-                    ));
-                }
-                return Ok(ta.clone());
+    if let JsValue::Object(o) = this_val
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let obj_ref = obj.borrow();
+        if let Some(ref ta) = obj_ref.typed_array_info {
+            if !matches!(ta.kind, TypedArrayKind::Uint8) {
+                return Err(Completion::Throw(
+                    interp.create_type_error("not a Uint8Array"),
+                ));
             }
+            return Ok(ta.clone());
         }
     }
     Err(Completion::Throw(
@@ -4144,45 +4139,45 @@ fn parse_base64_options(
     let mut alphabet = "base64".to_string();
     let mut last_chunk = "loose".to_string();
 
-    if !matches!(opts, JsValue::Undefined | JsValue::Null) {
-        if let JsValue::Object(o) = opts {
-            let alpha_val = match interp.get_object_property(o.id, "alphabet", opts) {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            if !matches!(alpha_val, JsValue::Undefined) {
-                if !matches!(alpha_val, JsValue::String(_)) {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("alphabet must be a string"),
-                    ));
-                }
-                let s = to_js_string(&alpha_val);
-                if s != "base64" && s != "base64url" {
-                    return Err(Completion::Throw(interp.create_type_error(
-                        "expected alphabet to be either \"base64\" or \"base64url\"",
-                    )));
-                }
-                alphabet = s;
+    if !matches!(opts, JsValue::Undefined | JsValue::Null)
+        && let JsValue::Object(o) = opts
+    {
+        let alpha_val = match interp.get_object_property(o.id, "alphabet", opts) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !matches!(alpha_val, JsValue::Undefined) {
+            if !matches!(alpha_val, JsValue::String(_)) {
+                return Err(Completion::Throw(
+                    interp.create_type_error("alphabet must be a string"),
+                ));
             }
+            let s = to_js_string(&alpha_val);
+            if s != "base64" && s != "base64url" {
+                return Err(Completion::Throw(interp.create_type_error(
+                    "expected alphabet to be either \"base64\" or \"base64url\"",
+                )));
+            }
+            alphabet = s;
+        }
 
-            let lch_val = match interp.get_object_property(o.id, "lastChunkHandling", opts) {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            if !matches!(lch_val, JsValue::Undefined) {
-                if !matches!(lch_val, JsValue::String(_)) {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("lastChunkHandling must be a string"),
-                    ));
-                }
-                let s = to_js_string(&lch_val);
-                if s != "loose" && s != "strict" && s != "stop-before-partial" {
-                    return Err(Completion::Throw(
+        let lch_val = match interp.get_object_property(o.id, "lastChunkHandling", opts) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !matches!(lch_val, JsValue::Undefined) {
+            if !matches!(lch_val, JsValue::String(_)) {
+                return Err(Completion::Throw(
+                    interp.create_type_error("lastChunkHandling must be a string"),
+                ));
+            }
+            let s = to_js_string(&lch_val);
+            if s != "loose" && s != "strict" && s != "stop-before-partial" {
+                return Err(Completion::Throw(
                         interp.create_type_error("expected lastChunkHandling to be either \"loose\", \"strict\", or \"stop-before-partial\""),
                     ));
-                }
-                last_chunk = s;
             }
+            last_chunk = s;
         }
     }
     Ok((alphabet, last_chunk))
@@ -4195,33 +4190,33 @@ fn parse_to_base64_options(
     let mut alphabet = "base64".to_string();
     let mut omit_padding = false;
 
-    if !matches!(opts, JsValue::Undefined | JsValue::Null) {
-        if let JsValue::Object(o) = opts {
-            let alpha_val = match interp.get_object_property(o.id, "alphabet", opts) {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            if !matches!(alpha_val, JsValue::Undefined) {
-                if !matches!(alpha_val, JsValue::String(_)) {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("alphabet must be a string"),
-                    ));
-                }
-                let s = to_js_string(&alpha_val);
-                if s != "base64" && s != "base64url" {
-                    return Err(Completion::Throw(interp.create_type_error(
-                        "expected alphabet to be either \"base64\" or \"base64url\"",
-                    )));
-                }
-                alphabet = s;
+    if !matches!(opts, JsValue::Undefined | JsValue::Null)
+        && let JsValue::Object(o) = opts
+    {
+        let alpha_val = match interp.get_object_property(o.id, "alphabet", opts) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !matches!(alpha_val, JsValue::Undefined) {
+            if !matches!(alpha_val, JsValue::String(_)) {
+                return Err(Completion::Throw(
+                    interp.create_type_error("alphabet must be a string"),
+                ));
             }
-
-            let omit_val = match interp.get_object_property(o.id, "omitPadding", opts) {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            omit_padding = to_boolean(&omit_val);
+            let s = to_js_string(&alpha_val);
+            if s != "base64" && s != "base64url" {
+                return Err(Completion::Throw(interp.create_type_error(
+                    "expected alphabet to be either \"base64\" or \"base64url\"",
+                )));
+            }
+            alphabet = s;
         }
+
+        let omit_val = match interp.get_object_property(o.id, "omitPadding", opts) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        omit_padding = to_boolean(&omit_val);
     }
     Ok((alphabet, omit_padding))
 }

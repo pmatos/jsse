@@ -131,6 +131,7 @@ impl<'a> Parser<'a> {
         self.pushback = Some((old_current, old_lt, old_ts, old_te));
     }
 
+    #[allow(dead_code)]
     fn peek(&self) -> &Token {
         &self.current
     }
@@ -556,7 +557,7 @@ impl<'a> Parser<'a> {
             if let ModuleItem::ExportDeclaration(ref export) = item {
                 for name in self.get_exported_names(export) {
                     if !exported_names.insert(name.clone()) {
-                        return Err(self.error(&format!("Duplicate export of '{}'", name)));
+                        return Err(self.error(format!("Duplicate export of '{}'", name)));
                     }
                 }
             }

@@ -3,6 +3,7 @@ use crate::interpreter::generator_analysis::*;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct GeneratorStateMachine {
     pub states: Vec<GeneratorState>,
     pub local_vars: Vec<LocalVariable>,
@@ -12,6 +13,7 @@ pub struct GeneratorStateMachine {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct GeneratorState {
     pub id: usize,
     pub statements: Vec<Statement>,
@@ -80,6 +82,7 @@ pub struct SentValueBinding {
 pub enum SentValueBindingKind {
     Variable(String),
     Pattern(Pattern),
+    #[allow(dead_code)]
     Discard,
 }
 
@@ -87,6 +90,7 @@ struct TransformContext {
     states: Vec<GeneratorState>,
     current_state_id: usize,
     current_statements: Vec<Statement>,
+    #[allow(dead_code)]
     analysis: GeneratorAnalysis,
     yield_counter: usize,
     break_targets: HashMap<Option<String>, usize>,
@@ -96,6 +100,7 @@ struct TransformContext {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct TryInfo {
     catch_state: Option<CatchInfo>,
     finally_state: Option<usize>,
@@ -1068,8 +1073,8 @@ fn transform_try_statement(
 
     ctx.current_state_id = try_body_state;
     transform_statements(&try_stmt.block, ctx, after_try);
-    if finally_entry_state.is_some() {
-        ctx.finalize_current_state(StateTerminator::Goto(finally_entry_state.unwrap()));
+    if let Some(fin_state) = finally_entry_state {
+        ctx.finalize_current_state(StateTerminator::Goto(fin_state));
     } else {
         ctx.finalize_current_state(StateTerminator::Goto(after_try));
     }
@@ -1086,8 +1091,8 @@ fn transform_try_statement(
         if let Some(handler) = &try_stmt.handler {
             transform_statements(&handler.body, ctx, after_try);
         }
-        if finally_entry_state.is_some() {
-            ctx.finalize_current_state(StateTerminator::Goto(finally_entry_state.unwrap()));
+        if let Some(fin_state) = finally_entry_state {
+            ctx.finalize_current_state(StateTerminator::Goto(fin_state));
         } else {
             ctx.finalize_current_state(StateTerminator::Goto(after_try));
         }

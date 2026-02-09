@@ -38,6 +38,7 @@ impl JsString {
     }
 
     // §6.1.4.1 StringIndexOf(string, searchValue, fromIndex)
+    #[allow(dead_code)]
     pub fn index_of(&self, search: &JsString, from: usize) -> Option<usize> {
         let s_len = self.code_units.len();
         let search_len = search.code_units.len();
@@ -51,6 +52,7 @@ impl JsString {
             .find(|&i| self.code_units[i..i + search_len] == search.code_units[..])
     }
 
+    #[allow(dead_code)]
     pub fn slice_utf16(&self, start: usize, end: usize) -> JsString {
         let s = start.min(self.code_units.len());
         let e = end.min(self.code_units.len());
@@ -63,6 +65,7 @@ impl JsString {
     }
 
     // §6.1.4.2 StringLastIndexOf
+    #[allow(dead_code)]
     pub fn last_index_of(&self, search: &JsString, from: usize) -> Option<usize> {
         let s_len = self.code_units.len();
         let search_len = search.code_units.len();
@@ -109,6 +112,7 @@ impl JsSymbol {
 
 // Well-known symbols (§6.1.5.1)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum WellKnownSymbol {
     AsyncIterator,
     HasInstance,
@@ -168,6 +172,7 @@ impl JsValue {
         matches!(self, JsValue::BigInt(_))
     }
 
+    #[allow(dead_code)]
     pub fn is_object(&self) -> bool {
         matches!(self, JsValue::Object(_))
     }
@@ -176,6 +181,7 @@ impl JsValue {
         matches!(self, JsValue::Undefined | JsValue::Null)
     }
 
+    #[allow(dead_code)]
     pub fn is_nan(&self) -> bool {
         matches!(self, JsValue::Number(n) if n.is_nan())
     }
@@ -267,6 +273,7 @@ pub mod number_ops {
         x == y
     }
 
+    #[allow(dead_code)]
     pub fn same_value_zero(x: f64, y: f64) -> bool {
         if x.is_nan() && y.is_nan() {
             return true;
@@ -387,6 +394,7 @@ pub mod bigint_ops {
         }
     }
 
+    #[allow(dead_code)]
     pub fn unsigned_right_shift(_x: &BigInt, _y: &BigInt) -> Result<BigInt, &'static str> {
         Err("Cannot use >>> on BigInt")
     }
@@ -411,6 +419,7 @@ pub mod bigint_ops {
         x | y
     }
 
+    #[allow(dead_code)]
     pub fn to_string(x: &BigInt) -> String {
         x.to_string()
     }

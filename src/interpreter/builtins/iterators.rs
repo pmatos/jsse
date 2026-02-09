@@ -77,30 +77,30 @@ fn get_iterator_flattenable(
         Some(JsValue::Undefined)
     };
 
-    if let Some(method) = iter_method {
-        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-            // Has @@iterator - check it's callable and call it
-            if let JsValue::Object(mo) = &method {
-                if !interp
-                    .get_object(mo.id)
-                    .map(|od| od.borrow().callable.is_some())
-                    .unwrap_or(false)
-                {
-                    return Err(interp.create_type_error("Symbol.iterator is not a function"));
-                }
-            } else {
+    if let Some(method) = iter_method
+        && !matches!(method, JsValue::Undefined | JsValue::Null)
+    {
+        // Has @@iterator - check it's callable and call it
+        if let JsValue::Object(mo) = &method {
+            if !interp
+                .get_object(mo.id)
+                .map(|od| od.borrow().callable.is_some())
+                .unwrap_or(false)
+            {
                 return Err(interp.create_type_error("Symbol.iterator is not a function"));
             }
-            let iter_obj = match interp.call_function(&method, obj, &[]) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Err(interp.create_type_error("Symbol.iterator did not return a value")),
-            };
-            if !matches!(iter_obj, JsValue::Object(_)) {
-                return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
-            }
-            return get_iterator_direct_getter(interp, &iter_obj);
+        } else {
+            return Err(interp.create_type_error("Symbol.iterator is not a function"));
         }
+        let iter_obj = match interp.call_function(&method, obj, &[]) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Err(interp.create_type_error("Symbol.iterator did not return a value")),
+        };
+        if !matches!(iter_obj, JsValue::Object(_)) {
+            return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
+        }
+        return get_iterator_direct_getter(interp, &iter_obj);
     }
 
     // @@iterator is null/undefined: use obj as iterator directly
@@ -977,6 +977,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
+                #[allow(clippy::type_complexity)]
                 let state: Rc<RefCell<(JsValue, JsValue, JsValue, f64, bool)>> =
                     Rc::new(RefCell::new((iter, next_method, mapper, 0.0, true)));
 
@@ -1044,11 +1045,10 @@ impl Interpreter {
                             (s.0.clone(), s.4)
                         };
                         state_ret.borrow_mut().4 = false;
-                        if alive {
-                            if let Err(e) = iterator_close_getter(interp, &iter) {
+                        if alive
+                            && let Err(e) = iterator_close_getter(interp, &iter) {
                                 return Completion::Throw(e);
                             }
-                        }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
@@ -1084,6 +1084,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
+                #[allow(clippy::type_complexity)]
                 let state: Rc<RefCell<(JsValue, JsValue, JsValue, f64, bool)>> =
                     Rc::new(RefCell::new((iter, next_method, predicate, 0.0, true)));
 
@@ -1156,11 +1157,10 @@ impl Interpreter {
                             (s.0.clone(), s.4)
                         };
                         state_ret.borrow_mut().4 = false;
-                        if alive {
-                            if let Err(e) = iterator_close_getter(interp, &iter) {
+                        if alive
+                            && let Err(e) = iterator_close_getter(interp, &iter) {
                                 return Completion::Throw(e);
                             }
-                        }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
@@ -1283,10 +1283,8 @@ impl Interpreter {
                             (s.0.clone(), s.3)
                         };
                         state_ret.borrow_mut().3 = false;
-                        if alive {
-                            if let Err(e) = iterator_close_getter(interp, &iter) {
-                                return Completion::Throw(e);
-                            }
+                        if alive && let Err(e) = iterator_close_getter(interp, &iter) {
+                            return Completion::Throw(e);
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -1343,6 +1341,7 @@ impl Interpreter {
                 };
 
                 // state: (iter, next_method, to_skip, skipped, alive)
+                #[allow(clippy::type_complexity)]
                 let state: Rc<RefCell<(JsValue, JsValue, f64, bool, bool)>> = Rc::new(
                     RefCell::new((iter, next_method, integer_limit, false, true)),
                 );
@@ -1417,10 +1416,8 @@ impl Interpreter {
                             (s.0.clone(), s.4)
                         };
                         state_ret.borrow_mut().4 = false;
-                        if alive {
-                            if let Err(e) = iterator_close_getter(interp, &iter) {
-                                return Completion::Throw(e);
-                            }
+                        if alive && let Err(e) = iterator_close_getter(interp, &iter) {
+                            return Completion::Throw(e);
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -1458,6 +1455,7 @@ impl Interpreter {
                 };
 
                 // state: (outer_iter, outer_next, mapper, counter, inner_iter, inner_next, alive)
+                #[allow(clippy::type_complexity)]
                 let state: Rc<
                     RefCell<(
                         JsValue,
@@ -1877,6 +1875,7 @@ impl Interpreter {
                 }
 
                 // state: (iterables, current_index, current_iter, current_next, alive)
+                #[allow(clippy::type_complexity)]
                 let state: Rc<
                     RefCell<(
                         Vec<(JsValue, JsValue)>,
@@ -1986,10 +1985,11 @@ impl Interpreter {
                         state_ret.borrow_mut().4 = false;
                         state_ret.borrow_mut().2 = None;
                         state_ret.borrow_mut().3 = None;
-                        if alive && let Some(ref ci) = cur_iter {
-                            if let Err(e) = iterator_close_getter(interp, ci) {
-                                return Completion::Throw(e);
-                            }
+                        if alive
+                            && let Some(ref ci) = cur_iter
+                            && let Err(e) = iterator_close_getter(interp, ci)
+                        {
+                            return Completion::Throw(e);
                         }
                         Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
@@ -2120,10 +2120,7 @@ impl Interpreter {
 
                 // Step 14: Collect padding values (exactly iter_count values)
                 let padding_values: Vec<JsValue> = if mode == "longest" {
-                    if padding_option.is_none() {
-                        vec![JsValue::Undefined; iter_count]
-                    } else {
-                        let pad_iterable = padding_option.unwrap();
+                    if let Some(pad_iterable) = padding_option {
                         let (pi, pn) = match get_iterator_getter(interp, &pad_iterable) {
                             Ok(v) => v,
                             Err(e) => {
@@ -2150,13 +2147,14 @@ impl Interpreter {
                                 pads.push(JsValue::Undefined);
                             }
                         }
-                        if using_iterator {
-                            if let Err(e) = iterator_close_getter(interp, &pi) {
+                        if using_iterator
+                            && let Err(e) = iterator_close_getter(interp, &pi) {
                                 let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                                 return Completion::Throw(e);
                             }
-                        }
                         pads
+                    } else {
+                        vec![JsValue::Undefined; iter_count]
                     }
                 } else {
                     vec![JsValue::Undefined; iter_count]
@@ -2164,6 +2162,7 @@ impl Interpreter {
 
                 // State: (iters, exhausted, mode, padding, alive)
                 // exhausted tracks which iterators in openIters are exhausted
+                #[allow(clippy::type_complexity)]
                 let state: Rc<RefCell<(Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>, bool)>> =
                     Rc::new(RefCell::new((iters, vec![false; iter_count], mode, padding_values, true)));
 
@@ -2490,6 +2489,7 @@ impl Interpreter {
                 };
 
                 // state: (key_names, iters, exhausted, mode, padding_values, alive)
+                #[allow(clippy::type_complexity)]
                 let state: Rc<RefCell<(Vec<String>, Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>, bool)>> =
                     Rc::new(RefCell::new((key_names, iters, vec![false; iter_count], mode, padding_values, true)));
 
@@ -2713,15 +2713,15 @@ impl Interpreter {
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
-                if let JsValue::Object(o) = this {
-                    if let Some(obj_rc) = interp.get_object(o.id) {
-                        let is_state_machine = matches!(
-                            obj_rc.borrow().iterator_state,
-                            Some(IteratorState::StateMachineGenerator { .. })
-                        );
-                        if is_state_machine {
-                            return interp.generator_next_state_machine(this, value);
-                        }
+                if let JsValue::Object(o) = this
+                    && let Some(obj_rc) = interp.get_object(o.id)
+                {
+                    let is_state_machine = matches!(
+                        obj_rc.borrow().iterator_state,
+                        Some(IteratorState::StateMachineGenerator { .. })
+                    );
+                    if is_state_machine {
+                        return interp.generator_next_state_machine(this, value);
                     }
                 }
                 interp.generator_next(this, value)
@@ -2739,15 +2739,15 @@ impl Interpreter {
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
-                if let JsValue::Object(o) = this {
-                    if let Some(obj_rc) = interp.get_object(o.id) {
-                        let is_state_machine = matches!(
-                            obj_rc.borrow().iterator_state,
-                            Some(IteratorState::StateMachineGenerator { .. })
-                        );
-                        if is_state_machine {
-                            return interp.generator_return_state_machine(this, value);
-                        }
+                if let JsValue::Object(o) = this
+                    && let Some(obj_rc) = interp.get_object(o.id)
+                {
+                    let is_state_machine = matches!(
+                        obj_rc.borrow().iterator_state,
+                        Some(IteratorState::StateMachineGenerator { .. })
+                    );
+                    if is_state_machine {
+                        return interp.generator_return_state_machine(this, value);
                     }
                 }
                 interp.generator_return(this, value)
@@ -2765,15 +2765,15 @@ impl Interpreter {
             |interp, this, args| {
                 let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
-                if let JsValue::Object(o) = this {
-                    if let Some(obj_rc) = interp.get_object(o.id) {
-                        let is_state_machine = matches!(
-                            obj_rc.borrow().iterator_state,
-                            Some(IteratorState::StateMachineGenerator { .. })
-                        );
-                        if is_state_machine {
-                            return interp.generator_throw_state_machine(this, exception);
-                        }
+                if let JsValue::Object(o) = this
+                    && let Some(obj_rc) = interp.get_object(o.id)
+                {
+                    let is_state_machine = matches!(
+                        obj_rc.borrow().iterator_state,
+                        Some(IteratorState::StateMachineGenerator { .. })
+                    );
+                    if is_state_machine {
+                        return interp.generator_throw_state_machine(this, exception);
                     }
                 }
                 interp.generator_throw(this, exception)
@@ -2816,18 +2816,13 @@ impl Interpreter {
 
         // [[Prototype]] = Function.prototype
         // Get Function.prototype from global Function
-        if let Some(func_val) = self.global_env.borrow().get("Function") {
-            if let JsValue::Object(func_obj) = func_val {
-                if let Some(func_data) = self.get_object(func_obj.id) {
-                    if let JsValue::Object(func_proto_obj) =
-                        func_data.borrow().get_property("prototype")
-                    {
-                        if let Some(func_proto) = self.get_object(func_proto_obj.id) {
-                            gf_proto.borrow_mut().prototype = Some(func_proto);
-                        }
-                    }
-                }
-            }
+        if let Some(func_val) = self.global_env.borrow().get("Function")
+            && let JsValue::Object(func_obj) = func_val
+            && let Some(func_data) = self.get_object(func_obj.id)
+            && let JsValue::Object(func_proto_obj) = func_data.borrow().get_property("prototype")
+            && let Some(func_proto) = self.get_object(func_proto_obj.id)
+        {
+            gf_proto.borrow_mut().prototype = Some(func_proto);
         }
 
         // GeneratorFunction.prototype.prototype = Generator.prototype

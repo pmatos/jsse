@@ -574,6 +574,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok((PropertyKey::Number(n), false))
         } else if let Token::Keyword(kw) = &self.current {
+            // Keywords can be property names
             let name = kw.to_string();
             self.advance()?;
             Ok((PropertyKey::Identifier(name), false))
@@ -738,6 +739,7 @@ impl<'a> Parser<'a> {
         Ok((stmts, was_strict))
     }
 
+    #[allow(dead_code)]
     fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
         self.parse_function_body_with_context(false, false)
     }

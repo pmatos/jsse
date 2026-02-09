@@ -1,18 +1,3 @@
-#![allow(
-    dead_code,
-    clippy::type_complexity,
-    clippy::too_many_arguments,
-    clippy::wrong_self_convention,
-    clippy::collapsible_if,
-    clippy::collapsible_match,
-    clippy::if_same_then_else,
-    clippy::single_match,
-    clippy::needless_range_loop,
-    clippy::while_let_loop,
-    clippy::cloned_ref_to_slice_refs,
-    clippy::unnecessary_unwrap
-)]
-
 mod ast;
 mod interpreter;
 mod lexer;

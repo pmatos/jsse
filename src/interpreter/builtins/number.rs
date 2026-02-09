@@ -151,6 +151,7 @@ impl Interpreter {
             }
         }
 
+        #[allow(clippy::type_complexity)]
         let methods: Vec<(
             &str,
             usize,
@@ -325,6 +326,7 @@ impl Interpreter {
             }
         }
 
+        #[allow(clippy::type_complexity)]
         let methods: Vec<(
             &str,
             usize,
@@ -578,6 +580,7 @@ impl Interpreter {
             }
         }
 
+        #[allow(clippy::type_complexity)]
         let methods: Vec<(
             &str,
             usize,

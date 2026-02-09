@@ -33,6 +33,7 @@ impl Interpreter {
         }
 
         // Getter methods
+        #[allow(clippy::type_complexity)]
         let methods: Vec<(
             &str,
             usize,
@@ -936,10 +937,10 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    if let JsValue::Number(n) = &tv {
-                        if !n.is_finite() {
-                            return Completion::Normal(JsValue::Null);
-                        }
+                    if let JsValue::Number(n) = &tv
+                        && !n.is_finite()
+                    {
+                        return Completion::Normal(JsValue::Null);
                     }
                     if let JsValue::Object(obj_ref) = &o {
                         let to_iso = interp.get_object_property(obj_ref.id, "toISOString", &o);

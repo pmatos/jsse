@@ -57,6 +57,7 @@ fn to_num(interp: &mut Interpreter, val: &JsValue) -> Result<f64, Completion> {
     }
 }
 
+#[allow(dead_code)]
 fn utf16_len(s: &str) -> usize {
     s.encode_utf16().count()
 }
@@ -79,6 +80,7 @@ impl Interpreter {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "String".to_string();
 
+        #[allow(clippy::type_complexity)]
         let methods: Vec<(
             &str,
             usize,

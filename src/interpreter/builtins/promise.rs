@@ -170,9 +170,12 @@ impl Interpreter {
         }
 
         let cap = self.new_promise_capability(constructor)?;
-        match self.call_function(&cap.resolve, &JsValue::Undefined, &[value.clone()]) {
-            Completion::Throw(e) => return Err(e),
-            _ => {}
+        if let Completion::Throw(e) = self.call_function(
+            &cap.resolve,
+            &JsValue::Undefined,
+            std::slice::from_ref(value),
+        ) {
+            return Err(e);
         }
         Ok(cap.promise)
     }
@@ -405,11 +408,11 @@ impl Interpreter {
                     &JsValue::Undefined,
                     &[resolve_fn.clone(), reject_fn.clone()],
                 );
-                if let Completion::Throw(e) = result {
-                    match interp.call_function(&reject_fn, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
-                    }
+                if let Completion::Throw(e) = result
+                    && let Completion::Throw(e2) =
+                        interp.call_function(&reject_fn, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 Completion::Normal(promise)
             },
@@ -493,9 +496,10 @@ impl Interpreter {
                 let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
                 match interp.new_promise_capability(this) {
                     Ok(cap) => {
-                        match interp.call_function(&cap.reject, &JsValue::Undefined, &[reason]) {
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => {}
+                        if let Completion::Throw(e) =
+                            interp.call_function(&cap.reject, &JsValue::Undefined, &[reason])
+                        {
+                            return Completion::Throw(e);
                         }
                         Completion::Normal(cap.promise)
                     }
@@ -626,24 +630,27 @@ impl Interpreter {
                 };
                 if !interp.is_callable(&callback) {
                     let err = interp.create_type_error("Promise.try requires a callable");
-                    match interp.call_function(&cap.reject, &JsValue::Undefined, &[err]) {
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => {}
+                    if let Completion::Throw(e) =
+                        interp.call_function(&cap.reject, &JsValue::Undefined, &[err])
+                    {
+                        return Completion::Throw(e);
                     }
                     return Completion::Normal(cap.promise);
                 }
                 let result = interp.call_function(&callback, &JsValue::Undefined, &call_args);
                 match result {
                     Completion::Normal(v) => {
-                        match interp.call_function(&cap.resolve, &JsValue::Undefined, &[v]) {
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => {}
+                        if let Completion::Throw(e) =
+                            interp.call_function(&cap.resolve, &JsValue::Undefined, &[v])
+                        {
+                            return Completion::Throw(e);
                         }
                     }
                     Completion::Throw(e) => {
-                        match interp.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                            Completion::Throw(e2) => return Completion::Throw(e2),
-                            _ => {}
+                        if let Completion::Throw(e2) =
+                            interp.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                        {
+                            return Completion::Throw(e2);
                         }
                     }
                     _ => {}
@@ -797,17 +804,14 @@ impl Interpreter {
     fn trigger_promise_reactions(&mut self, reactions: Vec<PromiseReaction>, argument: JsValue) {
         for reaction in reactions {
             let arg = argument.clone();
-            // Root values captured by the microtask closure so GC doesn't collect them
-            self.microtask_roots.push(arg.clone());
-            if let Some(ref h) = reaction.handler {
-                self.microtask_roots.push(h.clone());
-            }
-            self.microtask_roots.push(reaction.resolve.clone());
-            self.microtask_roots.push(reaction.reject.clone());
             self.microtask_queue.push(Box::new(move |interp| {
                 let handler_result = if let Some(ref handler) = reaction.handler {
                     if interp.is_callable(handler) {
-                        match interp.call_function(handler, &JsValue::Undefined, &[arg.clone()]) {
+                        match interp.call_function(
+                            handler,
+                            &JsValue::Undefined,
+                            std::slice::from_ref(&arg),
+                        ) {
                             Completion::Throw(e) => Err(e),
                             Completion::Normal(v) => Ok(v),
                             _ => Ok(JsValue::Undefined),
@@ -828,23 +832,21 @@ impl Interpreter {
                 if let Some(_pid) = reaction.promise_id {
                     match handler_result {
                         Ok(value) => {
-                            match interp.call_function(
+                            if let Completion::Throw(e) = interp.call_function(
                                 &reaction.resolve,
                                 &JsValue::Undefined,
                                 &[value],
                             ) {
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => {}
+                                return Completion::Throw(e);
                             }
                         }
                         Err(reason) => {
-                            match interp.call_function(
+                            if let Completion::Throw(e) = interp.call_function(
                                 &reaction.reject,
                                 &JsValue::Undefined,
                                 &[reason],
                             ) {
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => {}
+                                return Completion::Throw(e);
                             }
                         }
                     }
@@ -856,19 +858,14 @@ impl Interpreter {
 
     fn promise_resolve_thenable(&mut self, promise_id: u64, thenable: JsValue, then_fn: JsValue) {
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        // Root values captured by the microtask closure
-        self.microtask_roots.push(thenable.clone());
-        self.microtask_roots.push(then_fn.clone());
-        self.microtask_roots.push(resolve_fn.clone());
-        self.microtask_roots.push(reject_fn.clone());
         self.microtask_queue.push(Box::new(move |interp| {
             let result =
                 interp.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]);
-            if let Completion::Throw(e) = result {
-                match interp.call_function(&reject_fn, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
-                }
+            if let Completion::Throw(e) = result
+                && let Completion::Throw(e2) =
+                    interp.call_function(&reject_fn, &JsValue::Undefined, &[e])
+            {
+                return Completion::Throw(e2);
             }
             Completion::Normal(JsValue::Undefined)
         }));
@@ -1024,9 +1021,10 @@ impl Interpreter {
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
-                match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 return Completion::Normal(cap.promise);
             }
@@ -1034,9 +1032,10 @@ impl Interpreter {
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
-            match self.call_function(&cap.reject, &JsValue::Undefined, &[err]) {
-                Completion::Throw(e2) => return Completion::Throw(e2),
-                _ => {}
+            if let Completion::Throw(e2) =
+                self.call_function(&cap.reject, &JsValue::Undefined, &[err])
+            {
+                return Completion::Throw(e2);
             }
             return Completion::Normal(cap.promise);
         }
@@ -1044,9 +1043,10 @@ impl Interpreter {
         let items = match self.iterate_to_vec(iterable) {
             Ok(v) => v,
             Err(e) => {
-                match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 return Completion::Normal(cap.promise);
             }
@@ -1054,14 +1054,12 @@ impl Interpreter {
 
         if items.is_empty() {
             let arr = self.create_array(vec![]);
-            match self.call_function(&cap.resolve, &JsValue::Undefined, &[arr]) {
-                Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
-                    }
-                }
-                _ => {}
+            if let Completion::Throw(e) =
+                self.call_function(&cap.resolve, &JsValue::Undefined, &[arr])
+                && let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+            {
+                return Completion::Throw(e2);
             }
             return Completion::Normal(cap.promise);
         }
@@ -1074,9 +1072,10 @@ impl Interpreter {
             let p = match self.call_function(&promise_resolve, constructor, &[item]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
+                    if let Completion::Throw(e2) =
+                        self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                    {
+                        return Completion::Throw(e2);
                     }
                     return Completion::Normal(cap.promise);
                 }
@@ -1104,9 +1103,10 @@ impl Interpreter {
                     if r == 0 {
                         let values = results.borrow().clone();
                         let arr = interp.create_array(values);
-                        match interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]) {
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => {}
+                        if let Completion::Throw(e) =
+                            interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr])
+                        {
+                            return Completion::Throw(e);
                         }
                     }
                     Completion::Normal(JsValue::Undefined)
@@ -1121,23 +1121,24 @@ impl Interpreter {
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
+                    if let Completion::Throw(e2) =
+                        self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                    {
+                        return Completion::Throw(e2);
                     }
                     return Completion::Normal(cap.promise);
                 }
                 _ => JsValue::Undefined,
             };
-            match self.call_function(&then_fn, &p, &[on_fulfilled, reject_fn_clone]) {
-                Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
-                    }
-                    return Completion::Normal(cap.promise);
+            if let Completion::Throw(e) =
+                self.call_function(&then_fn, &p, &[on_fulfilled, reject_fn_clone])
+            {
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
-                _ => {}
+                return Completion::Normal(cap.promise);
             }
         }
 
@@ -1158,9 +1159,10 @@ impl Interpreter {
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
-                match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 return Completion::Normal(cap.promise);
             }
@@ -1168,9 +1170,10 @@ impl Interpreter {
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
-            match self.call_function(&cap.reject, &JsValue::Undefined, &[err]) {
-                Completion::Throw(e2) => return Completion::Throw(e2),
-                _ => {}
+            if let Completion::Throw(e2) =
+                self.call_function(&cap.reject, &JsValue::Undefined, &[err])
+            {
+                return Completion::Throw(e2);
             }
             return Completion::Normal(cap.promise);
         }
@@ -1178,9 +1181,10 @@ impl Interpreter {
         let items = match self.iterate_to_vec(iterable) {
             Ok(v) => v,
             Err(e) => {
-                match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 return Completion::Normal(cap.promise);
             }
@@ -1188,14 +1192,12 @@ impl Interpreter {
 
         if items.is_empty() {
             let arr = self.create_array(vec![]);
-            match self.call_function(&cap.resolve, &JsValue::Undefined, &[arr]) {
-                Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
-                    }
-                }
-                _ => {}
+            if let Completion::Throw(e) =
+                self.call_function(&cap.resolve, &JsValue::Undefined, &[arr])
+                && let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+            {
+                return Completion::Throw(e2);
             }
             return Completion::Normal(cap.promise);
         }
@@ -1208,9 +1210,10 @@ impl Interpreter {
             let p = match self.call_function(&promise_resolve, constructor, &[item]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
+                    if let Completion::Throw(e2) =
+                        self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                    {
+                        return Completion::Throw(e2);
                     }
                     return Completion::Normal(cap.promise);
                 }
@@ -1250,9 +1253,10 @@ impl Interpreter {
                     if r == 0 {
                         let values = results_f.borrow().clone();
                         let arr = interp.create_array(values);
-                        match interp.call_function(&resolve_fn_f, &JsValue::Undefined, &[arr]) {
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => {}
+                        if let Completion::Throw(e) =
+                            interp.call_function(&resolve_fn_f, &JsValue::Undefined, &[arr])
+                        {
+                            return Completion::Throw(e);
                         }
                     }
                     Completion::Normal(JsValue::Undefined)
@@ -1284,9 +1288,10 @@ impl Interpreter {
                     if r == 0 {
                         let values = results_r.borrow().clone();
                         let arr = interp.create_array(values);
-                        match interp.call_function(&resolve_fn_r, &JsValue::Undefined, &[arr]) {
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => {}
+                        if let Completion::Throw(e) =
+                            interp.call_function(&resolve_fn_r, &JsValue::Undefined, &[arr])
+                        {
+                            return Completion::Throw(e);
                         }
                     }
                     Completion::Normal(JsValue::Undefined)
@@ -1301,23 +1306,24 @@ impl Interpreter {
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
+                    if let Completion::Throw(e2) =
+                        self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                    {
+                        return Completion::Throw(e2);
                     }
                     return Completion::Normal(cap.promise);
                 }
                 _ => JsValue::Undefined,
             };
-            match self.call_function(&then_fn, &p, &[on_fulfilled, on_rejected]) {
-                Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
-                    }
-                    return Completion::Normal(cap.promise);
+            if let Completion::Throw(e) =
+                self.call_function(&then_fn, &p, &[on_fulfilled, on_rejected])
+            {
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
-                _ => {}
+                return Completion::Normal(cap.promise);
             }
         }
 
@@ -1338,9 +1344,10 @@ impl Interpreter {
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
-                match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 return Completion::Normal(cap.promise);
             }
@@ -1348,9 +1355,10 @@ impl Interpreter {
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
-            match self.call_function(&cap.reject, &JsValue::Undefined, &[err]) {
-                Completion::Throw(e2) => return Completion::Throw(e2),
-                _ => {}
+            if let Completion::Throw(e2) =
+                self.call_function(&cap.reject, &JsValue::Undefined, &[err])
+            {
+                return Completion::Throw(e2);
             }
             return Completion::Normal(cap.promise);
         }
@@ -1358,9 +1366,10 @@ impl Interpreter {
         let items = match self.iterate_to_vec(iterable) {
             Ok(v) => v,
             Err(e) => {
-                match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 return Completion::Normal(cap.promise);
             }
@@ -1370,9 +1379,10 @@ impl Interpreter {
             let p = match self.call_function(&promise_resolve, constructor, &[item]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
+                    if let Completion::Throw(e2) =
+                        self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                    {
+                        return Completion::Throw(e2);
                     }
                     return Completion::Normal(cap.promise);
                 }
@@ -1387,23 +1397,24 @@ impl Interpreter {
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
+                    if let Completion::Throw(e2) =
+                        self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                    {
+                        return Completion::Throw(e2);
                     }
                     return Completion::Normal(cap.promise);
                 }
                 _ => JsValue::Undefined,
             };
-            match self.call_function(&then_fn, &p, &[cap.resolve.clone(), cap.reject.clone()]) {
-                Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
-                    }
-                    return Completion::Normal(cap.promise);
+            if let Completion::Throw(e) =
+                self.call_function(&then_fn, &p, &[cap.resolve.clone(), cap.reject.clone()])
+            {
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
-                _ => {}
+                return Completion::Normal(cap.promise);
             }
         }
 
@@ -1424,9 +1435,10 @@ impl Interpreter {
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
-                match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 return Completion::Normal(cap.promise);
             }
@@ -1434,9 +1446,10 @@ impl Interpreter {
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
-            match self.call_function(&cap.reject, &JsValue::Undefined, &[err]) {
-                Completion::Throw(e2) => return Completion::Throw(e2),
-                _ => {}
+            if let Completion::Throw(e2) =
+                self.call_function(&cap.reject, &JsValue::Undefined, &[err])
+            {
+                return Completion::Throw(e2);
             }
             return Completion::Normal(cap.promise);
         }
@@ -1444,9 +1457,10 @@ impl Interpreter {
         let items = match self.iterate_to_vec(iterable) {
             Ok(v) => v,
             Err(e) => {
-                match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                    Completion::Throw(e2) => return Completion::Throw(e2),
-                    _ => {}
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
                 return Completion::Normal(cap.promise);
             }
@@ -1454,9 +1468,10 @@ impl Interpreter {
 
         if items.is_empty() {
             let err = self.create_aggregate_error(vec![], "All promises were rejected");
-            match self.call_function(&cap.reject, &JsValue::Undefined, &[err]) {
-                Completion::Throw(e2) => return Completion::Throw(e2),
-                _ => {}
+            if let Completion::Throw(e2) =
+                self.call_function(&cap.reject, &JsValue::Undefined, &[err])
+            {
+                return Completion::Throw(e2);
             }
             return Completion::Normal(cap.promise);
         }
@@ -1469,9 +1484,10 @@ impl Interpreter {
             let p = match self.call_function(&promise_resolve, constructor, &[item]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
+                    if let Completion::Throw(e2) =
+                        self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                    {
+                        return Completion::Throw(e2);
                     }
                     return Completion::Normal(cap.promise);
                 }
@@ -1498,9 +1514,10 @@ impl Interpreter {
                     if r == 0 {
                         let errs = errors.borrow().clone();
                         let err = interp.create_aggregate_error(errs, "All promises were rejected");
-                        match interp.call_function(&reject_fn_clone, &JsValue::Undefined, &[err]) {
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => {}
+                        if let Completion::Throw(e) =
+                            interp.call_function(&reject_fn_clone, &JsValue::Undefined, &[err])
+                        {
+                            return Completion::Throw(e);
                         }
                     }
                     Completion::Normal(JsValue::Undefined)
@@ -1515,23 +1532,24 @@ impl Interpreter {
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
+                    if let Completion::Throw(e2) =
+                        self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                    {
+                        return Completion::Throw(e2);
                     }
                     return Completion::Normal(cap.promise);
                 }
                 _ => JsValue::Undefined,
             };
-            match self.call_function(&then_fn, &p, &[cap.resolve.clone(), on_rejected]) {
-                Completion::Throw(e) => {
-                    match self.call_function(&cap.reject, &JsValue::Undefined, &[e]) {
-                        Completion::Throw(e2) => return Completion::Throw(e2),
-                        _ => {}
-                    }
-                    return Completion::Normal(cap.promise);
+            if let Completion::Throw(e) =
+                self.call_function(&then_fn, &p, &[cap.resolve.clone(), on_rejected])
+            {
+                if let Completion::Throw(e2) =
+                    self.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
                 }
-                _ => {}
+                return Completion::Normal(cap.promise);
             }
         }
 

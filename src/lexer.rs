@@ -231,6 +231,7 @@ impl fmt::Display for Keyword {
 pub struct SourceLocation {
     pub line: u32,
     pub column: u32,
+    #[allow(dead_code)]
     pub offset: usize,
 }
 
@@ -1245,6 +1246,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn tokenize_all(&mut self) -> Result<Vec<Token>, LexError> {
         let mut tokens = Vec::new();
         loop {

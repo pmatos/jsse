@@ -11,6 +11,7 @@ pub struct GeneratorAnalysis {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct YieldPoint {
     pub id: usize,
     pub is_delegate: bool,
@@ -20,6 +21,7 @@ pub struct YieldPoint {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LocalVariable {
     pub name: String,
     pub kind: VarKind,
@@ -27,6 +29,7 @@ pub struct LocalVariable {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TryContext {
     pub id: usize,
     pub has_catch: bool,
@@ -36,6 +39,7 @@ pub struct TryContext {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LoopContext {
     pub id: usize,
     pub loop_type: LoopType,
@@ -431,17 +435,16 @@ fn analyze_expression(
 
             analysis.yield_points.push(yield_point);
 
-            if let Some(try_id) = ctx.current_try {
-                if let Some(try_ctx) = analysis.try_contexts.iter_mut().find(|t| t.id == try_id) {
-                    try_ctx.contains_yields.push(yield_id);
-                }
+            if let Some(try_id) = ctx.current_try
+                && let Some(try_ctx) = analysis.try_contexts.iter_mut().find(|t| t.id == try_id)
+            {
+                try_ctx.contains_yields.push(yield_id);
             }
 
-            if let Some(loop_id) = ctx.current_loop {
-                if let Some(loop_ctx) = analysis.loop_contexts.iter_mut().find(|l| l.id == loop_id)
-                {
-                    loop_ctx.contains_yields.push(yield_id);
-                }
+            if let Some(loop_id) = ctx.current_loop
+                && let Some(loop_ctx) = analysis.loop_contexts.iter_mut().find(|l| l.id == loop_id)
+            {
+                loop_ctx.contains_yields.push(yield_id);
             }
 
             if let Some(inner) = inner_expr {

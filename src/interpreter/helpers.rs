@@ -111,6 +111,7 @@ pub(crate) fn is_string(val: &JsValue) -> bool {
     matches!(val, JsValue::String(_))
 }
 
+#[allow(dead_code)]
 pub(crate) fn get_set_record(
     interp: &mut Interpreter,
     obj: &JsValue,
@@ -221,6 +222,7 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn abstract_equality(left: &JsValue, right: &JsValue) -> bool {
     // Same type
     if std::mem::discriminant(left) == std::mem::discriminant(right) {
@@ -247,6 +249,7 @@ pub(crate) fn abstract_equality(left: &JsValue, right: &JsValue) -> bool {
     false
 }
 
+#[allow(dead_code)]
 pub(crate) fn abstract_relational(left: &JsValue, right: &JsValue) -> Option<bool> {
     if is_string(left) && is_string(right) {
         let ls = to_js_string(left);
@@ -369,11 +372,11 @@ fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
     let mut indices: Vec<(u64, usize)> = Vec::new();
     let mut strings: Vec<(String, usize)> = Vec::new();
     for (pos, k) in keys.iter().enumerate() {
-        if let Ok(n) = k.parse::<u64>() {
-            if n.to_string() == *k {
-                indices.push((n, pos));
-                continue;
-            }
+        if let Ok(n) = k.parse::<u64>()
+            && n.to_string() == *k
+        {
+            indices.push((n, pos));
+            continue;
         }
         strings.push((k.clone(), pos));
     }
@@ -394,9 +397,7 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
             let target_val = interp.get_proxy_target_val(obj_id);
             match interp.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
-                    if let Err(e) = interp.validate_ownkeys_invariant(&v, &target_val) {
-                        return Err(e);
-                    }
+                    interp.validate_ownkeys_invariant(&v, &target_val)?;
                     let mut keys = Vec::new();
                     if let JsValue::Object(arr) = &v
                         && let Some(arr_obj) = interp.get_object(arr.id)
@@ -429,13 +430,10 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
                                     Ok(None) => {
                                         if let JsValue::Object(ref t) = target_val
                                             && let Some(tobj) = interp.get_object(t.id)
+                                            && let Some(d) = tobj.borrow().properties.get(&key_str)
+                                            && d.enumerable != Some(false)
                                         {
-                                            if let Some(d) = tobj.borrow().properties.get(&key_str)
-                                            {
-                                                if d.enumerable != Some(false) {
-                                                    keys.push(key_str);
-                                                }
-                                            }
+                                            keys.push(key_str);
                                         }
                                     }
                                     Err(e) => return Err(e),
@@ -471,6 +469,7 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
     Ok(Vec::new())
 }
 
+#[allow(dead_code)]
 pub(crate) fn json_stringify_value(interp: &mut Interpreter, val: &JsValue) -> Option<String> {
     let mut stack = Vec::new();
     let wrapper = interp.create_object();
@@ -565,6 +564,7 @@ pub(crate) fn json_stringify_full(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn json_stringify_internal(
     interp: &mut Interpreter,
     holder_id: u64,
@@ -646,17 +646,17 @@ fn json_stringify_internal(
                 Err(e) => return Err(e),
             },
             "Boolean" => {
-                if let Some(obj) = interp.get_object(o.id) {
-                    if let Some(pv) = obj.borrow().primitive_value.clone() {
-                        value = pv;
-                    }
+                if let Some(obj) = interp.get_object(o.id)
+                    && let Some(pv) = obj.borrow().primitive_value.clone()
+                {
+                    value = pv;
                 }
             }
             "BigInt" => {
-                if let Some(obj) = interp.get_object(o.id) {
-                    if let Some(pv) = obj.borrow().primitive_value.clone() {
-                        value = pv;
-                    }
+                if let Some(obj) = interp.get_object(o.id)
+                    && let Some(pv) = obj.borrow().primitive_value.clone()
+                {
+                    value = pv;
                 }
             }
             _ => {}
@@ -776,7 +776,7 @@ fn json_stringify_internal(
                             }
                             _ => JsValue::Undefined,
                         };
-                        match json_stringify_internal(
+                        if let Some(sv) = json_stringify_internal(
                             interp,
                             obj_id,
                             k,
@@ -787,15 +787,12 @@ fn json_stringify_internal(
                             gap,
                             &new_indent,
                         )? {
-                            Some(sv) => {
-                                let quoted_key = json_quote(k);
-                                if gap.is_empty() {
-                                    entries.push(format!("{}:{}", quoted_key, sv));
-                                } else {
-                                    entries.push(format!("{}: {}", quoted_key, sv));
-                                }
+                            let quoted_key = json_quote(k);
+                            if gap.is_empty() {
+                                entries.push(format!("{}:{}", quoted_key, sv));
+                            } else {
+                                entries.push(format!("{}: {}", quoted_key, sv));
                             }
-                            None => {}
                         }
                     }
                     if entries.is_empty() {
@@ -896,13 +893,13 @@ fn json_parse_value_inner(
         }
         let vals: Vec<JsValue> = parsed_items.iter().map(|(v, _)| v.clone()).collect();
         let arr_val = interp.create_array(vals);
-        if let JsValue::Object(ref arr_obj) = arr_val {
-            if let Some(ref mut smap) = source_map {
-                let arr_id = arr_obj.id;
-                for (i, (v, src)) in parsed_items.iter().enumerate() {
-                    if is_json_primitive(v) {
-                        smap.insert((arr_id, i.to_string()), src.clone());
-                    }
+        if let JsValue::Object(ref arr_obj) = arr_val
+            && let Some(ref mut smap) = source_map
+        {
+            let arr_id = arr_obj.id;
+            for (i, (v, src)) in parsed_items.iter().enumerate() {
+                if is_json_primitive(v) {
+                    smap.insert((arr_id, i.to_string()), src.clone());
                 }
             }
         }
@@ -937,10 +934,10 @@ fn json_parse_value_inner(
                 let val_src = json_trim(val_str).to_string();
                 match json_parse_value_inner(interp, val_str, source_map.as_deref_mut()) {
                     Completion::Normal(v) => {
-                        if let Some(ref mut smap) = source_map {
-                            if is_json_primitive(&v) {
-                                smap.insert((obj_id, key.clone()), val_src);
-                            }
+                        if let Some(ref mut smap) = source_map
+                            && is_json_primitive(&v)
+                        {
+                            smap.insert((obj_id, key.clone()), val_src);
                         }
                         obj.borrow_mut().insert_value(key, v);
                     }
@@ -1046,11 +1043,11 @@ fn json_internalize_apply(
                 }
                 Ok(None) => {
                     // No trap, delete on target directly
-                    if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id) {
-                        if let Some(tobj) = interp.get_object(t.id) {
-                            tobj.borrow_mut().properties.remove(key);
-                            tobj.borrow_mut().property_order.retain(|k| k != key);
-                        }
+                    if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
+                        && let Some(tobj) = interp.get_object(t.id)
+                    {
+                        tobj.borrow_mut().properties.remove(key);
+                        tobj.borrow_mut().property_order.retain(|k| k != key);
                     }
                 }
                 Err(e) => return Err(e),
@@ -1088,10 +1085,10 @@ fn json_internalize_apply(
                 }
                 Ok(None) => {
                     // No trap, define on target directly
-                    if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id) {
-                        if let Some(tobj) = interp.get_object(t.id) {
-                            tobj.borrow_mut().insert_value(key.to_string(), new_val);
-                        }
+                    if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
+                        && let Some(tobj) = interp.get_object(t.id)
+                    {
+                        tobj.borrow_mut().insert_value(key.to_string(), new_val);
                     }
                 }
                 Err(e) => return Err(e),
@@ -1191,38 +1188,36 @@ pub(crate) fn json_internalize(
     // Build context argument for reviver
     let context = {
         let ctx = interp.create_object();
-        if is_json_primitive(&walked) {
-            if let Some(smap) = source_map {
-                if let JsValue::Object(o) = holder {
-                    if let Some(src) = smap.get(&(o.id, name.to_string())) {
-                        // Verify the source text matches the actual value
-                        // (forward modifications make source invalid)
-                        let source_matches = match &walked {
-                            JsValue::Null => src == "null",
-                            JsValue::Boolean(true) => src == "true",
-                            JsValue::Boolean(false) => src == "false",
-                            JsValue::Number(n) => src.parse::<f64>().map_or(false, |parsed| {
-                                (parsed.is_nan() && n.is_nan()) || parsed == *n
-                            }),
-                            JsValue::String(s) => {
-                                // Source includes quotes, parse it to compare
-                                if src.starts_with('"') && src.ends_with('"') {
-                                    let inner = &src[1..src.len() - 1];
-                                    json_unescape_string(inner) == s.to_rust_string()
-                                } else {
-                                    false
-                                }
-                            }
-                            _ => false,
-                        };
-                        if source_matches {
-                            ctx.borrow_mut().insert_value(
-                                "source".to_string(),
-                                JsValue::String(JsString::from_str(src)),
-                            );
-                        }
+        if is_json_primitive(&walked)
+            && let Some(smap) = source_map
+            && let JsValue::Object(o) = holder
+            && let Some(src) = smap.get(&(o.id, name.to_string()))
+        {
+            // Verify the source text matches the actual value
+            // (forward modifications make source invalid)
+            let source_matches = match &walked {
+                JsValue::Null => src == "null",
+                JsValue::Boolean(true) => src == "true",
+                JsValue::Boolean(false) => src == "false",
+                JsValue::Number(n) => src
+                    .parse::<f64>()
+                    .is_ok_and(|parsed| (parsed.is_nan() && n.is_nan()) || parsed == *n),
+                JsValue::String(s) => {
+                    // Source includes quotes, parse it to compare
+                    if src.starts_with('"') && src.ends_with('"') {
+                        let inner = &src[1..src.len() - 1];
+                        json_unescape_string(inner) == s.to_rust_string()
+                    } else {
+                        false
                     }
                 }
+                _ => false,
+            };
+            if source_matches {
+                ctx.borrow_mut().insert_value(
+                    "source".to_string(),
+                    JsValue::String(JsString::from_str(src)),
+                );
             }
         }
         let id = ctx.borrow().id.unwrap();
@@ -2006,9 +2001,7 @@ pub(crate) fn decode_uri_string(
 
         if preserve_reserved && is_uri_reserved(c) {
             // Keep original percent-encoded form
-            for idx in start_i..i {
-                result.push(code_units[idx]);
-            }
+            result.extend_from_slice(&code_units[start_i..i]);
         } else {
             // Encode char as UTF-16 code units
             let mut buf = [0u16; 2];
@@ -2029,6 +2022,7 @@ fn cu16_to_hex_val(cu: u16) -> Result<u8, String> {
     hex_val(cu as u8)
 }
 
+#[allow(dead_code)]
 fn parse_hex_byte(h: u8, l: u8) -> Result<u8, String> {
     let hi = hex_val(h)?;
     let lo = hex_val(l)?;
