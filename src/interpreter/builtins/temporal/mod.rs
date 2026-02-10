@@ -1199,6 +1199,15 @@ pub(crate) fn parse_utc_offset_timezone(s: &str) -> Option<String> {
     Some(format!("{}{:02}:{:02}", sign, hours, minutes))
 }
 
+pub(super) fn parse_offset_string(s: &str) -> Option<ParsedOffset> {
+    let bytes = s.as_bytes();
+    let (offset, consumed) = parse_iso_offset(bytes, 0)?;
+    if consumed != bytes.len() {
+        return None;
+    }
+    Some(offset)
+}
+
 /// Convert a canonical offset string like "+01:00" or "-05:30" to nanoseconds.
 pub(crate) fn offset_string_to_ns(s: &str) -> i128 {
     let bytes = s.as_bytes();

@@ -1,12 +1,12 @@
 # Temporal: Path to 100% (4482/4482)
 
-**Current state:** 4423/4482 passing (98.68%), 59 failing
+**Current state:** 4438/4482 passing (99.02%), 44 failing
 
 ## Current Pass Rates by Subdirectory
 
 | Subdirectory | Passing | Total | Rate |
 |---|---|---|---|
-| Duration | 489 | 522 | 93.68% |
+| Duration | 504 | 522 | 96.55% |
 | Instant | 459 | 459 | 100% |
 | Now | 66 | 66 | 100% |
 | PlainDate | 635 | 635 | 100% |
@@ -43,7 +43,7 @@ ZonedDateTime/prototype/until/no-fractional-minutes-hours.js
 
 ---
 
-## Phase 2: TZ String Validation in relativeTo Property Bags (+14 tests → 4437/4482)
+## Phase 2: TZ String Validation in relativeTo Property Bags (+15 tests → 4438/4482) ✅ COMPLETE
 
 **Root cause:** When a property bag with a `timeZone` property is provided as `relativeTo`,
 jsse fails to validate the time zone value per `ToTemporalTimeZoneIdentifier`. Invalid
@@ -251,13 +251,13 @@ The negative direction DifferenceISODate month-day balancing is wrong.
 |---|---|---|---|---|
 | Baseline | — | — | 4420/4482 | 98.62% |
 | Phase 1 | IANA time zones | +3 | 4423/4482 | 98.68% |
-| Phase 2 | TZ string validation | +14 | 4437/4482 | 99.00% |
-| Phase 3 | Infinity rejection | +3 | 4440/4482 | 99.06% |
-| Phase 4 | Epoch ns range checks | +10 | 4450/4482 | 99.29% |
-| Phase 5 | Boundary arithmetic | +8 | 4458/4482 | 99.46% |
-| Phase 6 | Property-read order | +13 | 4471/4482 | 99.75% |
-| Phase 7 | Options-read order | +7 | 4478/4482 | 99.91% |
-| Phase 8 | Duration correctness | +4 | 4482/4482 | 100.00% |
+| Phase 2 | TZ string validation | +15 | 4438/4482 | 99.02% |
+| Phase 3 | Infinity rejection | +3 | 4441/4482 | 99.09% |
+| Phase 4 | Epoch ns range checks | +10 | 4451/4482 | 99.31% |
+| Phase 5 | Boundary arithmetic | +8 | 4459/4482 | 99.49% |
+| Phase 6 | Property-read order | +13 | 4472/4482 | 99.78% |
+| Phase 7 | Options-read order | +7 | 4479/4482 | 99.93% |
+| Phase 8 | Duration correctness | +3 | 4482/4482 | 100.00% |
 
 **Note:** Some phases may have overlapping test fixes (order-of-operations tests may require
 both Phase 6 and Phase 7 fixes). The counts above are best estimates; some tests may shift

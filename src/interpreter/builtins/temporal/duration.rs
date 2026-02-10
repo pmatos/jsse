@@ -80,18 +80,27 @@ fn to_relative_to_date(
                 // This is a ZonedDateTime string
                 if let Some(parsed) = super::parse_temporal_date_time_string(&raw) {
                     if let Some(ref offset) = parsed.offset {
-                        let tz_end = after.find(']').unwrap_or(after.len());
-                        let tz_name = &after[..tz_end];
-                        // For known fixed-offset timezones, validate offset matches
-                        if tz_name == "UTC" || tz_name == "Etc/UTC" || tz_name == "Etc/GMT" {
-                            let is_zero = offset.hours == 0
-                                && offset.minutes == 0
-                                && offset.seconds == 0
-                                && offset.nanoseconds == 0;
-                            if !is_zero {
-                                return Err(Completion::Throw(interp.create_range_error(
-                                    "UTC offset mismatch in ZonedDateTime string",
-                                )));
+                        if !parsed.has_utc_designator {
+                            let tz_end = after.find(']').unwrap_or(after.len());
+                            let tz_name = &after[..tz_end];
+                            if let Some(canonical_tz) = super::parse_utc_offset_timezone(tz_name) {
+                                let offset_sign = if offset.sign < 0 { '-' } else { '+' };
+                                let iso_truncated = format!("{}{:02}:{:02}", offset_sign, offset.hours, offset.minutes);
+                                if iso_truncated != canonical_tz {
+                                    return Err(Completion::Throw(interp.create_range_error(
+                                        "UTC offset mismatch in ZonedDateTime string",
+                                    )));
+                                }
+                            } else if tz_name == "UTC" || tz_name == "Etc/UTC" || tz_name == "Etc/GMT" {
+                                let is_zero = offset.hours == 0
+                                    && offset.minutes == 0
+                                    && offset.seconds == 0
+                                    && offset.nanoseconds == 0;
+                                if !is_zero {
+                                    return Err(Completion::Throw(interp.create_range_error(
+                                        "UTC offset mismatch in ZonedDateTime string",
+                                    )));
+                                }
                             }
                         }
                     }
@@ -103,18 +112,36 @@ fn to_relative_to_date(
             }
         }
     }
-    // For property bags with timeZone, validate timezone string for year-zero
     if let JsValue::Object(_) = val {
         let tz_val = match get_prop(interp, val, "timeZone") {
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        if let JsValue::String(ref tz_str) = tz_val {
-            let tz_raw = tz_str.to_rust_string();
-            if tz_raw.starts_with("-000000") {
-                return Err(Completion::Throw(
-                    interp.create_range_error("negative zero year is not allowed in timeZone"),
-                ));
+        if !is_undefined(&tz_val) {
+            let _tz = super::to_temporal_time_zone_identifier(interp, &tz_val)?;
+
+            let offset_val = match get_prop(interp, val, "offset") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            if !is_undefined(&offset_val) {
+                match &offset_val {
+                    JsValue::String(s) => {
+                        let s_str = s.to_rust_string();
+                        if super::parse_offset_string(&s_str).is_none() {
+                            return Err(Completion::Throw(
+                                interp.create_range_error(&format!(
+                                    "{s_str} is not a valid offset string"
+                                )),
+                            ));
+                        }
+                    }
+                    _ => {
+                        return Err(Completion::Throw(
+                            interp.create_type_error("offset must be a string"),
+                        ));
+                    }
+                }
             }
         }
     }
