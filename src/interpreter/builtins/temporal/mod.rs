@@ -1221,28 +1221,37 @@ pub(crate) fn offset_string_to_ns(s: &str) -> i128 {
 }
 
 /// Check if a string is a valid IANA timezone name (simplified).
-fn is_iana_timezone(s: &str) -> bool {
+/// Resolve an IANA timezone name, returning the canonical name if valid.
+/// Uses chrono-tz's database for case-insensitive matching.
+fn resolve_iana_timezone(s: &str) -> Option<String> {
     if s.is_empty() {
-        return false;
+        return None;
     }
     let lower = s.to_ascii_lowercase();
     if lower == "utc" || lower == "etc/utc" || lower == "etc/gmt" {
-        return true;
+        return Some("UTC".to_string());
     }
-    // IANA names look like "Area/Location" or "Etc/Something"
-    if !s.contains('/') {
-        return false;
+    // Fast path: try exact parse (case-sensitive hash lookup)
+    use chrono_tz::Tz;
+    if let Ok(tz) = s.parse::<Tz>() {
+        return Some(tz.name().to_string());
     }
-    s.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b == b'/' || b == b'_' || b == b'-' || b == b'+')
+    // Slow path: case-insensitive scan
+    use chrono_tz::TZ_VARIANTS;
+    for tz in &TZ_VARIANTS {
+        if tz.name().eq_ignore_ascii_case(s) {
+            return Some(tz.name().to_string());
+        }
+    }
+    None
+}
+
+fn is_iana_timezone(s: &str) -> bool {
+    resolve_iana_timezone(s).is_some()
 }
 
 fn normalize_iana_timezone(s: &str) -> String {
-    let lower = s.to_ascii_lowercase();
-    if lower == "utc" || lower == "etc/utc" || lower == "etc/gmt" {
-        return "UTC".to_string();
-    }
-    s.to_string()
+    resolve_iana_timezone(s).unwrap_or_else(|| s.to_string())
 }
 
 /// Normalize a timezone ID for comparison: canonical offset form or case-insensitive IANA
