@@ -96,14 +96,7 @@ fn to_temporal_plain_month_day(
                 ));
             }
             let m = if !is_undefined(&mc_val) {
-                let mc = match &mc_val {
-                    JsValue::String(s) => s.to_rust_string(),
-                    _ => {
-                        return Err(Completion::Throw(
-                            interp.create_type_error("monthCode must be a string"),
-                        ));
-                    }
-                };
+                let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
                 match super::plain_date::month_code_to_number_pub(&mc) {
                     Some(n) => n,
                     None => {

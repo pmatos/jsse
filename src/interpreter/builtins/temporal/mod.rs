@@ -154,13 +154,49 @@ pub(crate) fn max_rounding_increment(unit: &str) -> Option<u64> {
 }
 
 /// Validate rounding increment: truncate to integer, check range, check divisibility.
-/// Per spec ToTemporalRoundingIncrement + ValidateTemporalRoundingIncrement.
-/// `mode`: "difference" for since/until (must divide unit max), "round" for .round() (must divide day)
+/// Coerce and validate a rounding increment value.
+/// For since/until and PlainTime/PlainDateTime.round: uses max_rounding_increment (exclusive).
+/// `is_difference`: true for since/until, false for round.
 pub(crate) fn validate_rounding_increment(
     interp: &mut Interpreter,
     inc_val: &JsValue,
     unit: &str,
-    is_difference: bool, // true for since/until, false for round
+    is_difference: bool,
+) -> Result<f64, Completion> {
+    let int_inc = coerce_rounding_increment(interp, inc_val)?;
+    // Check max_rounding_increment: increment < max AND max % increment == 0
+    if let Some(max) = max_rounding_increment(unit) {
+        let i = int_inc as u64;
+        if i >= max {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "roundingIncrement {int_inc} is out of range for {unit}"
+            ))));
+        }
+        if max % i != 0 {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "roundingIncrement {int_inc} does not divide evenly into {max}"
+            ))));
+        }
+    } else if !is_difference {
+        check_day_divisibility(interp, int_inc, unit)?;
+    }
+    Ok(int_inc)
+}
+
+/// For Instant.round: only requires increment to divide evenly into a solar day.
+pub(crate) fn validate_rounding_increment_day_divisible(
+    interp: &mut Interpreter,
+    inc_val: &JsValue,
+    unit: &str,
+) -> Result<f64, Completion> {
+    let int_inc = coerce_rounding_increment(interp, inc_val)?;
+    check_day_divisibility(interp, int_inc, unit)?;
+    Ok(int_inc)
+}
+
+fn coerce_rounding_increment(
+    interp: &mut Interpreter,
+    inc_val: &JsValue,
 ) -> Result<f64, Completion> {
     if is_undefined(inc_val) {
         return Ok(1.0);
@@ -180,24 +216,16 @@ pub(crate) fn validate_rounding_increment(
             interp.create_range_error("roundingIncrement is out of range"),
         ));
     }
-    if is_difference {
-        // For since/until: increment must be < max AND divide max (exclusive)
-        if let Some(max) = max_rounding_increment(unit) {
-            let i = int_inc as u64;
-            if i >= max {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "{int_inc} is out of range for {unit}"
-                ))));
-            }
-            if max % i != 0 {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "{int_inc} does not divide evenly into {max}"
-                ))));
-            }
-        }
-    } else {
-        // For round: increment × unit_ns must divide 86400_000_000_000 (one day)
-        let unit_ns = temporal_unit_length_ns(unit) as u64;
+    Ok(int_inc)
+}
+
+fn check_day_divisibility(
+    interp: &mut Interpreter,
+    int_inc: f64,
+    unit: &str,
+) -> Result<(), Completion> {
+    let unit_ns = temporal_unit_length_ns(unit) as u64;
+    if unit_ns > 0 {
         let total_ns = int_inc as u64 * unit_ns;
         let day_ns: u64 = 86_400_000_000_000;
         if day_ns % total_ns != 0 {
@@ -206,7 +234,7 @@ pub(crate) fn validate_rounding_increment(
             ))));
         }
     }
-    Ok(int_inc)
+    Ok(())
 }
 
 /// Parse the overflow option from an options bag. Returns "constrain" or "reject".
@@ -1983,6 +2011,23 @@ pub(crate) fn is_valid_duration(
             return false;
         }
     }
+    // Calendar units: abs(v) must be < 2^32
+    for &v in &[years, months, weeks] {
+        if v.abs() >= 4_294_967_296.0 {
+            return false;
+        }
+    }
+    // Per spec IsValidDuration step 6-7: compute normalizedSeconds, check abs > 2^53
+    let normalized_seconds = days.abs() * 86_400.0
+        + hours.abs() * 3_600.0
+        + minutes.abs() * 60.0
+        + seconds.abs()
+        + milliseconds.abs() * 1e-3
+        + microseconds.abs() * 1e-6
+        + nanoseconds.abs() * 1e-9;
+    if normalized_seconds > 9_007_199_254_740_992.0 {
+        return false;
+    }
     true
 }
 
@@ -2119,16 +2164,23 @@ pub(crate) fn read_month_fields(
     let month_code = if is_undefined(&mc_val) {
         None
     } else {
-        match &mc_val {
-            JsValue::String(s) => Some(s.to_rust_string()),
-            _ => {
-                return Err(Completion::Throw(
-                    interp.create_type_error("monthCode must be a string"),
-                ));
-            }
-        }
+        Some(to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
     };
     Ok((month, month_code))
+}
+
+pub(crate) fn to_primitive_and_require_string(
+    interp: &mut Interpreter,
+    val: &JsValue,
+    field_name: &str,
+) -> Result<String, Completion> {
+    let primitive = interp.to_primitive(val, "string").map_err(Completion::Throw)?;
+    match primitive {
+        JsValue::String(s) => Ok(s.to_rust_string()),
+        _ => Err(Completion::Throw(
+            interp.create_type_error(&format!("{field_name} must be a string")),
+        )),
+    }
 }
 
 /// Resolve previously-read month/monthCode values into a concrete month number.

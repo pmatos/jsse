@@ -373,13 +373,10 @@ fn to_temporal_zoned_date_time_with_options(
 
             // Validate monthCode syntax BEFORE year coercion (per spec PrepareTemporalFields)
             if has_month_code {
-                let mc = match &mc_val {
-                    JsValue::String(s) => s.to_rust_string(),
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("monthCode must be a string"),
-                        );
-                    }
+                let mc = match super::to_primitive_and_require_string(interp, &mc_val, "monthCode")
+                {
+                    Ok(s) => s,
+                    Err(c) => return c,
                 };
                 if !is_valid_month_code_syntax(&mc) {
                     return Completion::Throw(
@@ -393,13 +390,10 @@ fn to_temporal_zoned_date_time_with_options(
                 Err(c) => return c,
             };
             let month_raw: i32 = if has_month_code {
-                let mc = match &mc_val {
-                    JsValue::String(s) => s.to_rust_string(),
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("monthCode must be a string"),
-                        );
-                    }
+                let mc = match super::to_primitive_and_require_string(interp, &mc_val, "monthCode")
+                {
+                    Ok(s) => s,
+                    Err(c) => return c,
                 };
                 match super::plain_date::month_code_to_number_pub(&mc) {
                     Some(n) => {

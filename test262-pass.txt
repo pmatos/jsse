@@ -14505,6 +14505,7 @@ test262/test/built-ins/Temporal/Duration/from/name.js
 test262/test/built-ins/Temporal/Duration/from/negative-inifinity-throws-rangeerror.js
 test262/test/built-ins/Temporal/Duration/from/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/Duration/from/not-a-constructor.js
+test262/test/built-ins/Temporal/Duration/from/order-of-operations.js
 test262/test/built-ins/Temporal/Duration/from/prop-desc.js
 test262/test/built-ins/Temporal/Duration/from/string-with-skipped-units.js
 test262/test/built-ins/Temporal/Duration/from/subclassing-ignored.js
@@ -14512,6 +14513,7 @@ test262/test/built-ins/Temporal/Duration/get-prototype-from-constructor-throws.j
 test262/test/built-ins/Temporal/Duration/hours-undefined.js
 test262/test/built-ins/Temporal/Duration/infinity-throws-rangeerror.js
 test262/test/built-ins/Temporal/Duration/invalid-type.js
+test262/test/built-ins/Temporal/Duration/large-number.js
 test262/test/built-ins/Temporal/Duration/length.js
 test262/test/built-ins/Temporal/Duration/lower-limit.js
 test262/test/built-ins/Temporal/Duration/microseconds-undefined.js
@@ -14554,7 +14556,10 @@ test262/test/built-ins/Temporal/Duration/prototype/add/negative-infinity-throws-
 test262/test/built-ins/Temporal/Duration/prototype/add/no-calendar-units.js
 test262/test/built-ins/Temporal/Duration/prototype/add/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/Duration/prototype/add/not-a-constructor.js
+test262/test/built-ins/Temporal/Duration/prototype/add/order-of-operations.js
 test262/test/built-ins/Temporal/Duration/prototype/add/prop-desc.js
+test262/test/built-ins/Temporal/Duration/prototype/add/result-out-of-range-1.js
+test262/test/built-ins/Temporal/Duration/prototype/add/result-out-of-range-2.js
 test262/test/built-ins/Temporal/Duration/prototype/add/subclassing-ignored.js
 test262/test/built-ins/Temporal/Duration/prototype/blank/basic.js
 test262/test/built-ins/Temporal/Duration/prototype/blank/branding.js
@@ -14704,7 +14709,10 @@ test262/test/built-ins/Temporal/Duration/prototype/subtract/negative-infinity-th
 test262/test/built-ins/Temporal/Duration/prototype/subtract/no-calendar-units.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/not-a-constructor.js
+test262/test/built-ins/Temporal/Duration/prototype/subtract/order-of-operations.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/prop-desc.js
+test262/test/built-ins/Temporal/Duration/prototype/subtract/result-out-of-range-1.js
+test262/test/built-ins/Temporal/Duration/prototype/subtract/result-out-of-range-2.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/subclassing-ignored.js
 test262/test/built-ins/Temporal/Duration/prototype/toJSON/balance-subseconds.js
 test262/test/built-ins/Temporal/Duration/prototype/toJSON/basic.js
@@ -14737,6 +14745,7 @@ test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigi
 test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-number.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-out-of-range.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-undefined.js
+test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-wrong-type.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/large-with-small-units.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/length.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/name.js
@@ -14960,6 +14969,7 @@ test262/test/built-ins/Temporal/Instant/prototype/add/name.js
 test262/test/built-ins/Temporal/Instant/prototype/add/negative-infinity-throws-rangeerror.js
 test262/test/built-ins/Temporal/Instant/prototype/add/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/Instant/prototype/add/not-a-constructor.js
+test262/test/built-ins/Temporal/Instant/prototype/add/order-of-operations.js
 test262/test/built-ins/Temporal/Instant/prototype/add/prop-desc.js
 test262/test/built-ins/Temporal/Instant/prototype/add/result-out-of-range.js
 test262/test/built-ins/Temporal/Instant/prototype/add/subclassing-ignored.js
@@ -15129,6 +15139,7 @@ test262/test/built-ins/Temporal/Instant/prototype/subtract/name.js
 test262/test/built-ins/Temporal/Instant/prototype/subtract/negative-infinity-throws-rangeerror.js
 test262/test/built-ins/Temporal/Instant/prototype/subtract/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/Instant/prototype/subtract/not-a-constructor.js
+test262/test/built-ins/Temporal/Instant/prototype/subtract/order-of-operations.js
 test262/test/built-ins/Temporal/Instant/prototype/subtract/prop-desc.js
 test262/test/built-ins/Temporal/Instant/prototype/subtract/result-out-of-range.js
 test262/test/built-ins/Temporal/Instant/prototype/subtract/subclassing-ignored.js
@@ -15499,6 +15510,7 @@ test262/test/built-ins/Temporal/PlainDate/prototype/add/not-a-constructor.js
 test262/test/built-ins/Temporal/PlainDate/prototype/add/options-object.js
 test262/test/built-ins/Temporal/PlainDate/prototype/add/options-undefined.js
 test262/test/built-ins/Temporal/PlainDate/prototype/add/options-wrong-type.js
+test262/test/built-ins/Temporal/PlainDate/prototype/add/order-of-operations.js
 test262/test/built-ins/Temporal/PlainDate/prototype/add/overflow-invalid-string.js
 test262/test/built-ins/Temporal/PlainDate/prototype/add/overflow-undefined.js
 test262/test/built-ins/Temporal/PlainDate/prototype/add/overflow-wrong-type.js
@@ -15685,6 +15697,7 @@ test262/test/built-ins/Temporal/PlainDate/prototype/subtract/not-a-constructor.j
 test262/test/built-ins/Temporal/PlainDate/prototype/subtract/options-object.js
 test262/test/built-ins/Temporal/PlainDate/prototype/subtract/options-undefined.js
 test262/test/built-ins/Temporal/PlainDate/prototype/subtract/options-wrong-type.js
+test262/test/built-ins/Temporal/PlainDate/prototype/subtract/order-of-operations.js
 test262/test/built-ins/Temporal/PlainDate/prototype/subtract/overflow-constrain.js
 test262/test/built-ins/Temporal/PlainDate/prototype/subtract/overflow-invalid-string.js
 test262/test/built-ins/Temporal/PlainDate/prototype/subtract/overflow-undefined.js
@@ -16098,6 +16111,7 @@ test262/test/built-ins/Temporal/PlainDateTime/prototype/add/options-empty.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/add/options-invalid.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/add/options-undefined.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/add/options-wrong-type.js
+test262/test/built-ins/Temporal/PlainDateTime/prototype/add/order-of-operations.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/add/overflow-invalid-string.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/add/overflow-undefined.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/add/overflow-wrong-type.js
@@ -16345,6 +16359,7 @@ test262/test/built-ins/Temporal/PlainDateTime/prototype/subtract/options-empty.j
 test262/test/built-ins/Temporal/PlainDateTime/prototype/subtract/options-invalid.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/subtract/options-undefined.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/subtract/options-wrong-type.js
+test262/test/built-ins/Temporal/PlainDateTime/prototype/subtract/order-of-operations.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/subtract/overflow-invalid-string.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/subtract/overflow-undefined.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/subtract/overflow-wrong-type.js
@@ -16394,14 +16409,18 @@ test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalsecon
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalseconddigits-invalid-string.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalseconddigits-nan.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalseconddigits-negative.js
+test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalseconddigits-non-integer.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalseconddigits-number.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalseconddigits-out-of-range.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalseconddigits-undefined.js
+test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/fractionalseconddigits-wrong-type.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/length.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/name.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/not-a-constructor.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/options-object.js
+test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/options-wrong-type.js
+test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/order-of-operations.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/prop-desc.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/rounding-direction.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/toString/roundingmode-ceil.js
@@ -16899,6 +16918,7 @@ test262/test/built-ins/Temporal/PlainTime/prototype/add/argument-not-object.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/argument-object.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/argument-propertybag-optional-properties.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/argument-singular-properties.js
+test262/test/built-ins/Temporal/PlainTime/prototype/add/argument-string-duration-too-large.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/argument-string-fractional-units-rounding-mode.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/argument-string-negative-fractional-units.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/argument-string.js
@@ -16913,6 +16933,7 @@ test262/test/built-ins/Temporal/PlainTime/prototype/add/negative-infinity-throws
 test262/test/built-ins/Temporal/PlainTime/prototype/add/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/not-a-constructor.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/options-ignored.js
+test262/test/built-ins/Temporal/PlainTime/prototype/add/order-of-operations.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/precision-exact-mathematical-values-1.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/prop-desc.js
 test262/test/built-ins/Temporal/PlainTime/prototype/add/subclassing-ignored.js
@@ -16966,7 +16987,9 @@ test262/test/built-ins/Temporal/PlainTime/prototype/round/not-a-constructor.js
 test262/test/built-ins/Temporal/PlainTime/prototype/round/options-wrong-type.js
 test262/test/built-ins/Temporal/PlainTime/prototype/round/prop-desc.js
 test262/test/built-ins/Temporal/PlainTime/prototype/round/rounding-cross-midnight.js
+test262/test/built-ins/Temporal/PlainTime/prototype/round/roundingincrement-divides.js
 test262/test/built-ins/Temporal/PlainTime/prototype/round/roundingincrement-hours.js
+test262/test/built-ins/Temporal/PlainTime/prototype/round/roundingincrement-invalid.js
 test262/test/built-ins/Temporal/PlainTime/prototype/round/roundingincrement-microseconds.js
 test262/test/built-ins/Temporal/PlainTime/prototype/round/roundingincrement-milliseconds.js
 test262/test/built-ins/Temporal/PlainTime/prototype/round/roundingincrement-minutes.js
@@ -17079,6 +17102,7 @@ test262/test/built-ins/Temporal/PlainTime/prototype/subtract/argument-not-object
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/argument-object.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/argument-propertybag-optional-properties.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/argument-singular-properties.js
+test262/test/built-ins/Temporal/PlainTime/prototype/subtract/argument-string-duration-too-large.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/argument-string-fractional-units-rounding-mode.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/argument-string-negative-fractional-units.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/argument-string.js
@@ -17093,6 +17117,7 @@ test262/test/built-ins/Temporal/PlainTime/prototype/subtract/negative-infinity-t
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/not-a-constructor.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/options-ignored.js
+test262/test/built-ins/Temporal/PlainTime/prototype/subtract/order-of-operations.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/precision-exact-mathematical-values-1.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/prop-desc.js
 test262/test/built-ins/Temporal/PlainTime/prototype/subtract/subclassing-ignored.js
@@ -17116,9 +17141,11 @@ test262/test/built-ins/Temporal/PlainTime/prototype/toString/builtin.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/fractionalseconddigits-auto.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/fractionalseconddigits-invalid-string.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/fractionalseconddigits-nan.js
+test262/test/built-ins/Temporal/PlainTime/prototype/toString/fractionalseconddigits-non-integer.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/fractionalseconddigits-number.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/fractionalseconddigits-out-of-range.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/fractionalseconddigits-undefined.js
+test262/test/built-ins/Temporal/PlainTime/prototype/toString/fractionalseconddigits-wrong-type.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/length.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/name.js
 test262/test/built-ins/Temporal/PlainTime/prototype/toString/not-a-constructor.js
@@ -17377,6 +17404,7 @@ test262/test/built-ins/Temporal/PlainYearMonth/prototype/add/not-a-constructor.j
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/add/options-invalid.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/add/options-object.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/add/options-wrong-type.js
+test262/test/built-ins/Temporal/PlainYearMonth/prototype/add/order-of-operations.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/add/overflow-adding-months-to-max-year.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/add/overflow-invalid-string.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/add/overflow-undefined.js
@@ -17549,6 +17577,7 @@ test262/test/built-ins/Temporal/PlainYearMonth/prototype/subtract/not-a-construc
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/subtract/options-invalid.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/subtract/options-object.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/subtract/options-wrong-type.js
+test262/test/built-ins/Temporal/PlainYearMonth/prototype/subtract/order-of-operations.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/subtract/overflow-invalid-string.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/subtract/overflow-subtracting-months-from-min-year.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/subtract/overflow-undefined.js

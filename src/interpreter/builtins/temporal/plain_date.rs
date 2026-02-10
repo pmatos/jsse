@@ -1165,14 +1165,7 @@ pub(super) fn to_temporal_plain_date(
                 to_integer_with_truncation(interp, &y_val)? as i32
             };
             let m = if has_month_code {
-                let mc = match &mc_val {
-                    JsValue::String(s) => s.to_rust_string(),
-                    _ => {
-                        return Err(Completion::Throw(
-                            interp.create_type_error("monthCode must be a string"),
-                        ));
-                    }
-                };
+                let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
                 match month_code_to_number(&mc) {
                     Some(n) => {
                         if has_month {

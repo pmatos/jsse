@@ -152,14 +152,7 @@ pub(super) fn to_temporal_plain_date_time_with_overflow(
                 to_integer_with_truncation(interp, &y_val)?
             };
             let month_f: f64 = if !is_undefined(&mc_val) {
-                let mc = match &mc_val {
-                    JsValue::String(s) => s.to_rust_string(),
-                    _ => {
-                        return Err(Completion::Throw(
-                            interp.create_type_error("monthCode must be a string"),
-                        ));
-                    }
-                };
+                let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
                 match super::plain_date::month_code_to_number_pub(&mc) {
                     Some(n) => n as f64,
                     None => {
@@ -1156,19 +1149,27 @@ impl Interpreter {
                     };
                     let mut prec: Option<i32> = if is_undefined(&fsd) {
                         None
-                    } else if let JsValue::String(ref sv) = fsd {
-                        if sv.to_rust_string() == "auto" { None } else {
-                            return Completion::Throw(interp.create_range_error("Invalid fractionalSecondDigits"));
-                        }
-                    } else {
+                    } else if matches!(fsd, JsValue::Number(_)) {
                         let n = match interp.to_number_value(&fsd) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };
-                        if n.is_nan() || !n.is_finite() || n < 0.0 || n > 9.0 || n != n.trunc() {
+                        if n.is_nan() || !n.is_finite() {
                             return Completion::Throw(interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"));
                         }
-                        Some(n as i32)
+                        let floored = n.floor();
+                        if floored < 0.0 || floored > 9.0 {
+                            return Completion::Throw(interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"));
+                        }
+                        Some(floored as i32)
+                    } else {
+                        let s = match interp.to_string_value(&fsd) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if s == "auto" { None } else {
+                            return Completion::Throw(interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"));
+                        }
                     };
                     // roundingMode
                     let rm_val = match get_prop(interp, &options, "roundingMode") {

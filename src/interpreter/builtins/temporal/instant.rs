@@ -2,6 +2,7 @@ use super::*;
 use crate::interpreter::builtins::temporal::{
     get_prop, is_undefined, parse_temporal_instant_string, round_number_to_increment,
     temporal_unit_length_ns, temporal_unit_singular, validate_rounding_increment,
+    validate_rounding_increment_day_divisible,
 };
 use num_bigint::BigInt;
 
@@ -361,7 +362,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    let inc = match validate_rounding_increment(interp, &inc_val, unit, false) {
+                    let inc = match validate_rounding_increment_day_divisible(interp, &inc_val, unit) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };

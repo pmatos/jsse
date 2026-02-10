@@ -1190,23 +1190,32 @@ fn parse_time_to_string_options(
     };
     let mut precision = None;
     if !is_undefined(&fsd_val) {
-        if let JsValue::String(ref s) = fsd_val {
-            if s.to_rust_string() != "auto" {
-                return Err(Completion::Throw(
-                    interp.create_range_error("Invalid fractionalSecondDigits"),
-                ));
-            }
-        } else {
+        if matches!(fsd_val, JsValue::Number(_)) {
+            // GetStringOrNumberOption: value is Number → floor then range check
             let n = match interp.to_number_value(&fsd_val) {
                 Ok(v) => v,
                 Err(e) => return Err(Completion::Throw(e)),
             };
-            if n.is_nan() || !n.is_finite() || n < 0.0 || n > 9.0 || n != n.trunc() {
+            if n.is_nan() || !n.is_finite() {
                 return Err(Completion::Throw(interp.create_range_error(
                     "fractionalSecondDigits must be 0-9 or 'auto'",
                 )));
             }
-            precision = Some(n as i32);
+            let floored = n.floor();
+            if floored < 0.0 || floored > 9.0 {
+                return Err(Completion::Throw(interp.create_range_error(
+                    "fractionalSecondDigits must be 0-9 or 'auto'",
+                )));
+            }
+            precision = Some(floored as i32);
+        } else {
+            // GetStringOrNumberOption: non-Number → ToString then check for "auto"
+            let s = interp.to_string_value(&fsd_val).map_err(Completion::Throw)?;
+            if s != "auto" {
+                return Err(Completion::Throw(interp.create_range_error(
+                    "fractionalSecondDigits must be 0-9 or 'auto'",
+                )));
+            }
         }
     }
     // smallestUnit

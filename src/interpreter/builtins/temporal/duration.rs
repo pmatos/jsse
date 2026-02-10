@@ -1148,7 +1148,7 @@ pub(crate) fn to_temporal_duration_record(
             )
         })?;
         let sign = parsed.sign;
-        return Ok((
+        let (y, mo, w, d, h, mi, sec, ms, us, ns) = (
             parsed.years * sign,
             parsed.months * sign,
             parsed.weeks * sign,
@@ -1159,7 +1159,13 @@ pub(crate) fn to_temporal_duration_record(
             parsed.milliseconds * sign,
             parsed.microseconds * sign,
             parsed.nanoseconds * sign,
-        ));
+        );
+        if !is_valid_duration(y, mo, w, d, h, mi, sec, ms, us, ns) {
+            return Err(Completion::Throw(
+                interp.create_range_error("Invalid duration: out of range"),
+            ));
+        }
+        return Ok((y, mo, w, d, h, mi, sec, ms, us, ns));
     }
     // Must be an object (reject null, booleans, numbers, etc.)
     if !matches!(&item, JsValue::Object(_)) {
@@ -1219,27 +1225,28 @@ pub(crate) fn to_temporal_duration_record(
             }
         }};
     }
-    let y = get_dur_field!("years");
-    let mo = get_dur_field!("months");
-    let w = get_dur_field!("weeks");
+    // Read properties in alphabetical order per spec ToTemporalDurationRecord
     let d = get_dur_field!("days");
     let h = get_dur_field!("hours");
-    let mi = get_dur_field!("minutes");
-    let s = get_dur_field!("seconds");
-    let ms = get_dur_field!("milliseconds");
     let us = get_dur_field!("microseconds");
+    let ms = get_dur_field!("milliseconds");
+    let mi = get_dur_field!("minutes");
+    let mo = get_dur_field!("months");
     let ns = get_dur_field!("nanoseconds");
+    let s = get_dur_field!("seconds");
+    let w = get_dur_field!("weeks");
+    let y = get_dur_field!("years");
     // If ALL recognized properties are undefined, throw TypeError
-    if y.is_none()
-        && mo.is_none()
-        && w.is_none()
-        && d.is_none()
+    if d.is_none()
         && h.is_none()
-        && mi.is_none()
-        && s.is_none()
-        && ms.is_none()
         && us.is_none()
+        && ms.is_none()
+        && mi.is_none()
+        && mo.is_none()
         && ns.is_none()
+        && s.is_none()
+        && w.is_none()
+        && y.is_none()
     {
         return Err(Completion::Throw(interp.create_type_error(
             "Invalid duration-like object: at least one duration property must be present",
@@ -1445,23 +1452,28 @@ fn parse_to_string_options(
     if is_undefined(&fp) {
         return Ok((None, rounding_mode));
     }
-    if let JsValue::String(ref s) = fp {
-        if s.to_rust_string() == "auto" {
-            return Ok((None, rounding_mode));
+    if matches!(fp, JsValue::Number(_)) {
+        let n = interp.to_number_value(&fp).map_err(Completion::Throw)?;
+        if n.is_nan() || !n.is_finite() {
+            return Err(Completion::Throw(
+                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
+            ));
         }
-        return Err(Completion::Throw(
-            interp.create_range_error("Invalid fractionalSecondDigits"),
-        ));
+        let floored = n.floor();
+        if floored < 0.0 || floored > 9.0 {
+            return Err(Completion::Throw(
+                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
+            ));
+        }
+        return Ok((Some(floored as u8), rounding_mode));
     }
-    let n = interp.to_number_value(&fp).map_err(Completion::Throw)?;
-    // Per spec: GetStringOrNumberOption floors the value
-    let n = n.floor();
-    if !(0.0..=9.0).contains(&n) || n.is_nan() {
-        return Err(Completion::Throw(
-            interp.create_range_error("fractionalSecondDigits must be 0-9"),
-        ));
+    let s = interp.to_string_value(&fp).map_err(Completion::Throw)?;
+    if s == "auto" {
+        return Ok((None, rounding_mode));
     }
-    Ok((Some(n as u8), rounding_mode))
+    Err(Completion::Throw(
+        interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
+    ))
 }
 
 fn format_duration_iso(

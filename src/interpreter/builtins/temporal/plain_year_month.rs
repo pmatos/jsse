@@ -129,14 +129,7 @@ fn to_temporal_plain_year_month(
                 to_integer_with_truncation(interp, &y_val)? as i32
             };
             let m = if !is_undefined(&mc_val) {
-                let mc = match &mc_val {
-                    JsValue::String(s) => s.to_rust_string(),
-                    _ => {
-                        return Err(Completion::Throw(
-                            interp.create_type_error("monthCode must be a string"),
-                        ));
-                    }
-                };
+                let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
                 match super::plain_date::month_code_to_number_pub(&mc) {
                     Some(n) => n,
                     None => {
