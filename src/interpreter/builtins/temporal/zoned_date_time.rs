@@ -2478,16 +2478,17 @@ fn zdt_until_since(
         if smallest_unit != "nanosecond" || rounding_increment != 1.0 {
             let su_order = super::temporal_unit_order(&smallest_unit);
             if su_order >= super::temporal_unit_order("day") {
-                let time_ns = dh as f64 * 3_600_000_000_000.0
-                    + dmi as f64 * 60_000_000_000.0
-                    + ds as f64 * 1_000_000_000.0
-                    + dms as f64 * 1_000_000.0
-                    + dus as f64 * 1_000.0
-                    + dns as f64;
+                let time_ns_i128: i128 = dh as i128 * 3_600_000_000_000
+                    + dmi as i128 * 60_000_000_000
+                    + ds as i128 * 1_000_000_000
+                    + dms as i128 * 1_000_000
+                    + dus as i128 * 1_000
+                    + dns as i128;
+                let time_ns = time_ns_i128 as f64;
                 let fractional_days = dd as f64 + time_ns / 86_400_000_000_000.0;
                 let (mut ry2, mut rm2, rw2, rd2) = super::round_date_duration_with_frac_days(
-                    dy, dm, dw, fractional_days,
-                    &smallest_unit, rounding_increment, &effective_mode,
+                    dy, dm, dw, fractional_days, time_ns_i128,
+                    &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
                     ref_y, ref_m, ref_d,
                 );
                 // Rebalance months overflow into years when largestUnit is year

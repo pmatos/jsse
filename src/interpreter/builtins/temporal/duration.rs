@@ -25,6 +25,34 @@ macro_rules! try_result {
     };
 }
 
+/// Correctly-rounded i128 / i128 → f64 division.
+/// Uses string-based conversion for precise results: constructs a decimal
+/// string with enough digits and lets f64 parsing handle the rounding.
+fn divide_i128_to_f64(numerator: i128, divisor: i128) -> f64 {
+    debug_assert!(divisor != 0);
+    if numerator == 0 { return 0.0; }
+    let sign = if (numerator < 0) != (divisor < 0) { -1.0f64 } else { 1.0f64 };
+    let abs_num = numerator.unsigned_abs();
+    let abs_div = divisor.unsigned_abs();
+    let whole = abs_num / abs_div;
+    let remainder = abs_num % abs_div;
+    if remainder == 0 {
+        return sign * whole as f64;
+    }
+    // Compute 25 decimal digits of the fractional part
+    // f64 has ~15.9 significant digits, but we need extra for leading zeros + rounding
+    let mut frac_digits = String::with_capacity(25);
+    let mut rem = remainder;
+    for _ in 0..25 {
+        rem *= 10;
+        let digit = rem / abs_div;
+        frac_digits.push((b'0' + digit as u8) as char);
+        rem %= abs_div;
+    }
+    let s = format!("{whole}.{frac_digits}");
+    sign * s.parse::<f64>().unwrap()
+}
+
 /// Extract a PlainDate (year, month, day) from a relativeTo value.
 /// Accepts PlainDate, PlainDateTime, ZonedDateTime objects, property bags, or strings.
 /// For ZonedDateTime-like inputs, extracts just the date portion.
@@ -142,6 +170,225 @@ fn duration_total_ns_relative(
         return Err(());
     }
     Ok(total)
+}
+
+/// TotalRelativeDuration per spec (simplified for ISO 8601 calendar).
+/// Adds date fields (Y/M/W) to relativeTo to get targetDate, then computes
+/// the fractional total in the given unit using calendar-aware boundaries.
+fn total_relative_duration(
+    y: f64, mo: f64, w: f64, d: f64,
+    h: f64, mi: f64, s: f64, ms: f64, us: f64, ns: f64,
+    unit: &str,
+    base_year: i32, base_month: u8, base_day: u8,
+) -> Result<f64, ()> {
+    // Step 1: Add date fields (years, months, weeks) to get targetDate — NOT days
+    let target = add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0);
+    if !super::iso_date_within_limits(target.0, target.1, target.2) {
+        return Err(());
+    }
+
+    // Step 2: NormalizedTimeDuration = days * dayNs + time components
+    let time_ns: i128 = h as i128 * 3_600_000_000_000
+        + mi as i128 * 60_000_000_000
+        + s as i128 * 1_000_000_000
+        + ms as i128 * 1_000_000
+        + us as i128 * 1_000
+        + ns as i128;
+    let norm_ns: i128 = d as i128 * 86_400_000_000_000 + time_ns;
+
+    let whole_days = if norm_ns >= 0 {
+        norm_ns / 86_400_000_000_000
+    } else {
+        -(-norm_ns / 86_400_000_000_000) - if (-norm_ns) % 86_400_000_000_000 != 0 { 1 } else { 0 }
+    };
+    let frac_day_ns = norm_ns - whole_days * 86_400_000_000_000;
+    let frac_day = frac_day_ns as f64 / 86_400_000_000_000.0;
+
+    // Step 3: endDate = targetDate + wholeDays
+    let end = add_iso_date(target.0, target.1, target.2, 0, 0, 0, whole_days as i32);
+    if !super::iso_date_within_limits(end.0, end.1, end.2) {
+        return Err(());
+    }
+
+    let base_epoch = iso_date_to_epoch_days(base_year, base_month, base_day);
+    let end_epoch = iso_date_to_epoch_days(end.0, end.1, end.2);
+
+    match unit {
+        "year" => {
+            let (diff_y, _, _, _) = super::difference_iso_date(
+                base_year, base_month, base_day, end.0, end.1, end.2, "year",
+            );
+            let year_start = add_iso_date(base_year, base_month, base_day, diff_y, 0, 0, 0);
+            let sign = if diff_y > 0 || (diff_y == 0 && end_epoch > base_epoch) { 1 }
+                else if diff_y < 0 || (diff_y == 0 && end_epoch < base_epoch) { -1 }
+                else { return Ok(frac_day); };
+            let year_end = add_iso_date(base_year, base_month, base_day, diff_y + sign, 0, 0, 0);
+            let year_start_epoch = iso_date_to_epoch_days(year_start.0, year_start.1, year_start.2);
+            let year_end_epoch = iso_date_to_epoch_days(year_end.0, year_end.1, year_end.2);
+            let year_length = (year_end_epoch - year_start_epoch).abs();
+            if year_length == 0 { return Ok(diff_y as f64); }
+            let days_into_year = end_epoch - year_start_epoch;
+            // Single division to avoid double-rounding
+            let numerator = diff_y as f64 * year_length as f64 + days_into_year as f64 + frac_day;
+            Ok(numerator / year_length as f64)
+        }
+        "month" => {
+            let (_, diff_m, _, _) = super::difference_iso_date(
+                base_year, base_month, base_day, end.0, end.1, end.2, "month",
+            );
+            let month_start = add_iso_date(base_year, base_month, base_day, 0, diff_m, 0, 0);
+            let sign = if diff_m > 0 || (diff_m == 0 && end_epoch > base_epoch) { 1 }
+                else if diff_m < 0 || (diff_m == 0 && end_epoch < base_epoch) { -1 }
+                else { return Ok(frac_day); };
+            let month_end = add_iso_date(base_year, base_month, base_day, 0, diff_m + sign, 0, 0);
+            let month_start_epoch = iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
+            let month_end_epoch = iso_date_to_epoch_days(month_end.0, month_end.1, month_end.2);
+            let month_length = (month_end_epoch - month_start_epoch).abs();
+            if month_length == 0 { return Ok(diff_m as f64); }
+            let days_into_month = end_epoch - month_start_epoch;
+            // Single division: (diff_m * length + days_into + frac_day) / length
+            let numerator = diff_m as f64 * month_length as f64 + days_into_month as f64 + frac_day;
+            Ok(numerator / month_length as f64)
+        }
+        "week" => {
+            // Decompose to preserve f64 precision: integer weeks + fractional remainder
+            let total_days_int = end_epoch - base_epoch;
+            let whole_weeks = total_days_int / 7;
+            let remaining_days = total_days_int % 7;
+            Ok(whole_weeks as f64 + (remaining_days as f64 + frac_day) / 7.0)
+        }
+        "day" => {
+            let total_days = (end_epoch - base_epoch) as f64 + frac_day;
+            Ok(total_days)
+        }
+        _ => {
+            // Time units: flatten everything to total nanoseconds
+            let target_epoch = iso_date_to_epoch_days(target.0, target.1, target.2);
+            let calendar_days = (target_epoch - base_epoch) as i128;
+            let total_ns = (calendar_days + d as i128) * 86_400_000_000_000 + time_ns;
+            let unit_ns = temporal_unit_length_ns(unit) as i128;
+            Ok(divide_i128_to_f64(total_ns, unit_ns))
+        }
+    }
+}
+
+/// Round a duration with calendar-aware relativeTo, then re-balance per spec.
+/// Implements NudgeToCalendarUnit + BalanceDateDurationRelative.
+/// Returns (years, months, weeks, days, hours, minutes, seconds, ms, µs, ns).
+fn round_relative_duration(
+    y: f64, mo: f64, w: f64, d: f64,
+    h: f64, mi: f64, s: f64, ms: f64, us: f64, ns: f64,
+    smallest_unit: &str, largest_unit: &str,
+    increment: f64, rounding_mode: &str,
+    base_year: i32, base_month: u8, base_day: u8,
+) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64), String> {
+    let su_order = temporal_unit_order(smallest_unit);
+    let lu_order = temporal_unit_order(largest_unit);
+
+    // Spec: cannot round to increment>1 of a calendar/day unit while balancing to a larger one
+    let su_is_calendar_or_day = su_order >= temporal_unit_order("day");
+    if increment > 1.0 && su_is_calendar_or_day && lu_order > su_order {
+        return Err(format!(
+            "Cannot round to an increment of {smallest_unit} while also balancing to {largest_unit}"
+        ));
+    }
+
+    if su_order >= temporal_unit_order("day") {
+        // Calendar/day unit rounding: NudgeToCalendarUnit
+        // Use i128 for the range check to avoid f64 precision loss
+        let time_ns_i128: i128 = h as i128 * 3_600_000_000_000
+            + mi as i128 * 60_000_000_000
+            + s as i128 * 1_000_000_000
+            + ms as i128 * 1_000_000
+            + us as i128 * 1_000
+            + ns as i128;
+        let total_ns_i128 = d as i128 * 86_400_000_000_000 + time_ns_i128;
+        // NanosecondsToDays range check: total ns must not exceed max instant epoch ns
+        let max_instant_ns: i128 = 86400 * 1_000_000_000 * 100_000_000; // 8.64e21
+        if total_ns_i128.abs() > max_instant_ns {
+            return Err("Total nanoseconds too large".to_string());
+        }
+        let time_ns = time_ns_i128 as f64;
+        let frac_days = d + time_ns / 86_400_000_000_000.0;
+
+        let (ry, rm, rw, rd) = super::round_date_duration_with_frac_days(
+            y as i32, mo as i32, w as i32, frac_days, time_ns_i128,
+            smallest_unit, largest_unit, increment, rounding_mode,
+            base_year, base_month, base_day,
+        );
+
+        // BalanceDateDurationRelative: re-balance via add + re-difference
+        // Per spec, skip when largestUnit == smallestUnit (no balancing needed)
+        if largest_unit == smallest_unit {
+            // For calendar units, validate the intermediate end date is within range
+            // (NudgeToCalendarUnit computes end_date = base + duration → must be within limits)
+            if matches!(smallest_unit, "year" | "month" | "week") {
+                let days_int = frac_days.trunc() as i32;
+                let end_date = add_iso_date(base_year, base_month, base_day,
+                    y as i32, mo as i32, w as i32, days_int);
+                if !super::iso_date_within_limits(end_date.0, end_date.1, end_date.2) {
+                    return Err("Rounded date outside valid ISO range".to_string());
+                }
+            }
+            Ok((ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        } else {
+            let result_date = add_iso_date(base_year, base_month, base_day, ry, rm, rw, rd);
+            if !super::iso_date_within_limits(result_date.0, result_date.1, result_date.2) {
+                return Err("Rounded date outside valid ISO range".to_string());
+            }
+            let (dy, dm, mut dw, mut dd) = super::difference_iso_date(
+                base_year, base_month, base_day,
+                result_date.0, result_date.1, result_date.2,
+                largest_unit,
+            );
+            // When smallestUnit is "week", convert remaining days to weeks
+            if smallest_unit == "week" && dd != 0 {
+                dw = dd / 7;
+                dd = dd % 7;
+            }
+            Ok((dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        }
+    } else {
+        // Time unit rounding: flatten to ns with calendar-aware day resolution
+        // Use i128 arithmetic throughout to avoid f64 precision loss for large ns values
+        let target = add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0);
+        let base_epoch = iso_date_to_epoch_days(base_year, base_month, base_day);
+        let target_epoch = iso_date_to_epoch_days(target.0, target.1, target.2);
+        let calendar_days = (target_epoch - base_epoch) as i128;
+
+        let time_ns: i128 = h as i128 * 3_600_000_000_000
+            + mi as i128 * 60_000_000_000
+            + s as i128 * 1_000_000_000
+            + ms as i128 * 1_000_000
+            + us as i128 * 1_000
+            + ns as i128;
+        let total_ns = (calendar_days + d as i128) * 86_400_000_000_000 + time_ns;
+
+        let unit_ns = temporal_unit_length_ns(smallest_unit) as i128;
+        let inc = increment as i128;
+        let rounded_ns = super::round_i128_to_increment(total_ns, unit_ns * inc, rounding_mode);
+
+        // Range check
+        let limit = (1i128 << 53) * 1_000_000_000;
+        if rounded_ns.abs() >= limit {
+            return Err("Rounded duration time is out of range".to_string());
+        }
+
+        if matches!(largest_unit, "year" | "month" | "week") {
+            let total_days = rounded_ns / 86_400_000_000_000;
+            let remainder_ns = rounded_ns - total_days * 86_400_000_000_000;
+            let (ry, rm, rd_result) =
+                add_iso_date(base_year, base_month, base_day, 0, 0, 0, total_days as i32);
+            let (dy, dm, dw, dd) = super::difference_iso_date(
+                base_year, base_month, base_day, ry, rm, rd_result, largest_unit,
+            );
+            let r = unbalance_time_ns_i128(remainder_ns, "hour");
+            Ok((dy as f64, dm as f64, dw as f64, dd as f64, r.1 as f64, r.2 as f64, r.3 as f64, r.4 as f64, r.5 as f64, r.6 as f64))
+        } else {
+            let r = unbalance_time_ns_i128(rounded_ns, largest_unit);
+            Ok((0.0, 0.0, 0.0, r.0 as f64, r.1 as f64, r.2 as f64, r.3 as f64, r.4 as f64, r.5 as f64, r.6 as f64))
+        }
+    }
 }
 
 impl Interpreter {
@@ -508,87 +755,35 @@ impl Interpreter {
                     ));
                 }
 
-                // If we have relativeTo, use it to resolve calendar units
+                // If we have relativeTo, use round_relative_duration
                 if let Some((by, bm, bd)) = relative_to {
-                    let su_order = temporal_unit_order(smallest_unit);
-
-                    if su_order >= temporal_unit_order("day") {
-                        // Calendar/day unit rounding: use NudgeCalendarUnit approach
-                        let time_ns = h * 3_600_000_000_000.0
-                            + mi * 60_000_000_000.0
-                            + s * 1_000_000_000.0
-                            + ms * 1_000_000.0
-                            + us * 1_000.0
-                            + ns;
-                        let frac_days = w * 7.0 + d + time_ns / 86_400_000_000_000.0;
-                        // Range check: verify end date is within ISO limits
-                        let check_end = add_iso_date(by, bm, bd, y as i32, mo as i32, 0, frac_days.trunc() as i32);
-                        if !super::iso_date_within_limits(check_end.0, check_end.1, check_end.2) {
-                            return Completion::Throw(interp.create_range_error(
-                                "duration out of range when applied to relativeTo",
-                            ));
+                    match round_relative_duration(
+                        y, mo, w, d, h, mi, s, ms, us, ns,
+                        smallest_unit, largest_unit,
+                        increment, rounding_mode,
+                        by, bm, bd,
+                    ) {
+                        Ok((ry, rm, rw, rd, rh, rmi, rs, rms, rus, rns)) => {
+                            create_duration_result(interp, ry, rm, rw, rd, rh, rmi, rs, rms, rus, rns)
                         }
-                        let (mut ry, mut rm, rw, rd) = super::round_date_duration_with_frac_days(
-                            y as i32, mo as i32, 0, frac_days,
-                            smallest_unit, increment, rounding_mode,
-                            by, bm, bd,
-                        );
-                        // Re-balance based on largest_unit
-                        if matches!(largest_unit, "month") {
-                            rm += ry * 12;
-                            ry = 0;
-                        }
-                        create_duration_result(
-                            interp, ry as f64, rm as f64, rw as f64, rd as f64,
-                            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                        )
-                    } else {
-                        // Time unit rounding: flatten to ns
-                        let total_ns = match duration_total_ns_relative(
-                            y, mo, w, d, h, mi, s, ms, us, ns, by, bm, bd,
-                        ) {
-                            Ok(v) => v as f64,
-                            Err(()) => return Completion::Throw(interp.create_range_error(
-                                "duration out of range when applied to relativeTo",
-                            )),
-                        };
-                        let unit_ns = temporal_unit_length_ns(smallest_unit);
-                        let rounded_ns =
-                            round_number_to_increment(total_ns, unit_ns * increment, rounding_mode);
-                        if matches!(largest_unit, "year" | "month" | "week") {
-                            let total_days = (rounded_ns / 86_400_000_000_000.0).trunc();
-                            let remainder_ns = rounded_ns - total_days * 86_400_000_000_000.0;
-                            let (ry, rm, rd_result) =
-                                add_iso_date(by, bm, bd, 0, 0, 0, total_days as i32);
-                            let (dy, dm, _dw, dd) = super::difference_iso_date(
-                                by, bm, bd, ry, rm, rd_result, largest_unit,
-                            );
-                            let (_, rh, rmi, rs, rms, rus, rns) =
-                                unbalance_time_ns(remainder_ns, "hour");
-                            create_duration_result(
-                                interp, dy as f64, dm as f64, 0.0, dd as f64, rh, rmi, rs, rms, rus, rns,
-                            )
-                        } else {
-                            let (rd, rh, rmi, rs, rms, rus, rns) =
-                                unbalance_time_ns(rounded_ns, largest_unit);
-                            create_duration_result(interp, 0.0, 0.0, 0.0, rd, rh, rmi, rs, rms, rus, rns)
-                        }
+                        Err(msg) => Completion::Throw(interp.create_range_error(&msg)),
                     }
                 } else {
-                    let total_ns = d * 86_400_000_000_000.0
-                        + h * 3_600_000_000_000.0
-                        + mi * 60_000_000_000.0
-                        + s * 1_000_000_000.0
-                        + ms * 1_000_000.0
-                        + us * 1_000.0
-                        + ns;
+                    // Use i128 for precision with large values
+                    let total_ns: i128 = d as i128 * 86_400_000_000_000
+                        + h as i128 * 3_600_000_000_000
+                        + mi as i128 * 60_000_000_000
+                        + s as i128 * 1_000_000_000
+                        + ms as i128 * 1_000_000
+                        + us as i128 * 1_000
+                        + ns as i128;
 
-                    let unit_ns = temporal_unit_length_ns(smallest_unit);
+                    let unit_ns = temporal_unit_length_ns(smallest_unit) as i128;
+                    let inc = increment as i128;
                     let rounded_ns =
-                        round_number_to_increment(total_ns, unit_ns * increment, rounding_mode);
-                    let (rd, rh, rmi, rs, rms, rus, rns) =
-                        unbalance_time_ns(rounded_ns, largest_unit);
-                    create_duration_result(interp, y, mo, w, rd, rh, rmi, rs, rms, rus, rns)
+                        super::round_i128_to_increment(total_ns, unit_ns * inc, rounding_mode);
+                    let r = unbalance_time_ns_i128(rounded_ns, largest_unit);
+                    create_duration_result(interp, y, mo, w, r.0 as f64, r.1 as f64, r.2 as f64, r.3 as f64, r.4 as f64, r.5 as f64, r.6 as f64)
                 }
             },
         ));
@@ -667,30 +862,29 @@ impl Interpreter {
                     );
                 }
 
-                let total_ns: i128 = if let Some((by, bm, bd)) = relative_to {
-                    match duration_total_ns_relative(
-                        y, mo, w, d, h, mi, s, ms, us, ns, by, bm, bd,
+                if let Some((by, bm, bd)) = relative_to {
+                    // Use calendar-aware TotalRelativeDuration
+                    match total_relative_duration(
+                        y, mo, w, d, h, mi, s, ms, us, ns,
+                        unit, by, bm, bd,
                     ) {
-                        Ok(v) => v,
-                        Err(()) => return Completion::Throw(interp.create_range_error(
+                        Ok(result) => Completion::Normal(JsValue::Number(result)),
+                        Err(()) => Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         )),
                     }
                 } else {
-                    d as i128 * 86_400_000_000_000
+                    let total_ns: i128 = d as i128 * 86_400_000_000_000
                         + h as i128 * 3_600_000_000_000
                         + mi as i128 * 60_000_000_000
                         + s as i128 * 1_000_000_000
                         + ms as i128 * 1_000_000
                         + us as i128 * 1_000
-                        + ns as i128
-                };
-
-                let unit_ns = temporal_unit_length_ns(unit) as i128;
-                let whole = total_ns / unit_ns;
-                let remainder = total_ns % unit_ns;
-                let result = whole as f64 + remainder as f64 / unit_ns as f64;
-                Completion::Normal(JsValue::Number(result))
+                        + ns as i128;
+                    let unit_ns = temporal_unit_length_ns(unit) as i128;
+                    let result = divide_i128_to_f64(total_ns, unit_ns);
+                    Completion::Normal(JsValue::Number(result))
+                }
             },
         ));
         proto

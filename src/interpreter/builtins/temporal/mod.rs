@@ -735,14 +735,16 @@ fn iso_date_surpasses(
 }
 
 fn compare_surpasses(sign: i32, year: i32, month: i32, day: i32, ty: i32, tm: i32, td: i32) -> bool {
+    // ConstrainISODate: clamp day to max days in month (e.g., Feb 29 → Feb 28 in non-leap year)
+    let clamped_day = day.min(iso_days_in_month(year, month as u8) as i32);
     if year != ty {
         return sign * (year - ty) > 0;
     }
     if month != tm {
         return sign * (month - tm) > 0;
     }
-    if day != td {
-        return sign * (day - td) > 0;
+    if clamped_day != td {
+        return sign * (clamped_day - td) > 0;
     }
     false
 }
@@ -2345,6 +2347,52 @@ pub(crate) fn round_number_to_increment(x: f64, increment: f64, rounding_mode: &
     rounded * increment
 }
 
+/// Integer-precision rounding for i128 values (avoids f64 precision loss for large ns values)
+pub(crate) fn round_i128_to_increment(x: i128, increment: i128, rounding_mode: &str) -> i128 {
+    let remainder = x % increment;
+    if remainder == 0 { return x; }
+    let truncated = x - remainder;
+    let sign = if x >= 0 { 1i128 } else { -1i128 };
+    let abs_rem = remainder.abs();
+    match rounding_mode {
+        "trunc" => truncated,
+        "ceil" => if remainder > 0 { truncated + increment } else { truncated },
+        "floor" => if remainder < 0 { truncated - increment } else { truncated },
+        "expand" => truncated + sign * increment,
+        "halfExpand" => {
+            if 2 * abs_rem >= increment { truncated + sign * increment } else { truncated }
+        }
+        "halfTrunc" => {
+            if 2 * abs_rem > increment { truncated + sign * increment } else { truncated }
+        }
+        "halfCeil" => {
+            if remainder > 0 {
+                if 2 * remainder >= increment { truncated + increment } else { truncated }
+            } else {
+                if 2 * abs_rem > increment { truncated - increment } else { truncated }
+            }
+        }
+        "halfFloor" => {
+            if remainder > 0 {
+                if 2 * remainder > increment { truncated + increment } else { truncated }
+            } else {
+                if 2 * abs_rem >= increment { truncated - increment } else { truncated }
+            }
+        }
+        "halfEven" => {
+            let q_trunc = x / increment;
+            if 2 * abs_rem > increment {
+                truncated + sign * increment
+            } else if 2 * abs_rem < increment {
+                truncated
+            } else {
+                if q_trunc % 2 == 0 { truncated } else { truncated + sign * increment }
+            }
+        }
+        _ => truncated,
+    }
+}
+
 // ToIntegerIfIntegral
 // Spec: ToIntegerWithTruncation — ToNumber then reject NaN/Infinity, truncate
 pub(crate) fn to_integer_with_truncation(
@@ -2786,6 +2834,7 @@ pub(crate) fn round_date_duration(
     weeks: i32,
     days: i32,
     smallest_unit: &str,
+    largest_unit: &str,
     rounding_increment: f64,
     rounding_mode: &str,
     ref_year: i32,
@@ -2793,8 +2842,8 @@ pub(crate) fn round_date_duration(
     ref_day: u8,
 ) -> (i32, i32, i32, i32) {
     round_date_duration_with_frac_days(
-        years, months, weeks, days as f64,
-        smallest_unit, rounding_increment, rounding_mode,
+        years, months, weeks, days as f64, 0i128,
+        smallest_unit, largest_unit, rounding_increment, rounding_mode,
         ref_year, ref_month, ref_day,
     )
 }
@@ -2804,7 +2853,9 @@ pub(crate) fn round_date_duration_with_frac_days(
     months: i32,
     weeks: i32,
     frac_days: f64,
+    time_ns_i128: i128,
     smallest_unit: &str,
+    largest_unit: &str,
     rounding_increment: f64,
     rounding_mode: &str,
     ref_year: i32,
@@ -2814,51 +2865,114 @@ pub(crate) fn round_date_duration_with_frac_days(
     let days = frac_days.trunc() as i32;
     match smallest_unit {
         "year" => {
+            // Use DifferenceDate to find the correct year boundary
             let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
-            let start_epoch = iso_date_to_epoch_days(ref_year, ref_month, ref_day);
-            let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
-
-            let sign = if years > 0 || (years == 0 && (months > 0 || weeks > 0 || frac_days > 0.0)) { 1 } else if years < 0 || (years == 0 && (months < 0 || weeks < 0 || frac_days < 0.0)) { -1 } else { 1 };
-            let year_end =
-                add_iso_date(ref_year, ref_month, ref_day, years + sign, 0, 0, 0);
-            let year_end_epoch = iso_date_to_epoch_days(year_end.0, year_end.1, year_end.2);
-            let year_start = add_iso_date(ref_year, ref_month, ref_day, years, 0, 0, 0);
+            let (diff_y, _, _, _) = difference_iso_date(
+                ref_year, ref_month, ref_day, end_date.0, end_date.1, end_date.2, "year",
+            );
+            let year_start = add_iso_date(ref_year, ref_month, ref_day, diff_y, 0, 0, 0);
             let year_start_epoch = iso_date_to_epoch_days(year_start.0, year_start.1, year_start.2);
+            let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
+            let sign = if end_epoch > iso_date_to_epoch_days(ref_year, ref_month, ref_day) { 1 }
+                else if end_epoch < iso_date_to_epoch_days(ref_year, ref_month, ref_day) { -1 }
+                else { return (0, 0, 0, 0); };
+            let year_end = add_iso_date(ref_year, ref_month, ref_day, diff_y + sign, 0, 0, 0);
+            let year_end_epoch = iso_date_to_epoch_days(year_end.0, year_end.1, year_end.2);
             let days_in_year = (year_end_epoch - year_start_epoch).abs() as f64;
             let remaining_days = (end_epoch - year_start_epoch) as f64 + frac_days.fract();
             let fractional =
-                years as f64 + if days_in_year > 0.0 { remaining_days / days_in_year } else { 0.0 };
+                diff_y as f64 + if days_in_year > 0.0 { remaining_days / days_in_year } else { 0.0 };
             let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
             (rounded as i32, 0, 0, 0)
         }
         "month" => {
-            let year_start = add_iso_date(ref_year, ref_month, ref_day, years, 0, 0, 0);
             let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
             let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
-
-            let month_start = add_iso_date(year_start.0, year_start.1, year_start.2, 0, months, 0, 0);
-            let month_start_epoch =
-                iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
-            let next_month = if months >= 0 { months + 1 } else { months - 1 };
-            let month_end = add_iso_date(year_start.0, year_start.1, year_start.2, 0, next_month, 0, 0);
-            let month_end_epoch =
-                iso_date_to_epoch_days(month_end.0, month_end.1, month_end.2);
-            let days_in_month = (month_end_epoch - month_start_epoch).abs() as f64;
-            let remaining_days = (end_epoch - month_start_epoch) as f64 + frac_days.fract();
-            let fractional = months as f64
-                + if days_in_month > 0.0 { remaining_days / days_in_month } else { 0.0 };
-            let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
-            (years, rounded as i32, 0, 0)
+            let base_epoch = iso_date_to_epoch_days(ref_year, ref_month, ref_day);
+            let sign = if end_epoch > base_epoch { 1 }
+                else if end_epoch < base_epoch { -1 }
+                else { return (0, 0, 0, 0); };
+            if largest_unit == "year" {
+                // Per spec NudgeToCalendarUnit: keep years fixed, round only months component
+                let month_base = add_iso_date(ref_year, ref_month, ref_day, years, months, 0, 0);
+                let month_base_epoch = iso_date_to_epoch_days(month_base.0, month_base.1, month_base.2);
+                let month_next = add_iso_date(ref_year, ref_month, ref_day, years, months + sign, 0, 0);
+                let month_next_epoch = iso_date_to_epoch_days(month_next.0, month_next.1, month_next.2);
+                let days_in_month = (month_next_epoch - month_base_epoch).abs() as f64;
+                let remaining_days = (end_epoch - month_base_epoch) as f64 + frac_days.fract();
+                let fractional = months as f64
+                    + if days_in_month > 0.0 { remaining_days / days_in_month } else { 0.0 };
+                let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
+                (years, rounded as i32, 0, 0)
+            } else {
+                // Flatten to total months
+                let (_, total_months, _, _) = difference_iso_date(
+                    ref_year, ref_month, ref_day, end_date.0, end_date.1, end_date.2, "month",
+                );
+                let month_start = add_iso_date(ref_year, ref_month, ref_day, 0, total_months, 0, 0);
+                let month_start_epoch = iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
+                let month_end = add_iso_date(ref_year, ref_month, ref_day, 0, total_months + sign, 0, 0);
+                let month_end_epoch = iso_date_to_epoch_days(month_end.0, month_end.1, month_end.2);
+                let days_in_month = (month_end_epoch - month_start_epoch).abs() as f64;
+                let remaining_days = (end_epoch - month_start_epoch) as f64 + frac_days.fract();
+                let fractional = total_months as f64
+                    + if days_in_month > 0.0 { remaining_days / days_in_month } else { 0.0 };
+                let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
+                (0, rounded as i32, 0, 0)
+            }
         }
         "week" => {
-            let total_days = weeks as f64 * 7.0 + frac_days;
-            let fractional_weeks = total_days / 7.0;
-            let rounded = round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
-            (years, months, rounded as i32, 0)
+            let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
+            let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
+            let preserve_months = (years != 0 || months != 0)
+                && matches!(largest_unit, "year" | "month");
+            if preserve_months {
+                // largestUnit preserves months: round remaining weeks within current month
+                let (_, total_months, _, _) = difference_iso_date(
+                    ref_year, ref_month, ref_day, end_date.0, end_date.1, end_date.2, "month",
+                );
+                let month_start = add_iso_date(ref_year, ref_month, ref_day, 0, total_months, 0, 0);
+                let month_start_epoch = iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
+                let remaining = (end_epoch - month_start_epoch) as f64 + frac_days.fract();
+                let fractional_weeks = remaining / 7.0;
+                let rounded = round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
+                (0, total_months, rounded as i32, 0)
+            } else {
+                // Flatten everything to total weeks
+                let base_epoch = iso_date_to_epoch_days(ref_year, ref_month, ref_day);
+                let total_days = (end_epoch - base_epoch) as f64 + frac_days.fract();
+                let fractional_weeks = total_days / 7.0;
+                let rounded = round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
+                (0, 0, rounded as i32, 0)
+            }
         }
         "day" => {
-            let rounded = round_number_to_increment(frac_days, rounding_increment, rounding_mode);
-            (years, months, weeks, rounded as i32)
+            if years != 0 || months != 0 || weeks != 0 {
+                // Preserve years/months/weeks, round remaining days
+                let days = frac_days.trunc() as i32;
+                let start = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, 0);
+                let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
+                let start_epoch = iso_date_to_epoch_days(start.0, start.1, start.2);
+                let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
+                // Use i128: remaining = calendar_days * NS_PER_DAY + sub-day ns
+                let calendar_days = (end_epoch - start_epoch) as i128;
+                // sub-day ns: time_ns modulo one day (the part not folded into days)
+                let sub_day_ns = time_ns_i128 % 86_400_000_000_000;
+                let remaining_ns: i128 = calendar_days * 86_400_000_000_000 + sub_day_ns;
+                let inc_ns: i128 = rounding_increment as i128 * 86_400_000_000_000;
+                let rounded_ns = round_i128_to_increment(remaining_ns, inc_ns, rounding_mode);
+                let rounded_days = (rounded_ns / 86_400_000_000_000) as i32;
+                (years, months, weeks, rounded_days)
+            } else {
+                // Use i128: days * NS_PER_DAY + sub-day ns for exact rounding
+                let days_i = frac_days.trunc() as i128;
+                let sub_day_ns = time_ns_i128 % 86_400_000_000_000;
+                let total_day_ns: i128 = days_i * 86_400_000_000_000 + sub_day_ns;
+                let inc_ns: i128 = rounding_increment as i128 * 86_400_000_000_000;
+                let rounded_ns = round_i128_to_increment(total_day_ns, inc_ns, rounding_mode);
+                let rounded_days = (rounded_ns / 86_400_000_000_000) as i32;
+                (0, 0, 0, rounded_days)
+            }
         }
         _ => (years, months, weeks, days),
     }

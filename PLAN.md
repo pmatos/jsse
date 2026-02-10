@@ -190,7 +190,7 @@ These are tracked across all phases:
 | `language/types` | 113 | |
 | `language/asi` | 102 | |
 | `language/` (other) | ~400 | white-space, comments, keywords, etc. |
-| `built-ins/Temporal` | 4,482 | 4,271 (95.3%) |
+| `built-ins/Temporal` | 4,482 | 4,420 (98.6%) |
 | `built-ins/Object` | 3,411 | |
 | `built-ins/Array` | 3,079 | |
 | `built-ins/RegExp` | 1,879 | 1,398 (74.4%) |

@@ -631,7 +631,7 @@ impl Interpreter {
                         }
                         let (ry2, rm2, _, _) = round_date_duration(
                             dy, dm, 0, 0,
-                            &smallest_unit, rounding_increment, &effective_mode,
+                            &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
                             ry, rm, rd,
                         );
                         dy = ry2;
