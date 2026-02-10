@@ -393,18 +393,22 @@ impl Interpreter {
                         "Duration.add cannot use calendar units (years, months, weeks) without relativeTo",
                     ));
                 }
-                let (ry, rmo, rw, rd, rh, rmi, rs, rms, rus, rns) = balance_duration_relative(
-                    y + other.0,
-                    mo + other.1,
-                    w + other.2,
-                    d + other.3,
-                    h + other.4,
-                    mi + other.5,
-                    s + other.6,
-                    ms + other.7,
-                    us + other.8,
-                    ns + other.9,
+                // Use i128 arithmetic to avoid f64 precision loss
+                let total_ns = ns as i128 + other.9 as i128
+                    + (us as i128 + other.8 as i128) * 1_000
+                    + (ms as i128 + other.7 as i128) * 1_000_000
+                    + (s as i128 + other.6 as i128) * 1_000_000_000
+                    + (mi as i128 + other.5 as i128) * 60_000_000_000
+                    + (h as i128 + other.4 as i128) * 3_600_000_000_000
+                    + (d as i128 + other.3 as i128) * 86_400_000_000_000;
+                let lu1 = default_temporal_largest_unit(y, mo, w, d, h, mi, s, ms, us);
+                let lu2 = default_temporal_largest_unit(
+                    other.0, other.1, other.2, other.3, other.4,
+                    other.5, other.6, other.7, other.8,
                 );
+                let lu = larger_of_two_temporal_units(&lu1, &lu2);
+                let (ry, rmo, rw, rd, rh, rmi, rs, rms, rus, rns) =
+                    balance_from_i128_ns(total_ns, &lu);
                 create_duration_result(interp, ry, rmo, rw, rd, rh, rmi, rs, rms, rus, rns)
             },
         ));
@@ -432,18 +436,22 @@ impl Interpreter {
                         "Duration.subtract cannot use calendar units (years, months, weeks) without relativeTo",
                     ));
                 }
-                let (ry, rmo, rw, rd, rh, rmi, rs, rms, rus, rns) = balance_duration_relative(
-                    y - other.0,
-                    mo - other.1,
-                    w - other.2,
-                    d - other.3,
-                    h - other.4,
-                    mi - other.5,
-                    s - other.6,
-                    ms - other.7,
-                    us - other.8,
-                    ns - other.9,
+                // Use i128 arithmetic to avoid f64 precision loss
+                let total_ns = ns as i128 - other.9 as i128
+                    + (us as i128 - other.8 as i128) * 1_000
+                    + (ms as i128 - other.7 as i128) * 1_000_000
+                    + (s as i128 - other.6 as i128) * 1_000_000_000
+                    + (mi as i128 - other.5 as i128) * 60_000_000_000
+                    + (h as i128 - other.4 as i128) * 3_600_000_000_000
+                    + (d as i128 - other.3 as i128) * 86_400_000_000_000;
+                let lu1 = default_temporal_largest_unit(y, mo, w, d, h, mi, s, ms, us);
+                let lu2 = default_temporal_largest_unit(
+                    other.0, other.1, other.2, other.3, other.4,
+                    other.5, other.6, other.7, other.8,
                 );
+                let lu = larger_of_two_temporal_units(&lu1, &lu2);
+                let (ry, rmo, rw, rd, rh, rmi, rs, rms, rus, rns) =
+                    balance_from_i128_ns(total_ns, &lu);
                 create_duration_result(interp, ry, rmo, rw, rd, rh, rmi, rs, rms, rus, rns)
             },
         ));
@@ -487,9 +495,14 @@ impl Interpreter {
                     Err(c) => return c,
                 };
 
-                // Calendar units require relativeTo
+                // Calendar units require relativeTo:
+                // - Duration has calendar units (years/months/weeks), OR
+                // - Target unit is a calendar unit (years/months/weeks)
                 let has_calendar = y != 0.0 || mo != 0.0 || w != 0.0;
-                if has_calendar && relative_to.is_none() {
+                let target_is_calendar = matches!(
+                    smallest_unit, "year" | "month" | "week"
+                ) || matches!(largest_unit, "year" | "month" | "week");
+                if (has_calendar || target_is_calendar) && relative_to.is_none() {
                     return Completion::Throw(interp.create_range_error(
                         "relativeTo is required for rounding durations with calendar units",
                     ));
@@ -643,9 +656,12 @@ impl Interpreter {
                     );
                 };
 
-                // Calendar units require relativeTo
+                // Calendar units require relativeTo:
+                // - Duration has calendar units, OR
+                // - Target unit is a calendar unit (year/month/week)
                 let has_calendar = y != 0.0 || mo != 0.0 || w != 0.0;
-                if has_calendar && relative_to.is_none() {
+                let target_is_calendar = matches!(unit, "year" | "month" | "week");
+                if (has_calendar || target_is_calendar) && relative_to.is_none() {
                     return Completion::Throw(
                         interp.create_range_error("relativeTo is required for calendar units"),
                     );
@@ -1531,6 +1547,58 @@ fn parse_to_string_options(
         None => Ok((None, rounding_mode)),
         Some(digits) => Ok((digits, rounding_mode)),
     }
+}
+
+/// Balance total nanoseconds into a duration tuple using i128 precision.
+fn balance_from_i128_ns(
+    total_ns: i128, largest_unit: &str,
+) -> (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) {
+    let sign = if total_ns < 0 { -1i128 } else { 1 };
+    let mut remaining = total_ns.abs();
+    let lu_order = super::temporal_unit_order(largest_unit);
+
+    let days = if lu_order >= super::temporal_unit_order("day") {
+        let d = remaining / 86_400_000_000_000;
+        remaining %= 86_400_000_000_000;
+        d
+    } else { 0 };
+    let hours = if lu_order >= super::temporal_unit_order("hour") {
+        let h = remaining / 3_600_000_000_000;
+        remaining %= 3_600_000_000_000;
+        h
+    } else { 0 };
+    let minutes = if lu_order >= super::temporal_unit_order("minute") {
+        let m = remaining / 60_000_000_000;
+        remaining %= 60_000_000_000;
+        m
+    } else { 0 };
+    let seconds = if lu_order >= super::temporal_unit_order("second") {
+        let s = remaining / 1_000_000_000;
+        remaining %= 1_000_000_000;
+        s
+    } else { 0 };
+    let milliseconds = if lu_order >= super::temporal_unit_order("millisecond") {
+        let ms = remaining / 1_000_000;
+        remaining %= 1_000_000;
+        ms
+    } else { 0 };
+    let microseconds = if lu_order >= super::temporal_unit_order("microsecond") {
+        let us = remaining / 1_000;
+        remaining %= 1_000;
+        us
+    } else { 0 };
+    let nanoseconds = remaining;
+
+    (
+        0.0, 0.0, 0.0,
+        (sign * days) as f64,
+        (sign * hours) as f64,
+        (sign * minutes) as f64,
+        (sign * seconds) as f64,
+        (sign * milliseconds) as f64,
+        (sign * microseconds) as f64,
+        (sign * nanoseconds) as f64,
+    )
 }
 
 fn default_temporal_largest_unit(
