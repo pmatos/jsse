@@ -127,13 +127,12 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                if dur.0 != 0.0 || dur.1 != 0.0 || dur.2 != 0.0 {
+                if dur.0 != 0.0 || dur.1 != 0.0 || dur.2 != 0.0 || dur.3 != 0.0 {
                     return Completion::Throw(interp.create_range_error(
-                        "Instant.add does not support years, months, or weeks",
+                        "Instant.add does not support years, months, weeks, or days",
                     ));
                 }
-                let delta_ns = dur.3 as i128 * 86_400_000_000_000
-                    + dur.4 as i128 * 3_600_000_000_000
+                let delta_ns = dur.4 as i128 * 3_600_000_000_000
                     + dur.5 as i128 * 60_000_000_000
                     + dur.6 as i128 * 1_000_000_000
                     + dur.7 as i128 * 1_000_000
@@ -164,13 +163,12 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                if dur.0 != 0.0 || dur.1 != 0.0 || dur.2 != 0.0 {
+                if dur.0 != 0.0 || dur.1 != 0.0 || dur.2 != 0.0 || dur.3 != 0.0 {
                     return Completion::Throw(interp.create_range_error(
-                        "Instant.subtract does not support years, months, or weeks",
+                        "Instant.subtract does not support years, months, weeks, or days",
                     ));
                 }
-                let delta_ns = dur.3 as i128 * 86_400_000_000_000
-                    + dur.4 as i128 * 3_600_000_000_000
+                let delta_ns = dur.4 as i128 * 3_600_000_000_000
                     + dur.5 as i128 * 60_000_000_000
                     + dur.6 as i128 * 1_000_000_000
                     + dur.7 as i128 * 1_000_000
@@ -221,7 +219,7 @@ impl Interpreter {
                             Err(c) => return c,
                         };
 
-                    // Round the difference using BigInt for precision
+                    // Round the difference using mathematical rounding
                     let diff_big = BigInt::from(diff_ns);
                     let rounded_big = if smallest_unit != "nanosecond" || rounding_increment != 1.0
                     {
@@ -376,7 +374,7 @@ impl Interpreter {
 
                 let unit_ns = temporal_unit_length_ns(unit) as i128;
                 let inc_ns = unit_ns * increment as i128;
-                let result = round_bigint_to_increment(&ns, inc_ns, rounding_mode);
+                let result = round_temporal_instant(&ns, inc_ns, rounding_mode);
                 if !is_valid_epoch_ns(&result) {
                     return Completion::Throw(interp.create_range_error("Instant out of range"));
                 }
@@ -397,7 +395,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let options = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let (tz_id, tz_offset_ns, frac_digits, smallest_unit, rounding_mode) =
+                let (tz_id, tz_offset_ns, tz_explicit, frac_digits, smallest_unit, rounding_mode) =
                     match parse_to_string_options(interp, &options) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -406,10 +404,10 @@ impl Interpreter {
                 // Apply rounding if smallestUnit or fractionalSecondDigits specified
                 let rounded_ns = if let Some(unit) = smallest_unit {
                     let unit_ns = temporal_unit_length_ns(unit) as i128;
-                    round_bigint_to_increment(&ns, unit_ns, rounding_mode)
+                    round_temporal_instant(&ns, unit_ns, rounding_mode)
                 } else if let Some(digits) = frac_digits {
                     let increment = 10i128.pow(9 - digits as u32);
-                    round_bigint_to_increment(&ns, increment, rounding_mode)
+                    round_temporal_instant(&ns, increment, rounding_mode)
                 } else {
                     ns
                 };
@@ -427,8 +425,13 @@ impl Interpreter {
                     frac_digits.map(|d| d as i32)
                 };
 
-                let result =
-                    instant_to_string_with_tz(&rounded_ns, &tz_id, tz_offset_ns, precision);
+                let result = instant_to_string_with_tz(
+                    &rounded_ns,
+                    &tz_id,
+                    tz_offset_ns,
+                    precision,
+                    tz_explicit,
+                );
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -445,7 +448,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let result = instant_to_string_with_tz(&ns, "UTC", 0, None);
+                let result = instant_to_string_with_tz(&ns, "UTC", 0, None, false);
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -462,7 +465,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let result = instant_to_string_with_tz(&ns, "UTC", 0, None);
+                let result = instant_to_string_with_tz(&ns, "UTC", 0, None, false);
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -892,6 +895,7 @@ pub(super) fn to_bigint_arg(interp: &mut Interpreter, val: &JsValue) -> Result<B
     }
 }
 
+// Mathematical rounding for durations (until/since): sign-aware trunc/expand/etc.
 fn round_bigint_to_increment(n: &BigInt, increment: i128, mode: &str) -> BigInt {
     let inc = BigInt::from(increment);
     let zero = BigInt::from(0);
@@ -909,7 +913,6 @@ fn round_bigint_to_increment(n: &BigInt, increment: i128, mode: &str) -> BigInt 
     } else {
         remainder.clone()
     };
-    let half_inc = BigInt::from(increment / 2);
     let abs_inc = BigInt::from(increment.abs());
 
     let round_up = match mode {
@@ -917,8 +920,8 @@ fn round_bigint_to_increment(n: &BigInt, increment: i128, mode: &str) -> BigInt 
         "floor" => is_negative,
         "trunc" => false,
         "expand" => true,
-        "halfExpand" => abs_rem * BigInt::from(2) >= abs_inc,
-        "halfTrunc" => abs_rem * BigInt::from(2) > abs_inc,
+        "halfExpand" => abs_rem.clone() * BigInt::from(2) >= abs_inc,
+        "halfTrunc" => abs_rem.clone() * BigInt::from(2) > abs_inc,
         "halfCeil" => {
             let doubled = &abs_rem * BigInt::from(2);
             if !is_negative {
@@ -942,13 +945,12 @@ fn round_bigint_to_increment(n: &BigInt, increment: i128, mode: &str) -> BigInt 
             } else if doubled < abs_inc {
                 false
             } else {
-                // Exactly half: round to even
                 let abs_q = if quotient < zero {
                     -&quotient
                 } else {
                     quotient.clone()
                 };
-                abs_q.clone() % BigInt::from(2) != zero
+                abs_q % BigInt::from(2) != zero
             }
         }
         _ => false,
@@ -962,6 +964,72 @@ fn round_bigint_to_increment(n: &BigInt, increment: i128, mode: &str) -> BigInt 
         }
     } else {
         &quotient * &inc
+    }
+}
+
+// Spec's RoundTemporalInstant rounding: r1=floor, r2=ceil, sign-independent modes.
+// trunc/expand/halfTrunc/halfExpand behave as floor/ceil/halfFloor/halfCeil.
+fn round_temporal_instant(n: &BigInt, increment: i128, mode: &str) -> BigInt {
+    let inc = BigInt::from(increment);
+    let zero = BigInt::from(0);
+
+    let remainder = n % &inc;
+    if remainder == zero {
+        return n.clone();
+    }
+
+    let q_trunc = n / &inc;
+    let (r1_q, r2_q) = if remainder > zero {
+        (q_trunc.clone(), &q_trunc + BigInt::from(1))
+    } else {
+        (&q_trunc - BigInt::from(1), q_trunc.clone())
+    };
+
+    let r1 = &r1_q * &inc;
+    let r2 = &r2_q * &inc;
+    let d1 = n - &r1;
+    let d2 = &r2 - n;
+
+    match mode {
+        "floor" | "trunc" => r1,
+        "ceil" | "expand" => r2,
+        "halfFloor" | "halfTrunc" => {
+            if d1 < d2 {
+                r1
+            } else if d2 < d1 {
+                r2
+            } else {
+                r1
+            }
+        }
+        "halfCeil" | "halfExpand" => {
+            if d1 < d2 {
+                r1
+            } else if d2 < d1 {
+                r2
+            } else {
+                r2
+            }
+        }
+        "halfEven" => {
+            if d1 < d2 {
+                r1
+            } else if d2 < d1 {
+                r2
+            } else {
+                let r1_abs = if r1_q < zero {
+                    -&r1_q
+                } else {
+                    r1_q.clone()
+                };
+                if r1_abs % BigInt::from(2) == zero {
+                    r1
+                } else {
+                    r2
+                }
+            }
+        }
+        _ => r1,
     }
 }
 
@@ -988,6 +1056,7 @@ fn instant_to_string_with_tz(
     tz_id: &str,
     tz_offset_ns: i64,
     precision: Option<i32>,
+    tz_explicit: bool,
 ) -> String {
     let total_ns: i128 = ns.try_into().unwrap_or(0);
     // Apply timezone offset
@@ -1032,8 +1101,8 @@ fn instant_to_string_with_tz(
         _ => format!("{hour:02}:{minute:02}:{second:02}"),
     };
 
-    // Format offset
-    let offset_str = if tz_id == "UTC" && tz_offset_ns == 0 {
+    // Format offset: Z only when no explicit timeZone; otherwise numeric offset
+    let offset_str = if !tz_explicit && tz_offset_ns == 0 {
         "Z".to_string()
     } else {
         let abs_offset = tz_offset_ns.unsigned_abs() as i64;
@@ -1063,12 +1132,23 @@ fn instant_to_string_with_tz(
     result
 }
 
+// Returns (tz_id, tz_offset_ns, tz_explicit, frac_digits, smallest_unit, rounding_mode)
 fn parse_to_string_options(
     interp: &mut Interpreter,
     options: &JsValue,
-) -> Result<(String, i64, Option<u8>, Option<&'static str>, &'static str), Completion> {
+) -> Result<
+    (
+        String,
+        i64,
+        bool,
+        Option<u8>,
+        Option<&'static str>,
+        &'static str,
+    ),
+    Completion,
+> {
     if is_undefined(options) {
-        return Ok(("UTC".to_string(), 0, None, None, "trunc"));
+        return Ok(("UTC".to_string(), 0, false, None, None, "trunc"));
     }
     if !matches!(options, JsValue::Object(_)) {
         return Err(Completion::Throw(
@@ -1076,68 +1156,45 @@ fn parse_to_string_options(
         ));
     }
 
-    // timeZone
-    let tz_val = match get_prop(interp, options, "timeZone") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let (tz_id, tz_offset_ns) = if is_undefined(&tz_val) {
-        ("UTC".to_string(), 0i64)
-    } else {
-        let tz_str = match interp.to_string_value(&tz_val) {
-            Ok(v) => v,
-            Err(e) => return Err(Completion::Throw(e)),
-        };
-        parse_timezone_offset(&tz_str)
-    };
+    // Per spec, read options in alphabetical order:
+    // fractionalSecondDigits, roundingMode, smallestUnit, timeZone
 
-    // fractionalSecondDigits
+    // fractionalSecondDigits — GetStringOrNumberOption
     let fsd_val = match get_prop(interp, options, "fractionalSecondDigits") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
     let frac_digits = if is_undefined(&fsd_val) {
         None
-    } else if let JsValue::String(ref s) = fsd_val {
-        if s.to_rust_string() == "auto" {
+    } else if matches!(fsd_val, JsValue::Number(_)) {
+        let n = match interp.to_number_value(&fsd_val) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        };
+        if n.is_nan() || !n.is_finite() {
+            return Err(Completion::Throw(interp.create_range_error(
+                "fractionalSecondDigits must be 0-9 or 'auto'",
+            )));
+        }
+        let floored = n.floor();
+        if floored < 0.0 || floored > 9.0 {
+            return Err(Completion::Throw(interp.create_range_error(
+                "fractionalSecondDigits must be 0-9 or 'auto'",
+            )));
+        }
+        Some(floored as u8)
+    } else {
+        // Not a number — convert to string and check for "auto"
+        let s = match interp.to_string_value(&fsd_val) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        };
+        if s == "auto" {
             None
         } else {
             return Err(Completion::Throw(interp.create_range_error(&format!(
                 "Invalid fractionalSecondDigits: {s}"
             ))));
-        }
-    } else {
-        let n = match interp.to_number_value(&fsd_val) {
-            Ok(v) => v,
-            Err(e) => return Err(Completion::Throw(e)),
-        };
-        if n.is_nan() || !n.is_finite() || n < 0.0 || n > 9.0 || n != n.trunc() {
-            return Err(Completion::Throw(interp.create_range_error(
-                "fractionalSecondDigits must be 0-9 or 'auto'",
-            )));
-        }
-        Some(n as u8)
-    };
-
-    // smallestUnit
-    let su_val = match get_prop(interp, options, "smallestUnit") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let smallest_unit = if is_undefined(&su_val) {
-        None
-    } else {
-        let s = match interp.to_string_value(&su_val) {
-            Ok(v) => v,
-            Err(e) => return Err(Completion::Throw(e)),
-        };
-        match temporal_unit_singular(&s) {
-            Some(u) => Some(u),
-            None => {
-                return Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid unit: {s}")),
-                ));
-            }
         }
     };
 
@@ -1171,9 +1228,57 @@ fn parse_to_string_options(
         }
     };
 
+    // smallestUnit — only time units valid, and "hour" is additionally rejected
+    let su_val = match get_prop(interp, options, "smallestUnit") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let smallest_unit = if is_undefined(&su_val) {
+        None
+    } else {
+        let s = match interp.to_string_value(&su_val) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        };
+        match temporal_unit_singular(&s) {
+            Some(u)
+                if matches!(
+                    u,
+                    "minute" | "second" | "millisecond" | "microsecond" | "nanosecond"
+                ) =>
+            {
+                Some(u)
+            }
+            _ => {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!(
+                        "{s} is not a valid value for smallest unit"
+                    )),
+                ));
+            }
+        }
+    };
+
+    // timeZone
+    let tz_val = match get_prop(interp, options, "timeZone") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let (tz_id, tz_offset_ns, tz_explicit) = if is_undefined(&tz_val) {
+        ("UTC".to_string(), 0i64, false)
+    } else {
+        let tz_str = match interp.to_string_value(&tz_val) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        };
+        let (id, offset) = parse_timezone_offset(&tz_str);
+        (id, offset, true)
+    };
+
     Ok((
         tz_id,
         tz_offset_ns,
+        tz_explicit,
         frac_digits,
         smallest_unit,
         rounding_mode,
