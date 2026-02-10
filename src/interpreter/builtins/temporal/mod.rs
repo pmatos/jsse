@@ -46,6 +46,10 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
             return Some(cn);
         }
     }
+    // Try parsing as a time-only string (e.g. "15:23", "T15:23:30")
+    if parse_temporal_time_string(cal).is_some() {
+        return Some("iso8601".to_string());
+    }
     // Try parsing as month-day (MM-DD) or year-month (YYYY-MM)
     if let Some(parsed) = parse_temporal_month_day_string(cal) {
         let c = parsed.3.unwrap_or_else(|| "iso8601".to_string());
@@ -177,9 +181,14 @@ pub(crate) fn validate_rounding_increment(
         ));
     }
     if is_difference {
-        // For since/until: increment must divide max of unit
+        // For since/until: increment must be < max AND divide max (exclusive)
         if let Some(max) = max_rounding_increment(unit) {
             let i = int_inc as u64;
+            if i >= max {
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "{int_inc} is out of range for {unit}"
+                ))));
+            }
             if max % i != 0 {
                 return Err(Completion::Throw(interp.create_range_error(&format!(
                     "{int_inc} does not divide evenly into {max}"
@@ -443,18 +452,32 @@ pub(crate) fn add_iso_date(
     weeks: i32,
     days: i32,
 ) -> (i32, u8, u8) {
-    // Add years and months
+    add_iso_date_with_overflow(year, month, day, years, months, weeks, days, "constrain").unwrap()
+}
+
+/// AddISODate with overflow handling. Returns Err(()) for reject when day > days-in-month.
+pub(crate) fn add_iso_date_with_overflow(
+    year: i32,
+    month: u8,
+    day: u8,
+    years: i32,
+    months: i32,
+    weeks: i32,
+    days: i32,
+    overflow: &str,
+) -> Result<(i32, u8, u8), ()> {
     let mut y = year + years;
     let mut m = month as i32 + months;
     y += (m - 1).div_euclid(12);
     m = (m - 1).rem_euclid(12) + 1;
     let mu = m as u8;
-    // Clamp day to days in resulting month
     let dim = iso_days_in_month(y, mu);
+    if overflow == "reject" && day > dim {
+        return Err(());
+    }
     let d = day.min(dim) as i32;
-    // Add weeks and days
     let total_days = d + weeks * 7 + days;
-    balance_iso_date(y, mu as i32, total_days)
+    Ok(balance_iso_date(y, mu as i32, total_days))
 }
 
 pub(crate) fn difference_iso_date(
@@ -895,6 +918,27 @@ pub(crate) fn parse_utc_offset_timezone(s: &str) -> Option<String> {
     }
 
     Some(format!("{}{:02}:{:02}", sign, hours, minutes))
+}
+
+/// Convert a canonical offset string like "+01:00" or "-05:30" to nanoseconds.
+pub(crate) fn offset_string_to_ns(s: &str) -> i128 {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return 0;
+    }
+    let sign: i128 = if bytes[0] == b'-' { -1 } else { 1 };
+    let rest = &bytes[1..];
+    let hours = if rest.len() >= 2 {
+        (rest[0] - b'0') as i128 * 10 + (rest[1] - b'0') as i128
+    } else {
+        0
+    };
+    let minutes = if rest.len() >= 5 && rest[2] == b':' {
+        (rest[3] - b'0') as i128 * 10 + (rest[4] - b'0') as i128
+    } else {
+        0
+    };
+    sign * (hours * 3_600_000_000_000 + minutes * 60_000_000_000)
 }
 
 /// Check if a string is a valid IANA timezone name (simplified).
@@ -2163,6 +2207,29 @@ pub(crate) fn default_largest_unit_for_duration(
 }
 
 // Larger temporal unit ordering
+/// DateDurationSign: returns the sign of a date duration's components.
+pub(crate) fn duration_date_sign(years: i32, months: i32, weeks: i32, days: i32) -> i32 {
+    for &v in &[years, months, weeks, days] {
+        if v > 0 { return 1; }
+        if v < 0 { return -1; }
+    }
+    0
+}
+
+pub(crate) fn negate_rounding_mode(mode: &str) -> String {
+    match mode {
+        "ceil" => "floor".to_string(),
+        "floor" => "ceil".to_string(),
+        "expand" => "trunc".to_string(),
+        "trunc" => "expand".to_string(),
+        "halfCeil" => "halfFloor".to_string(),
+        "halfFloor" => "halfCeil".to_string(),
+        "halfExpand" => "halfTrunc".to_string(),
+        "halfTrunc" => "halfExpand".to_string(),
+        _ => mode.to_string(), // halfEven is symmetric
+    }
+}
+
 pub(crate) fn temporal_unit_order(unit: &str) -> u8 {
     match unit {
         "year" | "years" => 10,
