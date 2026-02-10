@@ -894,6 +894,11 @@ impl Interpreter {
                                 ry, rm, rd,
                             );
                             dy = ry2; dm = rm2; dw = rw2; dd = rd2;
+                            // Rebalance months overflow into years when largestUnit is year
+                            if matches!(largest_unit.as_str(), "year") && dm.abs() >= 12 {
+                                dy += dm / 12;
+                                dm %= 12;
+                            }
                             dh = 0; dmi = 0; ds = 0; dms = 0; dus = 0; dns = 0;
                         } else {
                             let time_ns = dh as f64 * 3_600_000_000_000.0
@@ -917,6 +922,23 @@ impl Interpreter {
                             dmi = rem % 60;
                             let rem = rem / 60;
                             dh = rem;
+                            // Cascade day overflow from time rounding into calendar units
+                            if dh.abs() >= 24 {
+                                let day_overflow = (if dh >= 0 { dh / 24 } else { -((-dh) / 24) }) as i32;
+                                dh -= day_overflow as i64 * 24;
+                                dd += day_overflow;
+                                let lu_order = super::temporal_unit_order(&largest_unit);
+                                if lu_order >= super::temporal_unit_order("month") {
+                                    // Re-derive date portion: add years+months to ref, then diff to target
+                                    let intermediate = super::add_iso_date(y1, m1, d1, dy, dm, 0, 0);
+                                    // Target = intermediate + dd days
+                                    let target = super::add_iso_date(intermediate.0, intermediate.1, intermediate.2, 0, 0, 0, dd);
+                                    let (ny, nm, _, nd) = super::difference_iso_date(
+                                        y1, m1, d1, target.0, target.1, target.2, &largest_unit,
+                                    );
+                                    dy = ny; dm = nm; dd = nd;
+                                }
+                            }
                         }
                     }
 

@@ -14448,8 +14448,12 @@ test262/test/built-ins/Temporal/Duration/compare/argument-string-negative-fracti
 test262/test/built-ins/Temporal/Duration/compare/basic.js
 test262/test/built-ins/Temporal/Duration/compare/blank-duration.js
 test262/test/built-ins/Temporal/Duration/compare/builtin.js
+test262/test/built-ins/Temporal/Duration/compare/calendar-possibly-required.js
 test262/test/built-ins/Temporal/Duration/compare/calendar-temporal-object.js
+test262/test/built-ins/Temporal/Duration/compare/compare-no-precision-loss.js
 test262/test/built-ins/Temporal/Duration/compare/duration-out-of-range-added-to-relativeto.js
+test262/test/built-ins/Temporal/Duration/compare/exhaustive.js
+test262/test/built-ins/Temporal/Duration/compare/instances-identical.js
 test262/test/built-ins/Temporal/Duration/compare/length.js
 test262/test/built-ins/Temporal/Duration/compare/name.js
 test262/test/built-ins/Temporal/Duration/compare/not-a-constructor.js
@@ -14548,6 +14552,7 @@ test262/test/built-ins/Temporal/Duration/prototype/add/infinity-throws-rangeerro
 test262/test/built-ins/Temporal/Duration/prototype/add/length.js
 test262/test/built-ins/Temporal/Duration/prototype/add/name.js
 test262/test/built-ins/Temporal/Duration/prototype/add/negative-infinity-throws-rangeerror.js
+test262/test/built-ins/Temporal/Duration/prototype/add/no-calendar-units.js
 test262/test/built-ins/Temporal/Duration/prototype/add/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/Duration/prototype/add/not-a-constructor.js
 test262/test/built-ins/Temporal/Duration/prototype/add/prop-desc.js
@@ -14697,6 +14702,7 @@ test262/test/built-ins/Temporal/Duration/prototype/subtract/infinity-throws-rang
 test262/test/built-ins/Temporal/Duration/prototype/subtract/length.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/name.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/negative-infinity-throws-rangeerror.js
+test262/test/built-ins/Temporal/Duration/prototype/subtract/no-calendar-units.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/not-a-constructor.js
 test262/test/built-ins/Temporal/Duration/prototype/subtract/prop-desc.js
@@ -14725,6 +14731,7 @@ test262/test/built-ins/Temporal/Duration/prototype/toString/blank-duration-preci
 test262/test/built-ins/Temporal/Duration/prototype/toString/branding.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/builtin.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-auto.js
+test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-exact-number-of-digits.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-invalid-string.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-nan.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/fractionalseconddigits-non-integer.js
@@ -14741,6 +14748,7 @@ test262/test/built-ins/Temporal/Duration/prototype/toString/options-undefined.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/options-wrong-type.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/precision.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/prop-desc.js
+test262/test/built-ins/Temporal/Duration/prototype/toString/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/roundingmode-ceil.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/roundingmode-floor.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/roundingmode-halfExpand.js
@@ -14748,6 +14756,7 @@ test262/test/built-ins/Temporal/Duration/prototype/toString/roundingmode-invalid
 test262/test/built-ins/Temporal/Duration/prototype/toString/roundingmode-trunc.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/roundingmode-undefined.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/roundingmode-wrong-type.js
+test262/test/built-ins/Temporal/Duration/prototype/toString/smallestunit-fractionalseconddigits.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/smallestunit-invalid-string.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/smallestunit-plurals-accepted.js
 test262/test/built-ins/Temporal/Duration/prototype/toString/smallestunit-undefined.js
@@ -15612,6 +15621,7 @@ test262/test/built-ins/Temporal/PlainDate/prototype/since/not-a-constructor.js
 test262/test/built-ins/Temporal/PlainDate/prototype/since/options-object.js
 test262/test/built-ins/Temporal/PlainDate/prototype/since/options-wrong-type.js
 test262/test/built-ins/Temporal/PlainDate/prototype/since/prop-desc.js
+test262/test/built-ins/Temporal/PlainDate/prototype/since/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/PlainDate/prototype/since/rounding-relative.js
 test262/test/built-ins/Temporal/PlainDate/prototype/since/roundingincrement-nan.js
 test262/test/built-ins/Temporal/PlainDate/prototype/since/roundingincrement-non-integer.js
@@ -15840,6 +15850,7 @@ test262/test/built-ins/Temporal/PlainDate/prototype/until/not-a-constructor.js
 test262/test/built-ins/Temporal/PlainDate/prototype/until/options-object.js
 test262/test/built-ins/Temporal/PlainDate/prototype/until/options-wrong-type.js
 test262/test/built-ins/Temporal/PlainDate/prototype/until/prop-desc.js
+test262/test/built-ins/Temporal/PlainDate/prototype/until/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/PlainDate/prototype/until/rounding-relative.js
 test262/test/built-ins/Temporal/PlainDate/prototype/until/roundingincrement-nan.js
 test262/test/built-ins/Temporal/PlainDate/prototype/until/roundingincrement-non-integer.js
@@ -16261,6 +16272,7 @@ test262/test/built-ins/Temporal/PlainDateTime/prototype/since/options-undefined.
 test262/test/built-ins/Temporal/PlainDateTime/prototype/since/options-wrong-type.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/since/prop-desc.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/since/returns-days.js
+test262/test/built-ins/Temporal/PlainDateTime/prototype/since/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/since/round-negative-duration.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/since/round-relative-to-receiver.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/since/roundingincrement-basic.js
@@ -16479,6 +16491,7 @@ test262/test/built-ins/Temporal/PlainDateTime/prototype/until/options-undefined.
 test262/test/built-ins/Temporal/PlainDateTime/prototype/until/options-wrong-type.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/until/prop-desc.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/until/returns-days.js
+test262/test/built-ins/Temporal/PlainDateTime/prototype/until/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/until/round-negative-duration.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/until/round-relative-to-receiver.js
 test262/test/built-ins/Temporal/PlainDateTime/prototype/until/roundingincrement-basic.js
@@ -17473,6 +17486,7 @@ test262/test/built-ins/Temporal/PlainYearMonth/prototype/since/options-object.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/since/options-undefined.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/since/options-wrong-type.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/since/prop-desc.js
+test262/test/built-ins/Temporal/PlainYearMonth/prototype/since/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/since/roundingincrement-as-expected.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/since/roundingincrement-nan.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/since/roundingincrement-non-integer.js
@@ -17622,6 +17636,7 @@ test262/test/built-ins/Temporal/PlainYearMonth/prototype/until/options-object.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/until/options-undefined.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/until/options-wrong-type.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/until/prop-desc.js
+test262/test/built-ins/Temporal/PlainYearMonth/prototype/until/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/until/roundingincrement-as-expected.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/until/roundingincrement-nan.js
 test262/test/built-ins/Temporal/PlainYearMonth/prototype/until/roundingincrement-non-integer.js
@@ -18100,6 +18115,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/options-undefined.
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/options-wrong-type.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/reversibility-of-differences.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/rounding-increments.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/roundingincrement-nan.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/roundingincrement-non-integer.js
@@ -18354,6 +18370,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/options-object.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/options-undefined.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/options-wrong-type.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/prop-desc.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/rounding-increments.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/roundingincrement-nan.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/roundingincrement-non-integer.js

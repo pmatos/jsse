@@ -548,6 +548,11 @@ impl Interpreter {
                         dm = rm2;
                         dw = rw2;
                         dd = rd2;
+                        // Rebalance months overflow into years when largestUnit is year
+                        if matches!(largest_unit.as_str(), "year") && dm.abs() >= 12 {
+                            dy += dm / 12;
+                            dm %= 12;
+                        }
                     }
 
                     // For since: negate the result

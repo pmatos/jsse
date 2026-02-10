@@ -112,8 +112,7 @@ fn duration_total_ns_relative(
     base_year: i32,
     base_month: u8,
     base_day: u8,
-) -> Result<f64, ()> {
-    // Add years + months + weeks + days to the base date
+) -> Result<i128, ()> {
     let (ry, rm, rd) = add_iso_date(
         base_year,
         base_month,
@@ -123,27 +122,22 @@ fn duration_total_ns_relative(
         w as i32,
         d as i32,
     );
-    // Check result is within ISO date-time limits (year ±275760)
     if ry < -275760 || ry > 275760 {
         return Err(());
     }
     let base_epoch = iso_date_to_epoch_days(base_year, base_month, base_day);
     let result_epoch = iso_date_to_epoch_days(ry, rm, rd);
-    let total_days = (result_epoch - base_epoch) as f64;
-    let time_ns = h * 3_600_000_000_000.0
-        + mi * 60_000_000_000.0
-        + s * 1_000_000_000.0
-        + ms * 1_000_000.0
-        + us * 1_000.0
-        + ns;
-    // Check for out-of-range total (more than ~10^17 ns = ~3.17 years in nanoseconds)
-    let total = total_days * 86_400_000_000_000.0 + time_ns;
-    if !total.is_finite() {
-        return Err(());
-    }
-    // Add24HourDaysToNormalizedTimeDuration range check:
-    // if |total_days * 24h + time| exceeds 2^53 ns, it's out of range
-    if total.abs() > 2.0f64.powi(53) * 1_000_000_000.0 {
+    let total_days = (result_epoch - base_epoch) as i128;
+    let time_ns = h as i128 * 3_600_000_000_000
+        + mi as i128 * 60_000_000_000
+        + s as i128 * 1_000_000_000
+        + ms as i128 * 1_000_000
+        + us as i128 * 1_000
+        + ns as i128;
+    let total = total_days * 86_400_000_000_000 + time_ns;
+    // Add24HourDaysToNormalizedTimeDuration range check
+    let limit = (1i128 << 53) * 1_000_000_000;
+    if total.abs() > limit {
         return Err(());
     }
     Ok(total)
@@ -392,6 +386,11 @@ impl Interpreter {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
+                if y != 0.0 || mo != 0.0 || w != 0.0 || other.0 != 0.0 || other.1 != 0.0 || other.2 != 0.0 {
+                    return Completion::Throw(interp.create_range_error(
+                        "Duration.add cannot use calendar units (years, months, weeks) without relativeTo",
+                    ));
+                }
                 let (ry, rmo, rw, rd, rh, rmi, rs, rms, rus, rns) = balance_duration_relative(
                     y + other.0,
                     mo + other.1,
@@ -426,6 +425,11 @@ impl Interpreter {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
+                if y != 0.0 || mo != 0.0 || w != 0.0 || other.0 != 0.0 || other.1 != 0.0 || other.2 != 0.0 {
+                    return Completion::Throw(interp.create_range_error(
+                        "Duration.subtract cannot use calendar units (years, months, weeks) without relativeTo",
+                    ));
+                }
                 let (ry, rmo, rw, rd, rh, rmi, rs, rms, rus, rns) = balance_duration_relative(
                     y - other.0,
                     mo - other.1,
@@ -536,7 +540,7 @@ impl Interpreter {
                         let total_ns = match duration_total_ns_relative(
                             y, mo, w, d, h, mi, s, ms, us, ns, by, bm, bd,
                         ) {
-                            Ok(v) => v,
+                            Ok(v) => v as f64,
                             Err(()) => return Completion::Throw(interp.create_range_error(
                                 "duration out of range when applied to relativeTo",
                             )),
@@ -654,11 +658,11 @@ impl Interpreter {
                     );
                 }
 
-                let total_ns = if let Some((by, bm, bd)) = relative_to {
+                let total_ns: f64 = if let Some((by, bm, bd)) = relative_to {
                     match duration_total_ns_relative(
                         y, mo, w, d, h, mi, s, ms, us, ns, by, bm, bd,
                     ) {
-                        Ok(v) => v,
+                        Ok(v) => v as f64,
                         Err(()) => return Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         )),
@@ -936,6 +940,14 @@ impl Interpreter {
                     );
                 };
 
+                // If both durations are identical, return 0 without needing relativeTo
+                if one.0 == two.0 && one.1 == two.1 && one.2 == two.2 && one.3 == two.3
+                    && one.4 == two.4 && one.5 == two.5 && one.6 == two.6 && one.7 == two.7
+                    && one.8 == two.8 && one.9 == two.9
+                {
+                    return Completion::Normal(JsValue::Number(0.0));
+                }
+
                 let has_calendar_units = one.0 != 0.0
                     || one.1 != 0.0
                     || one.2 != 0.0
@@ -970,22 +982,22 @@ impl Interpreter {
                     };
                     (n1, n2)
                 } else {
-                    let n1 = one.2 * 604_800_000_000_000.0
-                        + one.3 * 86_400_000_000_000.0
-                        + one.4 * 3_600_000_000_000.0
-                        + one.5 * 60_000_000_000.0
-                        + one.6 * 1_000_000_000.0
-                        + one.7 * 1_000_000.0
-                        + one.8 * 1_000.0
-                        + one.9;
-                    let n2 = two.2 * 604_800_000_000_000.0
-                        + two.3 * 86_400_000_000_000.0
-                        + two.4 * 3_600_000_000_000.0
-                        + two.5 * 60_000_000_000.0
-                        + two.6 * 1_000_000_000.0
-                        + two.7 * 1_000_000.0
-                        + two.8 * 1_000.0
-                        + two.9;
+                    let n1 = one.2 as i128 * 604_800_000_000_000
+                        + one.3 as i128 * 86_400_000_000_000
+                        + one.4 as i128 * 3_600_000_000_000
+                        + one.5 as i128 * 60_000_000_000
+                        + one.6 as i128 * 1_000_000_000
+                        + one.7 as i128 * 1_000_000
+                        + one.8 as i128 * 1_000
+                        + one.9 as i128;
+                    let n2 = two.2 as i128 * 604_800_000_000_000
+                        + two.3 as i128 * 86_400_000_000_000
+                        + two.4 as i128 * 3_600_000_000_000
+                        + two.5 as i128 * 60_000_000_000
+                        + two.6 as i128 * 1_000_000_000
+                        + two.7 as i128 * 1_000_000
+                        + two.8 as i128 * 1_000
+                        + two.9 as i128;
                     (n1, n2)
                 };
                 let result = if ns1 < ns2 {
@@ -1408,27 +1420,29 @@ fn parse_to_string_options(
         }
     };
 
+    // Per spec: smallestUnit overrides fractionalSecondDigits when present
+    let sp = match get_prop(interp, &options, "smallestUnit") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if !is_undefined(&sp) {
+        let su = interp.to_string_value(&sp).map_err(Completion::Throw)?;
+        return match su.as_str() {
+            "second" | "seconds" => Ok((Some(0), rounding_mode)),
+            "millisecond" | "milliseconds" => Ok((Some(3), rounding_mode)),
+            "microsecond" | "microseconds" => Ok((Some(6), rounding_mode)),
+            "nanosecond" | "nanoseconds" => Ok((Some(9), rounding_mode)),
+            _ => Err(Completion::Throw(
+                interp.create_range_error(&format!("Invalid smallestUnit: {su}")),
+            )),
+        };
+    }
+
     let fp = match get_prop(interp, &options, "fractionalSecondDigits") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
     if is_undefined(&fp) {
-        let sp = match get_prop(interp, &options, "smallestUnit") {
-            Completion::Normal(v) => v,
-            other => return Err(other),
-        };
-        if !is_undefined(&sp) {
-            let su = interp.to_string_value(&sp).map_err(Completion::Throw)?;
-            return match su.as_str() {
-                "second" | "seconds" => Ok((Some(0), rounding_mode)),
-                "millisecond" | "milliseconds" => Ok((Some(3), rounding_mode)),
-                "microsecond" | "microseconds" => Ok((Some(6), rounding_mode)),
-                "nanosecond" | "nanoseconds" => Ok((Some(9), rounding_mode)),
-                _ => Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid smallestUnit: {su}")),
-                )),
-            };
-        }
         return Ok((None, rounding_mode));
     }
     if let JsValue::String(ref s) = fp {
@@ -1554,7 +1568,7 @@ fn format_duration_iso(
         result.push('D');
     }
 
-    let has_time = ah != 0.0 || ami != 0.0 || balanced_s != 0.0 || frac_ns != 0;
+    let has_time = ah != 0.0 || ami != 0.0 || balanced_s != 0.0 || frac_ns != 0 || precision.is_some();
     let has_date = ay != 0.0 || amo != 0.0 || aw != 0.0 || ad != 0.0;
 
     if has_time || !has_date {

@@ -2543,11 +2543,16 @@ fn zdt_until_since(
                     + dus as f64 * 1_000.0
                     + dns as f64;
                 let fractional_days = dd as f64 + time_ns / 86_400_000_000_000.0;
-                let (ry2, rm2, rw2, rd2) = super::round_date_duration_with_frac_days(
+                let (mut ry2, mut rm2, rw2, rd2) = super::round_date_duration_with_frac_days(
                     dy, dm, dw, fractional_days,
                     &smallest_unit, rounding_increment, &effective_mode,
                     ref_y, ref_m, ref_d,
                 );
+                // Rebalance months overflow into years when largestUnit is year
+                if matches!(largest_unit.as_str(), "year") && rm2.abs() >= 12 {
+                    ry2 += rm2 / 12;
+                    rm2 %= 12;
+                }
                 // For since (sign=-1): negate the rounded result
                 let nf = if sign == -1 { -1.0 } else { 1.0 };
                 return super::duration::create_duration_result(
@@ -2571,6 +2576,21 @@ fn zdt_until_since(
                 dmi = (rem % 60) as i64;
                 let rem = rem / 60;
                 dh = rem as i64;
+                // Cascade day overflow from time rounding into calendar units
+                if dh.abs() >= 24 {
+                    let day_overflow = if dh >= 0 { dh / 24 } else { -((-dh) / 24) };
+                    dh -= day_overflow * 24;
+                    dd += day_overflow;
+                    let lu_order = super::temporal_unit_order(&largest_unit);
+                    if lu_order >= super::temporal_unit_order("month") {
+                        let intermediate = super::add_iso_date(ref_y, ref_m, ref_d, dy, dm, 0, 0);
+                        let target = super::add_iso_date(intermediate.0, intermediate.1, intermediate.2, 0, 0, 0, dd as i32);
+                        let (ny, nm, _, nd) = super::difference_iso_date(
+                            ref_y, ref_m, ref_d, target.0, target.1, target.2, &largest_unit,
+                        );
+                        dy = ny; dm = nm; dd = nd as i64;
+                    }
+                }
             }
         }
 
