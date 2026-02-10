@@ -145,6 +145,32 @@ fn to_relative_to_date(
             }
         }
     }
+    // Read and validate time fields for Infinity rejection (values are discarded).
+    // Only for property bags — skip for Temporal objects (PlainDate, ZonedDateTime, etc.)
+    if let JsValue::Object(obj_ref) = val {
+        let is_temporal = interp
+            .get_object(obj_ref.id)
+            .map(|o| o.borrow().temporal_data.is_some())
+            .unwrap_or(false);
+        if !is_temporal {
+            for field in &[
+                "hour",
+                "minute",
+                "second",
+                "millisecond",
+                "microsecond",
+                "nanosecond",
+            ] {
+                let fval = match get_prop(interp, val, field) {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                };
+                if !is_undefined(&fval) {
+                    super::to_integer_with_truncation(interp, &fval)?;
+                }
+            }
+        }
+    }
     // Extract date portion
     let (y, m, d, _) = super::plain_date::to_temporal_plain_date(interp, val.clone())?;
     Ok(Some((y, m, d)))

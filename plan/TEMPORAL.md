@@ -1,12 +1,12 @@
 # Temporal: Path to 100% (4482/4482)
 
-**Current state:** 4438/4482 passing (99.02%), 44 failing
+**Current state:** 4456/4482 passing (99.42%), 26 failing
 
 ## Current Pass Rates by Subdirectory
 
 | Subdirectory | Passing | Total | Rate |
 |---|---|---|---|
-| Duration | 504 | 522 | 96.55% |
+| Duration | 507 | 522 | 97.13% |
 | Instant | 459 | 459 | 100% |
 | Now | 66 | 66 | 100% |
 | PlainDate | 635 | 635 | 100% |
@@ -79,15 +79,17 @@ Duration/prototype/total/relativeto-sub-minute-offset.js
 
 ---
 
-## Phase 3: Infinity Rejection in relativeTo Property Bags (+3 tests → 4440/4482)
+## Phase 3: Infinity Rejection in relativeTo Property Bags (+18 tests → 4456/4482) ✅ COMPLETE
 
 **Root cause:** When a `relativeTo` property bag contains `Infinity` or `-Infinity` for
-temporal fields (year, month, day, hour, etc.), jsse should throw RangeError but doesn't.
+time fields (hour, minute, second, millisecond, microsecond, nanosecond), jsse didn't throw
+RangeError because those fields were never read in the relativeTo path.
 
-**Fix:** `ToIntegerWithTruncation` (or wherever temporal fields are extracted from property
-bags for relativeTo) must reject `±Infinity` with RangeError.
+**Fix applied:** In `to_relative_to_date()` (duration.rs), added time field reading and
+validation via `to_integer_with_truncation()` for property bag inputs only (skipping Temporal
+objects like ZonedDateTime/PlainDate/PlainDateTime that store data internally).
 
-**Tests expected to pass:**
+**Tests fixed:** 18 new passes (3 target + 15 bonus from same fix)
 ```
 Duration/compare/relativeto-propertybag-infinity-throws-rangeerror.js
 Duration/prototype/round/relativeto-infinity-throws-rangeerror.js
@@ -252,7 +254,7 @@ The negative direction DifferenceISODate month-day balancing is wrong.
 | Baseline | — | — | 4420/4482 | 98.62% |
 | Phase 1 | IANA time zones | +3 | 4423/4482 | 98.68% |
 | Phase 2 | TZ string validation | +15 | 4438/4482 | 99.02% |
-| Phase 3 | Infinity rejection | +3 | 4441/4482 | 99.09% |
+| Phase 3 | Infinity rejection | +18 | 4456/4482 | 99.42% |
 | Phase 4 | Epoch ns range checks | +10 | 4451/4482 | 99.31% |
 | Phase 5 | Boundary arithmetic | +8 | 4459/4482 | 99.49% |
 | Phase 6 | Property-read order | +13 | 4472/4482 | 99.78% |
