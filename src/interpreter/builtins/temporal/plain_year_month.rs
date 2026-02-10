@@ -513,6 +513,12 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    // Check ISODateWithinLimits on intermediate date (day=rd)
+                    if !super::iso_date_within_limits(y, m, rd) {
+                        return Completion::Throw(
+                            interp.create_range_error("PlainYearMonth intermediate date outside valid ISO range"),
+                        );
+                    }
                     // Check no sub-month units per AddDurationToYearMonth
                     let time_ns: i128 = (dur.3 as i128) * 86_400_000_000_000
                         + (dur.4 as i128) * 3_600_000_000_000
@@ -601,6 +607,28 @@ impl Interpreter {
 
                     if smallest_unit != "month" || rounding_increment != 1.0 || rounding_mode != "trunc" {
                         let (ry, rm, rd) = (y1, m1, rd1);
+                        // Pre-check: verify NudgeToCalendarUnit boundary is within ISO range
+                        if matches!(smallest_unit.as_str(), "month" | "year") {
+                            let dur_sign = if dy > 0 || dm > 0 { 1i64 }
+                                else if dy < 0 || dm < 0 { -1i64 }
+                                else { 1 };
+                            let inc = rounding_increment as i64;
+                            let end_date = match smallest_unit.as_str() {
+                                "month" => {
+                                    let end_m = dm as i64 + dur_sign * inc;
+                                    super::add_iso_date(ry, rm, rd, dy, end_m as i32, 0, 0)
+                                }
+                                _ => {
+                                    let end_y = dy as i64 + dur_sign * inc;
+                                    super::add_iso_date(ry, rm, rd, end_y as i32, 0, 0, 0)
+                                }
+                            };
+                            if !super::iso_date_within_limits(end_date.0, end_date.1, end_date.2) {
+                                return Completion::Throw(
+                                    interp.create_range_error("Rounded date outside valid ISO range"),
+                                );
+                            }
+                        }
                         let (ry2, rm2, _, _) = round_date_duration(
                             dy, dm, 0, 0,
                             &smallest_unit, rounding_increment, &effective_mode,
@@ -608,6 +636,13 @@ impl Interpreter {
                         );
                         dy = ry2;
                         dm = rm2;
+                        // Check that rounded date is within valid ISO range
+                        let rounded_end = add_iso_date(ry, rm, rd, dy, dm, 0, 0);
+                        if !iso_date_within_limits(rounded_end.0, rounded_end.1, rounded_end.2) {
+                            return Completion::Throw(
+                                interp.create_range_error("Rounded date outside valid ISO range"),
+                            );
+                        }
                         // Rebalance months overflow into years when largestUnit is year
                         if matches!(largest_unit.as_str(), "year") && dm.abs() >= 12 {
                             dy += dm / 12;

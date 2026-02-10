@@ -985,12 +985,43 @@ impl Interpreter {
                                 + dns as f64;
                             let fractional_days = dd as f64 + time_ns / 86_400_000_000_000.0;
                             let (ry, rm, rd) = (y1, m1, d1);
+                            // Pre-check: verify the NudgeToCalendarUnit end boundary is within limits
+                            if matches!(smallest_unit.as_str(), "month" | "year") {
+                                let dur_sign = if dy > 0 || dm > 0 || dw > 0 || fractional_days > 0.0 { 1i64 }
+                                    else if dy < 0 || dm < 0 || dw < 0 || fractional_days < 0.0 { -1i64 }
+                                    else { 1 };
+                                let inc = rounding_increment as i64;
+                                let end_date = match smallest_unit.as_str() {
+                                    "month" => {
+                                        let end_m = dm as i64 + dur_sign * inc;
+                                        super::add_iso_date(ry, rm, rd, dy, end_m as i32, 0, 0)
+                                    }
+                                    _ => { // year
+                                        let end_y = dy as i64 + dur_sign * inc;
+                                        super::add_iso_date(ry, rm, rd, end_y as i32, 0, 0, 0)
+                                    }
+                                };
+                                if !super::iso_date_within_limits(end_date.0, end_date.1, end_date.2) {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Rounded date outside valid ISO range"),
+                                    );
+                                }
+                            }
                             let (ry2, rm2, rw2, rd2) = super::round_date_duration_with_frac_days(
                                 dy, dm, dw, fractional_days,
                                 &smallest_unit, rounding_increment, &effective_mode,
                                 ry, rm, rd,
                             );
                             dy = ry2; dm = rm2; dw = rw2; dd = rd2;
+                            // Check that rounded date is within valid ISO range (calendar units only)
+                            if matches!(smallest_unit.as_str(), "month" | "year") {
+                                let rounded_end = super::add_iso_date(ry, rm, rd, dy, dm, dw, dd);
+                                if !super::iso_date_within_limits(rounded_end.0, rounded_end.1, rounded_end.2) {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Rounded date outside valid ISO range"),
+                                    );
+                                }
+                            }
                             // Rebalance months overflow into years when largestUnit is year
                             if matches!(largest_unit.as_str(), "year") && dm.abs() >= 12 {
                                 dy += dm / 12;
@@ -1008,32 +1039,95 @@ impl Interpreter {
                             let increment_ns = unit_ns * rounding_increment;
                             let rounded_ns = round_number_to_increment(time_ns, increment_ns, &effective_mode);
                             let total = rounded_ns as i64;
-                            dns = total % 1000;
-                            let rem = total / 1000;
-                            dus = rem % 1000;
-                            let rem = rem / 1000;
-                            dms = rem % 1000;
-                            let rem = rem / 1000;
-                            ds = rem % 60;
-                            let rem = rem / 60;
-                            dmi = rem % 60;
-                            let rem = rem / 60;
-                            dh = rem;
-                            // Cascade day overflow from time rounding into calendar units
-                            if dh.abs() >= 24 {
-                                let day_overflow = (if dh >= 0 { dh / 24 } else { -((-dh) / 24) }) as i32;
-                                dh -= day_overflow as i64 * 24;
-                                dd += day_overflow;
-                                let lu_order = super::temporal_unit_order(&largest_unit);
-                                if lu_order >= super::temporal_unit_order("month") {
-                                    // Re-derive date portion: add years+months to ref, then diff to target
-                                    let intermediate = super::add_iso_date(y1, m1, d1, dy, dm, 0, 0);
-                                    // Target = intermediate + dd days
-                                    let target = super::add_iso_date(intermediate.0, intermediate.1, intermediate.2, 0, 0, 0, dd);
-                                    let (ny, nm, _, nd) = super::difference_iso_date(
-                                        y1, m1, d1, target.0, target.1, target.2, &largest_unit,
-                                    );
-                                    dy = ny; dm = nm; dd = nd;
+                            let lu_order = super::temporal_unit_order(&largest_unit);
+                            let day_order = super::temporal_unit_order("day");
+                            if lu_order < day_order {
+                                // largest_unit is a time unit: decompose according to largest_unit
+                                match largest_unit.as_str() {
+                                    "hour" => {
+                                        dns = total % 1000;
+                                        let rem = total / 1000;
+                                        dus = rem % 1000;
+                                        let rem = rem / 1000;
+                                        dms = rem % 1000;
+                                        let rem = rem / 1000;
+                                        ds = rem % 60;
+                                        let rem = rem / 60;
+                                        dmi = rem % 60;
+                                        dh = rem / 60;
+                                    }
+                                    "minute" => {
+                                        dns = total % 1000;
+                                        let rem = total / 1000;
+                                        dus = rem % 1000;
+                                        let rem = rem / 1000;
+                                        dms = rem % 1000;
+                                        let rem = rem / 1000;
+                                        ds = rem % 60;
+                                        dmi = rem / 60;
+                                        dh = 0;
+                                    }
+                                    "second" => {
+                                        dns = total % 1000;
+                                        let rem = total / 1000;
+                                        dus = rem % 1000;
+                                        let rem = rem / 1000;
+                                        dms = rem % 1000;
+                                        ds = rem / 1000;
+                                        dmi = 0;
+                                        dh = 0;
+                                    }
+                                    "millisecond" => {
+                                        dns = total % 1000;
+                                        let rem = total / 1000;
+                                        dus = rem % 1000;
+                                        dms = rem / 1000;
+                                        ds = 0;
+                                        dmi = 0;
+                                        dh = 0;
+                                    }
+                                    "microsecond" => {
+                                        dns = total % 1000;
+                                        dus = total / 1000;
+                                        dms = 0;
+                                        ds = 0;
+                                        dmi = 0;
+                                        dh = 0;
+                                    }
+                                    _ => { // nanosecond
+                                        dns = total;
+                                        dus = 0;
+                                        dms = 0;
+                                        ds = 0;
+                                        dmi = 0;
+                                        dh = 0;
+                                    }
+                                }
+                            } else {
+                                // largest_unit is day or higher: decompose fully, cascade overflow
+                                dns = total % 1000;
+                                let rem = total / 1000;
+                                dus = rem % 1000;
+                                let rem = rem / 1000;
+                                dms = rem % 1000;
+                                let rem = rem / 1000;
+                                ds = rem % 60;
+                                let rem = rem / 60;
+                                dmi = rem % 60;
+                                let rem = rem / 60;
+                                dh = rem;
+                                if dh.abs() >= 24 {
+                                    let day_overflow = (if dh >= 0 { dh / 24 } else { -((-dh) / 24) }) as i32;
+                                    dh -= day_overflow as i64 * 24;
+                                    dd += day_overflow;
+                                    if lu_order >= super::temporal_unit_order("month") {
+                                        let intermediate = super::add_iso_date(y1, m1, d1, dy, dm, 0, 0);
+                                        let target = super::add_iso_date(intermediate.0, intermediate.1, intermediate.2, 0, 0, 0, dd);
+                                        let (ny, nm, _, nd) = super::difference_iso_date(
+                                            y1, m1, d1, target.0, target.1, target.2, &largest_unit,
+                                        );
+                                        dy = ny; dm = nm; dd = nd;
+                                    }
                                 }
                             }
                         }
@@ -1572,12 +1666,29 @@ impl Interpreter {
                     Ok(t) => t,
                     Err(c) => return c,
                 };
-                // Validate options (second argument)
+                // Validate options: read disambiguation per spec
                 let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 if !super::is_undefined(&opts) && !matches!(opts, JsValue::Object(_)) {
                     return Completion::Throw(
                         interp.create_type_error("options must be an object"),
                     );
+                }
+                if matches!(opts, JsValue::Object(_)) {
+                    let dis_val = match super::get_prop(interp, &opts, "disambiguation") {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
+                    if !super::is_undefined(&dis_val) {
+                        let s = match interp.to_string_value(&dis_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if !matches!(s.as_str(), "compatible" | "earlier" | "later" | "reject") {
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "{s} is not a valid value for disambiguation"
+                            )));
+                        }
+                    }
                 }
                 let epoch_days = super::iso_date_to_epoch_days(y, m, d) as i128;
                 let day_ns = h as i128 * 3_600_000_000_000

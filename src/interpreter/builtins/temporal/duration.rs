@@ -698,9 +698,12 @@ impl Interpreter {
                         Err(c) => return c,
                     };
 
-                let result = format_duration_iso(
+                let result = match format_duration_iso(
                     y, mo, w, d, h, mi, s, ms, us, ns, precision, rounding_mode,
-                );
+                ) {
+                    Ok(s) => s,
+                    Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                };
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -718,7 +721,10 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                let result = format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc");
+                let result = match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
+                    Ok(s) => s,
+                    Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                };
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -736,7 +742,10 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                let result = format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc");
+                let result = match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
+                    Ok(s) => s,
+                    Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                };
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -1524,6 +1533,55 @@ fn parse_to_string_options(
     }
 }
 
+fn default_temporal_largest_unit(
+    years: f64, months: f64, weeks: f64, days: f64,
+    hours: f64, minutes: f64, seconds: f64, milliseconds: f64, microseconds: f64,
+) -> String {
+    if years != 0.0 { "year" }
+    else if months != 0.0 { "month" }
+    else if weeks != 0.0 { "week" }
+    else if days != 0.0 { "day" }
+    else if hours != 0.0 { "hour" }
+    else if minutes != 0.0 { "minute" }
+    else if seconds != 0.0 { "second" }
+    else if milliseconds != 0.0 { "millisecond" }
+    else if microseconds != 0.0 { "microsecond" }
+    else { "nanosecond" }
+    .to_string()
+}
+
+fn larger_of_two_temporal_units(a: &str, b: &str) -> String {
+    let order = |u: &str| match u {
+        "year" => 9, "month" => 8, "week" => 7, "day" => 6,
+        "hour" => 5, "minute" => 4, "second" => 3,
+        "millisecond" => 2, "microsecond" => 1, _ => 0,
+    };
+    if order(a) >= order(b) { a } else { b }.to_string()
+}
+
+/// Balance total nanoseconds into (days, hours, minutes, seconds, frac_ns)
+fn balance_time_ns(total_ns: i128, largest_unit: &str) -> (i128, i128, i128, i128, u64) {
+    let mut remaining = total_ns;
+    let days = if largest_unit == "day" || largest_unit == "week" || largest_unit == "month" || largest_unit == "year" {
+        let d = remaining / 86_400_000_000_000;
+        remaining -= d * 86_400_000_000_000;
+        d
+    } else { 0 };
+    let hours = if largest_unit != "minute" && largest_unit != "second" && largest_unit != "millisecond" && largest_unit != "microsecond" && largest_unit != "nanosecond" {
+        let h = remaining / 3_600_000_000_000;
+        remaining -= h * 3_600_000_000_000;
+        h
+    } else { 0 };
+    let minutes = if largest_unit != "second" && largest_unit != "millisecond" && largest_unit != "microsecond" && largest_unit != "nanosecond" {
+        let m = remaining / 60_000_000_000;
+        remaining -= m * 60_000_000_000;
+        m
+    } else { 0 };
+    let seconds = remaining / 1_000_000_000;
+    let frac_ns = (remaining - seconds * 1_000_000_000) as u64;
+    (days, hours, minutes, seconds, frac_ns)
+}
+
 fn format_duration_iso(
     years: f64,
     months: f64,
@@ -1537,7 +1595,7 @@ fn format_duration_iso(
     nanoseconds: f64,
     precision: Option<u8>,
     rounding_mode: &str,
-) -> String {
+) -> Result<String, String> {
     let sign = duration_sign(
         years,
         months,
@@ -1551,15 +1609,18 @@ fn format_duration_iso(
         nanoseconds,
     );
 
-    // Balance subsecond components into seconds for display using i128
-    let total_sub_ns_i128 = nanoseconds.abs() as i128
+    // Per spec: combine all time components + days into total nanoseconds
+    let time_ns_i128 = nanoseconds.abs() as i128
         + microseconds.abs() as i128 * 1_000
         + milliseconds.abs() as i128 * 1_000_000
-        + seconds.abs() as i128 * 1_000_000_000;
+        + seconds.abs() as i128 * 1_000_000_000
+        + minutes.abs() as i128 * 60_000_000_000
+        + hours.abs() as i128 * 3_600_000_000_000
+        + days.abs() as i128 * 86_400_000_000_000;
 
-    // Apply rounding if precision is specified
-    let total_sub_ns_i128 = if let Some(p) = precision {
-        let increment = 10.0f64.powi(9 - p as i32);
+    // Apply rounding if precision is specified (RoundTimeDuration + BalanceTimeDuration)
+    let (balanced_s, frac_ns, ami, ah, extra_days) = if let Some(p) = precision {
+        let increment = 10i128.pow(9 - p as u32);
         let effective_mode = if sign < 0 {
             match rounding_mode {
                 "ceil" => "floor",
@@ -1571,34 +1632,39 @@ fn format_duration_iso(
         } else {
             rounding_mode
         };
-        round_number_to_increment(total_sub_ns_i128 as f64, increment, effective_mode) as i128
+        let rounded = round_i128_to_increment(time_ns_i128, increment, effective_mode);
+        // IsNormalizedTimeDurationWithinRange: |rounded| < 2^53 * 10^9
+        const MAX_TIME_NS: i128 = (1i128 << 53) * 1_000_000_000;
+        if rounded >= MAX_TIME_NS {
+            return Err("Rounded duration time is out of range".to_string());
+        }
+        // BalanceTimeDuration: extract days, hours, minutes, seconds from rounded total
+        // Use LargerOfTwoTemporalUnits(DefaultTemporalLargestUnit, "seconds")
+        let largest_orig = default_temporal_largest_unit(
+            years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds,
+        );
+        let balance_unit = larger_of_two_temporal_units(&largest_orig, "seconds");
+
+        let (rd, rh, rm, rs, rfrac) = balance_time_ns(rounded, &balance_unit);
+        (rs, rfrac, rm, rh, rd)
     } else {
-        total_sub_ns_i128
+        // No rounding: use original components
+        let total_sub = nanoseconds.abs() as i128
+            + microseconds.abs() as i128 * 1_000
+            + milliseconds.abs() as i128 * 1_000_000
+            + seconds.abs() as i128 * 1_000_000_000;
+        let bs = total_sub / 1_000_000_000;
+        let fns = (total_sub - bs * 1_000_000_000) as u64;
+        (bs, fns, minutes.abs() as i128, hours.abs() as i128, 0i128)
     };
 
-    let mut balanced_s = total_sub_ns_i128 / 1_000_000_000;
-    let frac_ns = (total_sub_ns_i128 - balanced_s * 1_000_000_000) as u64;
-
-    // Handle carry across unit boundaries ONLY when rounding was applied
-    let mut ami = minutes.abs() as i128;
-    let mut ah = hours.abs() as i128;
-    let mut extra_days = 0i128;
+    // After rounding, validate result (IsValidDuration)
+    const MAX_SAFE: i128 = (1i128 << 53) - 1;
+    // When rounding was applied, extra_days already includes original days
+    let total_days = if precision.is_some() { extra_days } else { days.abs() as i128 };
     if precision.is_some() {
-        let has_higher_time = ami != 0 || ah != 0;
-        if has_higher_time && balanced_s >= 60 {
-            let carry_m = balanced_s / 60;
-            balanced_s -= carry_m * 60;
-            ami += carry_m;
-        }
-        if ah != 0 && ami >= 60 {
-            let carry_h = ami / 60;
-            ami -= carry_h * 60;
-            ah += carry_h;
-        }
-        if ah >= 24 {
-            let carry_d = ah / 24;
-            ah -= carry_d * 24;
-            extra_days = carry_d;
+        if balanced_s > MAX_SAFE || ami > MAX_SAFE || ah > MAX_SAFE || total_days > MAX_SAFE {
+            return Err("Rounded duration is out of range".to_string());
         }
     }
 
@@ -1609,7 +1675,7 @@ fn format_duration_iso(
     result.push('P');
 
     let (ay, amo, aw) = (years.abs(), months.abs(), weeks.abs());
-    let ad = days.abs() as i128 + extra_days;
+    let ad = total_days;
 
     if ay != 0.0 {
         result.push_str(&format_number(ay));
@@ -1681,9 +1747,37 @@ fn format_duration_iso(
     }
 
     if result == "P" || result == "-P" {
-        return "PT0S".to_string();
+        return Ok("PT0S".to_string());
     }
-    result
+    Ok(result)
+}
+
+/// Round a non-negative i128 value to the nearest multiple of increment.
+fn round_i128_to_increment(value: i128, increment: i128, mode: &str) -> i128 {
+    let remainder = value % increment;
+    if remainder == 0 {
+        return value;
+    }
+    let truncated = value - remainder;
+    let expanded = truncated + increment;
+    match mode {
+        "trunc" | "floor" => truncated,
+        "ceil" | "expand" => expanded,
+        "halfExpand" | "halfCeil" => {
+            if remainder * 2 >= increment { expanded } else { truncated }
+        }
+        "halfTrunc" | "halfFloor" => {
+            if remainder * 2 > increment { expanded } else { truncated }
+        }
+        "halfEven" => {
+            if remainder * 2 > increment { expanded }
+            else if remainder * 2 < increment { truncated }
+            else {
+                if (truncated / increment) % 2 == 0 { truncated } else { expanded }
+            }
+        }
+        _ => truncated,
+    }
 }
 
 fn format_number(v: f64) -> String {

@@ -2314,10 +2314,14 @@ pub(crate) fn round_number_to_increment(x: f64, increment: f64, rounding_mode: &
             }
         }
         "halfTrunc" => {
-            if quotient >= 0.0 {
-                (quotient + 0.5 - f64::EPSILON).floor()
+            // Round to nearest, breaking ties toward zero
+            let f = quotient.fract();
+            if f == 0.0 {
+                quotient
+            } else if quotient > 0.0 {
+                if f > 0.5 { quotient.ceil() } else { quotient.floor() }
             } else {
-                (quotient - 0.5 + f64::EPSILON).ceil()
+                if f < -0.5 { quotient.floor() } else { quotient.ceil() }
             }
         }
         "halfCeil" => (quotient + 0.5).floor(),

@@ -3172,6 +3172,7 @@ impl Interpreter {
             "BigUint64Array",
             "BigInt",
             "AggregateError",
+            "Temporal",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.global_env.borrow();

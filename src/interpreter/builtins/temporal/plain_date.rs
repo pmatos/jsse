@@ -569,6 +569,28 @@ impl Interpreter {
                     // Apply rounding on signed values
                     if smallest_unit != "day" || rounding_increment != 1.0 || rounding_mode != "trunc" {
                         let (ry, rm, rd) = (y1, m1, d1);
+                        // Pre-check: NudgeToCalendarUnit end boundary within limits
+                        if matches!(smallest_unit.as_str(), "month" | "year") {
+                            let dur_sign = if dy > 0 || dm > 0 || dw > 0 || dd > 0 { 1i64 }
+                                else if dy < 0 || dm < 0 || dw < 0 || dd < 0 { -1i64 }
+                                else { 1 };
+                            let inc = rounding_increment as i64;
+                            let end_date = match smallest_unit.as_str() {
+                                "month" => {
+                                    let end_m = dm as i64 + dur_sign * inc;
+                                    add_iso_date(ry, rm, rd, dy, end_m as i32, 0, 0)
+                                }
+                                _ => {
+                                    let end_y = dy as i64 + dur_sign * inc;
+                                    add_iso_date(ry, rm, rd, end_y as i32, 0, 0, 0)
+                                }
+                            };
+                            if !iso_date_within_limits(end_date.0, end_date.1, end_date.2) {
+                                return Completion::Throw(
+                                    interp.create_range_error("Rounded date outside valid ISO range"),
+                                );
+                            }
+                        }
                         let (ry2, rm2, rw2, rd2) = round_date_duration(
                             dy, dm, dw, dd,
                             &smallest_unit, rounding_increment, &effective_mode,
@@ -578,6 +600,15 @@ impl Interpreter {
                         dm = rm2;
                         dw = rw2;
                         dd = rd2;
+                        // Check that rounded date is within valid ISO range (calendar units only)
+                        if matches!(smallest_unit.as_str(), "month" | "year") {
+                            let rounded_end = add_iso_date(ry, rm, rd, dy, dm, dw, dd);
+                            if !iso_date_within_limits(rounded_end.0, rounded_end.1, rounded_end.2) {
+                                return Completion::Throw(
+                                    interp.create_range_error("Rounded date outside valid ISO range"),
+                                );
+                            }
+                        }
                         // Rebalance months overflow into years when largestUnit is year
                         if matches!(largest_unit.as_str(), "year") && dm.abs() >= 12 {
                             dy += dm / 12;
@@ -872,28 +903,38 @@ impl Interpreter {
                     };
                     (tz, 0u8, 0u8, 0u8, 0u16, 0u16, 0u16)
                 } else if let JsValue::Object(_) = &item {
-                    // Object with timeZone and optional plainTime
+                    // Per spec: get timeZone property
                     let tz_val = match super::get_prop(interp, &item, "timeZone") {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
-                    let tz = match super::to_temporal_time_zone_identifier(interp, &tz_val) {
-                        Ok(t) => t,
-                        Err(c) => return c,
-                    };
-                    let pt_val = match super::get_prop(interp, &item, "plainTime") {
-                        Completion::Normal(v) => v,
-                        c => return c,
-                    };
-                    if super::is_undefined(&pt_val) {
-                        (tz, 0, 0, 0, 0, 0, 0)
+                    if super::is_undefined(&tz_val) {
+                        // timeZone undefined → treat item itself as timezone
+                        let tz = match super::to_temporal_time_zone_identifier(interp, &item) {
+                            Ok(t) => t,
+                            Err(c) => return c,
+                        };
+                        (tz, 0u8, 0u8, 0u8, 0u16, 0u16, 0u16)
                     } else {
-                        let (th, tm, ts, tms, tus, tns) =
-                            match super::plain_time::to_temporal_plain_time(interp, pt_val) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        (tz, th, tm, ts, tms, tus, tns)
+                        // Object with timeZone and optional plainTime
+                        let tz = match super::to_temporal_time_zone_identifier(interp, &tz_val) {
+                            Ok(t) => t,
+                            Err(c) => return c,
+                        };
+                        let pt_val = match super::get_prop(interp, &item, "plainTime") {
+                            Completion::Normal(v) => v,
+                            c => return c,
+                        };
+                        if super::is_undefined(&pt_val) {
+                            (tz, 0, 0, 0, 0, 0, 0)
+                        } else {
+                            let (th, tm, ts, tms, tus, tns) =
+                                match super::plain_time::to_temporal_plain_time(interp, pt_val) {
+                                    Ok(v) => v,
+                                    Err(c) => return c,
+                                };
+                            (tz, th, tm, ts, tms, tus, tns)
+                        }
                     }
                 } else {
                     return Completion::Throw(
