@@ -922,6 +922,15 @@ fn normalize_iana_timezone(s: &str) -> String {
     s.to_string()
 }
 
+/// Normalize a timezone ID for comparison: canonical offset form or case-insensitive IANA
+pub(crate) fn normalize_tz_id(s: &str) -> String {
+    // Try parsing as offset to get canonical form
+    if let Some(canonical) = parse_utc_offset_timezone(s) {
+        return canonical;
+    }
+    s.to_ascii_lowercase()
+}
+
 /// ParseTemporalTimeZoneString per spec: extract timezone identifier from a string
 pub(super) fn parse_temporal_time_zone_string(s: &str) -> Option<String> {
     // 1. Try as UTC offset
@@ -971,6 +980,61 @@ pub(super) fn parse_temporal_time_zone_string(s: &str) -> Option<String> {
     None
 }
 
+/// Strict timezone validation — only bare offsets and IANA names, no ISO strings.
+/// Used for constructor parameters where ISO string fallback is not allowed.
+pub(super) fn validate_timezone_identifier_strict(
+    interp: &mut Interpreter,
+    arg: &JsValue,
+) -> Result<String, Completion> {
+    match arg {
+        JsValue::String(s) => {
+            let s_str = s.to_string();
+            if let Some(offset) = parse_utc_offset_timezone(&s_str) {
+                Ok(offset)
+            } else if is_iana_timezone(&s_str) {
+                Ok(normalize_iana_timezone(&s_str))
+            } else {
+                Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid time zone: {}", s_str)),
+                ))
+            }
+        }
+        _ => to_temporal_time_zone_identifier(interp, arg),
+    }
+}
+
+/// Strict calendar validation — only bare calendar names, no ISO strings.
+pub(super) fn validate_calendar_strict(
+    interp: &mut Interpreter,
+    val: &JsValue,
+) -> Result<String, Completion> {
+    match val {
+        JsValue::Undefined => Ok("iso8601".to_string()),
+        JsValue::String(s) => {
+            let raw = s.to_rust_string();
+            if raw.is_empty() {
+                return Err(Completion::Throw(
+                    interp.create_range_error("Invalid calendar: empty string"),
+                ));
+            }
+            if !raw.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid calendar: {raw}")),
+                ));
+            }
+            let normalized = ascii_lowercase(&raw);
+            if normalized == "iso8601" {
+                Ok(normalized)
+            } else {
+                Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid calendar: {raw}")),
+                ))
+            }
+        }
+        _ => to_temporal_calendar_slot_value(interp, val),
+    }
+}
+
 /// ToTemporalTimeZoneIdentifier — validates and returns a timezone string, or throws
 pub(super) fn to_temporal_time_zone_identifier(
     interp: &mut Interpreter,
@@ -989,7 +1053,19 @@ pub(super) fn to_temporal_time_zone_identifier(
                 )),
             }
         }
-        JsValue::Object(_) | JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) => Err(
+        JsValue::Object(o) => {
+            // If it's a Temporal.ZonedDateTime, extract timeZoneId
+            if let Some(obj) = interp.get_object(o.id) {
+                let td = obj.borrow().temporal_data.clone();
+                if let Some(TemporalData::ZonedDateTime { time_zone, .. }) = td {
+                    return Ok(time_zone);
+                }
+            }
+            Err(Completion::Throw(
+                interp.create_type_error("Expected a string for time zone"),
+            ))
+        }
+        JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) => Err(
             Completion::Throw(interp.create_type_error("Expected a string for time zone")),
         ),
         JsValue::Symbol(_) => Err(Completion::Throw(

@@ -875,8 +875,14 @@ pub(super) fn to_bigint_arg(interp: &mut Interpreter, val: &JsValue) -> Result<B
                 ))
             }
         }
+        JsValue::Undefined | JsValue::Null => Err(Completion::Throw(
+            interp.create_type_error("Cannot convert to BigInt"),
+        )),
+        JsValue::Symbol(_) => Err(Completion::Throw(
+            interp.create_type_error("Cannot convert a Symbol value to a BigInt"),
+        )),
         _ => {
-            // ToBigInt
+            // ToBigInt via ToPrimitive
             let prim = match interp.to_primitive(val, "number") {
                 Ok(v) => v,
                 Err(e) => return Err(Completion::Throw(e)),

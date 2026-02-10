@@ -3,7 +3,8 @@ use super::*;
 use crate::interpreter::builtins::temporal::{
     get_prop, is_undefined, parse_overflow_option, parse_temporal_time_zone_string,
     read_month_fields, resolve_month_fields, round_number_to_increment, temporal_unit_length_ns,
-    temporal_unit_singular, to_temporal_time_zone_identifier,
+    temporal_unit_singular, to_temporal_time_zone_identifier, validate_calendar_strict,
+    validate_timezone_identifier_strict,
 };
 use num_bigint::BigInt;
 
@@ -12,6 +13,24 @@ const NS_PER_SEC: i128 = 1_000_000_000;
 const NS_PER_MIN: i128 = 60 * NS_PER_SEC;
 const NS_PER_HOUR: i128 = 60 * NS_PER_MIN;
 const NS_PER_DAY: i128 = 24 * NS_PER_HOUR;
+
+/// Check if a monthCode string has valid syntax: M\d\d or M\d\dL
+fn is_valid_month_code_syntax(mc: &str) -> bool {
+    let b = mc.as_bytes();
+    if b.len() < 3 || b[0] != b'M' {
+        return false;
+    }
+    if !b[1].is_ascii_digit() || !b[2].is_ascii_digit() {
+        return false;
+    }
+    if b.len() == 3 {
+        return true;
+    }
+    if b.len() == 4 && b[3] == b'L' {
+        return true;
+    }
+    false
+}
 
 /// Round an i128 nanosecond total to a given increment using the specified rounding mode.
 fn round_ns_i128(total: i128, increment: i128, mode: &str) -> i128 {
@@ -274,8 +293,8 @@ fn to_temporal_zoned_date_time_with_options(
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            // Get year/month/day/time from bag
-            let y_val = match get_prop(interp, item, "year") {
+            // Get fields from bag — read offset first (per spec alphabetical PrepareTemporalFields)
+            let d_val = match get_prop(interp, item, "day") {
                 Completion::Normal(v) => v,
                 c => return c,
             };
@@ -287,7 +306,7 @@ fn to_temporal_zoned_date_time_with_options(
                 Completion::Normal(v) => v,
                 c => return c,
             };
-            let d_val = match get_prop(interp, item, "day") {
+            let y_val = match get_prop(interp, item, "year") {
                 Completion::Normal(v) => v,
                 c => return c,
             };
@@ -305,11 +324,75 @@ fn to_temporal_zoned_date_time_with_options(
                     interp.create_type_error("day is required"),
                 );
             }
+
+            // Read and validate offset BEFORE coercing year/month/day
+            let offset_val = match get_prop(interp, item, "offset") {
+                Completion::Normal(v) => v,
+                c => return c,
+            };
+            let bag_offset_ns: Option<i64> = if is_undefined(&offset_val) {
+                None
+            } else {
+                match &offset_val {
+                    JsValue::String(s) => {
+                        let s_str = s.to_rust_string();
+                        match super::parse_utc_offset_timezone(&s_str) {
+                            Some(normalized) => Some(parse_offset_to_ns(&normalized)),
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_range_error(&format!(
+                                        "invalid offset string: {s_str}"
+                                    )),
+                                );
+                            }
+                        }
+                    }
+                    JsValue::Object(_) => {
+                        let s_str = match interp.to_string_value(&offset_val) {
+                            Ok(s) => s,
+                            Err(c) => return Completion::Throw(c),
+                        };
+                        match super::parse_utc_offset_timezone(&s_str) {
+                            Some(normalized) => Some(parse_offset_to_ns(&normalized)),
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_range_error(&format!(
+                                        "invalid offset string: {s_str}"
+                                    )),
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        return Completion::Throw(
+                            interp.create_type_error("offset must be a string"),
+                        );
+                    }
+                }
+            };
+
+            // Validate monthCode syntax BEFORE year coercion (per spec PrepareTemporalFields)
+            if has_month_code {
+                let mc = match &mc_val {
+                    JsValue::String(s) => s.to_rust_string(),
+                    _ => {
+                        return Completion::Throw(
+                            interp.create_type_error("monthCode must be a string"),
+                        );
+                    }
+                };
+                if !is_valid_month_code_syntax(&mc) {
+                    return Completion::Throw(
+                        interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+                    );
+                }
+            }
+
             let year = match to_integer_with_truncation(interp, &y_val) {
                 Ok(n) => n as i32,
                 Err(c) => return c,
             };
-            let month = if has_month_code {
+            let month_raw: i32 = if has_month_code {
                 let mc = match &mc_val {
                     JsValue::String(s) => s.to_rust_string(),
                     _ => {
@@ -322,16 +405,16 @@ fn to_temporal_zoned_date_time_with_options(
                     Some(n) => {
                         if has_month {
                             let explicit_m = match to_integer_with_truncation(interp, &m_val) {
-                                Ok(v) => v as u8,
+                                Ok(v) => v as i32,
                                 Err(c) => return c,
                             };
-                            if explicit_m != n {
+                            if explicit_m != n as i32 {
                                 return Completion::Throw(
                                     interp.create_range_error("month and monthCode conflict"),
                                 );
                             }
                         }
-                        n
+                        n as i32
                     }
                     None => {
                         return Completion::Throw(
@@ -341,7 +424,7 @@ fn to_temporal_zoned_date_time_with_options(
                 }
             } else if has_month {
                 match to_integer_with_truncation(interp, &m_val) {
-                    Ok(n) => n as u8,
+                    Ok(n) => n as i32,
                     Err(c) => return c,
                 }
             } else {
@@ -378,61 +461,21 @@ fn to_temporal_zoned_date_time_with_options(
                 Err(c) => return c,
             };
 
-            // Read and validate offset property from bag
-            let offset_val = match get_prop(interp, item, "offset") {
-                Completion::Normal(v) => v,
-                c => return c,
-            };
-            let bag_offset_ns: Option<i64> = if is_undefined(&offset_val) {
-                None
-            } else {
-                // Must be a string
-                match &offset_val {
-                    JsValue::String(s) => {
-                        let s_str = s.to_rust_string();
-                        match super::parse_utc_offset_timezone(&s_str) {
-                            Some(normalized) => Some(parse_offset_to_ns(&normalized)),
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_range_error(&format!(
-                                        "invalid offset string: {s_str}"
-                                    )),
-                                );
-                            }
-                        }
-                    }
-                    JsValue::Object(_) => {
-                        // ToString the object then validate
-                        let s_str = match interp.to_string_value(&offset_val) {
-                            Ok(s) => s,
-                            Err(c) => return Completion::Throw(c),
-                        };
-                        match super::parse_utc_offset_timezone(&s_str) {
-                            Some(normalized) => Some(parse_offset_to_ns(&normalized)),
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_range_error(&format!(
-                                        "invalid offset string: {s_str}"
-                                    )),
-                                );
-                            }
-                        }
-                    }
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("offset must be a string"),
-                        );
-                    }
-                }
-            };
+            // Per spec: negative month/day always throws regardless of overflow
+            if month_raw < 1 {
+                return Completion::Throw(interp.create_range_error("month out of range"));
+            }
+            if day_i < 1.0 {
+                return Completion::Throw(interp.create_range_error("day out of range"));
+            }
 
             // Apply overflow to all fields
             let (month, day, hour, minute, second, millisecond, microsecond, nanosecond) =
                 if overflow == "reject" {
-                    if (month as i32) < 1 || (month as i32) > 12 {
+                    if month_raw > 12 {
                         return Completion::Throw(interp.create_range_error("month out of range"));
                     }
-                    if day_i < 1.0 || day_i > super::iso_days_in_month(year, month) as f64 {
+                    if day_i > super::iso_days_in_month(year, month_raw as u8) as f64 {
                         return Completion::Throw(interp.create_range_error("day out of range"));
                     }
                     if hour_raw < 0 || hour_raw > 23 {
@@ -460,7 +503,7 @@ fn to_temporal_zoned_date_time_with_options(
                         );
                     }
                     (
-                        month,
+                        month_raw as u8,
                         day_i as u8,
                         hour_raw as u8,
                         minute_raw as u8,
@@ -471,7 +514,7 @@ fn to_temporal_zoned_date_time_with_options(
                     )
                 } else {
                     // constrain: clamp all fields to valid ranges
-                    let month = (month as i32).clamp(1, 12) as u8;
+                    let month = month_raw.clamp(1, 12) as u8;
                     let max_day = super::iso_days_in_month(year, month);
                     let day = (day_i as i32).clamp(1, max_day as i32) as u8;
                     let hour = hour_raw.clamp(0, 23) as u8;
@@ -538,9 +581,10 @@ fn to_temporal_zoned_date_time_with_options(
             let s_str = s.to_string();
             match super::parse_temporal_date_time_string(&s_str) {
                 Some(parsed) => {
-                    if !parsed.has_time {
+                    // If there's an offset (Z, ±HH:MM), time is required
+                    if parsed.offset.is_some() && !parsed.has_time {
                         return Completion::Throw(
-                            interp.create_range_error("ZonedDateTime requires time component"),
+                            interp.create_range_error("UTC offset without time is not valid for ZonedDateTime"),
                         );
                     }
                     // Must have timezone annotation (e.g. [UTC], [+01:00])
@@ -596,18 +640,37 @@ fn to_temporal_zoned_date_time_with_options(
                                 + off.seconds as i128 * NS_PER_SEC
                                 + off.nanoseconds as i128);
                         let exact_ns = local_ns - off_ns;
-                        // Validate offset matches timezone (offset: "reject" default)
-                        // Skip validation for Z designator — Z means "use exact time"
-                        if !parsed.has_utc_designator {
-                            let expected_off =
-                                get_tz_offset_ns(&tz, &BigInt::from(exact_ns)) as i128;
-                            if off_ns != expected_off {
-                                return Completion::Throw(interp.create_range_error(
-                                    "UTC offset mismatch with time zone",
-                                ));
+                        let tz_off =
+                            get_tz_offset_ns(&tz, &BigInt::from(exact_ns)) as i128;
+
+                        match offset_option {
+                            "reject" => {
+                                // Skip validation for Z designator — Z means "use exact time"
+                                if !parsed.has_utc_designator && off_ns != tz_off {
+                                    return Completion::Throw(interp.create_range_error(
+                                        "UTC offset mismatch with time zone",
+                                    ));
+                                }
+                                BigInt::from(exact_ns)
                             }
+                            "use" => {
+                                // Use the offset from the string
+                                BigInt::from(exact_ns)
+                            }
+                            "ignore" => {
+                                // Ignore the string offset, use wall time with tz
+                                BigInt::from(local_ns - tz_off)
+                            }
+                            "prefer" => {
+                                // Use offset if it matches, otherwise use tz
+                                if off_ns == tz_off || parsed.has_utc_designator {
+                                    BigInt::from(exact_ns)
+                                } else {
+                                    BigInt::from(local_ns - tz_off)
+                                }
+                            }
+                            _ => BigInt::from(exact_ns),
                         }
-                        BigInt::from(exact_ns)
                     } else {
                         // Use timezone to compute offset
                         let approx = BigInt::from(local_ns);
@@ -645,6 +708,121 @@ fn get_time_field(interp: &mut Interpreter, obj: &JsValue, name: &str) -> Result
         return Ok(0);
     }
     Ok(to_integer_with_truncation(interp, &val)? as i64)
+}
+
+/// from() with string: parse string first, then read options, then apply offset behavior
+fn from_string_with_options(
+    interp: &mut Interpreter,
+    item: &JsValue,
+    options: &JsValue,
+) -> Completion {
+    let s_str = match item {
+        JsValue::String(s) => s.to_string(),
+        _ => unreachable!(),
+    };
+    let parsed = match super::parse_temporal_date_time_string(&s_str) {
+        Some(p) => p,
+        None => {
+            return Completion::Throw(
+                interp.create_range_error(&format!("Invalid ZonedDateTime string: {s_str}")),
+            );
+        }
+    };
+
+    // If there's an offset (Z, ±HH:MM), time is required
+    if parsed.offset.is_some() && !parsed.has_time {
+        return Completion::Throw(
+            interp.create_range_error("UTC offset without time is not valid for ZonedDateTime"),
+        );
+    }
+
+    // Must have timezone annotation
+    let tz = if let Some(ref tz_ann) = parsed.time_zone {
+        match super::parse_temporal_time_zone_string(tz_ann) {
+            Some(tz) => tz,
+            None => {
+                return Completion::Throw(
+                    interp.create_range_error(&format!("Invalid timezone annotation: {tz_ann}")),
+                );
+            }
+        }
+    } else {
+        return Completion::Throw(
+            interp
+                .create_range_error("ZonedDateTime string requires a timezone annotation (e.g. [UTC])"),
+        );
+    };
+
+    let cal_raw = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
+    let cal = match super::validate_calendar(&cal_raw) {
+        Some(c) => c,
+        None => {
+            return Completion::Throw(
+                interp.create_range_error(&format!("Invalid calendar: {cal_raw}")),
+            );
+        }
+    };
+
+    // String parsed successfully — NOW read options
+    let (_disambiguation, offset_opt, _overflow) =
+        match parse_zdt_options(interp, options, "reject") {
+            Ok(v) => v,
+            Err(c) => return c,
+        };
+
+    // Compute epoch ns from date/time + offset
+    let epoch_days =
+        super::iso_date_to_epoch_days(parsed.year, parsed.month, parsed.day) as i128;
+    let day_ns = parsed.hour as i128 * NS_PER_HOUR
+        + parsed.minute as i128 * NS_PER_MIN
+        + parsed.second as i128 * NS_PER_SEC
+        + parsed.millisecond as i128 * NS_PER_MS
+        + parsed.microsecond as i128 * 1_000
+        + parsed.nanosecond as i128;
+    let local_ns = epoch_days * NS_PER_DAY + day_ns;
+
+    let epoch_ns = if let Some(ref off) = parsed.offset {
+        let off_ns = off.sign as i128
+            * (off.hours as i128 * NS_PER_HOUR
+                + off.minutes as i128 * NS_PER_MIN
+                + off.seconds as i128 * NS_PER_SEC
+                + off.nanoseconds as i128);
+        let exact_ns = local_ns - off_ns;
+        let tz_off = get_tz_offset_ns(&tz, &BigInt::from(exact_ns)) as i128;
+
+        match offset_opt.as_str() {
+            "reject" => {
+                if !parsed.has_utc_designator && off_ns != tz_off {
+                    return Completion::Throw(
+                        interp.create_range_error("UTC offset mismatch with time zone"),
+                    );
+                }
+                BigInt::from(exact_ns)
+            }
+            "use" => BigInt::from(exact_ns),
+            "ignore" => BigInt::from(local_ns - tz_off),
+            "prefer" => {
+                if off_ns == tz_off || parsed.has_utc_designator {
+                    BigInt::from(exact_ns)
+                } else {
+                    BigInt::from(local_ns - tz_off)
+                }
+            }
+            _ => BigInt::from(exact_ns),
+        }
+    } else {
+        let approx = BigInt::from(local_ns);
+        let off = get_tz_offset_ns(&tz, &approx) as i128;
+        BigInt::from(local_ns - off)
+    };
+
+    if !is_valid_epoch_ns(&epoch_ns) {
+        return Completion::Throw(
+            interp.create_range_error("ZonedDateTime is outside the representable range"),
+        );
+    }
+
+    create_zdt(interp, epoch_ns, tz, cal)
 }
 
 /// Parse ZonedDateTime-specific options: disambiguation, offset, overflow.
@@ -745,8 +923,12 @@ fn zdt_to_string(
     let total_ns: i128 = ns.try_into().unwrap_or(0);
     let local_ns = total_ns + offset_ns as i128;
 
-    // Apply rounding if precision is specified
-    let local_ns = if let Some(p) = precision {
+    // Decompose into epoch_days and day_ns first, then round the time-of-day
+    // portion. This is spec-correct: RoundISODateTime rounds as if positive.
+    let mut epoch_days = local_ns.div_euclid(NS_PER_DAY);
+    let day_ns = local_ns.rem_euclid(NS_PER_DAY);
+
+    let day_ns = if let Some(p) = precision {
         let increment = match p {
             -1 => NS_PER_MIN,
             0 => NS_PER_SEC,
@@ -755,13 +937,16 @@ fn zdt_to_string(
             7..=9 => 10i128.pow(9 - p as u32),
             _ => 1,
         };
-        round_ns_to_increment(local_ns, increment, rounding_mode)
+        let rounded = round_ns_to_increment(day_ns, increment, rounding_mode);
+        if rounded >= NS_PER_DAY {
+            epoch_days += 1;
+            rounded - NS_PER_DAY
+        } else {
+            rounded
+        }
     } else {
-        local_ns
+        day_ns
     };
-
-    let epoch_days = local_ns.div_euclid(NS_PER_DAY);
-    let day_ns = local_ns.rem_euclid(NS_PER_DAY);
 
     let (year, month, day) = super::epoch_days_to_iso_date(epoch_days as i64);
     let nanosecond = (day_ns % 1_000) as u16;
@@ -1167,7 +1352,9 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::Boolean(ns == ons && tz == otz && cal == ocal))
+                    let tz_equal = tz.eq_ignore_ascii_case(&otz)
+                        || super::normalize_tz_id(&tz) == super::normalize_tz_id(&otz);
+                    Completion::Normal(JsValue::Boolean(ns == ons && tz_equal && cal == ocal))
                 },
             ));
             proto
@@ -1335,6 +1522,11 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let cal_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if matches!(&cal_arg, JsValue::Undefined) {
+                        return Completion::Throw(
+                            interp.create_type_error("withCalendar requires a calendar argument"),
+                        );
+                    }
                     let new_cal = match super::to_temporal_calendar_slot_value(interp, &cal_arg) {
                         Ok(c) => c,
                         Err(c) => return c,
@@ -1529,12 +1721,56 @@ impl Interpreter {
                     let nus_raw = field_or_default!("microsecond", us) as i32;
                     let nns_raw = field_or_default!("nanosecond", nanos) as i32;
 
+                    // Read offset property from bag and validate
+                    let offset_prop = match get_prop(interp, &bag, "offset") {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
+                    if !is_undefined(&offset_prop) {
+                        has_any = true;
+                        match &offset_prop {
+                            JsValue::String(s) => {
+                                let s_str = s.to_rust_string();
+                                if super::parse_utc_offset_timezone(&s_str).is_none() {
+                                    return Completion::Throw(
+                                        interp.create_range_error(&format!(
+                                            "invalid offset string: {s_str}"
+                                        )),
+                                    );
+                                }
+                            }
+                            JsValue::Object(_) => {
+                                let s_str = match interp.to_string_value(&offset_prop) {
+                                    Ok(s) => s,
+                                    Err(c) => return Completion::Throw(c),
+                                };
+                                if super::parse_utc_offset_timezone(&s_str).is_none() {
+                                    return Completion::Throw(
+                                        interp.create_range_error(&format!(
+                                            "invalid offset string: {s_str}"
+                                        )),
+                                    );
+                                }
+                            }
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_type_error("offset must be a string"),
+                                );
+                            }
+                        }
+                    }
+
                     if !has_any {
                         return Completion::Throw(interp.create_type_error(
                             "with requires at least one recognized temporal property",
                         ));
                     }
                     let _ = relevant_props;
+
+                    // Per spec: validate fields BEFORE reading options
+                    if nd_raw < 1 {
+                        return Completion::Throw(interp.create_range_error("day out of range"));
+                    }
 
                     // Read options: disambiguation (default "compatible"), offset (default "prefer"), overflow (default "constrain")
                     let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -1780,6 +2016,27 @@ impl Interpreter {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
+                        // ZDT.round per-unit max check (stricter than Instant):
+                        // day: must be 1; others: < unit max and divides max
+                        let inc_i = increment as u64;
+                        if unit == "day" {
+                            if inc_i > 1 {
+                                return Completion::Throw(interp.create_range_error(
+                                    "roundingIncrement for day must be 1",
+                                ));
+                            }
+                        } else if let Some(max) = super::max_rounding_increment(unit) {
+                            if inc_i >= max {
+                                return Completion::Throw(interp.create_range_error(
+                                    &format!("roundingIncrement {increment} is out of range for {unit}"),
+                                ));
+                            }
+                            if max % inc_i != 0 {
+                                return Completion::Throw(interp.create_range_error(
+                                    &format!("{increment} does not divide evenly into {max}"),
+                                ));
+                            }
+                        }
                         (unit, rounding_mode, increment)
                     } else {
                         return Completion::Throw(
@@ -1920,29 +2177,16 @@ impl Interpreter {
                 .insert_builtin("getTimeZoneTransition".to_string(), method);
         }
 
-        // Symbol.toPrimitive — throws TypeError
-        {
-            let to_prim =
-                self.create_function(JsFunction::native(
-                    "[Symbol.toPrimitive]".to_string(),
-                    1,
-                    |interp, _this, _args| {
-                        Completion::Throw(interp.create_type_error(
-                            "Cannot convert Temporal.ZonedDateTime to a primitive",
-                        ))
-                    },
-                ));
-            let key = "Symbol(Symbol.toPrimitive)".to_string();
-            proto
-                .borrow_mut()
-                .insert_property(key, PropertyDescriptor::data(to_prim, false, false, true));
-        }
-
         // --- Constructor ---
         let constructor = self.create_function(JsFunction::constructor(
             "ZonedDateTime".to_string(),
             2,
             |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("Temporal.ZonedDateTime must be called with new"),
+                    );
+                }
                 let ns_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let ns_bigint = match to_bigint_arg(interp, &ns_arg) {
                     Ok(n) => n,
@@ -1950,13 +2194,13 @@ impl Interpreter {
                 };
 
                 let tz_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let tz = match to_temporal_time_zone_identifier(interp, &tz_arg) {
+                let tz = match validate_timezone_identifier_strict(interp, &tz_arg) {
                     Ok(t) => t,
                     Err(c) => return c,
                 };
 
                 let cal_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                let cal = match super::to_temporal_calendar_slot_value(interp, &cal_arg) {
+                let cal = match validate_calendar_strict(interp, &cal_arg) {
                     Ok(c) => c,
                     Err(c) => return c,
                 };
@@ -1991,20 +2235,12 @@ impl Interpreter {
                 |interp, _this, args| {
                     let item = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    // Per spec: if item is a string, parse first, then validate all options
                     if matches!(&item, JsValue::String(_)) {
-                        let result = to_temporal_zoned_date_time(interp, &item);
-                        if !matches!(&result, Completion::Normal(_)) {
-                            return result;
-                        }
-                        // Read and validate all three options (even though they're unused for strings)
-                        match parse_zdt_options(interp, &options, "reject") {
-                            Ok(_) => {}
-                            Err(c) => return c,
-                        }
-                        return result;
+                        // Per spec: parse string first; if invalid, throw without reading options
+                        // If valid, read options then apply offset/disambiguation
+                        return from_string_with_options(interp, &item, &options);
                     }
-                    // Property bag: read options before conversion
+                    // Property bag or ZDT object: read options first
                     let (disambiguation, offset_opt, overflow) =
                         match parse_zdt_options(interp, &options, "reject") {
                             Ok(v) => v,
@@ -2366,72 +2602,71 @@ fn parse_zdt_to_string_options(
         ));
     }
 
-    // fractionalSecondDigits
-    let fsd_val = match get_prop(interp, options, "fractionalSecondDigits") {
+    // Per spec (ToSecondsStringPrecision): smallestUnit takes priority over
+    // fractionalSecondDigits. Check smallestUnit first.
+    let su_val = match get_prop(interp, options, "smallestUnit") {
         Completion::Normal(v) => v,
         c => return Err(c),
     };
-    let precision = if is_undefined(&fsd_val) {
-        // Check smallestUnit
-        let su_val = match get_prop(interp, options, "smallestUnit") {
+    let precision = if !is_undefined(&su_val) {
+        let su_str = match interp.to_string_value(&su_val) {
+            Ok(s) => s,
+            Err(c) => return Err(Completion::Throw(c)),
+        };
+        match temporal_unit_singular(&su_str) {
+            Some("minute") => Some(-1),
+            Some("second") => Some(0),
+            Some("millisecond") => Some(3),
+            Some("microsecond") => Some(6),
+            Some("nanosecond") => Some(9),
+            Some(u) => {
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "{u} is not a valid value for smallestUnit"
+                ))));
+            }
+            None => {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid unit: {su_str}")),
+                ));
+            }
+        }
+    } else {
+        // smallestUnit not provided, check fractionalSecondDigits
+        let fsd_val = match get_prop(interp, options, "fractionalSecondDigits") {
             Completion::Normal(v) => v,
             c => return Err(c),
         };
-        if is_undefined(&su_val) {
+        if is_undefined(&fsd_val) {
             None
-        } else {
-            let su_str = match interp.to_string_value(&su_val) {
-                Ok(s) => s,
+        } else if matches!(&fsd_val, JsValue::Number(_)) {
+            let n = match interp.to_number_value(&fsd_val) {
+                Ok(n) => n,
                 Err(c) => return Err(Completion::Throw(c)),
             };
-            match temporal_unit_singular(&su_str) {
-                Some("minute") => Some(-1),
-                Some("second") => Some(0),
-                Some("millisecond") => Some(3),
-                Some("microsecond") => Some(6),
-                Some("nanosecond") => Some(9),
-                Some(u) => {
-                    return Err(Completion::Throw(interp.create_range_error(&format!(
-                        "{u} is not a valid value for smallestUnit"
-                    ))));
-                }
-                None => {
-                    return Err(Completion::Throw(
-                        interp.create_range_error(&format!("Invalid unit: {su_str}")),
-                    ));
-                }
+            if n.is_nan() || n.is_infinite() {
+                return Err(Completion::Throw(interp.create_range_error(
+                    "fractionalSecondDigits must be a finite number",
+                )));
             }
-        }
-    } else if matches!(&fsd_val, JsValue::Number(_)) {
-        // Per spec: if value's type is Number, use ToNumber
-        let n = match interp.to_number_value(&fsd_val) {
-            Ok(n) => n,
-            Err(c) => return Err(Completion::Throw(c)),
-        };
-        if n.is_nan() || n.is_infinite() {
-            return Err(Completion::Throw(interp.create_range_error(
-                "fractionalSecondDigits must be a finite number",
-            )));
-        }
-        let digits = n.floor() as i32;
-        if digits < 0 || digits > 9 {
-            return Err(Completion::Throw(interp.create_range_error(&format!(
-                "fractionalSecondDigits must be 0-9 or auto, got {n}"
-            ))));
-        }
-        Some(digits)
-    } else {
-        // Per spec: non-Number → ToString, only "auto" is valid
-        let s = match interp.to_string_value(&fsd_val) {
-            Ok(v) => v,
-            Err(c) => return Err(Completion::Throw(c)),
-        };
-        if s == "auto" {
-            None
+            let digits = n.floor() as i32;
+            if digits < 0 || digits > 9 {
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "fractionalSecondDigits must be 0-9 or auto, got {n}"
+                ))));
+            }
+            Some(digits)
         } else {
-            return Err(Completion::Throw(interp.create_range_error(&format!(
-                "Invalid fractionalSecondDigits: {s}"
-            ))));
+            let s = match interp.to_string_value(&fsd_val) {
+                Ok(v) => v,
+                Err(c) => return Err(Completion::Throw(c)),
+            };
+            if s == "auto" {
+                None
+            } else {
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "Invalid fractionalSecondDigits: {s}"
+                ))));
+            }
         }
     };
 

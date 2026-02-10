@@ -606,7 +606,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        s.push_str(&format!("{val}"));
+                        let str_val = match self.to_string_value(&val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        s.push_str(&str_val);
                     }
                 }
                 Completion::Normal(JsValue::String(JsString::from_str(&s)))
