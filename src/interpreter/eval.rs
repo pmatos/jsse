@@ -1505,62 +1505,61 @@ impl Interpreter {
         false
     }
 
-    fn abstract_relational(&mut self, left: &JsValue, right: &JsValue) -> Option<bool> {
-        let lprim = self
-            .to_primitive(left, "number")
-            .unwrap_or(JsValue::Undefined);
-        let rprim = self
-            .to_primitive(right, "number")
-            .unwrap_or(JsValue::Undefined);
+    fn abstract_relational(
+        &mut self,
+        left: &JsValue,
+        right: &JsValue,
+    ) -> Result<Option<bool>, JsValue> {
+        let lprim = self.to_primitive(left, "number")?;
+        let rprim = self.to_primitive(right, "number")?;
         if is_string(&lprim) && is_string(&rprim) {
             let ls = to_js_string(&lprim);
             let rs = to_js_string(&rprim);
-            return Some(ls < rs);
+            return Ok(Some(ls < rs));
         }
         // BigInt comparisons
         if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
-            return bigint_ops::less_than(&a.value, &b.value);
+            return Ok(bigint_ops::less_than(&a.value, &b.value));
         }
         if let (JsValue::BigInt(b), JsValue::Number(n)) = (&lprim, &rprim) {
             if n.is_nan() {
-                return None;
+                return Ok(None);
             }
             if *n == f64::INFINITY {
-                return Some(true);
+                return Ok(Some(true));
             }
             if *n == f64::NEG_INFINITY {
-                return Some(false);
+                return Ok(Some(false));
             }
             use num_bigint::BigInt;
             let n_floor = BigInt::from(*n as i64);
             if b.value < n_floor {
-                return Some(true);
+                return Ok(Some(true));
             }
             if b.value > n_floor {
-                return Some(false);
+                return Ok(Some(false));
             }
-            // b.value == n_floor, check fractional part
-            return Some((*n as i64 as f64) < *n);
+            return Ok(Some((*n as i64 as f64) < *n));
         }
         if let (JsValue::Number(n), JsValue::BigInt(b)) = (&lprim, &rprim) {
             if n.is_nan() {
-                return None;
+                return Ok(None);
             }
             if *n == f64::NEG_INFINITY {
-                return Some(true);
+                return Ok(Some(true));
             }
             if *n == f64::INFINITY {
-                return Some(false);
+                return Ok(Some(false));
             }
             use num_bigint::BigInt;
             let n_floor = BigInt::from(*n as i64);
             if n_floor < b.value {
-                return Some(true);
+                return Ok(Some(true));
             }
             if n_floor > b.value {
-                return Some(false);
+                return Ok(Some(false));
             }
-            return Some(*n < (*n as i64 as f64));
+            return Ok(Some(*n < (*n as i64 as f64)));
         }
         // BigInt vs String: try parsing
         if let (JsValue::BigInt(_), JsValue::String(s)) = (&lprim, &rprim) {
@@ -1568,18 +1567,18 @@ impl Interpreter {
                 return self
                     .abstract_relational(&lprim, &JsValue::BigInt(JsBigInt { value: parsed }));
             }
-            return None;
+            return Ok(None);
         }
         if let (JsValue::String(s), JsValue::BigInt(_)) = (&lprim, &rprim) {
             if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
                 return self
                     .abstract_relational(&JsValue::BigInt(JsBigInt { value: parsed }), &rprim);
             }
-            return None;
+            return Ok(None);
         }
         let ln = to_number(&lprim);
         let rn = to_number(&rprim);
-        number_ops::less_than(ln, rn)
+        Ok(number_ops::less_than(ln, rn))
     }
 
     fn eval_binary(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
@@ -1678,18 +1677,22 @@ impl Interpreter {
             BinaryOp::StrictNotEq => {
                 Completion::Normal(JsValue::Boolean(!strict_equality(left, right)))
             }
-            BinaryOp::Lt => Completion::Normal(JsValue::Boolean(
-                self.abstract_relational(left, right) == Some(true),
-            )),
-            BinaryOp::Gt => Completion::Normal(JsValue::Boolean(
-                self.abstract_relational(right, left) == Some(true),
-            )),
-            BinaryOp::LtEq => Completion::Normal(JsValue::Boolean(
-                self.abstract_relational(right, left) == Some(false),
-            )),
-            BinaryOp::GtEq => Completion::Normal(JsValue::Boolean(
-                self.abstract_relational(left, right) == Some(false),
-            )),
+            BinaryOp::Lt => match self.abstract_relational(left, right) {
+                Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(true))),
+                Err(e) => Completion::Throw(e),
+            },
+            BinaryOp::Gt => match self.abstract_relational(right, left) {
+                Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(true))),
+                Err(e) => Completion::Throw(e),
+            },
+            BinaryOp::LtEq => match self.abstract_relational(right, left) {
+                Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(false))),
+                Err(e) => Completion::Throw(e),
+            },
+            BinaryOp::GtEq => match self.abstract_relational(left, right) {
+                Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(false))),
+                Err(e) => Completion::Throw(e),
+            },
             BinaryOp::LShift | BinaryOp::RShift | BinaryOp::URShift => {
                 let lprim = match self.to_primitive(left, "number") {
                     Ok(v) => v,

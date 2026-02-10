@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 37,307 / 48,257 run (77.31%)
+**Current pass rate:** 39,983 / 48,257 run (82.85%)
 
 ---
 
@@ -190,7 +190,7 @@ These are tracked across all phases:
 | `language/types` | 113 | |
 | `language/asi` | 102 | |
 | `language/` (other) | ~400 | white-space, comments, keywords, etc. |
-| `built-ins/Temporal` | 4,482 | Stage 3 — optional |
+| `built-ins/Temporal` | 4,480 | 4,021 (89.8%) |
 | `built-ins/Object` | 3,411 | |
 | `built-ins/Array` | 3,079 | |
 | `built-ins/RegExp` | 1,879 | 1,398 (74.4%) |

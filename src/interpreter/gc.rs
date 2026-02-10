@@ -70,6 +70,14 @@ impl Interpreter {
             &self.dataview_prototype,
             &self.promise_prototype,
             &self.aggregate_error_prototype,
+            &self.temporal_duration_prototype,
+            &self.temporal_instant_prototype,
+            &self.temporal_plain_date_prototype,
+            &self.temporal_plain_time_prototype,
+            &self.temporal_plain_date_time_prototype,
+            &self.temporal_plain_year_month_prototype,
+            &self.temporal_plain_month_day_prototype,
+            &self.temporal_zoned_date_time_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id

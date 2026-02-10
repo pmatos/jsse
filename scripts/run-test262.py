@@ -415,6 +415,10 @@ def main():
         pass_list.sort()
         baseline_file.write_text("\n".join(pass_list) + "\n")
 
+    # Always write fail list
+    fail_list.sort()
+    Path("/tmp/test262-fail.txt").write_text("\n".join(fail_list) + "\n")
+
     print()
     print(
         f"JSON: {json.dumps({

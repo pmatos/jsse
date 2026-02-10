@@ -8,6 +8,7 @@ mod number;
 mod promise;
 mod regexp;
 mod string;
+mod temporal;
 mod typedarray;
 
 use super::*;
@@ -3089,6 +3090,9 @@ impl Interpreter {
 
         // Promise built-in
         self.setup_promise();
+
+        // Temporal built-in
+        self.setup_temporal();
 
         // globalThis - create a global object
         let global_obj = self.create_object();

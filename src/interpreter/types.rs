@@ -623,6 +623,68 @@ pub struct DataViewInfo {
     pub is_detached: Rc<Cell<bool>>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum TemporalData {
+    Duration {
+        years: f64,
+        months: f64,
+        weeks: f64,
+        days: f64,
+        hours: f64,
+        minutes: f64,
+        seconds: f64,
+        milliseconds: f64,
+        microseconds: f64,
+        nanoseconds: f64,
+    },
+    Instant {
+        epoch_nanoseconds: num_bigint::BigInt,
+    },
+    PlainDate {
+        iso_year: i32,
+        iso_month: u8,
+        iso_day: u8,
+        calendar: String,
+    },
+    PlainTime {
+        hour: u8,
+        minute: u8,
+        second: u8,
+        millisecond: u16,
+        microsecond: u16,
+        nanosecond: u16,
+    },
+    PlainDateTime {
+        iso_year: i32,
+        iso_month: u8,
+        iso_day: u8,
+        hour: u8,
+        minute: u8,
+        second: u8,
+        millisecond: u16,
+        microsecond: u16,
+        nanosecond: u16,
+        calendar: String,
+    },
+    ZonedDateTime {
+        epoch_nanoseconds: num_bigint::BigInt,
+        time_zone: String,
+        calendar: String,
+    },
+    PlainYearMonth {
+        iso_year: i32,
+        iso_month: u8,
+        reference_iso_day: u8,
+        calendar: String,
+    },
+    PlainMonthDay {
+        iso_month: u8,
+        iso_day: u8,
+        reference_iso_year: i32,
+        calendar: String,
+    },
+}
+
 pub struct JsObjectData {
     pub id: Option<u64>,
     pub properties: HashMap<String, PropertyDescriptor>,
@@ -652,6 +714,7 @@ pub struct JsObjectData {
     pub is_derived_class_constructor: bool,
     pub(crate) disposable_stack: Option<DisposableStackData>,
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
+    pub(crate) temporal_data: Option<TemporalData>,
 }
 
 #[derive(Clone)]
@@ -699,6 +762,7 @@ impl JsObjectData {
             is_derived_class_constructor: false,
             disposable_stack: None,
             module_namespace: None,
+            temporal_data: None,
         }
     }
 
