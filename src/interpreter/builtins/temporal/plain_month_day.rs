@@ -93,7 +93,13 @@ fn read_pmd_property_bag_raw(
         other => return Err(other),
     };
     let mc_str = if !is_undefined(&mc_val) {
-        Some(super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
+        let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
+        if !super::is_month_code_syntax_valid(&mc) {
+            return Err(Completion::Throw(
+                interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+            ));
+        }
+        Some(mc)
     } else {
         None
     };
@@ -193,7 +199,13 @@ fn to_temporal_plain_month_day(
                 other => return Err(other),
             };
             let mc_str = if !is_undefined(&mc_val) {
-                Some(super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
+                let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
+                if !super::is_month_code_syntax_valid(&mc) {
+                    return Err(Completion::Throw(
+                        interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+                    ));
+                }
+                Some(mc)
             } else {
                 None
             };
@@ -580,14 +592,19 @@ impl Interpreter {
                 if is_undefined(&y_val) {
                     return Completion::Throw(interp.create_type_error("year is required"));
                 }
-                let y = match interp.to_number_value(&y_val) {
+                let y = match to_integer_with_truncation(interp, &y_val) {
                     Ok(n) => n as i32,
-                    Err(e) => return Completion::Throw(e),
+                    Err(c) => return c,
                 };
-                if !iso_date_valid(y, m, d) {
-                    return Completion::Throw(interp.create_range_error("Invalid date"));
+                // Constrain day to valid range for the given year/month
+                let max_day = iso_days_in_month(y, m);
+                let cd = d.min(max_day);
+                if !super::iso_date_within_limits(y, m, cd) {
+                    return Completion::Throw(
+                        interp.create_range_error("Date outside valid ISO range"),
+                    );
                 }
-                super::plain_date::create_plain_date_result(interp, y, m, d, &cal)
+                super::plain_date::create_plain_date_result(interp, y, m, cd, &cal)
             },
         ));
         proto

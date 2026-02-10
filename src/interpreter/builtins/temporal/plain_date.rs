@@ -741,6 +741,11 @@ impl Interpreter {
                         Err(c) => return c,
                     }
                 };
+                if !super::iso_date_time_within_limits(y, m, d, h, mi, s, ms, us, ns) {
+                    return Completion::Throw(
+                        interp.create_range_error("DateTime outside valid ISO range"),
+                    );
+                }
                 super::plain_date_time::create_plain_date_time_result(
                     interp, y, m, d, h, mi, s, ms, us, ns, &cal,
                 )
@@ -1016,6 +1021,11 @@ impl Interpreter {
                         Ok(_) => {}
                         Err(c) => return c,
                     }
+                    if !super::iso_date_within_limits(y, m, d) {
+                        return Completion::Throw(
+                            interp.create_range_error("Date outside valid ISO range"),
+                        );
+                    }
                     return create_plain_date_result(interp, y, m, d, &cal);
                 }
                 // Check if it's a Temporal object (read overflow first, return copy)
@@ -1064,6 +1074,11 @@ impl Interpreter {
                         return Completion::Throw(interp.create_range_error("Invalid date"));
                     }
                     let (y, m, d) = constrain_or_reject_date(y, m, d, &overflow);
+                    if !super::iso_date_within_limits(y, m, d) {
+                        return Completion::Throw(
+                            interp.create_range_error("Date outside valid ISO range"),
+                        );
+                    }
                     create_plain_date_result(interp, y, m, d, &cal)
                 }
             },
@@ -1224,7 +1239,13 @@ fn read_pd_property_bag_raw(
         other => return Err(other),
     };
     let mc_str = if !is_undefined(&mc_val) {
-        Some(super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
+        let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
+        if !super::is_month_code_syntax_valid(&mc) {
+            return Err(Completion::Throw(
+                interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+            ));
+        }
+        Some(mc)
     } else {
         None
     };
@@ -1358,22 +1379,20 @@ pub(super) fn to_temporal_plain_date(
                 None
             };
 
-            // 4. monthCode: get + coerce
+            // 4. monthCode: get + coerce + SYNTAX check (before year)
             let mc_val = match get_prop(interp, &item, "monthCode") {
                 Completion::Normal(v) => v,
                 other => return Err(other),
             };
             let has_month_code = !is_undefined(&mc_val);
-            let month_code_num = if has_month_code {
+            let mc_str = if has_month_code {
                 let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
-                match month_code_to_number(&mc) {
-                    Some(n) => Some(n),
-                    None => {
-                        return Err(Completion::Throw(
-                            interp.create_range_error(&format!("Invalid monthCode: {mc}")),
-                        ));
-                    }
+                if !super::is_month_code_syntax_valid(&mc) {
+                    return Err(Completion::Throw(
+                        interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+                    ));
                 }
+                Some(mc)
             } else {
                 None
             };
@@ -1389,6 +1408,20 @@ pub(super) fn to_temporal_plain_date(
                 ));
             } else {
                 to_integer_with_truncation(interp, &y_val)? as i32
+            };
+
+            // Now validate monthCode VALUE (after year coercion)
+            let month_code_num = if let Some(ref mc) = mc_str {
+                match month_code_to_number(mc) {
+                    Some(n) => Some(n),
+                    None => {
+                        return Err(Completion::Throw(
+                            interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+                        ));
+                    }
+                }
+            } else {
+                None
             };
 
             // Resolve month

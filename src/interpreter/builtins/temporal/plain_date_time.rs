@@ -266,7 +266,13 @@ fn read_pdt_property_bag(
         other => return Err(other),
     };
     let mc_str = if !is_undefined(&mc_val) {
-        Some(super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
+        let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
+        if !super::is_month_code_syntax_valid(&mc) {
+            return Err(Completion::Throw(
+                interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+            ));
+        }
+        Some(mc)
     } else {
         None
     };
@@ -816,6 +822,11 @@ impl Interpreter {
                         Err(c) => return c,
                     }
                 };
+                if !super::iso_date_time_within_limits(y, m, d, h, mi, s, ms, us, ns) {
+                    return Completion::Throw(
+                        interp.create_range_error("DateTime outside valid ISO range"),
+                    );
+                }
                 create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
             },
         ));
@@ -1170,6 +1181,11 @@ impl Interpreter {
                 let rem_ns = ((rounded % ns_per_day) + ns_per_day) % ns_per_day;
                 let (nh, nmi, nse, nms, nus, nns) = nanoseconds_to_time(rem_ns);
                 let (ry, rm, rd) = add_iso_date(y, m, d, 0, 0, 0, extra_days);
+                if !super::iso_date_time_within_limits(ry, rm, rd, nh, nmi, nse, nms, nus, nns) {
+                    return Completion::Throw(
+                        interp.create_range_error("Rounded DateTime outside valid ISO range"),
+                    );
+                }
                 create_plain_date_time_result(interp, ry, rm, rd, nh, nmi, nse, nms, nus, nns, &cal)
             },
         ));
@@ -1349,6 +1365,11 @@ impl Interpreter {
                 } else {
                     (y, m, d, h, mi, s, ms, us, ns)
                 };
+                if !super::iso_date_time_within_limits(ry, rm, rd, rh, rmi, rs, rms, rus, rns) {
+                    return Completion::Throw(
+                        interp.create_range_error("Rounded DateTime outside valid ISO range"),
+                    );
+                }
                 let result = format_plain_date_time(
                     ry, rm, rd, rh, rmi, rs, rms, rus, rns, &cal, show_calendar, precision,
                 );
@@ -1703,6 +1724,11 @@ impl Interpreter {
                         Ok(_) => {}
                         Err(c) => return c,
                     }
+                    if !super::iso_date_time_within_limits(y, m, d, h, mi, s, ms, us, ns) {
+                        return Completion::Throw(
+                            interp.create_range_error("DateTime outside valid ISO range"),
+                        );
+                    }
                     return create_plain_date_time_result(
                         interp, y, m, d, h, mi, s, ms, us, ns, &cal,
                     );
@@ -1750,6 +1776,11 @@ impl Interpreter {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
+                    if !super::iso_date_time_within_limits(y, m, d, h, mi, s, ms, us, ns) {
+                        return Completion::Throw(
+                            interp.create_range_error("DateTime outside valid ISO range"),
+                        );
+                    }
                     create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
                 }
             },

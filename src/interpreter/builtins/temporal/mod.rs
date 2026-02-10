@@ -123,6 +123,25 @@ pub(crate) fn get_prop(interp: &mut Interpreter, obj: &JsValue, key: &str) -> Co
 pub(crate) fn is_undefined(v: &JsValue) -> bool {
     matches!(v, JsValue::Undefined)
 }
+/// Check if monthCode string has valid syntax: /^M\d{2}L?$/
+/// Returns true if syntax is valid (even if the value is not valid for ISO 8601).
+pub(crate) fn is_month_code_syntax_valid(mc: &str) -> bool {
+    let b = mc.as_bytes();
+    if b.len() < 3 || b.len() > 4 {
+        return false;
+    }
+    if b[0] != b'M' {
+        return false;
+    }
+    if !b[1].is_ascii_digit() || !b[2].is_ascii_digit() {
+        return false;
+    }
+    if b.len() == 4 && b[3] != b'L' {
+        return false;
+    }
+    true
+}
+
 /// Spec: IsPartialTemporalObject(value)
 /// Returns Ok(()) if valid partial temporal object, Err(Completion) otherwise.
 /// Rejects: non-objects, Temporal objects, objects with calendar/timeZone properties.
@@ -1796,12 +1815,14 @@ pub(crate) fn parse_temporal_month_day_string(
     }
     // Fall back to full date-time
     let parsed = parse_temporal_date_time_string(s)?;
+    // Reject date-only strings with UTC offset (no time component)
+    let date_only_offset = !parsed.has_time && (parsed.offset.is_some() || parsed.has_utc_designator);
     Some((
         parsed.month,
         parsed.day,
         Some(parsed.year),
         parsed.calendar,
-        parsed.has_utc_designator,
+        parsed.has_utc_designator || date_only_offset,
     ))
 }
 
