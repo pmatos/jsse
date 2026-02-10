@@ -63,7 +63,7 @@ fn get_md_fields(
 fn read_pmd_property_bag_raw(
     interp: &mut Interpreter,
     item: &JsValue,
-) -> Result<(Option<f64>, Option<String>, f64, String), Completion> {
+) -> Result<(Option<f64>, Option<String>, f64, String, Option<i32>), Completion> {
     // Alphabetical: calendar, day, month, monthCode, year
     let cal_val = match get_prop(interp, item, "calendar") {
         Completion::Normal(v) => v,
@@ -101,15 +101,17 @@ fn read_pmd_property_bag_raw(
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    if !is_undefined(&y_val) {
-        let _ = to_integer_with_truncation(interp, &y_val)?;
-    }
+    let year_opt = if !is_undefined(&y_val) {
+        Some(to_integer_with_truncation(interp, &y_val)? as i32)
+    } else {
+        None
+    };
     if d_f < 1.0 {
         return Err(Completion::Throw(
             interp.create_range_error("day must be a positive integer"),
         ));
     }
-    Ok((month_num, mc_str, d_f, cal))
+    Ok((month_num, mc_str, d_f, cal, year_opt))
 }
 
 fn resolve_month_from_raw(
@@ -345,20 +347,20 @@ impl Interpreter {
                 },
             );
         }
-        for &(name, idx) in &[("month", 0u8), ("day", 1)] {
+        {
             let getter = self.create_function(JsFunction::native(
-                format!("get {name}"),
+                "get day".to_string(),
                 0,
-                move |interp, this, _| {
-                    let (m, d, _, _) = match get_md_fields(interp, &this) {
+                |interp, this, _| {
+                    let (_, d, _, _) = match get_md_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::Number(if idx == 0 { m as f64 } else { d as f64 }))
+                    Completion::Normal(JsValue::Number(d as f64))
                 },
             ));
             proto.borrow_mut().insert_property(
-                name.to_string(),
+                "day".to_string(),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -633,7 +635,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let cal_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                let cal = match to_temporal_calendar_slot_value(interp, &cal_arg) {
+                let cal = match super::validate_calendar_strict(interp, &cal_arg) {
                     Ok(c) => c,
                     Err(c) => return c,
                 };
@@ -727,7 +729,7 @@ impl Interpreter {
                     create_plain_month_day_result(interp, m, d, ry, &cal)
                 } else {
                     // Property bag: read fields raw, then overflow, then validate
-                    let (month_num, mc_str, d_f, cal) = match read_pmd_property_bag_raw(interp, &item) {
+                    let (month_num, mc_str, d_f, cal, year_opt) = match read_pmd_property_bag_raw(interp, &item) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -740,14 +742,34 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    // For ISO 8601 calendar: year from bag is used for validation only,
+                    // stored referenceISOYear is always 1972 (leap year)
+                    let validation_year = year_opt.unwrap_or(1972);
                     let d = d_f as u8;
-                    let ry = 1972i32;
+                    if m < 1 {
+                        return Completion::Throw(
+                            interp.create_range_error("Invalid month"),
+                        );
+                    }
                     if overflow == "constrain" {
-                        let cm = m.max(1).min(12);
-                        let cd = d.max(1).min(iso_days_in_month(ry, cm));
-                        create_plain_month_day_result(interp, cm, cd, ry, &cal)
+                        let cm = m.min(12);
+                        let max_day = iso_days_in_month(validation_year, cm);
+                        let cd = d.max(1).min(max_day);
+                        create_plain_month_day_result(interp, cm, cd, 1972, &cal)
                     } else {
-                        create_plain_month_day_result(interp, m, d, ry, &cal)
+                        // reject
+                        if m > 12 {
+                            return Completion::Throw(
+                                interp.create_range_error("Invalid month"),
+                            );
+                        }
+                        let max_day = iso_days_in_month(validation_year, m);
+                        if d < 1 || d > max_day {
+                            return Completion::Throw(
+                                interp.create_range_error("Invalid day"),
+                            );
+                        }
+                        create_plain_month_day_result(interp, m, d, 1972, &cal)
                     }
                 }
             },

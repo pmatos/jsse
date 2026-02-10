@@ -1688,17 +1688,25 @@ pub(crate) fn parse_temporal_year_month_string(
 ) -> Option<(i32, u8, Option<String>, bool, bool)> {
     let s = s.trim();
     let bytes = s.as_bytes();
-    // Try YYYY-MM first
+    // Try YYYY-MM or YYYYMM first
     if let Some((year, new_pos)) = parse_iso_year(bytes, 0) {
-        if new_pos < bytes.len() && bytes[new_pos] == b'-' {
-            let mut pos = new_pos + 1;
-            let (month, np) = parse_two_digit(bytes, pos)?;
-            pos = np;
-            // Optional calendar annotation
-            let mut calendar = None;
-            pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
-            if pos == bytes.len() && (1..=12).contains(&month) {
-                return Some((year, month, calendar, false, false));
+        let has_sep = new_pos < bytes.len() && bytes[new_pos] == b'-';
+        let month_start = if has_sep { new_pos + 1 } else { new_pos };
+        if let Some((month, np)) = parse_two_digit(bytes, month_start) {
+            if (1..=12).contains(&month) {
+                // Check it's not followed by more digits (which would make it a date)
+                let next_is_digit = np < bytes.len() && bytes[np].is_ascii_digit();
+                let next_is_dash = np < bytes.len() && bytes[np] == b'-';
+                let next_is_t = np < bytes.len()
+                    && (bytes[np] == b'T' || bytes[np] == b't' || bytes[np] == b' ');
+                if !next_is_digit && !(has_sep && next_is_dash) && !next_is_t {
+                    let mut pos = np;
+                    let mut calendar = None;
+                    pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
+                    if pos == bytes.len() {
+                        return Some((year, month, calendar, false, false));
+                    }
+                }
             }
         }
     }
@@ -1721,7 +1729,6 @@ pub(crate) fn parse_temporal_month_day_string(
     let s = s.trim();
     let bytes = s.as_bytes();
     // Try MM-DD first
-    let mut pos = 0;
     if bytes.len() >= 5 && bytes[2] == b'-' {
         if let Some((month, p1)) = parse_two_digit(bytes, 0) {
             if bytes.get(p1) == Some(&b'-') {
@@ -1740,8 +1747,33 @@ pub(crate) fn parse_temporal_month_day_string(
             }
         }
     }
-    // Try --MM-DD (ISO 8601 extended)
-    if bytes.len() >= 7 && bytes[0] == b'-' && bytes[1] == b'-' {
+    // Try MMDD (4 digits, no dash)
+    if bytes.len() >= 4
+        && bytes[0].is_ascii_digit()
+        && bytes[1].is_ascii_digit()
+        && bytes[2].is_ascii_digit()
+        && bytes[3].is_ascii_digit()
+    {
+        if let Some((month, p1)) = parse_two_digit(bytes, 0) {
+            if let Some((day, p2)) = parse_two_digit(bytes, p1) {
+                // Must not be followed by more digits (that would be YYYYMM or YYYYMMDD)
+                if p2 == bytes.len() || !bytes[p2].is_ascii_digit() {
+                    let mut p = p2;
+                    let mut calendar = None;
+                    p = parse_annotations_extract_calendar(bytes, p, &mut calendar)?;
+                    if p == bytes.len()
+                        && (1..=12).contains(&month)
+                        && day >= 1
+                        && day <= iso_days_in_month(1972, month)
+                    {
+                        return Some((month, day, None, calendar, false));
+                    }
+                }
+            }
+        }
+    }
+    // Try --MM-DD or --MMDD (ISO 8601 extended)
+    if bytes.len() >= 6 && bytes[0] == b'-' && bytes[1] == b'-' {
         if let Some((month, p1)) = parse_two_digit(bytes, 2) {
             let sep = if bytes.get(p1) == Some(&b'-') {
                 p1 + 1
@@ -1884,7 +1916,7 @@ fn parse_iso_time(bytes: &[u8], start: usize) -> Option<(u8, u8, u8, u16, u16, u
                     pos += 1;
                 }
                 let frac_len = pos - frac_start;
-                if frac_len == 0 {
+                if frac_len == 0 || frac_len > 9 {
                     return None;
                 }
                 let mut frac_digits = [b'0'; 9];

@@ -893,15 +893,9 @@ pub(super) fn to_bigint_arg(interp: &mut Interpreter, val: &JsValue) -> Result<B
             }
         }
         JsValue::Boolean(b) => Ok(BigInt::from(if *b { 1 } else { 0 })),
-        JsValue::Number(n) => {
-            if n.is_finite() && *n == n.trunc() {
-                Ok(BigInt::from(*n as i64))
-            } else {
-                Err(Completion::Throw(
-                    interp.create_range_error("Cannot convert to BigInt"),
-                ))
-            }
-        }
+        JsValue::Number(_) => Err(Completion::Throw(
+            interp.create_type_error("Cannot convert a Number to a BigInt"),
+        )),
         JsValue::Undefined | JsValue::Null => Err(Completion::Throw(
             interp.create_type_error("Cannot convert to BigInt"),
         )),

@@ -501,18 +501,17 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    // Balance time to days and check no sub-month units
-                    let time_ns: i128 = (dur.4 as i128) * 3_600_000_000_000
+                    // Check no sub-month units per AddDurationToYearMonth
+                    let time_ns: i128 = (dur.3 as i128) * 86_400_000_000_000
+                        + (dur.4 as i128) * 3_600_000_000_000
                         + (dur.5 as i128) * 60_000_000_000
                         + (dur.6 as i128) * 1_000_000_000
                         + (dur.7 as i128) * 1_000_000
                         + (dur.8 as i128) * 1_000
                         + (dur.9 as i128);
-                    let bal_days = time_ns / 86_400_000_000_000; // truncate
-                    let total_days = dur.3 as i64 + bal_days as i64;
-                    if total_days != 0 {
+                    if time_ns != 0 {
                         return Completion::Throw(
-                            interp.create_range_error("Duration days must be zero for PlainYearMonth arithmetic"),
+                            interp.create_range_error("Duration days/time must be zero for PlainYearMonth arithmetic"),
                         );
                     }
                     if dur.2 != 0.0 {
@@ -806,7 +805,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let cal_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                let cal = match to_temporal_calendar_slot_value(interp, &cal_arg) {
+                let cal = match super::validate_calendar_strict(interp, &cal_arg) {
                     Ok(c) => c,
                     Err(c) => return c,
                 };
@@ -835,6 +834,16 @@ impl Interpreter {
                 } else {
                     1u8
                 };
+                if !super::iso_date_valid(y, m, rd) {
+                    return Completion::Throw(
+                        interp.create_range_error("Invalid ISO date for PlainYearMonth"),
+                    );
+                }
+                if !super::iso_year_month_within_limits(y, m) {
+                    return Completion::Throw(
+                        interp.create_range_error("Date outside valid ISO range"),
+                    );
+                }
                 create_plain_year_month_result(interp, y, m, rd, &cal)
             },
         ));
@@ -915,7 +924,12 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let (y, m, rd, cal) = if overflow == "constrain" {
-                        let cm = m.max(1).min(12);
+                        if m < 1 {
+                            return Completion::Throw(
+                                interp.create_range_error("Invalid month"),
+                            );
+                        }
+                        let cm = m.min(12);
                         (y, cm, 1, cal)
                     } else {
                         if m < 1 || m > 12 {

@@ -966,7 +966,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let cal_arg = args.get(3).cloned().unwrap_or(JsValue::Undefined);
-                let cal = match to_temporal_calendar_slot_value(interp, &cal_arg) {
+                let cal = match super::validate_calendar_strict(interp, &cal_arg) {
                     Ok(c) => c,
                     Err(c) => return c,
                 };

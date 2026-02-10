@@ -867,7 +867,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let _overflow = match parse_overflow_option(interp, &options) {
+                    let overflow = match parse_overflow_option(interp, &options) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -889,7 +889,7 @@ impl Interpreter {
                     let rem_ns = ((total_ns % ns_per_day) + ns_per_day) % ns_per_day;
                     let (nh, nmi, nse, nms, nus, nns) = nanoseconds_to_time(rem_ns);
                     let total_days = (dur.3 as i32) * sign + extra_days;
-                    let (ry, rm, rd) = add_iso_date(
+                    let (ry, rm, rd) = match super::add_iso_date_with_overflow(
                         y,
                         m,
                         d,
@@ -897,7 +897,15 @@ impl Interpreter {
                         (dur.1 as i32) * sign,
                         (dur.2 as i32) * sign,
                         total_days,
-                    );
+                        &overflow,
+                    ) {
+                        Ok(v) => v,
+                        Err(()) => {
+                            return Completion::Throw(
+                                interp.create_range_error("Ambiguous date in add/subtract with reject overflow"),
+                            );
+                        }
+                    };
                     if !super::iso_date_time_within_limits(ry, rm, rd, nh, nmi, nse, nms, nus, nns)
                     {
                         return Completion::Throw(
@@ -1312,7 +1320,7 @@ impl Interpreter {
                     ("auto", None, "trunc")
                 };
                 // Apply rounding to the time component
-                let (rh, rmi, rs, rms, rus, rns) = if let Some(prec) = precision {
+                let (ry, rm, rd, rh, rmi, rs, rms, rus, rns) = if let Some(prec) = precision {
                     let time_ns = super::time_to_nanoseconds(h, mi, s, ms, us, ns);
                     let unit_ns: i128 = if prec == -1 {
                         60_000_000_000
@@ -1323,13 +1331,26 @@ impl Interpreter {
                     };
                     let rounded = super::plain_time::round_i128_to_increment(time_ns, unit_ns, rounding_mode);
                     let ns_per_day: i128 = 86_400_000_000_000;
+                    let extra_days = if rounded >= ns_per_day {
+                        (rounded / ns_per_day) as i32
+                    } else if rounded < 0 {
+                        -(((-rounded + ns_per_day - 1) / ns_per_day) as i32)
+                    } else {
+                        0
+                    };
                     let wrapped = ((rounded % ns_per_day) + ns_per_day) % ns_per_day;
-                    super::nanoseconds_to_time(wrapped)
+                    let (th, tmi, ts, tms, tus, tns) = super::nanoseconds_to_time(wrapped);
+                    let (ny, nm, nd) = if extra_days != 0 {
+                        super::balance_iso_date(y, m as i32, d as i32 + extra_days)
+                    } else {
+                        (y, m, d)
+                    };
+                    (ny, nm, nd, th, tmi, ts, tms, tus, tns)
                 } else {
-                    (h, mi, s, ms, us, ns)
+                    (y, m, d, h, mi, s, ms, us, ns)
                 };
                 let result = format_plain_date_time(
-                    y, m, d, rh, rmi, rs, rms, rus, rns, &cal, show_calendar, precision,
+                    ry, rm, rd, rh, rmi, rs, rms, rus, rns, &cal, show_calendar, precision,
                 );
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
@@ -1630,7 +1651,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let cal_arg = args.get(9).cloned().unwrap_or(JsValue::Undefined);
-                let cal = match to_temporal_calendar_slot_value(interp, &cal_arg) {
+                let cal = match super::validate_calendar_strict(interp, &cal_arg) {
                     Ok(c) => c,
                     Err(c) => return c,
                 };
