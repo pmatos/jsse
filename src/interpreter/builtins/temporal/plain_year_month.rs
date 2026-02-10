@@ -468,20 +468,26 @@ impl Interpreter {
 
                     let (mut dy, mut dm, _, _) =
                         difference_iso_date(y1, m1, rd1, y2, m2, rd1, &largest_unit);
-                    if sign == -1 {
-                        dy = -dy;
-                        dm = -dm;
-                    }
+
+                    let effective_mode = if sign == -1 {
+                        negate_rounding_mode(&rounding_mode)
+                    } else {
+                        rounding_mode.clone()
+                    };
 
                     if smallest_unit != "month" || rounding_increment != 1.0 || rounding_mode != "trunc" {
-                        let (ry, rm, rd) = if sign == -1 { (y2, m2, rd1) } else { (y1, m1, rd1) };
+                        let (ry, rm, rd) = (y1, m1, rd1);
                         let (ry2, rm2, _, _) = round_date_duration(
                             dy, dm, 0, 0,
-                            &smallest_unit, rounding_increment, &rounding_mode,
+                            &smallest_unit, rounding_increment, &effective_mode,
                             ry, rm, rd,
                         );
                         dy = ry2;
                         dm = rm2;
+                    }
+
+                    if sign == -1 {
+                        dy = -dy; dm = -dm;
                     }
 
                     super::duration::create_duration_result(

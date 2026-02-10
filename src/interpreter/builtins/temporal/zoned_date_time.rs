@@ -2444,85 +2444,74 @@ fn zdt_until_since(
         (n2 - n1) * sign as i128
     };
 
-    // For date units, use DifferenceZonedDateTime algorithm:
-    // 1. DifferenceISODateTime for initial date diff (with borrow-a-day)
-    // 2. Add date portion back to ns1 → intermediate
-    // 3. Time remainder = ns2 - intermediate (actual nanosecond gap)
-    // 4. Adjust days if remainder sign conflicts with date sign
+    // DifferenceZonedDateTime: compute from receiver (this = ns1) perspective
     if matches!(largest_unit.as_str(), "year" | "month" | "week" | "day") {
         let n1: i128 = (&ns1).try_into().unwrap_or(0);
         let n2: i128 = (&ns2).try_into().unwrap_or(0);
+        let ns_diff = n2 - n1;
 
-        // Always compute forward difference (earlier → later) for correct date arithmetic.
-        // Per spec DifferenceTemporal: direction corrects for ns1 vs ns2 ordering,
-        // sign corrects for since vs until. result_sign = direction * sign.
-        let (start_bi, end_bi, start_n, end_n) = if n1 <= n2 {
-            (&ns1, &ns2, n1, n2)
-        } else {
-            (&ns2, &ns1, n2, n1)
-        };
-        let direction: i32 = if n1 <= n2 { 1 } else { -1 };
-        let result_sign: i32 = direction * sign;
+        if ns_diff == 0 {
+            return super::duration::create_duration_result(
+                interp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            );
+        }
 
-        let (sy, sm, sd, sh, smi, ss, sms, sus, snanos) = epoch_ns_to_components(start_bi, &tz);
-        let (ey, em, ed, eh, emi, es, ems, eus, enanos) = epoch_ns_to_components(end_bi, &tz);
+        // Decompose this (ns1) and other (ns2) to wall-clock date/time
+        let (ty, tm, td, th, tmi, ts, tms, tus, tns_c) = epoch_ns_to_components(&ns1, &tz);
+        let (oy, om, od, oh, omi, os, oms, ous, ons_c) = epoch_ns_to_components(&ns2, &tz);
 
-        // Rounding reference: positive durations use start, negative use end.
-        // This ensures adding the signed duration to the reference reaches the other date.
-        let (ref_y, ref_m, ref_d) = if result_sign >= 0 { (sy, sm, sd) } else { (ey as i32, em, ed) };
+        let this_time_ns = th as i128 * NS_PER_HOUR + tmi as i128 * NS_PER_MIN
+            + ts as i128 * NS_PER_SEC + tms as i128 * NS_PER_MS
+            + tus as i128 * 1_000 + tns_c as i128;
 
-        let start_time_ns = sh as i128 * NS_PER_HOUR
-            + smi as i128 * NS_PER_MIN
-            + ss as i128 * NS_PER_SEC
-            + sms as i128 * NS_PER_MS
-            + sus as i128 * 1_000
-            + snanos as i128;
-
-        // DifferenceISODateTime: borrow a day when time sign conflicts with date direction
-        let end_time_ns = eh as i128 * NS_PER_HOUR + emi as i128 * NS_PER_MIN
-            + es as i128 * NS_PER_SEC + ems as i128 * NS_PER_MS
-            + eus as i128 * 1_000 + enanos as i128;
-        let time_diff_ns = end_time_ns - start_time_ns;
-        let time_sign: i32 = if time_diff_ns > 0 { 1 } else if time_diff_ns < 0 { -1 } else { 0 };
-        let date_cmp: i32 = if (ey, em, ed) > (sy, sm, sd) { 1 }
-            else if (ey, em, ed) < (sy, sm, sd) { -1 }
-            else { 0 };
-
-        let (adj_ey, adj_em, adj_ed) = if time_sign != 0 && time_sign == -date_cmp {
-            let new_d = ed as i32 + time_sign;
-            super::balance_iso_date(ey as i32, em as i32, new_d)
-        } else {
-            (ey as i32, em, ed)
+        // Day correction per DifferenceZonedDateTime spec:
+        // poly_sign: 1 when ns2 < ns1 (backward), -1 when ns2 > ns1 (forward)
+        let poly_sign: i32 = if ns_diff < 0 { 1 } else { -1 };
+        let other_time_ns = oh as i128 * NS_PER_HOUR + omi as i128 * NS_PER_MIN
+            + os as i128 * NS_PER_SEC + oms as i128 * NS_PER_MS
+            + ous as i128 * 1_000 + ons_c as i128;
+        let time_diff_sign: i32 = {
+            let td = other_time_ns - this_time_ns;
+            if td > 0 { 1 } else if td < 0 { -1 } else { 0 }
         };
 
-        let (dy, dm, dw, dd) = super::difference_iso_date(sy, sm, sd, adj_ey, adj_em, adj_ed, &largest_unit);
+        let mut day_correction: i32 = if time_diff_sign == poly_sign { 1 } else { 0 };
+        let max_correction = if poly_sign == -1 { 2 } else { 1 };
 
-        // Add date portion back to start to get intermediate instant
-        let (int_y, int_m, int_d) = super::add_iso_date(sy, sm, sd, dy, dm, dw, dd);
-        let int_epoch_days = super::iso_date_to_epoch_days(int_y, int_m, int_d) as i128;
-        let int_local_ns = int_epoch_days * NS_PER_DAY + start_time_ns;
-        let int_offset = get_tz_offset_ns(&tz, &BigInt::from(int_local_ns)) as i128;
-        let intermediate_ns = int_local_ns - int_offset;
+        let mut time_remainder: i128 = 0;
+        let mut adj_oy = oy as i32;
+        let mut adj_om = om;
+        let mut adj_od = od;
 
-        // Time remainder = end - intermediate
-        let time_remainder = end_n - intermediate_ns;
-
-        // Adjust days if time_remainder is negative (intermediate overshot end)
-        let (mut dd, time_remainder) = if time_remainder < 0 {
-            let one_day_further_ns = {
-                let adj_d = int_d as i32 + 1;
-                let (fy, fm, fd) = super::balance_iso_date(int_y as i32, int_m as i32, adj_d);
-                let f_epoch = super::iso_date_to_epoch_days(fy, fm, fd) as i128;
-                let f_local = f_epoch * NS_PER_DAY + start_time_ns;
-                let f_off = get_tz_offset_ns(&tz, &BigInt::from(f_local)) as i128;
-                f_local - f_off
+        loop {
+            let (ay, am, ad) = if day_correction == 0 {
+                (oy as i32, om, od)
+            } else {
+                super::balance_iso_date(oy as i32, om as i32, od as i32 + day_correction * poly_sign)
             };
-            (dd + 1, end_n - one_day_further_ns)
-        } else {
-            (dd, time_remainder)
-        };
+            let int_epoch = super::iso_date_to_epoch_days(ay, am, ad) as i128;
+            let int_local = int_epoch * NS_PER_DAY + this_time_ns;
+            let int_off = get_tz_offset_ns(&tz, &BigInt::from(int_local)) as i128;
+            let int_ns = int_local - int_off;
 
-        // Decompose time remainder into h/m/s/ms/us/ns (all positive, forward diff)
+            time_remainder = n2 - int_ns;
+            let tr_sign = if time_remainder > 0 { 1 } else if time_remainder < 0 { -1 } else { 0 };
+            if tr_sign != poly_sign {
+                adj_oy = ay; adj_om = am; adj_od = ad;
+                break;
+            }
+            day_correction += 1;
+            if day_correction > max_correction {
+                adj_oy = ay; adj_om = am; adj_od = ad;
+                break;
+            }
+        }
+
+        // dateUntil from this's perspective (asymmetric)
+        let (mut dy, mut dm, mut dw, dd) = super::difference_iso_date(ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit);
+        let mut dd = dd as i64;
+
+        // Decompose time remainder (already signed, same direction as date components)
         let mut dh = (time_remainder / NS_PER_HOUR) as i64;
         let mut dmi = ((time_remainder % NS_PER_HOUR) / NS_PER_MIN) as i64;
         let mut ds = ((time_remainder % NS_PER_MIN) / NS_PER_SEC) as i64;
@@ -2530,15 +2519,20 @@ fn zdt_until_since(
         let mut dus = ((time_remainder % NS_PER_MS) / 1_000) as i64;
         let mut dns = (time_remainder % 1_000) as i64;
 
-        // Apply result_sign to get signed components
-        let mut dy = dy * result_sign;
-        let mut dm = dm * result_sign;
-        let mut dw = dw * result_sign;
-        dd *= result_sign;
-        dh *= result_sign as i64; dmi *= result_sign as i64; ds *= result_sign as i64;
-        dms *= result_sign as i64; dus *= result_sign as i64; dns *= result_sign as i64;
+        // Per spec DifferenceTemporal: for "since", negate rounding mode BEFORE rounding,
+        // round the signed result, THEN negate the final result.
+        let effective_mode = if sign == -1 {
+            super::negate_rounding_mode(&rounding_mode)
+        } else {
+            rounding_mode.clone()
+        };
 
-        // Round SIGNED components with RECEIVER reference and ORIGINAL mode
+        // Rounding reference: always the receiver's date (this = ns1)
+        let ref_y = ty;
+        let ref_m = tm;
+        let ref_d = td;
+
+        // Apply rounding on signed values
         if smallest_unit != "nanosecond" || rounding_increment != 1.0 {
             let su_order = super::temporal_unit_order(&smallest_unit);
             if su_order >= super::temporal_unit_order("day") {
@@ -2551,20 +2545,21 @@ fn zdt_until_since(
                 let fractional_days = dd as f64 + time_ns / 86_400_000_000_000.0;
                 let (ry2, rm2, rw2, rd2) = super::round_date_duration_with_frac_days(
                     dy, dm, dw, fractional_days,
-                    &smallest_unit, rounding_increment, &rounding_mode,
+                    &smallest_unit, rounding_increment, &effective_mode,
                     ref_y, ref_m, ref_d,
                 );
+                // For since (sign=-1): negate the rounded result
+                let nf = if sign == -1 { -1.0 } else { 1.0 };
                 return super::duration::create_duration_result(
                     interp,
-                    ry2 as f64, rm2 as f64, rw2 as f64, rd2 as f64,
+                    ry2 as f64 * nf, rm2 as f64 * nf, rw2 as f64 * nf, rd2 as f64 * nf,
                     0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 );
             } else {
                 // Time unit rounding on signed values
-                let total_time_ns = time_remainder * result_sign as i128;
                 let unit_ns = super::temporal_unit_length_ns(&smallest_unit) as i128;
                 let increment_ns = unit_ns * rounding_increment as i128;
-                let rounded = round_ns_i128(total_time_ns, increment_ns, &rounding_mode);
+                let rounded = round_ns_i128(time_remainder, increment_ns, &effective_mode);
                 dns = (rounded % 1000) as i64;
                 let rem = rounded / 1000;
                 dus = (rem % 1000) as i64;
@@ -2577,6 +2572,12 @@ fn zdt_until_since(
                 let rem = rem / 60;
                 dh = rem as i64;
             }
+        }
+
+        // For since (sign=-1): negate everything
+        if sign == -1 {
+            dy = -dy; dm = -dm; dw = -dw; dd = -dd;
+            dh = -dh; dmi = -dmi; ds = -ds; dms = -dms; dus = -dus; dns = -dns;
         }
 
         return super::duration::create_duration_result(

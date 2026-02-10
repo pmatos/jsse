@@ -480,6 +480,40 @@ pub(crate) fn add_iso_date_with_overflow(
     Ok(balance_iso_date(y, mu as i32, total_days))
 }
 
+/// ISODateSurpasses: checks if adding years+months to baseDate surpasses target.
+/// Uses the ORIGINAL unclamped day from baseDate for comparison (spec key insight).
+fn iso_date_surpasses(
+    sign: i32,
+    base_y: i32, base_m: u8, base_d: u8,
+    target_y: i32, target_m: u8, target_d: u8,
+    years: i32, months: i32,
+) -> bool {
+    let y0 = base_y + years;
+    if compare_surpasses(sign, y0, base_m as i32, base_d as i32, target_y as i32, target_m as i32, target_d as i32) {
+        return true;
+    }
+    if months == 0 { return false; }
+    let m0 = base_m as i32 + months;
+    let bal_y = y0 + (m0 - 1).div_euclid(12);
+    let bal_m = (m0 - 1).rem_euclid(12) + 1;
+    compare_surpasses(sign, bal_y, bal_m, base_d as i32, target_y as i32, target_m as i32, target_d as i32)
+}
+
+fn compare_surpasses(sign: i32, year: i32, month: i32, day: i32, ty: i32, tm: i32, td: i32) -> bool {
+    if year != ty {
+        return sign * (year - ty) > 0;
+    }
+    if month != tm {
+        return sign * (month - tm) > 0;
+    }
+    if day != td {
+        return sign * (day - td) > 0;
+    }
+    false
+}
+
+/// Asymmetric date difference per spec: computes from date1's perspective.
+/// date1 is the reference (receiver). Result is signed.
 pub(crate) fn difference_iso_date(
     y1: i32,
     m1: u8,
@@ -489,47 +523,51 @@ pub(crate) fn difference_iso_date(
     d2: u8,
     largest_unit: &str,
 ) -> (i32, i32, i32, i32) {
-    // If date1 > date2, compute forward difference and negate
-    if (y1, m1, d1) > (y2, m2, d2) {
-        let (dy, dm, dw, dd) = difference_iso_date(y2, m2, d2, y1, m1, d1, largest_unit);
-        return (-dy, -dm, -dw, -dd);
-    }
-    // From here: date1 <= date2, all results are non-negative
+    let sign = if (y1, m1, d1) < (y2, m2, d2) { 1 }
+        else if (y1, m1, d1) > (y2, m2, d2) { -1 }
+        else { return (0, 0, 0, 0); };
+
     match largest_unit {
-        "year" | "years" => {
-            let mut years = y2 as i32 - y1 as i32;
-            let mut months = m2 as i32 - m1 as i32;
-            if months < 0 {
-                years -= 1;
-                months += 12;
-            }
-            // Compute the intermediate date: start + years + months
-            let (mid_y, mid_m, mid_d) = add_iso_date(y1, m1, d1, years, months, 0, 0);
-            let mid_epoch = iso_date_to_epoch_days(mid_y, mid_m, mid_d);
-            let end_epoch = iso_date_to_epoch_days(y2, m2, d2);
-            let mut days = (end_epoch - mid_epoch) as i32;
-            if days < 0 {
-                // Borrow from months
-                months -= 1;
-                if months < 0 {
-                    years -= 1;
-                    months += 12;
+        "year" | "years" | "month" | "months" => {
+            let mut years = 0i32;
+            let mut months = 0i32;
+
+            if matches!(largest_unit, "year" | "years" | "month" | "months") {
+                // Find years
+                let mut candidate_years = y2 - y1;
+                if candidate_years != 0 { candidate_years -= sign; }
+                while !iso_date_surpasses(sign, y1, m1, d1, y2, m2, d2, candidate_years, 0) {
+                    years = candidate_years;
+                    candidate_years += sign;
                 }
-                let (mid_y2, mid_m2, mid_d2) = add_iso_date(y1, m1, d1, years, months, 0, 0);
-                let mid_epoch2 = iso_date_to_epoch_days(mid_y2, mid_m2, mid_d2);
-                days = (end_epoch - mid_epoch2) as i32;
+
+                // Find months
+                let mut candidate_months = sign;
+                while !iso_date_surpasses(sign, y1, m1, d1, y2, m2, d2, years, candidate_months) {
+                    months = candidate_months;
+                    candidate_months += sign;
+                }
+
+                if matches!(largest_unit, "month" | "months") {
+                    months += years * 12;
+                    years = 0;
+                }
             }
+
+            // Compute intermediate: constrain day to fit result month
+            let int_y = y1 + years;
+            let int_m0 = m1 as i32 + months;
+            let bal_y = int_y + (int_m0 - 1).div_euclid(12);
+            let bal_m = ((int_m0 - 1).rem_euclid(12) + 1) as u8;
+            let int_d = d1.min(iso_days_in_month(bal_y, bal_m));
+            let days = (iso_date_to_epoch_days(y2, m2, d2) - iso_date_to_epoch_days(bal_y, bal_m, int_d)) as i32;
             (years, months, 0, days)
-        }
-        "month" | "months" => {
-            let (years, months, _, days) = difference_iso_date(y1, m1, d1, y2, m2, d2, "year");
-            (0, years * 12 + months, 0, days)
         }
         "week" | "weeks" => {
             let total = iso_date_to_epoch_days(y2, m2, d2) - iso_date_to_epoch_days(y1, m1, d1);
-            let weeks = total / 7;
-            let days = total % 7;
-            (0, 0, weeks as i32, days as i32)
+            let weeks = if total >= 0 { total / 7 } else { -(-total / 7) } as i32;
+            let days = (total - weeks as i64 * 7) as i32;
+            (0, 0, weeks, days)
         }
         _ => {
             let total = iso_date_to_epoch_days(y2, m2, d2) - iso_date_to_epoch_days(y1, m1, d1);
@@ -2220,13 +2258,9 @@ pub(crate) fn negate_rounding_mode(mode: &str) -> String {
     match mode {
         "ceil" => "floor".to_string(),
         "floor" => "ceil".to_string(),
-        "expand" => "trunc".to_string(),
-        "trunc" => "expand".to_string(),
         "halfCeil" => "halfFloor".to_string(),
         "halfFloor" => "halfCeil".to_string(),
-        "halfExpand" => "halfTrunc".to_string(),
-        "halfTrunc" => "halfExpand".to_string(),
-        _ => mode.to_string(), // halfEven is symmetric
+        _ => mode.to_string(), // expand, trunc, halfExpand, halfTrunc, halfEven are symmetric
     }
 }
 

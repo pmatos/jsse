@@ -868,16 +868,18 @@ impl Interpreter {
 
                     let (mut dy, mut dm, mut dw, mut dd, mut dh, mut dmi, mut ds, mut dms, mut dus, mut dns) =
                         diff_date_time(y1, m1, d1, ns1_total, y2, m2, d2, ns2_total, &largest_unit);
-                    if sign == -1 {
-                        dy = -dy; dm = -dm; dw = -dw; dd = -dd;
-                        dh = -dh; dmi = -dmi; ds = -ds; dms = -dms; dus = -dus; dns = -dns;
-                    }
 
-                    // Apply rounding
+                    // Per spec: for since, negate rounding mode, round signed values, then negate result
+                    let effective_mode = if sign == -1 {
+                        super::negate_rounding_mode(&rounding_mode)
+                    } else {
+                        rounding_mode.clone()
+                    };
+
+                    // Apply rounding on signed values
                     if smallest_unit != "nanosecond" || rounding_increment != 1.0 {
                         let su_order = super::temporal_unit_order(&smallest_unit);
                         if su_order >= super::temporal_unit_order("day") {
-                            // Date unit rounding: include time as fractional days
                             let time_ns = dh as f64 * 3_600_000_000_000.0
                                 + dmi as f64 * 60_000_000_000.0
                                 + ds as f64 * 1_000_000_000.0
@@ -885,16 +887,15 @@ impl Interpreter {
                                 + dus as f64 * 1_000.0
                                 + dns as f64;
                             let fractional_days = dd as f64 + time_ns / 86_400_000_000_000.0;
-                            let (ry, rm, rd) = if sign == -1 { (y2, m2, d2) } else { (y1, m1, d1) };
+                            let (ry, rm, rd) = (y1, m1, d1);
                             let (ry2, rm2, rw2, rd2) = super::round_date_duration_with_frac_days(
                                 dy, dm, dw, fractional_days,
-                                &smallest_unit, rounding_increment, &rounding_mode,
+                                &smallest_unit, rounding_increment, &effective_mode,
                                 ry, rm, rd,
                             );
                             dy = ry2; dm = rm2; dw = rw2; dd = rd2;
                             dh = 0; dmi = 0; ds = 0; dms = 0; dus = 0; dns = 0;
                         } else {
-                            // Time unit rounding
                             let time_ns = dh as f64 * 3_600_000_000_000.0
                                 + dmi as f64 * 60_000_000_000.0
                                 + ds as f64 * 1_000_000_000.0
@@ -903,7 +904,7 @@ impl Interpreter {
                                 + dns as f64;
                             let unit_ns = super::temporal_unit_length_ns(&smallest_unit);
                             let increment_ns = unit_ns * rounding_increment;
-                            let rounded_ns = round_number_to_increment(time_ns, increment_ns, &rounding_mode);
+                            let rounded_ns = round_number_to_increment(time_ns, increment_ns, &effective_mode);
                             let total = rounded_ns as i64;
                             dns = total % 1000;
                             let rem = total / 1000;
@@ -917,6 +918,12 @@ impl Interpreter {
                             let rem = rem / 60;
                             dh = rem;
                         }
+                    }
+
+                    // For since: negate the result
+                    if sign == -1 {
+                        dy = -dy; dm = -dm; dw = -dw; dd = -dd;
+                        dh = -dh; dmi = -dmi; ds = -ds; dms = -dms; dus = -dus; dns = -dns;
                     }
 
                     super::duration::create_duration_result(

@@ -528,27 +528,31 @@ impl Interpreter {
 
                     let (mut dy, mut dm, mut dw, mut dd) =
                         difference_iso_date(y1, m1, d1, y2, m2, d2, &largest_unit);
-                    if sign == -1 {
-                        dy = -dy;
-                        dm = -dm;
-                        dw = -dw;
-                        dd = -dd;
-                    }
 
-                    // Apply rounding if smallestUnit is not the default or increment > 1
+                    // Per spec: for since, negate rounding mode, round signed values, then negate result
+                    let effective_mode = if sign == -1 {
+                        negate_rounding_mode(&rounding_mode)
+                    } else {
+                        rounding_mode.clone()
+                    };
+
+                    // Apply rounding on signed values
                     if smallest_unit != "day" || rounding_increment != 1.0 || rounding_mode != "trunc" {
-                        // For since, the reference date is other (y2,m2,d2)
-                        // For until, the reference date is this (y1,m1,d1)
-                        let (ry, rm, rd) = if sign == -1 { (y2, m2, d2) } else { (y1, m1, d1) };
+                        let (ry, rm, rd) = (y1, m1, d1);
                         let (ry2, rm2, rw2, rd2) = round_date_duration(
                             dy, dm, dw, dd,
-                            &smallest_unit, rounding_increment, &rounding_mode,
+                            &smallest_unit, rounding_increment, &effective_mode,
                             ry, rm, rd,
                         );
                         dy = ry2;
                         dm = rm2;
                         dw = rw2;
                         dd = rd2;
+                    }
+
+                    // For since: negate the result
+                    if sign == -1 {
+                        dy = -dy; dm = -dm; dw = -dw; dd = -dd;
                     }
 
                     super::duration::create_duration_result(
