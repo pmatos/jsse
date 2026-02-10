@@ -60,6 +60,88 @@ fn get_md_fields(
     }
 }
 
+fn read_pmd_property_bag_raw(
+    interp: &mut Interpreter,
+    item: &JsValue,
+) -> Result<(Option<f64>, Option<String>, f64, String), Completion> {
+    // Alphabetical: calendar, day, month, monthCode, year
+    let cal_val = match get_prop(interp, item, "calendar") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let cal = to_temporal_calendar_slot_value(interp, &cal_val)?;
+    let d_val = match get_prop(interp, item, "day") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let d_f = if is_undefined(&d_val) {
+        return Err(Completion::Throw(interp.create_type_error("day is required")));
+    } else {
+        to_integer_with_truncation(interp, &d_val)?
+    };
+    let m_val = match get_prop(interp, item, "month") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let month_num = if !is_undefined(&m_val) {
+        Some(to_integer_with_truncation(interp, &m_val)?)
+    } else {
+        None
+    };
+    let mc_val = match get_prop(interp, item, "monthCode") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let mc_str = if !is_undefined(&mc_val) {
+        Some(super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
+    } else {
+        None
+    };
+    let y_val = match get_prop(interp, item, "year") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if !is_undefined(&y_val) {
+        let _ = to_integer_with_truncation(interp, &y_val)?;
+    }
+    if d_f < 1.0 {
+        return Err(Completion::Throw(
+            interp.create_range_error("day must be a positive integer"),
+        ));
+    }
+    Ok((month_num, mc_str, d_f, cal))
+}
+
+fn resolve_month_from_raw(
+    interp: &mut Interpreter,
+    month_num: Option<f64>,
+    mc_str: Option<String>,
+) -> Result<u8, Completion> {
+    if let Some(ref mc) = mc_str {
+        match super::plain_date::month_code_to_number_pub(mc) {
+            Some(n) => {
+                if let Some(mn) = month_num {
+                    if mn as u8 != n {
+                        return Err(Completion::Throw(
+                            interp.create_range_error("month and monthCode conflict"),
+                        ));
+                    }
+                }
+                Ok(n)
+            }
+            None => Err(Completion::Throw(
+                interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+            )),
+        }
+    } else if let Some(mn) = month_num {
+        Ok(mn as u8)
+    } else {
+        Err(Completion::Throw(
+            interp.create_type_error("month or monthCode is required"),
+        ))
+    }
+}
+
 fn to_temporal_plain_month_day(
     interp: &mut Interpreter,
     item: JsValue,
@@ -78,52 +160,82 @@ fn to_temporal_plain_month_day(
                     return Ok((*iso_month, *iso_day, *reference_iso_year, calendar.clone()));
                 }
             }
+            // Alphabetical order: calendar, day, month, monthCode, year
+            let cal_val = match get_prop(interp, &item, "calendar") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let cal = to_temporal_calendar_slot_value(interp, &cal_val)?;
+            let d_val = match get_prop(interp, &item, "day") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let d_f = if is_undefined(&d_val) {
+                return Err(Completion::Throw(
+                    interp.create_type_error("day is required"),
+                ));
+            } else {
+                to_integer_with_truncation(interp, &d_val)?
+            };
             let m_val = match get_prop(interp, &item, "month") {
                 Completion::Normal(v) => v,
                 other => return Err(other),
+            };
+            let month_num = if !is_undefined(&m_val) {
+                Some(to_integer_with_truncation(interp, &m_val)?)
+            } else {
+                None
             };
             let mc_val = match get_prop(interp, &item, "monthCode") {
                 Completion::Normal(v) => v,
                 other => return Err(other),
             };
-            let d_val = match get_prop(interp, &item, "day") {
+            let mc_str = if !is_undefined(&mc_val) {
+                Some(super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
+            } else {
+                None
+            };
+            let y_val = match get_prop(interp, &item, "year") {
                 Completion::Normal(v) => v,
                 other => return Err(other),
             };
-            if is_undefined(&m_val) && is_undefined(&mc_val) && is_undefined(&d_val) {
-                return Err(Completion::Throw(
-                    interp.create_type_error("Property bag missing required fields"),
-                ));
-            }
-            let m = if !is_undefined(&mc_val) {
-                let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
-                match super::plain_date::month_code_to_number_pub(&mc) {
-                    Some(n) => n,
+            let _y = if !is_undefined(&y_val) {
+                Some(to_integer_with_truncation(interp, &y_val)? as i32)
+            } else {
+                None
+            };
+            // Resolve month from month/monthCode
+            let m = if let Some(ref mc) = mc_str {
+                match super::plain_date::month_code_to_number_pub(mc) {
+                    Some(n) => {
+                        if let Some(mn) = month_num {
+                            if mn as u8 != n {
+                                return Err(Completion::Throw(
+                                    interp.create_range_error("month and monthCode conflict"),
+                                ));
+                            }
+                        }
+                        n
+                    }
                     None => {
                         return Err(Completion::Throw(
                             interp.create_range_error(&format!("Invalid monthCode: {mc}")),
                         ));
                     }
                 }
-            } else if !is_undefined(&m_val) {
-                to_integer_with_truncation(interp, &m_val)? as u8
+            } else if let Some(mn) = month_num {
+                mn as u8
             } else {
                 return Err(Completion::Throw(
                     interp.create_type_error("month or monthCode is required"),
                 ));
             };
-            let d = if is_undefined(&d_val) {
+            let d = d_f as u8;
+            if d_f < 1.0 {
                 return Err(Completion::Throw(
-                    interp.create_type_error("day is required"),
+                    interp.create_range_error("day must be a positive integer"),
                 ));
-            } else {
-                to_integer_with_truncation(interp, &d_val)? as u8
-            };
-            let cal_val = match get_prop(interp, &item, "calendar") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let cal = to_temporal_calendar_slot_value(interp, &cal_val)?;
+            }
             Ok((m, d, 1972, cal)) // 1972 is a leap year reference
         }
         JsValue::String(s) => {
@@ -268,17 +380,38 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let item = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(item, JsValue::Object(_)) {
-                    return Completion::Throw(interp.create_type_error("with requires an object"));
+                // IsPartialTemporalObject
+                if let Err(c) = is_partial_temporal_object(interp, &item) {
+                    return c;
                 }
-                let (raw_month, raw_month_code) = match read_month_fields(interp, &item) {
+                // PrepareCalendarFields in alphabetical order: day, month, monthCode, year
+                let mut has_any = false;
+                let (new_d, has_d) = match read_field_positive_int(interp, &item, "day", d) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let new_d = match get_opt_u8(interp, &item, "day", d) {
+                has_any |= has_d;
+                let (raw_month, has_m) = match read_field_positive_int(interp, &item, "month", m) {
+                    Ok(v) => (Some(v.0), v.1),
+                    Err(c) => return c,
+                };
+                let raw_month = if has_m { raw_month } else { None };
+                has_any |= has_m;
+                let (raw_month_code, has_mc) = match read_month_code_field(interp, &item) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                has_any |= has_mc;
+                let (new_ry, has_y) = match read_field_i32(interp, &item, "year", ry) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_y;
+                if !has_any {
+                    return Completion::Throw(
+                        interp.create_type_error("with() requires at least one recognized property"),
+                    );
+                }
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let overflow = match parse_overflow_option(interp, &options) {
                     Ok(v) => v,
@@ -288,6 +421,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                // Year is used for validation only; reference year stays unchanged
                 if overflow == "reject" {
                     if !iso_date_valid(ry, new_m, new_d) {
                         return Completion::Throw(interp.create_range_error("Invalid month/day"));
@@ -465,23 +599,36 @@ impl Interpreter {
             "PlainMonthDay".to_string(),
             2,
             |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("Temporal.PlainMonthDay must be called with new"),
+                    );
+                }
                 let m_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let m = match interp.to_number_value(&m_val) {
                     Ok(n) => {
-                        if !n.is_finite() || n != n.trunc() || n < 1.0 || n > 12.0 {
+                        if !n.is_finite() {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
-                        n as u8
+                        let t = n.trunc();
+                        if t < 1.0 || t > 12.0 {
+                            return Completion::Throw(interp.create_range_error("Invalid month"));
+                        }
+                        t as u8
                     }
                     Err(e) => return Completion::Throw(e),
                 };
                 let d_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let d = match interp.to_number_value(&d_val) {
                     Ok(n) => {
-                        if !n.is_finite() || n != n.trunc() || n < 1.0 || n > 31.0 {
+                        if !n.is_finite() {
                             return Completion::Throw(interp.create_range_error("Invalid day"));
                         }
-                        n as u8
+                        let t = n.trunc();
+                        if t < 1.0 || t > 31.0 {
+                            return Completion::Throw(interp.create_range_error("Invalid day"));
+                        }
+                        t as u8
                     }
                     Err(e) => return Completion::Throw(e),
                 };
@@ -495,13 +642,28 @@ impl Interpreter {
                         1972i32
                     } else {
                         match interp.to_number_value(v) {
-                            Ok(n) => n as i32,
+                            Ok(n) => {
+                                if !n.is_finite() {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid referenceISOYear"),
+                                    );
+                                }
+                                n.trunc() as i32
+                            }
                             Err(e) => return Completion::Throw(e),
                         }
                     }
                 } else {
                     1972i32
                 };
+                if !iso_date_valid(ry, m, d) {
+                    return Completion::Throw(interp.create_range_error("Invalid date"));
+                }
+                if !super::iso_date_within_limits(ry, m, d) {
+                    return Completion::Throw(
+                        interp.create_range_error("Date outside valid ISO range"),
+                    );
+                }
                 create_plain_month_day_result(interp, m, d, ry, &cal)
             },
         ));
@@ -541,20 +703,52 @@ impl Interpreter {
                     }
                     return create_plain_month_day_result(interp, m, d, ry, &cal);
                 }
-                let overflow = match parse_overflow_option(interp, &options) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let (m, d, ry, cal) = match to_temporal_plain_month_day(interp, item) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if overflow == "constrain" {
-                    let cm = m.max(1).min(12);
-                    let cd = d.max(1).min(iso_days_in_month(ry, cm));
-                    create_plain_month_day_result(interp, cm, cd, ry, &cal)
+                // Check if it's a Temporal PlainMonthDay (read overflow first, return copy)
+                let is_temporal = if let JsValue::Object(ref o) = item {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let data = obj.borrow();
+                        matches!(&data.temporal_data, Some(TemporalData::PlainMonthDay { .. }))
+                    } else {
+                        false
+                    }
                 } else {
+                    false
+                };
+                if is_temporal {
+                    let overflow = match parse_overflow_option(interp, &options) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let (m, d, ry, cal) = match to_temporal_plain_month_day(interp, item) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let _ = overflow;
                     create_plain_month_day_result(interp, m, d, ry, &cal)
+                } else {
+                    // Property bag: read fields raw, then overflow, then validate
+                    let (month_num, mc_str, d_f, cal) = match read_pmd_property_bag_raw(interp, &item) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let overflow = match parse_overflow_option(interp, &options) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    // Now resolve monthCode
+                    let m = match resolve_month_from_raw(interp, month_num, mc_str) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let d = d_f as u8;
+                    let ry = 1972i32;
+                    if overflow == "constrain" {
+                        let cm = m.max(1).min(12);
+                        let cd = d.max(1).min(iso_days_in_month(ry, cm));
+                        create_plain_month_day_result(interp, cm, cd, ry, &cal)
+                    } else {
+                        create_plain_month_day_result(interp, m, d, ry, &cal)
+                    }
                 }
             },
         ));

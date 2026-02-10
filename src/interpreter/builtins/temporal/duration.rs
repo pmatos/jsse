@@ -4,6 +4,7 @@ use crate::interpreter::builtins::temporal::{
     is_valid_duration, iso_date_to_epoch_days, parse_temporal_duration_string,
     round_number_to_increment, temporal_unit_length_ns, temporal_unit_order,
     temporal_unit_singular, to_integer_if_integral, validate_rounding_increment,
+    coerce_rounding_increment, max_rounding_increment,
 };
 
 macro_rules! try_completion {
@@ -347,16 +348,17 @@ impl Interpreter {
                         }
                     }};
                 }
-                let (hy, ny) = get_field!("years", y);
-                let (hmo, nmo) = get_field!("months", mo);
-                let (hw, nw) = get_field!("weeks", w);
+                // Alphabetical order per spec
                 let (hd, nd) = get_field!("days", d);
                 let (hh, nh) = get_field!("hours", h);
-                let (hmi, nmi) = get_field!("minutes", mi);
-                let (hs, ns_val) = get_field!("seconds", s);
-                let (hms, nms) = get_field!("milliseconds", ms);
                 let (hus, nus) = get_field!("microseconds", us);
+                let (hms, nms) = get_field!("milliseconds", ms);
+                let (hmi, nmi) = get_field!("minutes", mi);
+                let (hmo, nmo) = get_field!("months", mo);
                 let (hns, nns) = get_field!("nanoseconds", ns);
+                let (hs, ns_val) = get_field!("seconds", s);
+                let (hw, nw) = get_field!("weeks", w);
+                let (hy, ny) = get_field!("years", y);
                 if !hy && !hmo && !hw && !hd && !hh && !hmi && !hs && !hms && !hus && !hns {
                     return Completion::Throw(interp.create_type_error(
                         "Invalid duration-like object: at least one duration property must be present",
@@ -466,7 +468,7 @@ impl Interpreter {
                     );
                 }
 
-                let (smallest_unit, rounding_mode, increment, largest_unit) =
+                let (smallest_unit, rounding_mode, increment, largest_unit, relative_to_raw) =
                     match parse_round_options(interp, &round_to, y, mo, w, d, h, mi, s, ms, us, ns)
                     {
                         Ok(opts) => opts,
@@ -479,18 +481,10 @@ impl Interpreter {
                     ));
                 }
 
-                // Parse relativeTo from options
-                let relative_to = if matches!(round_to, JsValue::Object(_)) {
-                    let rt = match get_prop(interp, &round_to, "relativeTo") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    match to_relative_to_date(interp, &rt) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    }
-                } else {
-                    None
+                // Use relativeTo from options (already read in parse_round_options)
+                let relative_to = match to_relative_to_date(interp, &relative_to_raw) {
+                    Ok(v) => v,
+                    Err(c) => return c,
                 };
 
                 // Calendar units require relativeTo
@@ -606,48 +600,47 @@ impl Interpreter {
                     );
                 }
 
-                let unit = if let JsValue::String(ref su) = total_of {
+                let (unit, relative_to) = if let JsValue::String(ref su) = total_of {
                     let su_str = su.to_rust_string();
-                    match temporal_unit_singular(&su_str) {
+                    let u = match temporal_unit_singular(&su_str) {
                         Some(u) => u,
                         None => {
                             return Completion::Throw(
                                 interp.create_range_error(&format!("Invalid unit: {su_str}")),
                             );
                         }
-                    }
+                    };
+                    (u, None)
                 } else if matches!(total_of, JsValue::Object(_)) {
+                    // Read options in alphabetical order: relativeTo, unit
+                    let rt = match get_prop(interp, &total_of, "relativeTo") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
                     let u = try_completion!(get_prop(interp, &total_of, "unit"));
+                    // Coerce relativeTo
+                    let relative = match to_relative_to_date(interp, &rt) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    // Coerce unit
                     if is_undefined(&u) {
                         return Completion::Throw(interp.create_range_error("unit is required"));
                     }
                     let us = try_result!(interp, interp.to_string_value(&u));
-                    match temporal_unit_singular(&us) {
+                    let unit = match temporal_unit_singular(&us) {
                         Some(u) => u,
                         None => {
                             return Completion::Throw(
                                 interp.create_range_error(&format!("Invalid unit: {us}")),
                             );
                         }
-                    }
+                    };
+                    (unit, relative)
                 } else {
                     return Completion::Throw(
                         interp.create_type_error("total requires a string or options object"),
                     );
-                };
-
-                // Parse relativeTo from options
-                let relative_to = if matches!(total_of, JsValue::Object(_)) {
-                    let rt = match get_prop(interp, &total_of, "relativeTo") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    match to_relative_to_date(interp, &rt) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    }
-                } else {
-                    None
                 };
 
                 // Calendar units require relativeTo
@@ -658,27 +651,30 @@ impl Interpreter {
                     );
                 }
 
-                let total_ns: f64 = if let Some((by, bm, bd)) = relative_to {
+                let total_ns: i128 = if let Some((by, bm, bd)) = relative_to {
                     match duration_total_ns_relative(
                         y, mo, w, d, h, mi, s, ms, us, ns, by, bm, bd,
                     ) {
-                        Ok(v) => v as f64,
+                        Ok(v) => v,
                         Err(()) => return Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         )),
                     }
                 } else {
-                    d * 86_400_000_000_000.0
-                        + h * 3_600_000_000_000.0
-                        + mi * 60_000_000_000.0
-                        + s * 1_000_000_000.0
-                        + ms * 1_000_000.0
-                        + us * 1_000.0
-                        + ns
+                    d as i128 * 86_400_000_000_000
+                        + h as i128 * 3_600_000_000_000
+                        + mi as i128 * 60_000_000_000
+                        + s as i128 * 1_000_000_000
+                        + ms as i128 * 1_000_000
+                        + us as i128 * 1_000
+                        + ns as i128
                 };
 
-                let unit_ns = temporal_unit_length_ns(unit);
-                Completion::Normal(JsValue::Number(total_ns / unit_ns))
+                let unit_ns = temporal_unit_length_ns(unit) as i128;
+                let whole = total_ns / unit_ns;
+                let remainder = total_ns % unit_ns;
+                let result = whole as f64 + remainder as f64 / unit_ns as f64;
+                Completion::Normal(JsValue::Number(result))
             },
         ));
         proto
@@ -1285,7 +1281,7 @@ fn parse_round_options(
     ms: f64,
     us: f64,
     ns: f64,
-) -> Result<(&'static str, &'static str, f64, &'static str), Completion> {
+) -> Result<(&'static str, &'static str, f64, &'static str, JsValue), Completion> {
     if let JsValue::String(su) = round_to {
         let su_str = su.to_rust_string();
         let unit = temporal_unit_singular(&su_str).ok_or_else(|| {
@@ -1297,7 +1293,7 @@ fn parse_round_options(
         } else {
             def
         };
-        return Ok((unit, "halfExpand", 1.0, largest));
+        return Ok((unit, "halfExpand", 1.0, largest, JsValue::Undefined));
     }
     if !matches!(round_to, JsValue::Object(_)) {
         return Err(Completion::Throw(
@@ -1305,49 +1301,34 @@ fn parse_round_options(
         ));
     }
 
-    let small_unit_val = match get_prop(interp, round_to, "smallestUnit") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
+    // Read and coerce each option in alphabetical order per spec.
+    // Each option is get+coerced before the next is read.
+
+    // 1. largestUnit: get + coerce
     let large_unit_val = match get_prop(interp, round_to, "largestUnit") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-
-    // Both smallestUnit and largestUnit undefined → error
-    if is_undefined(&small_unit_val) && is_undefined(&large_unit_val) {
-        return Err(Completion::Throw(
-            interp.create_range_error("smallestUnit or largestUnit is required"),
-        ));
-    }
-
-    let small_unit = if is_undefined(&small_unit_val) {
-        "nanosecond"
+    let large_unit_str = if !is_undefined(&large_unit_val) {
+        Some(interp.to_string_value(&large_unit_val).map_err(Completion::Throw)?)
     } else {
-        let su = interp
-            .to_string_value(&small_unit_val)
-            .map_err(Completion::Throw)?;
-        temporal_unit_singular(&su).ok_or_else(|| {
-            Completion::Throw(interp.create_range_error(&format!("Invalid unit: {su}")))
-        })?
+        None
     };
 
-    let large_unit = if is_undefined(&large_unit_val) {
-        let def = default_largest_unit_for_duration(y, mo, w, d, h, mi, s, ms, us, ns);
-        if temporal_unit_order(def) < temporal_unit_order(small_unit) {
-            small_unit
-        } else {
-            def
-        }
-    } else {
-        let lu = interp
-            .to_string_value(&large_unit_val)
-            .map_err(Completion::Throw)?;
-        temporal_unit_singular(&lu).ok_or_else(|| {
-            Completion::Throw(interp.create_range_error(&format!("Invalid unit: {lu}")))
-        })?
+    // 2. relativeTo: get only (no coercion here, processed later)
+    let relative_to_val = match get_prop(interp, round_to, "relativeTo") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
     };
 
+    // 3. roundingIncrement: get + coerce
+    let inc_val = match get_prop(interp, round_to, "roundingIncrement") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let increment = coerce_rounding_increment(interp, &inc_val)?;
+
+    // 4. roundingMode: get + coerce
     let rm_val = match get_prop(interp, round_to, "roundingMode") {
         Completion::Normal(v) => v,
         other => return Err(other),
@@ -1374,13 +1355,69 @@ fn parse_round_options(
         }
     };
 
-    let inc_val = match get_prop(interp, round_to, "roundingIncrement") {
+    // 5. smallestUnit: get + coerce
+    let small_unit_val = match get_prop(interp, round_to, "smallestUnit") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let increment = validate_rounding_increment(interp, &inc_val, &small_unit, true)?;
+    let small_unit = if is_undefined(&small_unit_val) {
+        None
+    } else {
+        let su = interp
+            .to_string_value(&small_unit_val)
+            .map_err(Completion::Throw)?;
+        Some(temporal_unit_singular(&su).ok_or_else(|| {
+            Completion::Throw(interp.create_range_error(&format!("Invalid unit: {su}")))
+        })?)
+    };
 
-    Ok((small_unit, rounding_mode, increment, large_unit))
+    // Both smallestUnit and largestUnit undefined → error (auto counts as provided)
+    if small_unit.is_none() && large_unit_str.is_none() {
+        return Err(Completion::Throw(
+            interp.create_range_error("smallestUnit or largestUnit is required"),
+        ));
+    }
+
+    let small_unit = small_unit.unwrap_or("nanosecond");
+
+    let large_unit = if let Some(ref lu_str) = large_unit_str {
+        if lu_str == "auto" {
+            let def = default_largest_unit_for_duration(y, mo, w, d, h, mi, s, ms, us, ns);
+            if temporal_unit_order(def) < temporal_unit_order(small_unit) {
+                small_unit
+            } else {
+                def
+            }
+        } else {
+            temporal_unit_singular(lu_str).ok_or_else(|| {
+                Completion::Throw(interp.create_range_error(&format!("Invalid unit: {lu_str}")))
+            })?
+        }
+    } else {
+        let def = default_largest_unit_for_duration(y, mo, w, d, h, mi, s, ms, us, ns);
+        if temporal_unit_order(def) < temporal_unit_order(small_unit) {
+            small_unit
+        } else {
+            def
+        }
+    };
+
+    // Validate roundingIncrement against smallestUnit
+    if let Some(max) = max_rounding_increment(small_unit) {
+        let i = increment as u64;
+        if i >= max {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "roundingIncrement {increment} is out of range for {small_unit}"
+            ))));
+        }
+        if max % i != 0 {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "roundingIncrement {increment} does not divide evenly into {max}"
+            ))));
+        }
+    }
+
+    Ok((small_unit, rounding_mode, increment, large_unit, relative_to_val))
 }
 
 /// Returns (precision, rounding_mode).
@@ -1400,7 +1437,42 @@ fn parse_to_string_options(
     }
     let options = opt_val;
 
-    // Read roundingMode first
+    // Read and coerce options in alphabetical order: fractionalSecondDigits, roundingMode, smallestUnit
+    // Each option is read AND coerced before the next is read (spec observable ordering).
+
+    // 1. fractionalSecondDigits: get + coerce
+    let fp = match get_prop(interp, &options, "fractionalSecondDigits") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let fsd_result: Option<Option<u8>> = if is_undefined(&fp) {
+        None // will use default
+    } else if matches!(fp, JsValue::Number(_)) {
+        let n = interp.to_number_value(&fp).map_err(Completion::Throw)?;
+        if n.is_nan() || !n.is_finite() {
+            return Err(Completion::Throw(
+                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
+            ));
+        }
+        let floored = n.floor();
+        if floored < 0.0 || floored > 9.0 {
+            return Err(Completion::Throw(
+                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
+            ));
+        }
+        Some(Some(floored as u8))
+    } else {
+        let s = interp.to_string_value(&fp).map_err(Completion::Throw)?;
+        if s == "auto" {
+            Some(None)
+        } else {
+            return Err(Completion::Throw(
+                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
+            ));
+        }
+    };
+
+    // 2. roundingMode: get + coerce
     let rm_val = match get_prop(interp, &options, "roundingMode") {
         Completion::Normal(v) => v,
         other => return Err(other),
@@ -1427,7 +1499,7 @@ fn parse_to_string_options(
         }
     };
 
-    // Per spec: smallestUnit overrides fractionalSecondDigits when present
+    // 3. smallestUnit: get + coerce (only if not undefined)
     let sp = match get_prop(interp, &options, "smallestUnit") {
         Completion::Normal(v) => v,
         other => return Err(other),
@@ -1445,35 +1517,11 @@ fn parse_to_string_options(
         };
     }
 
-    let fp = match get_prop(interp, &options, "fractionalSecondDigits") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&fp) {
-        return Ok((None, rounding_mode));
+    // smallestUnit was undefined; use fractionalSecondDigits result
+    match fsd_result {
+        None => Ok((None, rounding_mode)),
+        Some(digits) => Ok((digits, rounding_mode)),
     }
-    if matches!(fp, JsValue::Number(_)) {
-        let n = interp.to_number_value(&fp).map_err(Completion::Throw)?;
-        if n.is_nan() || !n.is_finite() {
-            return Err(Completion::Throw(
-                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
-            ));
-        }
-        let floored = n.floor();
-        if floored < 0.0 || floored > 9.0 {
-            return Err(Completion::Throw(
-                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
-            ));
-        }
-        return Ok((Some(floored as u8), rounding_mode));
-    }
-    let s = interp.to_string_value(&fp).map_err(Completion::Throw)?;
-    if s == "auto" {
-        return Ok((None, rounding_mode));
-    }
-    Err(Completion::Throw(
-        interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
-    ))
 }
 
 fn format_duration_iso(
@@ -1503,14 +1551,14 @@ fn format_duration_iso(
         nanoseconds,
     );
 
-    // Balance subsecond components into seconds for display
-    let total_sub_ns = nanoseconds.abs()
-        + microseconds.abs() * 1_000.0
-        + milliseconds.abs() * 1_000_000.0
-        + seconds.abs() * 1_000_000_000.0;
+    // Balance subsecond components into seconds for display using i128
+    let total_sub_ns_i128 = nanoseconds.abs() as i128
+        + microseconds.abs() as i128 * 1_000
+        + milliseconds.abs() as i128 * 1_000_000
+        + seconds.abs() as i128 * 1_000_000_000;
 
     // Apply rounding if precision is specified
-    let total_sub_ns = if let Some(p) = precision {
+    let total_sub_ns_i128 = if let Some(p) = precision {
         let increment = 10.0f64.powi(9 - p as i32);
         let effective_mode = if sign < 0 {
             match rounding_mode {
@@ -1523,33 +1571,33 @@ fn format_duration_iso(
         } else {
             rounding_mode
         };
-        round_number_to_increment(total_sub_ns, increment, effective_mode)
+        round_number_to_increment(total_sub_ns_i128 as f64, increment, effective_mode) as i128
     } else {
-        total_sub_ns
+        total_sub_ns_i128
     };
 
-    let mut balanced_s = (total_sub_ns / 1_000_000_000.0).trunc();
-    let frac_ns = (total_sub_ns - balanced_s * 1_000_000_000.0).round() as u64;
+    let mut balanced_s = total_sub_ns_i128 / 1_000_000_000;
+    let frac_ns = (total_sub_ns_i128 - balanced_s * 1_000_000_000) as u64;
 
     // Handle carry across unit boundaries ONLY when rounding was applied
-    let mut ami = minutes.abs();
-    let mut ah = hours.abs();
-    let mut extra_days = 0.0f64;
+    let mut ami = minutes.abs() as i128;
+    let mut ah = hours.abs() as i128;
+    let mut extra_days = 0i128;
     if precision.is_some() {
-        let has_higher_time = ami != 0.0 || ah != 0.0;
-        if has_higher_time && balanced_s >= 60.0 {
-            let carry_m = (balanced_s / 60.0).trunc();
-            balanced_s -= carry_m * 60.0;
+        let has_higher_time = ami != 0 || ah != 0;
+        if has_higher_time && balanced_s >= 60 {
+            let carry_m = balanced_s / 60;
+            balanced_s -= carry_m * 60;
             ami += carry_m;
         }
-        if ah != 0.0 && ami >= 60.0 {
-            let carry_h = (ami / 60.0).trunc();
-            ami -= carry_h * 60.0;
+        if ah != 0 && ami >= 60 {
+            let carry_h = ami / 60;
+            ami -= carry_h * 60;
             ah += carry_h;
         }
-        if ah >= 24.0 {
-            let carry_d = (ah / 24.0).trunc();
-            ah -= carry_d * 24.0;
+        if ah >= 24 {
+            let carry_d = ah / 24;
+            ah -= carry_d * 24;
             extra_days = carry_d;
         }
     }
@@ -1561,7 +1609,7 @@ fn format_duration_iso(
     result.push('P');
 
     let (ay, amo, aw) = (years.abs(), months.abs(), weeks.abs());
-    let ad = days.abs() + extra_days;
+    let ad = days.abs() as i128 + extra_days;
 
     if ay != 0.0 {
         result.push_str(&format_number(ay));
@@ -1575,29 +1623,29 @@ fn format_duration_iso(
         result.push_str(&format_number(aw));
         result.push('W');
     }
-    if ad != 0.0 {
-        result.push_str(&format_number(ad));
+    if ad != 0 {
+        result.push_str(&format!("{ad}"));
         result.push('D');
     }
 
-    let has_time = ah != 0.0 || ami != 0.0 || balanced_s != 0.0 || frac_ns != 0 || precision.is_some();
-    let has_date = ay != 0.0 || amo != 0.0 || aw != 0.0 || ad != 0.0;
+    let has_time = ah != 0 || ami != 0 || balanced_s != 0 || frac_ns != 0 || precision.is_some();
+    let has_date = ay != 0.0 || amo != 0.0 || aw != 0.0 || ad != 0;
 
     if has_time || !has_date {
         result.push('T');
-        if ah != 0.0 {
-            result.push_str(&format_number(ah));
+        if ah != 0 {
+            result.push_str(&format!("{ah}"));
             result.push('H');
         }
-        if ami != 0.0 {
-            result.push_str(&format_number(ami));
+        if ami != 0 {
+            result.push_str(&format!("{ami}"));
             result.push('M');
         }
 
         let need_seconds =
-            balanced_s != 0.0 || frac_ns != 0 || (!has_time && !has_date) || precision.is_some();
+            balanced_s != 0 || frac_ns != 0 || (!has_time && !has_date) || precision.is_some();
         if need_seconds {
-            let sec_part = format_number(balanced_s);
+            let sec_part = format!("{balanced_s}");
             if frac_ns != 0 {
                 let frac = format!("{frac_ns:09}");
                 match precision {
@@ -1650,68 +1698,84 @@ pub(super) fn unbalance_time_ns(
     total_ns: f64,
     largest_unit: &str,
 ) -> (f64, f64, f64, f64, f64, f64, f64) {
+    let result = unbalance_time_ns_i128(total_ns as i128, largest_unit);
+    (
+        result.0 as f64,
+        result.1 as f64,
+        result.2 as f64,
+        result.3 as f64,
+        result.4 as f64,
+        result.5 as f64,
+        result.6 as f64,
+    )
+}
+
+fn unbalance_time_ns_i128(
+    total_ns: i128,
+    largest_unit: &str,
+) -> (i128, i128, i128, i128, i128, i128, i128) {
     match largest_unit {
         "day" | "days" => {
-            let d = (total_ns / 86_400_000_000_000.0).trunc();
-            let rem = total_ns - d * 86_400_000_000_000.0;
-            let h = (rem / 3_600_000_000_000.0).trunc();
-            let rem = rem - h * 3_600_000_000_000.0;
-            let mi = (rem / 60_000_000_000.0).trunc();
-            let rem = rem - mi * 60_000_000_000.0;
-            let s = (rem / 1_000_000_000.0).trunc();
-            let rem = rem - s * 1_000_000_000.0;
-            let ms = (rem / 1_000_000.0).trunc();
-            let rem = rem - ms * 1_000_000.0;
-            let us = (rem / 1_000.0).trunc();
-            let ns = (rem - us * 1_000.0).round();
+            let d = total_ns / 86_400_000_000_000;
+            let rem = total_ns - d * 86_400_000_000_000;
+            let h = rem / 3_600_000_000_000;
+            let rem = rem - h * 3_600_000_000_000;
+            let mi = rem / 60_000_000_000;
+            let rem = rem - mi * 60_000_000_000;
+            let s = rem / 1_000_000_000;
+            let rem = rem - s * 1_000_000_000;
+            let ms = rem / 1_000_000;
+            let rem = rem - ms * 1_000_000;
+            let us = rem / 1_000;
+            let ns = rem - us * 1_000;
             (d, h, mi, s, ms, us, ns)
         }
         "hour" | "hours" => {
-            let h = (total_ns / 3_600_000_000_000.0).trunc();
-            let rem = total_ns - h * 3_600_000_000_000.0;
-            let mi = (rem / 60_000_000_000.0).trunc();
-            let rem = rem - mi * 60_000_000_000.0;
-            let s = (rem / 1_000_000_000.0).trunc();
-            let rem = rem - s * 1_000_000_000.0;
-            let ms = (rem / 1_000_000.0).trunc();
-            let rem = rem - ms * 1_000_000.0;
-            let us = (rem / 1_000.0).trunc();
-            let ns = (rem - us * 1_000.0).round();
-            (0.0, h, mi, s, ms, us, ns)
+            let h = total_ns / 3_600_000_000_000;
+            let rem = total_ns - h * 3_600_000_000_000;
+            let mi = rem / 60_000_000_000;
+            let rem = rem - mi * 60_000_000_000;
+            let s = rem / 1_000_000_000;
+            let rem = rem - s * 1_000_000_000;
+            let ms = rem / 1_000_000;
+            let rem = rem - ms * 1_000_000;
+            let us = rem / 1_000;
+            let ns = rem - us * 1_000;
+            (0, h, mi, s, ms, us, ns)
         }
         "minute" | "minutes" => {
-            let mi = (total_ns / 60_000_000_000.0).trunc();
-            let rem = total_ns - mi * 60_000_000_000.0;
-            let s = (rem / 1_000_000_000.0).trunc();
-            let rem = rem - s * 1_000_000_000.0;
-            let ms = (rem / 1_000_000.0).trunc();
-            let rem = rem - ms * 1_000_000.0;
-            let us = (rem / 1_000.0).trunc();
-            let ns = (rem - us * 1_000.0).round();
-            (0.0, 0.0, mi, s, ms, us, ns)
+            let mi = total_ns / 60_000_000_000;
+            let rem = total_ns - mi * 60_000_000_000;
+            let s = rem / 1_000_000_000;
+            let rem = rem - s * 1_000_000_000;
+            let ms = rem / 1_000_000;
+            let rem = rem - ms * 1_000_000;
+            let us = rem / 1_000;
+            let ns = rem - us * 1_000;
+            (0, 0, mi, s, ms, us, ns)
         }
         "second" | "seconds" => {
-            let s = (total_ns / 1_000_000_000.0).trunc();
-            let rem = total_ns - s * 1_000_000_000.0;
-            let ms = (rem / 1_000_000.0).trunc();
-            let rem = rem - ms * 1_000_000.0;
-            let us = (rem / 1_000.0).trunc();
-            let ns = (rem - us * 1_000.0).round();
-            (0.0, 0.0, 0.0, s, ms, us, ns)
+            let s = total_ns / 1_000_000_000;
+            let rem = total_ns - s * 1_000_000_000;
+            let ms = rem / 1_000_000;
+            let rem = rem - ms * 1_000_000;
+            let us = rem / 1_000;
+            let ns = rem - us * 1_000;
+            (0, 0, 0, s, ms, us, ns)
         }
         "millisecond" | "milliseconds" => {
-            let ms = (total_ns / 1_000_000.0).trunc();
-            let rem = total_ns - ms * 1_000_000.0;
-            let us = (rem / 1_000.0).trunc();
-            let ns = (rem - us * 1_000.0).round();
-            (0.0, 0.0, 0.0, 0.0, ms, us, ns)
+            let ms = total_ns / 1_000_000;
+            let rem = total_ns - ms * 1_000_000;
+            let us = rem / 1_000;
+            let ns = rem - us * 1_000;
+            (0, 0, 0, 0, ms, us, ns)
         }
         "microsecond" | "microseconds" => {
-            let us = (total_ns / 1_000.0).trunc();
-            let ns = (total_ns - us * 1_000.0).round();
-            (0.0, 0.0, 0.0, 0.0, 0.0, us, ns)
+            let us = total_ns / 1_000;
+            let ns = total_ns - us * 1_000;
+            (0, 0, 0, 0, 0, us, ns)
         }
-        _ => (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, total_ns.round()),
+        _ => (0, 0, 0, 0, 0, 0, total_ns),
     }
 }
 
@@ -1760,35 +1824,29 @@ pub(crate) fn balance_duration_relative(
         );
     }
 
-    // Convert day+time to total nanoseconds and re-balance
-    let total_ns = nanoseconds
-        + microseconds * 1_000.0
-        + milliseconds * 1_000_000.0
-        + seconds * 1_000_000_000.0
-        + minutes * 60_000_000_000.0
-        + hours * 3_600_000_000_000.0
-        + days * 86_400_000_000_000.0;
+    // Convert day+time to total nanoseconds using i128 and re-balance
+    let total_ns = nanoseconds as i128
+        + microseconds as i128 * 1_000
+        + milliseconds as i128 * 1_000_000
+        + seconds as i128 * 1_000_000_000
+        + minutes as i128 * 60_000_000_000
+        + hours as i128 * 3_600_000_000_000
+        + days as i128 * 86_400_000_000_000;
 
-    let sign = if total_ns < 0.0 {
-        -1.0
-    } else if total_ns > 0.0 {
-        1.0
-    } else {
-        0.0
-    };
+    let sign: i128 = if total_ns < 0 { -1 } else if total_ns > 0 { 1 } else { 0 };
     let abs_ns = total_ns.abs();
-    let (rd, rh, rmi, rs, rms, rus, rns) = unbalance_time_ns(abs_ns, largest);
+    let (rd, rh, rmi, rs, rms, rus, rns) = unbalance_time_ns_i128(abs_ns, largest);
 
     (
         years,
         months,
         weeks,
-        rd * sign,
-        rh * sign,
-        rmi * sign,
-        rs * sign,
-        rms * sign,
-        rus * sign,
-        rns * sign,
+        (rd * sign) as f64,
+        (rh * sign) as f64,
+        (rmi * sign) as f64,
+        (rs * sign) as f64,
+        (rms * sign) as f64,
+        (rus * sign) as f64,
+        (rns * sign) as f64,
     )
 }

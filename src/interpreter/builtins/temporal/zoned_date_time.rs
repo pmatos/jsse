@@ -1606,68 +1606,15 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let bag = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if !matches!(bag, JsValue::Object(_)) {
-                        return Completion::Throw(
-                            interp.create_type_error("with requires an object argument"),
-                        );
-                    }
-
-                    // Reject Temporal objects with calendar/timeZone internal slots
-                    if let JsValue::Object(ref o) = bag {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            let td = obj.borrow().temporal_data.clone();
-                            if let Some(ref data) = td {
-                                match data {
-                                    TemporalData::ZonedDateTime { .. } => {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "a Temporal object with calendar/timeZone not allowed in with()",
-                                        ));
-                                    }
-                                    TemporalData::PlainDate { .. }
-                                    | TemporalData::PlainDateTime { .. }
-                                    | TemporalData::PlainYearMonth { .. }
-                                    | TemporalData::PlainMonthDay { .. } => {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "a Temporal object with a calendar not allowed in with()",
-                                        ));
-                                    }
-                                    TemporalData::PlainTime { .. } => {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "a Temporal object with a calendar not allowed in with()",
-                                        ));
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    // Also reject plain object with "calendar" or "timeZone" properties
-                    let cal_prop = match get_prop(interp, &bag, "calendar") {
-                        Completion::Normal(v) => v,
-                        c => return c,
-                    };
-                    if !is_undefined(&cal_prop) {
-                        return Completion::Throw(interp.create_type_error(
-                            "calendar not allowed in ZonedDateTime.with argument",
-                        ));
-                    }
-                    let tz_prop = match get_prop(interp, &bag, "timeZone") {
-                        Completion::Normal(v) => v,
-                        c => return c,
-                    };
-                    if !is_undefined(&tz_prop) {
-                        return Completion::Throw(interp.create_type_error(
-                            "timeZone not allowed in ZonedDateTime.with argument",
-                        ));
+                    // IsPartialTemporalObject
+                    if let Err(c) = is_partial_temporal_object(interp, &bag) {
+                        return c;
                     }
 
                     let (y, m, d, h, mi, s, ms, us, nanos) = epoch_ns_to_components(&ns, &tz);
 
-                    // Check relevant properties exist and validate Infinity/NaN
-                    let relevant_props = [
-                        "day", "hour", "microsecond", "millisecond", "minute",
-                        "month", "monthCode", "nanosecond", "second", "year",
-                    ];
+                    // Read fields in alphabetical order:
+                    // day, hour, microsecond, millisecond, minute, month, monthCode, nanosecond, offset, second, year
                     let mut has_any = false;
                     macro_rules! field_or_default {
                         ($name:expr, $default:expr) => {{
@@ -1697,7 +1644,13 @@ impl Interpreter {
                         }};
                     }
 
-                    let ny = field_or_default!("year", y) as i32;
+                    // Alphabetical: day, hour, microsecond, millisecond, minute
+                    let nd_raw = field_or_default!("day", d) as i32;
+                    let nh_raw = field_or_default!("hour", h) as i32;
+                    let nus_raw = field_or_default!("microsecond", us) as i32;
+                    let nms_raw = field_or_default!("millisecond", ms) as i32;
+                    let nmi_raw = field_or_default!("minute", mi) as i32;
+                    // month, monthCode
                     let (raw_month, raw_month_code) = match read_month_fields(interp, &bag) {
                         Ok(v) => {
                             if v.0.is_some() || v.1.is_some() {
@@ -1707,15 +1660,9 @@ impl Interpreter {
                         }
                         Err(c) => return c,
                     };
-                    let nd_raw = field_or_default!("day", d) as i32;
-                    let nh_raw = field_or_default!("hour", h) as i32;
-                    let nmi_raw = field_or_default!("minute", mi) as i32;
-                    let ns2_raw = field_or_default!("second", s) as i32;
-                    let nms_raw = field_or_default!("millisecond", ms) as i32;
-                    let nus_raw = field_or_default!("microsecond", us) as i32;
+                    // nanosecond
                     let nns_raw = field_or_default!("nanosecond", nanos) as i32;
-
-                    // Read offset property from bag and validate
+                    // offset
                     let offset_prop = match get_prop(interp, &bag, "offset") {
                         Completion::Normal(v) => v,
                         c => return c,
@@ -1753,15 +1700,16 @@ impl Interpreter {
                             }
                         }
                     }
+                    // second, year
+                    let ns2_raw = field_or_default!("second", s) as i32;
+                    let ny = field_or_default!("year", y) as i32;
 
                     if !has_any {
                         return Completion::Throw(interp.create_type_error(
                             "with requires at least one recognized temporal property",
                         ));
                     }
-                    let _ = relevant_props;
 
-                    // Per spec: validate fields BEFORE reading options
                     if nd_raw < 1 {
                         return Completion::Throw(interp.create_range_error("day out of range"));
                     }

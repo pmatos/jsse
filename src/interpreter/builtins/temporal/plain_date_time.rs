@@ -118,105 +118,8 @@ pub(super) fn to_temporal_plain_date_time_with_overflow(
                     return Ok((y, mo, d, h, mi, s, ms, us, ns, calendar.clone()));
                 }
             }
-            // Try property bag
-            let y_val = match get_prop(interp, &item, "year") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let m_val = match get_prop(interp, &item, "month") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let mc_val = match get_prop(interp, &item, "monthCode") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let d_val = match get_prop(interp, &item, "day") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            if is_undefined(&y_val)
-                && is_undefined(&m_val)
-                && is_undefined(&mc_val)
-                && is_undefined(&d_val)
-            {
-                return Err(Completion::Throw(
-                    interp.create_type_error("Property bag is missing required fields"),
-                ));
-            }
-            let y_f = if is_undefined(&y_val) {
-                return Err(Completion::Throw(
-                    interp.create_type_error("year is required"),
-                ));
-            } else {
-                to_integer_with_truncation(interp, &y_val)?
-            };
-            let month_f: f64 = if !is_undefined(&mc_val) {
-                let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
-                match super::plain_date::month_code_to_number_pub(&mc) {
-                    Some(n) => n as f64,
-                    None => {
-                        return Err(Completion::Throw(
-                            interp.create_range_error(&format!("Invalid monthCode: {mc}")),
-                        ));
-                    }
-                }
-            } else if !is_undefined(&m_val) {
-                to_integer_with_truncation(interp, &m_val)?
-            } else {
-                return Err(Completion::Throw(
-                    interp.create_type_error("month or monthCode is required"),
-                ));
-            };
-            let d_f: f64 = if is_undefined(&d_val) {
-                return Err(Completion::Throw(
-                    interp.create_type_error("day is required"),
-                ));
-            } else {
-                to_integer_with_truncation(interp, &d_val)?
-            };
-            // Time fields default to 0
-            let h = get_opt_u8(interp, &item, "hour", 0)?;
-            let mi = get_opt_u8(interp, &item, "minute", 0)?;
-            let s = get_opt_u8(interp, &item, "second", 0)?;
-            let ms = get_opt_u16(interp, &item, "millisecond", 0)?;
-            let us = get_opt_u16(interp, &item, "microsecond", 0)?;
-            let ns = get_opt_u16(interp, &item, "nanosecond", 0)?;
-            let y = y_f as i32;
-            let month = month_f as u8;
-            let d = d_f as u8;
-            let cal_val = match get_prop(interp, &item, "calendar") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let cal = to_temporal_calendar_slot_value(interp, &cal_val)?;
-            // Reject negative month/day always (even constrain doesn't fix negative)
-            if month_f < 0.0 || d_f < 0.0 {
-                return Err(Completion::Throw(
-                    interp.create_range_error("Month and day must be non-negative"),
-                ));
-            }
-            if overflow == "reject" {
-                if !iso_date_valid(y, month, d) {
-                    return Err(Completion::Throw(interp.create_range_error("Invalid date")));
-                }
-                if !iso_time_valid(h, mi, s, ms, us, ns) {
-                    return Err(Completion::Throw(interp.create_range_error("Invalid time")));
-                }
-                Ok((y, month, d, h, mi, s, ms, us, ns, cal))
-            } else {
-                // constrain
-                let month = month.max(1).min(12);
-                let dim = iso_days_in_month(y, month);
-                let d = d.max(1).min(dim);
-                let h = h.min(23);
-                let mi = mi.min(59);
-                let s = s.min(59);
-                let ms = ms.min(999);
-                let us = us.min(999);
-                let ns = ns.min(999);
-                Ok((y, month, d, h, mi, s, ms, us, ns, cal))
-            }
+            let (y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal) = read_pdt_property_bag(interp, &item)?;
+            apply_pdt_overflow(interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, overflow)
         }
         JsValue::String(s) => parse_date_time_string(interp, &s.to_rust_string()),
         _ => Err(Completion::Throw(
@@ -320,6 +223,145 @@ fn get_opt_u16(
     } else {
         let n = to_integer_with_truncation(interp, &val)?;
         Ok(n as u16)
+    }
+}
+
+
+/// Read PlainDateTime fields from a property bag without applying overflow.
+/// Returns (year_f64, month_num_opt, month_code_opt, day_f64, hour, minute, second, ms, us, ns, calendar).
+/// month validation and monthCode resolution are deferred to apply_pdt_overflow.
+fn read_pdt_property_bag(
+    interp: &mut Interpreter,
+    item: &JsValue,
+) -> Result<(f64, Option<f64>, Option<String>, f64, u8, u8, u8, u16, u16, u16, String), Completion> {
+    let cal_val = match get_prop(interp, item, "calendar") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let cal = to_temporal_calendar_slot_value(interp, &cal_val)?;
+    let d_val = match get_prop(interp, item, "day") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let d_f: f64 = if is_undefined(&d_val) {
+        return Err(Completion::Throw(interp.create_type_error("day is required")));
+    } else {
+        to_integer_with_truncation(interp, &d_val)?
+    };
+    let h = get_opt_u8(interp, item, "hour", 0)?;
+    let us = get_opt_u16(interp, item, "microsecond", 0)?;
+    let ms = get_opt_u16(interp, item, "millisecond", 0)?;
+    let mi = get_opt_u8(interp, item, "minute", 0)?;
+    let m_val = match get_prop(interp, item, "month") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let month_num = if !is_undefined(&m_val) {
+        Some(to_integer_with_truncation(interp, &m_val)?)
+    } else {
+        None
+    };
+    let mc_val = match get_prop(interp, item, "monthCode") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let mc_str = if !is_undefined(&mc_val) {
+        Some(super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
+    } else {
+        None
+    };
+    let ns = get_opt_u16(interp, item, "nanosecond", 0)?;
+    let s = get_opt_u8(interp, item, "second", 0)?;
+    let y_val = match get_prop(interp, item, "year") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let y_f = if is_undefined(&y_val) {
+        return Err(Completion::Throw(interp.create_type_error("year is required")));
+    } else {
+        to_integer_with_truncation(interp, &y_val)?
+    };
+    Ok((y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal))
+}
+
+fn resolve_pdt_month(
+    interp: &mut Interpreter,
+    month_num: Option<f64>,
+    mc_str: Option<String>,
+    d_f: f64,
+) -> Result<f64, Completion> {
+    let month_f: f64 = if let Some(ref mc) = mc_str {
+        match super::plain_date::month_code_to_number_pub(mc) {
+            Some(n) => {
+                let mc_n = n as f64;
+                if let Some(mn) = month_num {
+                    if mn as u8 != mc_n as u8 {
+                        return Err(Completion::Throw(
+                            interp.create_range_error("month and monthCode conflict"),
+                        ));
+                    }
+                }
+                mc_n
+            }
+            None => {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+                ));
+            }
+        }
+    } else if let Some(mn) = month_num {
+        mn
+    } else {
+        return Err(Completion::Throw(
+            interp.create_type_error("month or monthCode is required"),
+        ));
+    };
+    if month_f < 1.0 || d_f < 1.0 {
+        return Err(Completion::Throw(
+            interp.create_range_error("Month and day must be positive integers"),
+        ));
+    }
+    Ok(month_f)
+}
+
+fn apply_pdt_overflow(
+    interp: &mut Interpreter,
+    y_f: f64,
+    month_num: Option<f64>,
+    mc_str: Option<String>,
+    d_f: f64,
+    h: u8,
+    mi: u8,
+    s: u8,
+    ms: u16,
+    us: u16,
+    ns: u16,
+    cal: String,
+    overflow: &str,
+) -> Result<(i32, u8, u8, u8, u8, u8, u16, u16, u16, String), Completion> {
+    let month_f = resolve_pdt_month(interp, month_num, mc_str, d_f)?;
+    let y = y_f as i32;
+    let month = month_f as u8;
+    let d = d_f as u8;
+    if overflow == "reject" {
+        if !iso_date_valid(y, month, d) {
+            return Err(Completion::Throw(interp.create_range_error("Invalid date")));
+        }
+        if !iso_time_valid(h, mi, s, ms, us, ns) {
+            return Err(Completion::Throw(interp.create_range_error("Invalid time")));
+        }
+        Ok((y, month, d, h, mi, s, ms, us, ns, cal))
+    } else {
+        let month = month.max(1).min(12);
+        let dim = iso_days_in_month(y, month);
+        let d = d.max(1).min(dim);
+        let h = h.min(23);
+        let mi = mi.min(59);
+        let s = s.min(59);
+        let ms = ms.min(999);
+        let us = us.min(999);
+        let ns = ns.min(999);
+        Ok((y, month, d, h, mi, s, ms, us, ns, cal))
     }
 }
 
@@ -643,55 +685,76 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let item = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(item, JsValue::Object(_)) {
+                // IsPartialTemporalObject
+                if let Err(c) = is_partial_temporal_object(interp, &item) {
+                    return c;
+                }
+                // PrepareCalendarFields in alphabetical order:
+                // day, hour, microsecond, millisecond, minute, month, monthCode, nanosecond, second, year
+                let mut has_any = false;
+                let (new_d, has_d) = match read_field_positive_int(interp, &item, "day", d) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_d;
+                let (new_h, has_h) = match read_time_field_new(interp, &item, "hour", h as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_h;
+                let (new_us, has_us) = match read_time_field_new(interp, &item, "microsecond", us as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_us;
+                let (new_ms, has_ms) = match read_time_field_new(interp, &item, "millisecond", ms as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_ms;
+                let (new_mi, has_mi) = match read_time_field_new(interp, &item, "minute", mi as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_mi;
+                let (raw_month, has_m) = match read_field_positive_int(interp, &item, "month", m) {
+                    Ok(v) => (Some(v.0), v.1),
+                    Err(c) => return c,
+                };
+                let raw_month = if has_m { raw_month } else { None };
+                has_any |= has_m;
+                let (raw_month_code, has_mc) = match read_month_code_field(interp, &item) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_mc;
+                let (new_ns, has_ns) = match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_ns;
+                let (new_s, has_s) = match read_time_field_new(interp, &item, "second", s as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_s;
+                let (new_y, has_y) = match read_field_i32(interp, &item, "year", y) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_y;
+                if !has_any {
                     return Completion::Throw(
-                        interp.create_type_error("with requires an object argument"),
+                        interp.create_type_error("with() requires at least one recognized property"),
                     );
                 }
-                // Phase 1: Read all fields (coerce but don't validate)
-                let new_y = match get_date_field_i32(interp, &item, "year", y) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let (raw_month, raw_month_code) = match read_month_fields(interp, &item) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let new_d = match get_date_field_u8(interp, &item, "day", d) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let new_h = match get_date_field_u8(interp, &item, "hour", h) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let new_mi = match get_date_field_u8(interp, &item, "minute", mi) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let new_s = match get_date_field_u8(interp, &item, "second", s) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let new_ms = match get_date_field_u16(interp, &item, "millisecond", ms) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let new_us = match get_date_field_u16(interp, &item, "microsecond", us) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let new_ns = match get_date_field_u16(interp, &item, "nanosecond", ns) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                // Phase 2: Read options
+                // GetTemporalOverflowOption
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let overflow = match parse_overflow_option(interp, &options) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                // Phase 3: Resolve month/monthCode (algorithmic validation)
+                // Resolve month/monthCode
                 let new_m = match resolve_month_fields(interp, raw_month, raw_month_code, m) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -700,22 +763,31 @@ impl Interpreter {
                     if !iso_date_valid(new_y, new_m, new_d) {
                         return Completion::Throw(interp.create_range_error("Invalid date"));
                     }
-                    if !iso_time_valid(new_h, new_mi, new_s, new_ms, new_us, new_ns) {
+                    if !iso_time_valid_f64(new_h, new_mi, new_s, new_ms, new_us, new_ns) {
                         return Completion::Throw(interp.create_range_error("Invalid time"));
                     }
+                    let (ch, cmi, cs, cms, cus, cns) = (
+                        new_h as u8, new_mi as u8, new_s as u8,
+                        new_ms as u16, new_us as u16, new_ns as u16,
+                    );
+                    if !iso_date_time_within_limits(new_y, new_m, new_d, ch, cmi, cs, cms, cus, cns) {
+                        return Completion::Throw(interp.create_range_error("DateTime outside valid range"));
+                    }
                     create_plain_date_time_result(
-                        interp, new_y, new_m, new_d, new_h, new_mi, new_s, new_ms, new_us,
-                        new_ns, &cal,
+                        interp, new_y, new_m, new_d, ch, cmi, cs, cms, cus, cns, &cal,
                     )
                 } else {
                     let cm = new_m.max(1).min(12);
                     let cd = new_d.max(1).min(iso_days_in_month(new_y, cm));
-                    let ch = new_h.max(0).min(23);
-                    let cmi = new_mi.max(0).min(59);
-                    let cs = new_s.max(0).min(59);
-                    let cms = new_ms.max(0).min(999);
-                    let cus = new_us.max(0).min(999);
-                    let cns = new_ns.max(0).min(999);
+                    let ch = (new_h.max(0.0).min(23.0)) as u8;
+                    let cmi = (new_mi.max(0.0).min(59.0)) as u8;
+                    let cs = (new_s.max(0.0).min(59.0)) as u8;
+                    let cms = (new_ms.max(0.0).min(999.0)) as u16;
+                    let cus = (new_us.max(0.0).min(999.0)) as u16;
+                    let cns = (new_ns.max(0.0).min(999.0)) as u16;
+                    if !iso_date_time_within_limits(new_y, cm, cd, ch, cmi, cs, cms, cus, cns) {
+                        return Completion::Throw(interp.create_range_error("DateTime outside valid range"));
+                    }
                     create_plain_date_time_result(
                         interp, new_y, cm, cd, ch, cmi, cs, cms, cus, cns, &cal,
                     )
@@ -761,6 +833,11 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let cal_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if matches!(cal_arg, JsValue::Undefined) {
+                    return Completion::Throw(
+                        interp.create_type_error("withCalendar requires a calendar argument"),
+                    );
+                }
                 let cal = match to_temporal_calendar_slot_value(interp, &cal_arg) {
                     Ok(c) => c,
                     Err(c) => return c,
@@ -794,14 +871,15 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    // Add time components first
+                    // Add time components using i128 for precision
+                    let s128 = sign as i128;
                     let total_ns = time_to_nanoseconds(h, mi, s, ms, us, ns)
-                        + ((dur.4 * sign as f64) as i128 * 3_600_000_000_000)
-                        + ((dur.5 * sign as f64) as i128 * 60_000_000_000)
-                        + ((dur.6 * sign as f64) as i128 * 1_000_000_000)
-                        + ((dur.7 * sign as f64) as i128 * 1_000_000)
-                        + ((dur.8 * sign as f64) as i128 * 1_000)
-                        + (dur.9 * sign as f64) as i128;
+                        + (dur.4 as i128) * s128 * 3_600_000_000_000
+                        + (dur.5 as i128) * s128 * 60_000_000_000
+                        + (dur.6 as i128) * s128 * 1_000_000_000
+                        + (dur.7 as i128) * s128 * 1_000_000
+                        + (dur.8 as i128) * s128 * 1_000
+                        + (dur.9 as i128) * s128;
                     let ns_per_day: i128 = 86_400_000_000_000;
                     let extra_days = if total_ns >= 0 {
                         (total_ns / ns_per_day) as i32
@@ -810,16 +888,23 @@ impl Interpreter {
                     };
                     let rem_ns = ((total_ns % ns_per_day) + ns_per_day) % ns_per_day;
                     let (nh, nmi, nse, nms, nus, nns) = nanoseconds_to_time(rem_ns);
-                    let total_days = (dur.3 * sign as f64) as i32 + extra_days;
+                    let total_days = (dur.3 as i32) * sign + extra_days;
                     let (ry, rm, rd) = add_iso_date(
                         y,
                         m,
                         d,
-                        (dur.0 * sign as f64) as i32,
-                        (dur.1 * sign as f64) as i32,
-                        (dur.2 * sign as f64) as i32,
+                        (dur.0 as i32) * sign,
+                        (dur.1 as i32) * sign,
+                        (dur.2 as i32) * sign,
                         total_days,
                     );
+                    if !super::iso_date_time_within_limits(ry, rm, rd, nh, nmi, nse, nms, nus, nns)
+                    {
+                        return Completion::Throw(
+                            interp
+                                .create_range_error("Result date-time outside valid ISO range"),
+                        );
+                    }
                     create_plain_date_time_result(
                         interp, ry, rm, rd, nh, nmi, nse, nms, nus, nns, &cal,
                     )
@@ -969,61 +1054,73 @@ impl Interpreter {
                     };
                     (u, "halfExpand".to_string(), 1i128)
                 } else if matches!(options, JsValue::Object(_)) {
-                    let su = match get_prop(interp, &options, "smallestUnit") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let unit = if is_undefined(&su) {
-                        return Completion::Throw(
-                            interp.create_range_error("smallestUnit is required"),
-                        );
-                    } else {
-                        let s = match interp.to_string_value(&su) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match temporal_unit_singular(&s) {
-                            Some(u) => u,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_range_error(&format!("Invalid unit: {s}")),
-                                );
-                            }
-                        }
-                    };
-                    let rm = match get_prop(interp, &options, "roundingMode") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let mode_str = if is_undefined(&rm) {
-                        "halfExpand".to_string()
-                    } else {
-                        let s = match interp.to_string_value(&rm) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match s.as_str() {
-                            "ceil" | "floor" | "trunc" | "expand" | "halfExpand" | "halfTrunc"
-                            | "halfCeil" | "halfFloor" | "halfEven" => s,
-                            _ => {
-                                return Completion::Throw(
-                                    interp
-                                        .create_range_error(&format!("Invalid roundingMode: {s}")),
-                                );
-                            }
-                        }
-                    };
+                    // Read all options in alphabetical order first, then validate
+                    // 1. roundingIncrement
                     let ri = match get_prop(interp, &options, "roundingIncrement") {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    let inc = if is_undefined(&ri) {
-                        1i128
+                    let inc_raw = match super::coerce_rounding_increment(interp, &ri) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    // 2. roundingMode
+                    let rm = match get_prop(interp, &options, "roundingMode") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let rm_str: Option<String> = if is_undefined(&rm) {
+                        None
                     } else {
-                        match interp.to_number_value(&ri) {
-                            Ok(n) => n as i128,
+                        Some(match interp.to_string_value(&rm) {
+                            Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
+                        })
+                    };
+                    // 3. smallestUnit
+                    let su = match get_prop(interp, &options, "smallestUnit") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let su_str: Option<String> = if is_undefined(&su) {
+                        None
+                    } else {
+                        Some(match interp.to_string_value(&su) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        })
+                    };
+                    // Validate
+                    let unit = if let Some(ref sv) = su_str {
+                        match temporal_unit_singular(sv) {
+                            Some(u) => u,
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_range_error(&format!("Invalid unit: {sv}")),
+                                );
+                            }
                         }
+                    } else {
+                        return Completion::Throw(
+                            interp.create_range_error("smallestUnit is required"),
+                        );
+                    };
+                    let mode_str = if let Some(ref rs) = rm_str {
+                        match rs.as_str() {
+                            "ceil" | "floor" | "trunc" | "expand" | "halfExpand" | "halfTrunc"
+                            | "halfCeil" | "halfFloor" | "halfEven" => rs.clone(),
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_range_error(&format!("Invalid roundingMode: {rs}")),
+                                );
+                            }
+                        }
+                    } else {
+                        "halfExpand".to_string()
+                    };
+                    let inc = match super::validate_rounding_increment_raw(inc_raw, unit, false) {
+                        Ok(v) => v as i128,
+                        Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
                     };
                     (unit, mode_str, inc)
                 } else {
@@ -1328,11 +1425,11 @@ impl Interpreter {
             "toPlainYearMonth".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, _d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                super::plain_year_month::create_plain_year_month_result(interp, y, m, d, &cal)
+                super::plain_year_month::create_plain_year_month_result(interp, y, m, 1, &cal)
             },
         ));
         proto
@@ -1465,33 +1562,46 @@ impl Interpreter {
             "PlainDateTime".to_string(),
             3,
             |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("Temporal.PlainDateTime must be called with new"),
+                    );
+                }
                 let y_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let y = match interp.to_number_value(&y_val) {
                     Ok(n) => {
-                        if !n.is_finite() || n != n.trunc() {
+                        if !n.is_finite() {
                             return Completion::Throw(interp.create_range_error("Invalid year"));
                         }
-                        n as i32
+                        n.trunc() as i32
                     }
                     Err(e) => return Completion::Throw(e),
                 };
                 let m_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let m = match interp.to_number_value(&m_val) {
                     Ok(n) => {
-                        if !n.is_finite() || n != n.trunc() || n < 1.0 || n > 12.0 {
+                        if !n.is_finite() {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
-                        n as u8
+                        let t = n.trunc();
+                        if t < 1.0 || t > 12.0 {
+                            return Completion::Throw(interp.create_range_error("Invalid month"));
+                        }
+                        t as u8
                     }
                     Err(e) => return Completion::Throw(e),
                 };
                 let d_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                 let d = match interp.to_number_value(&d_val) {
                     Ok(n) => {
-                        if !n.is_finite() || n != n.trunc() || n < 1.0 || n > 31.0 {
+                        if !n.is_finite() {
                             return Completion::Throw(interp.create_range_error("Invalid day"));
                         }
-                        n as u8
+                        let t = n.trunc();
+                        if t < 1.0 || t > 31.0 {
+                            return Completion::Throw(interp.create_range_error("Invalid day"));
+                        }
+                        t as u8
                     }
                     Err(e) => return Completion::Throw(e),
                 };
@@ -1526,6 +1636,11 @@ impl Interpreter {
                 };
                 if !iso_date_valid(y, m, d) {
                     return Completion::Throw(interp.create_range_error("Invalid date"));
+                }
+                if !super::iso_date_time_within_limits(y, m, d, h, mi, s, ms, us, ns) {
+                    return Completion::Throw(
+                        interp.create_range_error("DateTime outside valid ISO range"),
+                    );
                 }
                 create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
             },
@@ -1571,16 +1686,51 @@ impl Interpreter {
                         interp, y, m, d, h, mi, s, ms, us, ns, &cal,
                     );
                 }
-                let overflow = match parse_overflow_option(interp, &options) {
-                    Ok(v) => v,
-                    Err(c) => return c,
+                // Check if it's a Temporal object (read overflow first, then return copy)
+                let is_temporal = if let JsValue::Object(ref o) = item {
+                    if let Some(obj) = interp.get_object(o.id) {
+                        let data = obj.borrow();
+                        matches!(
+                            &data.temporal_data,
+                            Some(TemporalData::PlainDateTime { .. })
+                                | Some(TemporalData::PlainDate { .. })
+                                | Some(TemporalData::ZonedDateTime { .. })
+                        )
+                    } else {
+                        false
+                    }
+                } else {
+                    false
                 };
-                let (y, m, d, h, mi, s, ms, us, ns, cal) =
-                    match to_temporal_plain_date_time_with_overflow(interp, item, &overflow) {
+                if is_temporal {
+                    let overflow = match parse_overflow_option(interp, &options) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
+                    let (y, m, d, h, mi, s, ms, us, ns, cal) =
+                        match to_temporal_plain_date_time_with_overflow(interp, item, &overflow) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                    create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
+                } else {
+                    // Property bag: read fields first, then overflow
+                    let (y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal) =
+                        match read_pdt_property_bag(interp, &item) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                    let overflow = match parse_overflow_option(interp, &options) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let (y, m, d, h, mi, s, ms, us, ns, cal) =
+                        match apply_pdt_overflow(interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, &overflow) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                    create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
+                }
             },
         ));
         if let JsValue::Object(ref o) = constructor {
@@ -1644,12 +1794,18 @@ fn get_constructor_field(
     }
     match interp.to_number_value(&val) {
         Ok(n) => {
-            if !n.is_finite() || n != n.trunc() || n < min as f64 || n > max as f64 {
+            if !n.is_finite() {
+                return Err(Completion::Throw(
+                    interp.create_range_error("Time field out of range"),
+                ));
+            }
+            let t = n.trunc();
+            if t < min as f64 || t > max as f64 {
                 Err(Completion::Throw(
                     interp.create_range_error("Time field out of range"),
                 ))
             } else {
-                Ok(n as u8)
+                Ok(t as u8)
             }
         }
         Err(e) => Err(Completion::Throw(e)),
@@ -1668,12 +1824,18 @@ fn get_constructor_field_u16(
     }
     match interp.to_number_value(&val) {
         Ok(n) => {
-            if !n.is_finite() || n != n.trunc() || n < min as f64 || n > max as f64 {
+            if !n.is_finite() {
+                return Err(Completion::Throw(
+                    interp.create_range_error("Time field out of range"),
+                ));
+            }
+            let t = n.trunc();
+            if t < min as f64 || t > max as f64 {
                 Err(Completion::Throw(
                     interp.create_range_error("Time field out of range"),
                 ))
             } else {
-                Ok(n as u16)
+                Ok(t as u16)
             }
         }
         Err(e) => Err(Completion::Throw(e)),

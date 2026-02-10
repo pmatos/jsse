@@ -1,9 +1,10 @@
 use super::*;
 use crate::interpreter::builtins::temporal::{
-    balance_time, get_options_object, get_prop, is_undefined, iso_time_valid, nanoseconds_to_time,
-    parse_overflow_option, parse_temporal_time_string, round_number_to_increment,
-    temporal_unit_length_ns, temporal_unit_order, temporal_unit_singular, time_to_nanoseconds,
-    validate_rounding_increment,
+    balance_time, coerce_rounding_increment, get_options_object, get_prop, is_undefined,
+    iso_time_valid, nanoseconds_to_time, parse_overflow_option, parse_temporal_time_string,
+    round_number_to_increment, temporal_unit_length_ns, temporal_unit_order,
+    temporal_unit_singular, time_to_nanoseconds, validate_rounding_increment,
+    validate_rounding_increment_raw,
 };
 
 impl Interpreter {
@@ -76,54 +77,70 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let item = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(item, JsValue::Object(_)) {
+                // IsPartialTemporalObject
+                if let Err(c) = is_partial_temporal_object(interp, &item) {
+                    return c;
+                }
+                // ToTemporalTimeRecord in alphabetical order:
+                // hour, microsecond, millisecond, minute, nanosecond, second
+                let mut has_any = false;
+                let (new_h, has_h) = match read_time_field_new(interp, &item, "hour", h as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_h;
+                let (new_us, has_us) = match read_time_field_new(interp, &item, "microsecond", us as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_us;
+                let (new_ms, has_ms) = match read_time_field_new(interp, &item, "millisecond", ms as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_ms;
+                let (new_m, has_mi) = match read_time_field_new(interp, &item, "minute", m as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_mi;
+                let (new_ns, has_ns) = match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_ns;
+                let (new_s, has_s) = match read_time_field_new(interp, &item, "second", s as f64) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                has_any |= has_s;
+                if !has_any {
                     return Completion::Throw(
-                        interp.create_type_error("with requires an object argument"),
+                        interp.create_type_error("with() requires at least one recognized property"),
                     );
                 }
-                let new_h = match get_time_field(interp, &item, "hour", h as f64) {
-                    Ok(v) => v as u8,
-                    Err(c) => return c,
-                };
-                let new_m = match get_time_field(interp, &item, "minute", m as f64) {
-                    Ok(v) => v as u8,
-                    Err(c) => return c,
-                };
-                let new_s = match get_time_field(interp, &item, "second", s as f64) {
-                    Ok(v) => v as u8,
-                    Err(c) => return c,
-                };
-                let new_ms = match get_time_field(interp, &item, "millisecond", ms as f64) {
-                    Ok(v) => v as u16,
-                    Err(c) => return c,
-                };
-                let new_us = match get_time_field(interp, &item, "microsecond", us as f64) {
-                    Ok(v) => v as u16,
-                    Err(c) => return c,
-                };
-                let new_ns = match get_time_field(interp, &item, "nanosecond", ns as f64) {
-                    Ok(v) => v as u16,
-                    Err(c) => return c,
-                };
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let overflow = match parse_overflow_option(interp, &options) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 if overflow == "reject" {
-                    if !iso_time_valid(new_h, new_m, new_s, new_ms, new_us, new_ns) {
+                    if !iso_time_valid_f64(new_h, new_m, new_s, new_ms, new_us, new_ns) {
                         return Completion::Throw(
                             interp.create_range_error("Invalid time fields"),
                         );
                     }
-                    create_plain_time_result(interp, new_h, new_m, new_s, new_ms, new_us, new_ns)
+                    create_plain_time_result(
+                        interp, new_h as u8, new_m as u8, new_s as u8,
+                        new_ms as u16, new_us as u16, new_ns as u16,
+                    )
                 } else {
-                    let ch = new_h.min(23);
-                    let cm = new_m.min(59);
-                    let cs = new_s.min(59);
-                    let cms = new_ms.min(999);
-                    let cus = new_us.min(999);
-                    let cns = new_ns.min(999);
+                    let ch = (new_h.max(0.0).min(23.0)) as u8;
+                    let cm = (new_m.max(0.0).min(59.0)) as u8;
+                    let cs = (new_s.max(0.0).min(59.0)) as u8;
+                    let cms = (new_ms.max(0.0).min(999.0)) as u16;
+                    let cus = (new_us.max(0.0).min(999.0)) as u16;
+                    let cns = (new_ns.max(0.0).min(999.0)) as u16;
                     create_plain_time_result(interp, ch, cm, cs, cms, cus, cns)
                 }
             },
@@ -150,12 +167,12 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let time_ns = time_to_nanoseconds(h, m, s, ms, us, ns);
-                    let delta = (dur.4 * 3_600_000_000_000.0
-                        + dur.5 * 60_000_000_000.0
-                        + dur.6 * 1_000_000_000.0
-                        + dur.7 * 1_000_000.0
-                        + dur.8 * 1_000.0
-                        + dur.9) as i128
+                    let delta = ((dur.4 as i128) * 3_600_000_000_000
+                        + (dur.5 as i128) * 60_000_000_000
+                        + (dur.6 as i128) * 1_000_000_000
+                        + (dur.7 as i128) * 1_000_000
+                        + (dur.8 as i128) * 1_000
+                        + (dur.9 as i128))
                         * sign;
                     let result_ns = time_ns + delta;
                     let ns_per_day = 86_400_000_000_000i128;
@@ -263,20 +280,45 @@ impl Interpreter {
                         }
                     }
                 } else if matches!(round_to, JsValue::Object(_)) {
+                    // Read all options in alphabetical order first, then validate
+                    // 1. roundingIncrement: get + coerce
+                    let inc_val = match get_prop(interp, &round_to, "roundingIncrement") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let inc_raw = match coerce_rounding_increment(interp, &inc_val) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    // 2. roundingMode: get + coerce
+                    let rm_val = match get_prop(interp, &round_to, "roundingMode") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let rm_str: Option<String> = if is_undefined(&rm_val) {
+                        None
+                    } else {
+                        Some(match interp.to_string_value(&rm_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        })
+                    };
+                    // 3. smallestUnit: get + coerce
                     let su_val = match get_prop(interp, &round_to, "smallestUnit") {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    let unit = if is_undefined(&su_val) {
-                        return Completion::Throw(
-                            interp.create_range_error("smallestUnit is required"),
-                        );
+                    let su_str: Option<String> = if is_undefined(&su_val) {
+                        None
                     } else {
-                        let sv = match interp.to_string_value(&su_val) {
+                        Some(match interp.to_string_value(&su_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
-                        };
-                        match temporal_unit_singular(&sv) {
+                        })
+                    };
+                    // Validate smallestUnit
+                    let unit = if let Some(ref sv) = su_str {
+                        match temporal_unit_singular(sv) {
                             Some(u) if is_valid_time_round_unit(u) => u,
                             Some(u) => {
                                 return Completion::Throw(interp.create_range_error(&format!(
@@ -289,19 +331,14 @@ impl Interpreter {
                                 );
                             }
                         }
-                    };
-                    let rm_val = match get_prop(interp, &round_to, "roundingMode") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let rm = if is_undefined(&rm_val) {
-                        "halfExpand"
                     } else {
-                        let sv = match interp.to_string_value(&rm_val) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match sv.as_str() {
+                        return Completion::Throw(
+                            interp.create_range_error("smallestUnit is required"),
+                        );
+                    };
+                    // Validate roundingMode
+                    let rm = if let Some(ref rs) = rm_str {
+                        match rs.as_str() {
                             "ceil" => "ceil",
                             "floor" => "floor",
                             "trunc" => "trunc",
@@ -314,18 +351,17 @@ impl Interpreter {
                             _ => {
                                 return Completion::Throw(
                                     interp
-                                        .create_range_error(&format!("Invalid roundingMode: {sv}")),
+                                        .create_range_error(&format!("Invalid roundingMode: {rs}")),
                                 );
                             }
                         }
+                    } else {
+                        "halfExpand"
                     };
-                    let inc_val = match get_prop(interp, &round_to, "roundingIncrement") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let inc = match validate_rounding_increment(interp, &inc_val, unit, false) {
+                    // Validate roundingIncrement
+                    let inc = match validate_rounding_increment_raw(inc_raw, unit, false) {
                         Ok(v) => v,
-                        Err(c) => return c,
+                        Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
                     };
                     (unit, rm, inc)
                 } else {
@@ -474,18 +510,29 @@ impl Interpreter {
             "PlainTime".to_string(),
             0,
             |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("Temporal.PlainTime must be called with new"),
+                    );
+                }
                 let hour = if let Some(v) = args.first() {
                     if is_undefined(v) {
                         0u8
                     } else {
                         match interp.to_number_value(v) {
                             Ok(n) => {
-                                if !n.is_finite() || n != n.trunc() || n < 0.0 || n > 23.0 {
+                                if !n.is_finite() {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid hour"),
                                     );
                                 }
-                                n as u8
+                                let t = n.trunc();
+                                if t < 0.0 || t > 23.0 {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid hour"),
+                                    );
+                                }
+                                t as u8
                             }
                             Err(e) => return Completion::Throw(e),
                         }
@@ -499,12 +546,18 @@ impl Interpreter {
                     } else {
                         match interp.to_number_value(v) {
                             Ok(n) => {
-                                if !n.is_finite() || n != n.trunc() || n < 0.0 || n > 59.0 {
+                                if !n.is_finite() {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid minute"),
                                     );
                                 }
-                                n as u8
+                                let t = n.trunc();
+                                if t < 0.0 || t > 59.0 {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid minute"),
+                                    );
+                                }
+                                t as u8
                             }
                             Err(e) => return Completion::Throw(e),
                         }
@@ -518,12 +571,18 @@ impl Interpreter {
                     } else {
                         match interp.to_number_value(v) {
                             Ok(n) => {
-                                if !n.is_finite() || n != n.trunc() || n < 0.0 || n > 59.0 {
+                                if !n.is_finite() {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid second"),
                                     );
                                 }
-                                n as u8
+                                let t = n.trunc();
+                                if t < 0.0 || t > 59.0 {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid second"),
+                                    );
+                                }
+                                t as u8
                             }
                             Err(e) => return Completion::Throw(e),
                         }
@@ -537,12 +596,18 @@ impl Interpreter {
                     } else {
                         match interp.to_number_value(v) {
                             Ok(n) => {
-                                if !n.is_finite() || n != n.trunc() || n < 0.0 || n > 999.0 {
+                                if !n.is_finite() {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid millisecond"),
                                     );
                                 }
-                                n as u16
+                                let t = n.trunc();
+                                if t < 0.0 || t > 999.0 {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid millisecond"),
+                                    );
+                                }
+                                t as u16
                             }
                             Err(e) => return Completion::Throw(e),
                         }
@@ -556,12 +621,18 @@ impl Interpreter {
                     } else {
                         match interp.to_number_value(v) {
                             Ok(n) => {
-                                if !n.is_finite() || n != n.trunc() || n < 0.0 || n > 999.0 {
+                                if !n.is_finite() {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid microsecond"),
                                     );
                                 }
-                                n as u16
+                                let t = n.trunc();
+                                if t < 0.0 || t > 999.0 {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid microsecond"),
+                                    );
+                                }
+                                t as u16
                             }
                             Err(e) => return Completion::Throw(e),
                         }
@@ -575,12 +646,18 @@ impl Interpreter {
                     } else {
                         match interp.to_number_value(v) {
                             Ok(n) => {
-                                if !n.is_finite() || n != n.trunc() || n < 0.0 || n > 999.0 {
+                                if !n.is_finite() {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid nanosecond"),
                                     );
                                 }
-                                n as u16
+                                let t = n.trunc();
+                                if t < 0.0 || t > 999.0 {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid nanosecond"),
+                                    );
+                                }
+                                t as u16
                             }
                             Err(e) => return Completion::Throw(e),
                         }
@@ -637,16 +714,29 @@ impl Interpreter {
                     }
                     return create_plain_time_result(interp, h, m, s, ms, us, ns);
                 }
+                // Per spec: read fields first (ToTemporalTimeRecord), then overflow option
+                let raw = match to_temporal_plain_time_raw(interp, item) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 let overflow = match parse_overflow_option(interp, &options) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let (h, m, s, ms, us, ns) =
-                    match to_temporal_plain_time_with_overflow(interp, item, &overflow) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                create_plain_time_result(interp, h, m, s, ms, us, ns)
+                if overflow == "reject" {
+                    if !iso_time_valid(raw.0, raw.1, raw.2, raw.3, raw.4, raw.5) {
+                        return Completion::Throw(
+                            interp.create_range_error("Invalid time fields"),
+                        );
+                    }
+                    create_plain_time_result(interp, raw.0, raw.1, raw.2, raw.3, raw.4, raw.5)
+                } else {
+                    create_plain_time_result(
+                        interp,
+                        raw.0.min(23), raw.1.min(59), raw.2.min(59),
+                        raw.3.min(999), raw.4.min(999), raw.5.min(999),
+                    )
+                }
             },
         ));
         if let JsValue::Object(ref o) = constructor {
@@ -870,73 +960,68 @@ fn to_temporal_plain_time_raw(
                     return Ok((h, mi, s, ms, us, ns));
                 }
             }
-            // Try property bag
+            // Property bag: read and coerce each field in alphabetical order per spec:
+            // hour, microsecond, millisecond, minute, nanosecond, second
             let h_val = match get_prop(interp, &item, "hour") {
                 Completion::Normal(v) => v,
                 other => return Err(other),
             };
-            let m_val = match get_prop(interp, &item, "minute") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let s_val = match get_prop(interp, &item, "second") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let ms_val = match get_prop(interp, &item, "millisecond") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
+            let (h, h_present) = if is_undefined(&h_val) {
+                (0u8, false)
+            } else {
+                (to_integer_with_truncation(interp, &h_val)? as u8, true)
             };
             let us_val = match get_prop(interp, &item, "microsecond") {
                 Completion::Normal(v) => v,
                 other => return Err(other),
             };
+            let (us, us_present) = if is_undefined(&us_val) {
+                (0u16, false)
+            } else {
+                (to_integer_with_truncation(interp, &us_val)? as u16, true)
+            };
+            let ms_val = match get_prop(interp, &item, "millisecond") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let (ms, ms_present) = if is_undefined(&ms_val) {
+                (0u16, false)
+            } else {
+                (to_integer_with_truncation(interp, &ms_val)? as u16, true)
+            };
+            let m_val = match get_prop(interp, &item, "minute") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let (m, m_present) = if is_undefined(&m_val) {
+                (0u8, false)
+            } else {
+                (to_integer_with_truncation(interp, &m_val)? as u8, true)
+            };
             let ns_val = match get_prop(interp, &item, "nanosecond") {
                 Completion::Normal(v) => v,
                 other => return Err(other),
             };
+            let (ns, ns_present) = if is_undefined(&ns_val) {
+                (0u16, false)
+            } else {
+                (to_integer_with_truncation(interp, &ns_val)? as u16, true)
+            };
+            let s_val = match get_prop(interp, &item, "second") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let (s, s_present) = if is_undefined(&s_val) {
+                (0u8, false)
+            } else {
+                (to_integer_with_truncation(interp, &s_val)? as u8, true)
+            };
             // Per spec: if no time properties exist, throw TypeError
-            if is_undefined(&h_val)
-                && is_undefined(&m_val)
-                && is_undefined(&s_val)
-                && is_undefined(&ms_val)
-                && is_undefined(&us_val)
-                && is_undefined(&ns_val)
-            {
+            if !h_present && !m_present && !s_present && !ms_present && !us_present && !ns_present {
                 return Err(Completion::Throw(
                     interp.create_type_error("Property bag has no time fields"),
                 ));
             }
-            let h = if is_undefined(&h_val) {
-                0
-            } else {
-                to_integer_with_truncation(interp, &h_val)? as u8
-            };
-            let m = if is_undefined(&m_val) {
-                0
-            } else {
-                to_integer_with_truncation(interp, &m_val)? as u8
-            };
-            let s = if is_undefined(&s_val) {
-                0
-            } else {
-                to_integer_with_truncation(interp, &s_val)? as u8
-            };
-            let ms = if is_undefined(&ms_val) {
-                0
-            } else {
-                to_integer_with_truncation(interp, &ms_val)? as u16
-            };
-            let us = if is_undefined(&us_val) {
-                0
-            } else {
-                to_integer_with_truncation(interp, &us_val)? as u16
-            };
-            let ns = if is_undefined(&ns_val) {
-                0
-            } else {
-                to_integer_with_truncation(interp, &ns_val)? as u16
-            };
             Ok((h, m, s, ms, us, ns))
         }
         JsValue::String(s) => parse_time_string(interp, &s.to_rust_string()),
@@ -1063,53 +1148,79 @@ fn parse_time_diff_options<'a>(
         return Ok((default_largest, "nanosecond", "trunc", 1.0));
     }
 
-    // largestUnit
+    // Read ALL options first (get + coerce), then validate
+
+    // 1. largestUnit: get + coerce to string
     let lu = match get_prop(interp, options, "largestUnit") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let mut largest_auto = is_undefined(&lu);
-    let largest: &str = if is_undefined(&lu) {
-        default_largest
+    let largest_str: Option<String> = if is_undefined(&lu) {
+        None // auto
     } else {
-        let s = match interp.to_string_value(&lu) {
+        Some(match interp.to_string_value(&lu) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
-        };
-        if s == "auto" {
-            largest_auto = true;
-            default_largest
-        } else {
-            match temporal_unit_singular(&s) {
-                Some(u) if is_valid_time_round_unit(u) => u,
-                _ => {
-                    return Err(Completion::Throw(
-                        interp.create_range_error(&format!("Invalid unit: {s}")),
-                    ));
-                }
-            }
-        }
+        })
     };
 
-    // roundingIncrement (read before roundingMode and smallestUnit per spec)
+    // 2. roundingIncrement: get + coerce
     let inc_val = match get_prop(interp, options, "roundingIncrement") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
+    let inc_raw = coerce_rounding_increment(interp, &inc_val)?;
 
-    // roundingMode
+    // 3. roundingMode: get + coerce to string
     let rm_val = match get_prop(interp, options, "roundingMode") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let rm: &str = if is_undefined(&rm_val) {
-        "trunc"
+    let rm_str: Option<String> = if is_undefined(&rm_val) {
+        None
     } else {
-        let s = match interp.to_string_value(&rm_val) {
+        Some(match interp.to_string_value(&rm_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
-        };
-        match s.as_str() {
+        })
+    };
+
+    // 4. smallestUnit: get + coerce to string
+    let su = match get_prop(interp, options, "smallestUnit") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let su_str: Option<String> = if is_undefined(&su) {
+        None
+    } else {
+        Some(match interp.to_string_value(&su) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        })
+    };
+
+    // Now validate all values
+    let mut largest_auto = largest_str.is_none();
+    let largest: &str = if let Some(ref ls) = largest_str {
+        if ls == "auto" {
+            largest_auto = true;
+            default_largest
+        } else {
+            match temporal_unit_singular(ls) {
+                Some(u) if is_valid_time_round_unit(u) => u,
+                _ => {
+                    return Err(Completion::Throw(
+                        interp.create_range_error(&format!("Invalid unit: {ls}")),
+                    ));
+                }
+            }
+        }
+    } else {
+        default_largest
+    };
+
+    let rm: &str = if let Some(ref rs) = rm_str {
+        match rs.as_str() {
             "ceil" => "ceil",
             "floor" => "floor",
             "trunc" => "trunc",
@@ -1121,32 +1232,25 @@ fn parse_time_diff_options<'a>(
             "halfEven" => "halfEven",
             _ => {
                 return Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid roundingMode: {s}")),
+                    interp.create_range_error(&format!("Invalid roundingMode: {rs}")),
                 ));
             }
         }
+    } else {
+        "trunc"
     };
 
-    // smallestUnit
-    let su = match get_prop(interp, options, "smallestUnit") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let smallest: &str = if is_undefined(&su) {
-        "nanosecond"
-    } else {
-        let s = match interp.to_string_value(&su) {
-            Ok(v) => v,
-            Err(e) => return Err(Completion::Throw(e)),
-        };
-        match temporal_unit_singular(&s) {
+    let smallest: &str = if let Some(ref ss) = su_str {
+        match temporal_unit_singular(ss) {
             Some(u) if is_valid_time_round_unit(u) => u,
             _ => {
                 return Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid unit: {s}")),
+                    interp.create_range_error(&format!("Invalid unit: {ss}")),
                 ));
             }
         }
+    } else {
+        "nanosecond"
     };
 
     // Auto-bump largestUnit if smallestUnit is larger
@@ -1165,10 +1269,22 @@ fn parse_time_diff_options<'a>(
         )));
     }
 
-    // Validate roundingIncrement
-    let inc = validate_rounding_increment(interp, &inc_val, smallest, true)?;
+    // Validate roundingIncrement against smallestUnit
+    if let Some(max) = max_rounding_increment(smallest) {
+        let i = inc_raw as u64;
+        if i >= max {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "roundingIncrement {inc_raw} is out of range for {smallest}"
+            ))));
+        }
+        if max % i != 0 {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "roundingIncrement {inc_raw} does not divide evenly into {max}"
+            ))));
+        }
+    }
 
-    Ok((largest, smallest, rm, inc))
+    Ok((largest, smallest, rm, inc_raw))
 }
 
 fn parse_time_to_string_options(
@@ -1218,30 +1334,7 @@ fn parse_time_to_string_options(
             }
         }
     }
-    // smallestUnit
-    let su_val = match get_prop(interp, options, "smallestUnit") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if !is_undefined(&su_val) {
-        let s = match interp.to_string_value(&su_val) {
-            Ok(v) => v,
-            Err(e) => return Err(Completion::Throw(e)),
-        };
-        precision = match temporal_unit_singular(&s) {
-            Some("minute") => Some(-1),
-            Some("second") => Some(0),
-            Some("millisecond") => Some(3),
-            Some("microsecond") => Some(6),
-            Some("nanosecond") => Some(9),
-            _ => {
-                return Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid unit: {s}")),
-                ));
-            }
-        };
-    }
-    // roundingMode
+    // roundingMode: get + coerce (before smallestUnit per spec)
     let rm_val = match get_prop(interp, options, "roundingMode") {
         Completion::Normal(v) => v,
         other => return Err(other),
@@ -1270,6 +1363,29 @@ fn parse_time_to_string_options(
             }
         }
     };
+    // smallestUnit: get + coerce (overrides fractionalSecondDigits)
+    let su_val = match get_prop(interp, options, "smallestUnit") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if !is_undefined(&su_val) {
+        let s = match interp.to_string_value(&su_val) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        };
+        precision = match temporal_unit_singular(&s) {
+            Some("minute") => Some(-1),
+            Some("second") => Some(0),
+            Some("millisecond") => Some(3),
+            Some("microsecond") => Some(6),
+            Some("nanosecond") => Some(9),
+            _ => {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid unit: {s}")),
+                ));
+            }
+        };
+    }
     Ok((precision, rm))
 }
 

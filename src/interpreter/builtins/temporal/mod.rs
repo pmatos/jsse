@@ -123,6 +123,148 @@ pub(crate) fn get_prop(interp: &mut Interpreter, obj: &JsValue, key: &str) -> Co
 pub(crate) fn is_undefined(v: &JsValue) -> bool {
     matches!(v, JsValue::Undefined)
 }
+/// Spec: IsPartialTemporalObject(value)
+/// Returns Ok(()) if valid partial temporal object, Err(Completion) otherwise.
+/// Rejects: non-objects, Temporal objects, objects with calendar/timeZone properties.
+pub(crate) fn is_partial_temporal_object(
+    interp: &mut Interpreter,
+    value: &JsValue,
+) -> Result<(), Completion> {
+    let obj_ref = match value {
+        JsValue::Object(o) => o,
+        _ => {
+            return Err(Completion::Throw(
+                interp.create_type_error("with requires an object argument"),
+            ));
+        }
+    };
+
+    if let Some(obj) = interp.get_object(obj_ref.id) {
+        let td = obj.borrow().temporal_data.clone();
+        if let Some(ref data) = td {
+            match data {
+                TemporalData::PlainDate { .. }
+                | TemporalData::PlainDateTime { .. }
+                | TemporalData::PlainTime { .. }
+                | TemporalData::PlainMonthDay { .. }
+                | TemporalData::PlainYearMonth { .. }
+                | TemporalData::ZonedDateTime { .. } => {
+                    return Err(Completion::Throw(
+                        interp.create_type_error(
+                            "a Temporal object is not allowed as argument to with()",
+                        ),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let cal_val = match get_prop(interp, value, "calendar") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if !is_undefined(&cal_val) {
+        return Err(Completion::Throw(
+            interp.create_type_error("calendar property not allowed in with() argument"),
+        ));
+    }
+
+    let tz_val = match get_prop(interp, value, "timeZone") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if !is_undefined(&tz_val) {
+        return Err(Completion::Throw(
+            interp.create_type_error("timeZone property not allowed in with() argument"),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Read a date-like field as i32, returning (value, was_present).
+/// Uses ToIntegerWithTruncation.
+pub(crate) fn read_field_i32(
+    interp: &mut Interpreter,
+    obj: &JsValue,
+    key: &str,
+    default: i32,
+) -> Result<(i32, bool), Completion> {
+    let val = match get_prop(interp, obj, key) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if is_undefined(&val) {
+        Ok((default, false))
+    } else {
+        let n = to_integer_with_truncation(interp, &val)?;
+        Ok((n as i32, true))
+    }
+}
+
+/// Read a date-like field as positive integer (month, day).
+/// Uses ToPositiveIntegerWithTruncation: RangeError if <= 0.
+/// Returns (value, was_present).
+pub(crate) fn read_field_positive_int(
+    interp: &mut Interpreter,
+    obj: &JsValue,
+    key: &str,
+    default: u8,
+) -> Result<(u8, bool), Completion> {
+    let val = match get_prop(interp, obj, key) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if is_undefined(&val) {
+        Ok((default, false))
+    } else {
+        let n = to_integer_with_truncation(interp, &val)?;
+        if n < 1.0 {
+            return Err(Completion::Throw(
+                interp.create_range_error(&format!("{key} must be a positive integer")),
+            ));
+        }
+        Ok((n as u8, true))
+    }
+}
+
+/// Read a time-like field (hour, minute, second, etc) for with().
+/// Returns (value, was_present). Uses ToIntegerWithTruncation.
+pub(crate) fn read_time_field_new(
+    interp: &mut Interpreter,
+    obj: &JsValue,
+    key: &str,
+    default: f64,
+) -> Result<(f64, bool), Completion> {
+    let val = match get_prop(interp, obj, key) {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if is_undefined(&val) {
+        Ok((default, false))
+    } else {
+        let n = to_integer_with_truncation(interp, &val)?;
+        Ok((n, true))
+    }
+}
+
+/// Read monthCode field: returns (Option<String>, was_present).
+pub(crate) fn read_month_code_field(
+    interp: &mut Interpreter,
+    obj: &JsValue,
+) -> Result<(Option<String>, bool), Completion> {
+    let mc_val = match get_prop(interp, obj, "monthCode") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    if is_undefined(&mc_val) {
+        Ok((None, false))
+    } else {
+        let s = to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
+        Ok((Some(s), true))
+    }
+}
 
 /// Per spec GetOptionsObject: if undefined return empty object, if object return it, else TypeError.
 /// Returns Ok(true) if real options object, Ok(false) if undefined (use defaults).
@@ -194,7 +336,7 @@ pub(crate) fn validate_rounding_increment_day_divisible(
     Ok(int_inc)
 }
 
-fn coerce_rounding_increment(
+pub(crate) fn coerce_rounding_increment(
     interp: &mut Interpreter,
     inc_val: &JsValue,
 ) -> Result<f64, Completion> {
@@ -235,6 +377,34 @@ fn check_day_divisibility(
         }
     }
     Ok(())
+}
+
+/// Validate a pre-coerced rounding increment value against unit constraints.
+/// Returns Ok(inc) or Err(error_message).
+pub(crate) fn validate_rounding_increment_raw(
+    int_inc: f64,
+    unit: &str,
+    is_difference: bool,
+) -> Result<f64, String> {
+    if let Some(max) = max_rounding_increment(unit) {
+        let i = int_inc as u64;
+        if i >= max {
+            return Err(format!("roundingIncrement {int_inc} is out of range for {unit}"));
+        }
+        if max % i != 0 {
+            return Err(format!("roundingIncrement {int_inc} does not divide evenly into {max}"));
+        }
+    } else if !is_difference {
+        let unit_ns = temporal_unit_length_ns(unit) as u64;
+        if unit_ns > 0 {
+            let total_ns = int_inc as u64 * unit_ns;
+            let day_ns: u64 = 86_400_000_000_000;
+            if day_ns % total_ns != 0 {
+                return Err(format!("roundingIncrement {int_inc} for {unit} does not divide evenly into a day"));
+            }
+        }
+    }
+    Ok(int_inc)
 }
 
 /// Parse the overflow option from an options bag. Returns "constrain" or "reject".
@@ -360,6 +530,24 @@ pub(crate) fn iso_time_valid(
         && millisecond < 1000
         && microsecond < 1000
         && nanosecond < 1000
+}
+
+/// Validate time fields as f64 (before truncation to u8/u16).
+/// Needed for reject mode where negative values must be caught.
+pub(crate) fn iso_time_valid_f64(
+    hour: f64,
+    minute: f64,
+    second: f64,
+    millisecond: f64,
+    microsecond: f64,
+    nanosecond: f64,
+) -> bool {
+    hour >= 0.0 && hour <= 23.0
+        && minute >= 0.0 && minute <= 59.0
+        && second >= 0.0 && second <= 59.0
+        && millisecond >= 0.0 && millisecond <= 999.0
+        && microsecond >= 0.0 && microsecond <= 999.0
+        && nanosecond >= 0.0 && nanosecond <= 999.0
 }
 
 pub(crate) fn iso_day_of_year(year: i32, month: u8, day: u8) -> u16 {
@@ -916,6 +1104,10 @@ fn parse_duration_number(bytes: &[u8], start: usize) -> Option<(f64, Option<f64>
         }
         if pos == frac_start {
             return None; // decimal point with no digits
+        }
+        let frac_len = pos - frac_start;
+        if frac_len > 9 {
+            return None; // max 9 fractional digits per spec
         }
         let frac_str = std::str::from_utf8(&bytes[frac_start..pos]).ok()?;
         let frac_val: f64 = format!("0.{frac_str}").parse().ok()?;
@@ -2017,15 +2209,31 @@ pub(crate) fn is_valid_duration(
             return false;
         }
     }
-    // Per spec IsValidDuration step 6-7: compute normalizedSeconds, check abs > 2^53
-    let normalized_seconds = days.abs() * 86_400.0
-        + hours.abs() * 3_600.0
-        + minutes.abs() * 60.0
-        + seconds.abs()
-        + milliseconds.abs() * 1e-3
-        + microseconds.abs() * 1e-6
-        + nanoseconds.abs() * 1e-9;
-    if normalized_seconds > 9_007_199_254_740_992.0 {
+    // Per spec IsValidDuration step 6-7: compute total nanoseconds using exact
+    // integer arithmetic (i128) to avoid f64 precision loss, then check against
+    // maxTimeDuration = 2^53 × 10^9 - 1.
+    // Guard against f64 values too large for i128 (e.g. Number.MAX_VALUE).
+    for &v in &[days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds] {
+        if v.abs() > 1e35 {
+            return false;
+        }
+    }
+    let d = days.abs() as i128;
+    let h = hours.abs() as i128;
+    let mi = minutes.abs() as i128;
+    let s = seconds.abs() as i128;
+    let ms = milliseconds.abs() as i128;
+    let us = microseconds.abs() as i128;
+    let ns = nanoseconds.abs() as i128;
+    let total_ns = d * 86_400_000_000_000
+        + h * 3_600_000_000_000
+        + mi * 60_000_000_000
+        + s * 1_000_000_000
+        + ms * 1_000_000
+        + us * 1_000
+        + ns;
+    const MAX_TIME_DURATION: i128 = (1i128 << 53) * 1_000_000_000 - 1;
+    if total_ns > MAX_TIME_DURATION {
         return false;
     }
     true
@@ -2142,17 +2350,15 @@ pub(crate) fn iso_month_code(month: u8) -> String {
     format!("M{month:02}")
 }
 
-/// Read raw month/monthCode values from a property bag (coerce but don't validate).
+/// Read raw month/monthCode values from a property bag (coerce each immediately).
 /// Returns (Option<u8>, Option<String>) for (month, monthCode).
+/// Per spec: get+coerce month BEFORE get+coerce monthCode (alphabetical with immediate coercion).
 pub(crate) fn read_month_fields(
     interp: &mut Interpreter,
     obj: &JsValue,
 ) -> Result<(Option<u8>, Option<String>), Completion> {
+    // Read and coerce month immediately
     let m_val = match get_prop(interp, obj, "month") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let mc_val = match get_prop(interp, obj, "monthCode") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
@@ -2160,6 +2366,11 @@ pub(crate) fn read_month_fields(
         None
     } else {
         Some(to_integer_with_truncation(interp, &m_val)? as u8)
+    };
+    // Then read and coerce monthCode
+    let mc_val = match get_prop(interp, obj, "monthCode") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
     };
     let month_code = if is_undefined(&mc_val) {
         None
@@ -2357,29 +2568,71 @@ pub(crate) fn parse_difference_options(
         ));
     }
 
-    // largestUnit
+    // Read ALL options first (get + coerce), then validate
+
+    // 1. largestUnit: get + coerce to string
     let lu = match get_prop(interp, options, "largestUnit") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let mut largest_unit_auto = is_undefined(&lu);
-    let largest_unit = if is_undefined(&lu) {
-        default_largest.to_string()
+    let lu_str: Option<String> = if is_undefined(&lu) {
+        None
     } else {
-        let s = match interp.to_string_value(&lu) {
+        Some(match interp.to_string_value(&lu) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
-        };
-        if s == "auto" {
+        })
+    };
+
+    // 2. roundingIncrement: get + coerce
+    let ri = match get_prop(interp, options, "roundingIncrement") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let ri_coerced = coerce_rounding_increment(interp, &ri)?;
+
+    // 3. roundingMode: get + coerce to string
+    let rm = match get_prop(interp, options, "roundingMode") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let rm_str: Option<String> = if is_undefined(&rm) {
+        None
+    } else {
+        Some(match interp.to_string_value(&rm) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        })
+    };
+
+    // 4. smallestUnit: get + coerce to string
+    let su = match get_prop(interp, options, "smallestUnit") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let su_str: Option<String> = if is_undefined(&su) {
+        None
+    } else {
+        Some(match interp.to_string_value(&su) {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        })
+    };
+
+    // Now validate all values
+
+    let mut largest_unit_auto = lu_str.is_none();
+    let largest_unit = if let Some(ref ls) = lu_str {
+        if ls == "auto" {
             largest_unit_auto = true;
             default_largest.to_string()
         } else {
-            match temporal_unit_singular(&s) {
+            match temporal_unit_singular(ls) {
                 Some(u) => {
                     if !allowed_units.contains(&u) {
                         return Err(Completion::Throw(
                             interp.create_range_error(&format!(
-                                "{s} is not a valid value for largestUnit"
+                                "{ls} is not a valid value for largestUnit"
                             )),
                         ));
                     }
@@ -2387,60 +2640,36 @@ pub(crate) fn parse_difference_options(
                 }
                 None => {
                     return Err(Completion::Throw(
-                        interp.create_range_error(&format!("Invalid unit: {s}")),
+                        interp.create_range_error(&format!("Invalid unit: {ls}")),
                     ));
                 }
             }
         }
-    };
-
-    // roundingIncrement (read value before roundingMode and smallestUnit per spec)
-    let ri = match get_prop(interp, options, "roundingIncrement") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-
-    // roundingMode
-    let rm = match get_prop(interp, options, "roundingMode") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let rounding_mode = if is_undefined(&rm) {
-        "trunc".to_string()
     } else {
-        let v = match interp.to_string_value(&rm) {
-            Ok(v) => v,
-            Err(e) => return Err(Completion::Throw(e)),
-        };
-        match v.as_str() {
+        default_largest.to_string()
+    };
+
+    let rounding_mode = if let Some(ref rs) = rm_str {
+        match rs.as_str() {
             "ceil" | "floor" | "trunc" | "expand" | "halfExpand" | "halfTrunc" | "halfCeil"
-            | "halfFloor" | "halfEven" => v,
+            | "halfFloor" | "halfEven" => rs.clone(),
             _ => {
                 return Err(Completion::Throw(
-                    interp.create_range_error(&format!("{v} is not a valid value for roundingMode")),
+                    interp.create_range_error(&format!("{rs} is not a valid value for roundingMode")),
                 ));
             }
         }
+    } else {
+        "trunc".to_string()
     };
 
-    // smallestUnit
-    let su = match get_prop(interp, options, "smallestUnit") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let smallest_unit = if is_undefined(&su) {
-        default_smallest.to_string()
-    } else {
-        let s = match interp.to_string_value(&su) {
-            Ok(v) => v,
-            Err(e) => return Err(Completion::Throw(e)),
-        };
-        match temporal_unit_singular(&s) {
+    let smallest_unit = if let Some(ref ss) = su_str {
+        match temporal_unit_singular(ss) {
             Some(u) => {
                 if !allowed_units.contains(&u) {
                     return Err(Completion::Throw(
                         interp.create_range_error(&format!(
-                            "{s} is not a valid value for smallestUnit"
+                            "{ss} is not a valid value for smallestUnit"
                         )),
                     ));
                 }
@@ -2448,10 +2677,12 @@ pub(crate) fn parse_difference_options(
             }
             None => {
                 return Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid unit: {s}")),
+                    interp.create_range_error(&format!("Invalid unit: {ss}")),
                 ));
             }
         }
+    } else {
+        default_smallest.to_string()
     };
 
     // Per spec: if largestUnit was auto/default, bump it up to at least smallestUnit
@@ -2470,8 +2701,21 @@ pub(crate) fn parse_difference_options(
         )));
     }
 
-    // Validate roundingIncrement (after smallestUnit is known, for divisibility check)
-    let rounding_increment = validate_rounding_increment(interp, &ri, &smallest_unit, true)?;
+    // Validate roundingIncrement against smallestUnit (using pre-coerced value)
+    let rounding_increment = ri_coerced;
+    if let Some(max) = max_rounding_increment(&smallest_unit) {
+        let i = rounding_increment as u64;
+        if i >= max {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "roundingIncrement {rounding_increment} is out of range for {smallest_unit}"
+            ))));
+        }
+        if max % i != 0 {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "roundingIncrement {rounding_increment} does not divide evenly into {max}"
+            ))));
+        }
+    }
 
     Ok((largest_unit, smallest_unit, rounding_mode, rounding_increment))
 }

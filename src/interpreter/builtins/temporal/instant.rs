@@ -1,8 +1,8 @@
 use super::*;
 use crate::interpreter::builtins::temporal::{
-    get_prop, is_undefined, parse_temporal_instant_string, round_number_to_increment,
-    temporal_unit_length_ns, temporal_unit_singular, validate_rounding_increment,
-    validate_rounding_increment_day_divisible,
+    coerce_rounding_increment, get_prop, is_undefined, parse_temporal_instant_string,
+    round_number_to_increment, temporal_unit_length_ns, temporal_unit_singular,
+    validate_rounding_increment, validate_rounding_increment_day_divisible,
 };
 use num_bigint::BigInt;
 
@@ -302,20 +302,45 @@ impl Interpreter {
                         }
                     }
                 } else if matches!(round_to, JsValue::Object(_)) {
+                    // Read all options in alphabetical order first, then validate
+                    // 1. roundingIncrement
+                    let inc_val = match get_prop(interp, &round_to, "roundingIncrement") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let inc_raw = match coerce_rounding_increment(interp, &inc_val) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    // 2. roundingMode
+                    let rm_val = match get_prop(interp, &round_to, "roundingMode") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let rm_str: Option<String> = if is_undefined(&rm_val) {
+                        None
+                    } else {
+                        Some(match interp.to_string_value(&rm_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        })
+                    };
+                    // 3. smallestUnit
                     let su_val = match get_prop(interp, &round_to, "smallestUnit") {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    let unit = if is_undefined(&su_val) {
-                        return Completion::Throw(
-                            interp.create_range_error("smallestUnit is required"),
-                        );
+                    let su_str: Option<String> = if is_undefined(&su_val) {
+                        None
                     } else {
-                        let s = match interp.to_string_value(&su_val) {
+                        Some(match interp.to_string_value(&su_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
-                        };
-                        match temporal_unit_singular(&s) {
+                        })
+                    };
+                    // Validate
+                    let unit = if let Some(ref sv) = su_str {
+                        match temporal_unit_singular(sv) {
                             Some(u) if is_valid_instant_round_unit(u) => u,
                             Some(u) => {
                                 return Completion::Throw(interp.create_range_error(&format!(
@@ -324,23 +349,17 @@ impl Interpreter {
                             }
                             None => {
                                 return Completion::Throw(
-                                    interp.create_range_error(&format!("Invalid unit: {s}")),
+                                    interp.create_range_error(&format!("Invalid unit: {sv}")),
                                 );
                             }
                         }
-                    };
-                    let rm_val = match get_prop(interp, &round_to, "roundingMode") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let rm = if is_undefined(&rm_val) {
-                        "halfExpand"
                     } else {
-                        let s = match interp.to_string_value(&rm_val) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match s.as_str() {
+                        return Completion::Throw(
+                            interp.create_range_error("smallestUnit is required"),
+                        );
+                    };
+                    let rm = if let Some(ref rs) = rm_str {
+                        match rs.as_str() {
                             "ceil" => "ceil",
                             "floor" => "floor",
                             "trunc" => "trunc",
@@ -352,21 +371,25 @@ impl Interpreter {
                             "halfEven" => "halfEven",
                             _ => {
                                 return Completion::Throw(
-                                    interp
-                                        .create_range_error(&format!("Invalid roundingMode: {s}")),
+                                    interp.create_range_error(&format!("Invalid roundingMode: {rs}")),
                                 );
                             }
                         }
+                    } else {
+                        "halfExpand"
                     };
-                    let inc_val = match get_prop(interp, &round_to, "roundingIncrement") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let inc = match validate_rounding_increment_day_divisible(interp, &inc_val, unit) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    (unit, rm, inc)
+                    // Validate roundingIncrement for day divisibility
+                    let unit_ns = temporal_unit_length_ns(unit) as u64;
+                    if unit_ns > 0 {
+                        let total_ns = inc_raw as u64 * unit_ns;
+                        let day_ns: u64 = 86_400_000_000_000;
+                        if day_ns % total_ns != 0 {
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "roundingIncrement {inc_raw} for {unit} does not divide evenly into a day"
+                            )));
+                        }
+                    }
+                    (unit, rm, inc_raw)
                 } else {
                     return Completion::Throw(
                         interp.create_type_error("round requires a string or object"),
@@ -1229,19 +1252,47 @@ fn parse_to_string_options(
         }
     };
 
-    // smallestUnit — only time units valid, and "hour" is additionally rejected
+    // smallestUnit — read and coerce, defer validation
     let su_val = match get_prop(interp, options, "smallestUnit") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let smallest_unit = if is_undefined(&su_val) {
+    let su_str: Option<String> = if is_undefined(&su_val) {
         None
     } else {
-        let s = match interp.to_string_value(&su_val) {
+        Some(match interp.to_string_value(&su_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
+        })
+    };
+
+    // timeZone — ToTemporalTimeZoneIdentifier
+    let tz_val = match get_prop(interp, options, "timeZone") {
+        Completion::Normal(v) => v,
+        other => return Err(other),
+    };
+    let (tz_id, tz_offset_ns, tz_explicit) = if is_undefined(&tz_val) {
+        ("UTC".to_string(), 0i64, false)
+    } else {
+        // Per spec, must be a string (not coerced from other types)
+        let tz_str = match &tz_val {
+            JsValue::String(s) => s.to_string(),
+            _ => {
+                return Err(Completion::Throw(
+                    interp.create_type_error("timeZone must be a string"),
+                ));
+            }
         };
-        match temporal_unit_singular(&s) {
+        let (id, offset) = match validate_timezone_string(interp, &tz_str) {
+            Ok(v) => v,
+            Err(c) => return Err(c),
+        };
+        (id, offset, true)
+    };
+
+    // Now validate smallestUnit
+    let smallest_unit = if let Some(ref ss) = su_str {
+        match temporal_unit_singular(ss) {
             Some(u)
                 if matches!(
                     u,
@@ -1253,27 +1304,13 @@ fn parse_to_string_options(
             _ => {
                 return Err(Completion::Throw(
                     interp.create_range_error(&format!(
-                        "{s} is not a valid value for smallest unit"
+                        "{ss} is not a valid value for smallest unit"
                     )),
                 ));
             }
         }
-    };
-
-    // timeZone
-    let tz_val = match get_prop(interp, options, "timeZone") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let (tz_id, tz_offset_ns, tz_explicit) = if is_undefined(&tz_val) {
-        ("UTC".to_string(), 0i64, false)
     } else {
-        let tz_str = match interp.to_string_value(&tz_val) {
-            Ok(v) => v,
-            Err(e) => return Err(Completion::Throw(e)),
-        };
-        let (id, offset) = parse_timezone_offset(&tz_str);
-        (id, offset, true)
+        None
     };
 
     Ok((
@@ -1286,28 +1323,188 @@ fn parse_to_string_options(
     ))
 }
 
+/// Parse a plain numeric offset like "+01:00", "-05:00", "+0100", "+01".
+/// Returns (formatted_id, offset_ns) or None if not a valid offset.
+/// Only HH:MM precision allowed — sub-minute offsets rejected.
+fn parse_plain_offset(s: &str) -> Option<(String, i64)> {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || (bytes[0] != b'+' && bytes[0] != b'-') {
+        return None;
+    }
+    let sign: i64 = if bytes[0] == b'-' { -1 } else { 1 };
+    let rest = &s[1..];
+    // Only digits and colons allowed
+    if rest.chars().any(|c| !c.is_ascii_digit() && c != ':') {
+        return None;
+    }
+    let parts: Vec<&str> = rest.split(':').collect();
+    match parts.len() {
+        1 => {
+            // ±HH or ±HHMM
+            if parts[0].len() == 2 {
+                let h: i64 = parts[0].parse().ok()?;
+                if h > 23 { return None; }
+                let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, 0);
+                Some((id, sign * h * 3_600_000_000_000))
+            } else if parts[0].len() == 4 {
+                let h: i64 = parts[0][..2].parse().ok()?;
+                let m: i64 = parts[0][2..].parse().ok()?;
+                if h > 23 || m > 59 { return None; }
+                let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, m);
+                Some((id, sign * (h * 3_600_000_000_000 + m * 60_000_000_000)))
+            } else {
+                None
+            }
+        }
+        2 => {
+            // ±HH:MM — exactly 2 parts
+            if parts[0].len() != 2 || parts[1].len() != 2 { return None; }
+            let h: i64 = parts[0].parse().ok()?;
+            let m: i64 = parts[1].parse().ok()?;
+            if h > 23 || m > 59 { return None; }
+            let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, m);
+            Some((id, sign * (h * 3_600_000_000_000 + m * 60_000_000_000)))
+        }
+        _ => None, // ±HH:MM:SS or more — sub-minute, rejected
+    }
+}
+
+/// ToTemporalTimeZoneIdentifier — validates a timezone string.
+/// Returns (tz_id, offset_ns) or error.
+fn validate_timezone_string(
+    interp: &mut Interpreter,
+    s: &str,
+) -> Result<(String, i64), Completion> {
+    if s.is_empty() {
+        return Err(Completion::Throw(
+            interp.create_range_error("Invalid time zone: empty string"),
+        ));
+    }
+    // 1. Try as plain numeric offset: ±HH:MM, ±HHMM, ±HH
+    if let Some(v) = parse_plain_offset(s) {
+        return Ok(v);
+    }
+    // 2. Try as named timezone: "UTC", "America/New_York", "Etc/GMT+5", etc.
+    //    Named TZ identifiers are alphanumeric with /, _, -, +
+    //    They don't start with digits and don't look like ISO date-time strings
+    if s.eq_ignore_ascii_case("utc") || s == "Etc/UTC" || s == "Etc/GMT" {
+        return Ok(("UTC".to_string(), 0));
+    }
+    // A named timezone must have at least one letter and not look like a datetime
+    // (datetimes have digit runs like YYYY-MM-DD or contain 'T' as date/time separator
+    //  in positions after a date-like prefix)
+    let looks_like_iana = s.contains('/')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '_' || c == '-' || c == '+');
+    if looks_like_iana {
+        return Ok((s.to_string(), 0));
+    }
+    // 3. Try as ISO date-time string with timezone info
+    //    Must have a Z, offset, or [annotation] to be valid as timezone source
+    if let Some(tz) = extract_timezone_from_iso_string(s) {
+        return Ok(tz);
+    }
+    Err(Completion::Throw(
+        interp.create_range_error(&format!("Invalid time zone: {s}")),
+    ))
+}
+
+/// Extract timezone info from an ISO date-time string.
+/// Returns Some((id, offset_ns)) if the string has timezone info, None otherwise.
+fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
+    // Reject negative zero year: -000000
+    if s.starts_with("-000000") {
+        return None;
+    }
+    // Look for [annotation] bracket — IANA name takes precedence
+    if let Some(bracket_start) = s.find('[') {
+        if let Some(bracket_end) = s[bracket_start..].find(']') {
+            let annotation = &s[bracket_start + 1..bracket_start + bracket_end];
+            // Skip non-timezone annotations like u-ca=iso8601
+            if !annotation.contains('=') {
+                if annotation.eq_ignore_ascii_case("UTC") || annotation == "Etc/UTC" {
+                    return Some(("UTC".to_string(), 0));
+                }
+                // Validate: annotation must be a valid TZ identifier
+                // (either IANA name or ±HH:MM offset — no sub-minute)
+                if annotation.starts_with('+') || annotation.starts_with('-') {
+                    // Must be a valid offset with no sub-minute
+                    return parse_plain_offset(annotation);
+                }
+                // IANA name: must contain '/' and be alphanumeric
+                if annotation.contains('/') {
+                    return Some((annotation.to_string(), 0));
+                }
+                // Other plain names (e.g. just "UTC" was handled above)
+                return None; // Invalid annotation
+            }
+        }
+    }
+    // Look for Z
+    let upper = s.to_uppercase();
+    // Find time portion (after T)
+    let t_pos = s.find(|c: char| c == 'T' || c == 't')?;
+    let time_part = &s[t_pos + 1..];
+    // Strip calendar annotation if present
+    let time_part = if let Some(b) = time_part.find('[') {
+        &time_part[..b]
+    } else {
+        time_part
+    };
+    // Check for Z at the end
+    if time_part.ends_with('Z') || time_part.ends_with('z') {
+        return Some(("UTC".to_string(), 0));
+    }
+    // Look for offset after the time digits
+    // Find the last +/- that's part of an offset (not part of exponent, etc.)
+    // Time format: HH:MM:SS.fff±HH:MM
+    let offset_re_start = find_offset_in_time(time_part)?;
+    let offset_str = &time_part[offset_re_start..];
+    // Validate: must be exactly ±HH:MM (no sub-minute)
+    parse_plain_offset(offset_str).map(|v| v)
+}
+
+/// Find the start of an offset (+ or -) in a time string portion.
+/// Skips time digits to find the trailing offset.
+fn find_offset_in_time(time: &str) -> Option<usize> {
+    // Walk past time digits: HH:MM:SS.fractional
+    let bytes = time.as_bytes();
+    let mut i = 0;
+    // Skip digits and colons and dots (time portion)
+    while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b':' || bytes[i] == b'.') {
+        i += 1;
+    }
+    // Should now be at + or -
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        // Validate the offset portion has no sub-minute (seconds) parts
+        let offset_part = &time[i..];
+        let offset_bytes = offset_part.as_bytes();
+        // Check for sub-minute: if there are more than 2 colon-separated parts, reject
+        let colon_count = offset_part.chars().filter(|&c| c == ':').count();
+        if colon_count > 1 {
+            return None; // Sub-minute offset
+        }
+        // Also check ±HHMMSS (6+ digits without colons)
+        let digits_after_sign = &offset_part[1..];
+        if digits_after_sign.len() > 4
+            && !digits_after_sign.contains(':')
+            && digits_after_sign.chars().all(|c| c.is_ascii_digit())
+        {
+            return None; // Sub-minute offset in compact form
+        }
+        Some(i)
+    } else {
+        None // No offset found — bare date-time string
+    }
+}
+
+/// Legacy wrapper for non-validated timezone parsing (used by ZDT etc.)
 fn parse_timezone_offset(s: &str) -> (String, i64) {
     if s == "UTC" {
         return ("UTC".to_string(), 0);
     }
-    // Parse numeric offset like "+01:00" or "-05:00"
-    let bytes = s.as_bytes();
-    if !bytes.is_empty() && (bytes[0] == b'+' || bytes[0] == b'-') {
-        let sign: i64 = if bytes[0] == b'-' { -1 } else { 1 };
-        // Try parsing as offset: ±HH:MM or ±HHMM or ±HH
-        let rest = &s[1..];
-        let parts: Vec<&str> = rest.split(':').collect();
-        if let Some(hours_str) = parts.first() {
-            if let Ok(hours) = hours_str.parse::<i64>() {
-                let minutes: i64 = if let Some(min_str) = parts.get(1) {
-                    min_str.parse().unwrap_or(0)
-                } else {
-                    0
-                };
-                let offset_ns = sign * (hours * 3_600_000_000_000 + minutes * 60_000_000_000);
-                return (s.to_string(), offset_ns);
-            }
-        }
+    if let Some(v) = parse_plain_offset(s) {
+        return v;
     }
     // Named timezone — for now just treat as UTC (full IANA support in Phase 9)
     (s.to_string(), 0)
