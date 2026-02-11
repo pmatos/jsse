@@ -9273,6 +9273,16 @@ test262/test/built-ins/Object/defineProperty/redefine-length-with-various-values
 test262/test/built-ins/Object/defineProperty/symbol-data-property-configurable.js
 test262/test/built-ins/Object/defineProperty/symbol-data-property-default-non-strict.js
 test262/test/built-ins/Object/defineProperty/symbol-data-property-writable.js
+test262/test/built-ins/Object/defineProperty/tmp1faqvv5_.js
+test262/test/built-ins/Object/defineProperty/tmp3bafngqx.js
+test262/test/built-ins/Object/defineProperty/tmp53n5rhz9.js
+test262/test/built-ins/Object/defineProperty/tmp77koz17d.js
+test262/test/built-ins/Object/defineProperty/tmpc94tky_v.js
+test262/test/built-ins/Object/defineProperty/tmpck1jrm82.js
+test262/test/built-ins/Object/defineProperty/tmpohkuc0pp.js
+test262/test/built-ins/Object/defineProperty/tmpve_7ip6x.js
+test262/test/built-ins/Object/defineProperty/tmpw7uc0enb.js
+test262/test/built-ins/Object/defineProperty/tmpxehpmz9s.js
 test262/test/built-ins/Object/entries/exception-during-enumeration.js
 test262/test/built-ins/Object/entries/exception-not-object-coercible.js
 test262/test/built-ins/Object/entries/function-length.js
@@ -14495,6 +14505,7 @@ test262/test/built-ins/Temporal/Duration/compare/relativeto-sub-minute-offset.js
 test262/test/built-ins/Temporal/Duration/compare/relativeto-undefined-throw-on-calendar-units.js
 test262/test/built-ins/Temporal/Duration/compare/relativeto-year.js
 test262/test/built-ins/Temporal/Duration/compare/relativeto-zoneddatetime-negative-epochnanoseconds.js
+test262/test/built-ins/Temporal/Duration/compare/throws-when-target-zoned-date-time-outside-valid-limits.js
 test262/test/built-ins/Temporal/Duration/compare/year-zero.js
 test262/test/built-ins/Temporal/Duration/constructor.js
 test262/test/built-ins/Temporal/Duration/days-undefined.js
@@ -14662,6 +14673,7 @@ test262/test/built-ins/Temporal/Duration/prototype/round/largestunit-undefined.j
 test262/test/built-ins/Temporal/Duration/prototype/round/largestunit-wrong-type.js
 test262/test/built-ins/Temporal/Duration/prototype/round/length.js
 test262/test/built-ins/Temporal/Duration/prototype/round/name.js
+test262/test/built-ins/Temporal/Duration/prototype/round/next-day-out-of-range.js
 test262/test/built-ins/Temporal/Duration/prototype/round/not-a-constructor.js
 test262/test/built-ins/Temporal/Duration/prototype/round/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/Duration/prototype/round/options-wrong-type.js
@@ -14902,6 +14914,9 @@ test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-zoneddatetim
 test262/test/built-ins/Temporal/Duration/prototype/total/relativeto-zoneddatetime-with-fractional-days.js
 test262/test/built-ins/Temporal/Duration/prototype/total/rounds-calendar-units-in-durations-without-calendar-units.js
 test262/test/built-ins/Temporal/Duration/prototype/total/rounds-durations-with-calendar-units.js
+test262/test/built-ins/Temporal/Duration/prototype/total/throws-if-date-time-invalid-with-plaindate-relative.js
+test262/test/built-ins/Temporal/Duration/prototype/total/throws-if-date-time-invalid-with-zoneddatetime-relative.js
+test262/test/built-ins/Temporal/Duration/prototype/total/throws-if-target-nanoseconds-outside-valid-limits.js
 test262/test/built-ins/Temporal/Duration/prototype/total/throws-if-unit-property-missing.js
 test262/test/built-ins/Temporal/Duration/prototype/total/throws-on-disallowed-or-invalid-unit.js
 test262/test/built-ins/Temporal/Duration/prototype/total/throws-on-wrong-offset-for-zoneddatetime-relativeto.js
@@ -18326,6 +18341,8 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/hour/branding.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/hour/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/basic.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/branding.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/get-start-of-day-throws.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/next-day-out-of-range.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/hoursInDay/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/inLeapYear/basic.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/inLeapYear/branding.js
@@ -18362,6 +18379,8 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/offsetNanoseconds/prop-d
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/round/branding.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/round/builtin.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/round/day-rounding-out-of-range.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/round/get-start-of-day-throws.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/round/length.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/round/name.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/round/negative-epochnanoseconds.js
@@ -18470,6 +18489,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/reversibility-of-differences.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/rounding-increments.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/roundingincrement-addition-out-of-range.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/roundingincrement-nan.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/roundingincrement-non-integer.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/roundingincrement-out-of-range.js
@@ -18729,6 +18749,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/options-wrong-type
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/rounding-increments.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/roundingincrement-addition-out-of-range.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/roundingincrement-nan.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/roundingincrement-non-integer.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/roundingincrement-out-of-range.js

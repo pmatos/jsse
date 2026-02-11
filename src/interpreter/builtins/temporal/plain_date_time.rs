@@ -1008,11 +1008,14 @@ impl Interpreter {
                                     );
                                 }
                             }
-                            let (ry2, rm2, rw2, rd2) = super::round_date_duration_with_frac_days(
+                            let (ry2, rm2, rw2, rd2) = match super::round_date_duration_with_frac_days(
                                 dy, dm, dw, fractional_days, time_ns_i128,
                                 &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
-                                ry, rm, rd,
-                            );
+                                ry, rm, rd, false,
+                            ) {
+                                Ok(v) => v,
+                                Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                            };
                             dy = ry2; dm = rm2; dw = rw2; dd = rd2;
                             // Check that rounded date is within valid ISO range (calendar units only)
                             if matches!(smallest_unit.as_str(), "month" | "year") {

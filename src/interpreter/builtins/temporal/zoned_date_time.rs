@@ -1217,29 +1217,72 @@ impl Interpreter {
             Completion::Normal(JsValue::Number(offset_ns as f64))
         });
 
-        zdt_getter!("hoursInDay", |ns, tz, _cal| {
-            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
-            // Calculate start of day and start of next day in epoch ns
-            let start_days = super::iso_date_to_epoch_days(y, m, d) as i128;
-            let start_local_ns = start_days * NS_PER_DAY;
+        {
+            let getter = self.create_function(JsFunction::native(
+                "get hoursInDay".to_string(),
+                0,
+                |interp, this, _args| {
+                    let (ns, tz, _cal) = match get_zdt_fields(interp, &this) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(&ns, &tz);
+                    let start_days = super::iso_date_to_epoch_days(y, m, d);
+                    if start_days.abs() > 100_000_000 {
+                        return Completion::Throw(interp.create_range_error(
+                            "date outside representable range",
+                        ));
+                    }
+                    let start_local_ns = start_days as i128 * NS_PER_DAY;
 
-            let (ny, nm, nd) = super::balance_iso_date(y, m as i32, d as i32 + 1);
-            let next_days = super::iso_date_to_epoch_days(ny, nm, nd) as i128;
-            let next_local_ns = next_days * NS_PER_DAY;
+                    let (ny, nm, nd) = super::balance_iso_date(y, m as i32, d as i32 + 1);
+                    let next_days = super::iso_date_to_epoch_days(ny, nm, nd);
+                    if next_days.abs() > 100_000_000 {
+                        return Completion::Throw(interp.create_range_error(
+                            "date outside representable range",
+                        ));
+                    }
+                    let next_local_ns = next_days as i128 * NS_PER_DAY;
 
-            // Convert to UTC, accounting for timezone
-            let start_approx = BigInt::from(start_local_ns);
-            let start_offset = get_tz_offset_ns(tz, &start_approx) as i128;
-            let start_utc = start_local_ns - start_offset;
+                    let start_approx = BigInt::from(start_local_ns);
+                    let start_offset = get_tz_offset_ns(&tz, &start_approx) as i128;
+                    let start_utc = start_local_ns - start_offset;
 
-            let next_approx = BigInt::from(next_local_ns);
-            let next_offset = get_tz_offset_ns(tz, &next_approx) as i128;
-            let next_utc = next_local_ns - next_offset;
+                    // Validate start-of-day epoch_ns is within representable range
+                    let ns_max: i128 = 8_640_000_000_000_000_000_000;
+                    if start_utc < -ns_max || start_utc > ns_max {
+                        return Completion::Throw(interp.create_range_error(
+                            "date outside representable range",
+                        ));
+                    }
 
-            let diff_ns = next_utc - start_utc;
-            let hours = diff_ns as f64 / NS_PER_HOUR as f64;
-            Completion::Normal(JsValue::Number(hours))
-        });
+                    let next_approx = BigInt::from(next_local_ns);
+                    let next_offset = get_tz_offset_ns(&tz, &next_approx) as i128;
+                    let next_utc = next_local_ns - next_offset;
+
+                    if next_utc < -ns_max || next_utc > ns_max {
+                        return Completion::Throw(interp.create_range_error(
+                            "date outside representable range",
+                        ));
+                    }
+
+                    let diff_ns = next_utc - start_utc;
+                    let hours = diff_ns as f64 / NS_PER_HOUR as f64;
+                    Completion::Normal(JsValue::Number(hours))
+                },
+            ));
+            proto.borrow_mut().insert_property(
+                "hoursInDay".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: Some(getter),
+                    set: None,
+                },
+            );
+        }
 
         zdt_getter!("era", |_ns, _tz, cal| {
             if cal == "iso8601" {
@@ -2029,6 +2072,20 @@ impl Interpreter {
 
                     // For day rounding, we need to compute relative to start of day
                     let rounded_ns = if smallest_unit == "day" {
+                        let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(&ns, &tz);
+                        let today_days = super::iso_date_to_epoch_days(y, m, d);
+                        if today_days.abs() > 100_000_000 {
+                            return Completion::Throw(interp.create_range_error(
+                                "date outside representable range",
+                            ));
+                        }
+                        let (ny, nm, nd) = super::balance_iso_date(y, m as i32, d as i32 + 1);
+                        let tomorrow_days = super::iso_date_to_epoch_days(ny, nm, nd);
+                        if tomorrow_days.abs() > 100_000_000 {
+                            return Completion::Throw(interp.create_range_error(
+                                "next day outside representable range",
+                            ));
+                        }
                         let local_ns = total_ns + offset_ns;
                         let epoch_days = local_ns.div_euclid(NS_PER_DAY);
                         let day_ns = local_ns.rem_euclid(NS_PER_DAY);
@@ -2510,11 +2567,14 @@ fn zdt_until_since(
                     + dns as i128;
                 let time_ns = time_ns_i128 as f64;
                 let fractional_days = dd as f64 + time_ns / 86_400_000_000_000.0;
-                let (mut ry2, mut rm2, rw2, rd2) = super::round_date_duration_with_frac_days(
+                let (mut ry2, mut rm2, rw2, rd2) = match super::round_date_duration_with_frac_days(
                     dy, dm, dw, fractional_days, time_ns_i128,
                     &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
-                    ref_y, ref_m, ref_d,
-                );
+                    ref_y, ref_m, ref_d, true,
+                ) {
+                    Ok(v) => v,
+                    Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                };
                 // Rebalance months overflow into years when largestUnit is year
                 if matches!(largest_unit.as_str(), "year") && rm2.abs() >= 12 {
                     ry2 += rm2 / 12;

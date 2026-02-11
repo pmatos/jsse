@@ -591,11 +591,14 @@ impl Interpreter {
                                 );
                             }
                         }
-                        let (ry2, rm2, rw2, rd2) = round_date_duration(
+                        let (ry2, rm2, rw2, rd2) = match round_date_duration(
                             dy, dm, dw, dd,
                             &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
                             ry, rm, rd,
-                        );
+                        ) {
+                            Ok(v) => v,
+                            Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                        };
                         dy = ry2;
                         dm = rm2;
                         dw = rw2;

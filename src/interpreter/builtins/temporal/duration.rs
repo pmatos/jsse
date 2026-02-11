@@ -206,6 +206,19 @@ fn to_relative_to_date(
             }
         }
     }
+    // If the value is a ZDT object, extract its epoch_ns for range checking
+    if let JsValue::Object(obj_ref) = val {
+        if let Some(obj) = interp.get_object(obj_ref.id) {
+            if let Some(super::TemporalData::ZonedDateTime { epoch_nanoseconds, time_zone, .. }) =
+                &obj.borrow().temporal_data
+            {
+                let ns: i128 = epoch_nanoseconds.try_into().unwrap_or(0);
+                let (y, m, d, _, _, _, _, _, _) =
+                    super::zoned_date_time::epoch_ns_to_components(epoch_nanoseconds, time_zone);
+                return Ok(Some((y, m, d, Some(ns))));
+            }
+        }
+    }
     // Extract date portion (non-ZDT path: no epoch_ns)
     let (y, m, d, _) = super::plain_date::to_temporal_plain_date(interp, val.clone())?;
     Ok(Some((y, m, d, None)))
@@ -239,7 +252,7 @@ fn duration_total_ns_relative(
         w as i32,
         d as i32,
     );
-    if ry < -275760 || ry > 275760 {
+    if !super::iso_date_within_limits(ry, rm, rd) {
         return Err(());
     }
     let base_epoch = iso_date_to_epoch_days(base_year, base_month, base_day);
@@ -307,16 +320,23 @@ fn total_relative_duration(
                 base_year, base_month, base_day, end.0, end.1, end.2, "year",
             );
             let year_start = add_iso_date(base_year, base_month, base_day, diff_y, 0, 0, 0);
-            let sign = if diff_y > 0 || (diff_y == 0 && end_epoch > base_epoch) { 1 }
+            let mut sign = if diff_y > 0 || (diff_y == 0 && end_epoch > base_epoch) { 1 }
                 else if diff_y < 0 || (diff_y == 0 && end_epoch < base_epoch) { -1 }
-                else { return Ok(frac_day); };
+                else { 0 };
+            if sign == 0 {
+                if frac_day_ns > 0 { sign = 1; }
+                else if frac_day_ns < 0 { sign = -1; }
+                else { return Ok(0.0); }
+            }
             let year_end = add_iso_date(base_year, base_month, base_day, diff_y + sign, 0, 0, 0);
+            if !super::iso_date_within_limits(year_end.0, year_end.1, year_end.2) {
+                return Err(());
+            }
             let year_start_epoch = iso_date_to_epoch_days(year_start.0, year_start.1, year_start.2);
             let year_end_epoch = iso_date_to_epoch_days(year_end.0, year_end.1, year_end.2);
             let year_length = (year_end_epoch - year_start_epoch).abs();
             if year_length == 0 { return Ok(diff_y as f64); }
             let days_into_year = end_epoch - year_start_epoch;
-            // Single division to avoid double-rounding
             let numerator = diff_y as f64 * year_length as f64 + days_into_year as f64 + frac_day;
             Ok(numerator / year_length as f64)
         }
@@ -325,16 +345,23 @@ fn total_relative_duration(
                 base_year, base_month, base_day, end.0, end.1, end.2, "month",
             );
             let month_start = add_iso_date(base_year, base_month, base_day, 0, diff_m, 0, 0);
-            let sign = if diff_m > 0 || (diff_m == 0 && end_epoch > base_epoch) { 1 }
+            let mut sign = if diff_m > 0 || (diff_m == 0 && end_epoch > base_epoch) { 1 }
                 else if diff_m < 0 || (diff_m == 0 && end_epoch < base_epoch) { -1 }
-                else { return Ok(frac_day); };
+                else { 0 };
+            if sign == 0 {
+                if frac_day_ns > 0 { sign = 1; }
+                else if frac_day_ns < 0 { sign = -1; }
+                else { return Ok(0.0); }
+            }
             let month_end = add_iso_date(base_year, base_month, base_day, 0, diff_m + sign, 0, 0);
+            if !super::iso_date_within_limits(month_end.0, month_end.1, month_end.2) {
+                return Err(());
+            }
             let month_start_epoch = iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
             let month_end_epoch = iso_date_to_epoch_days(month_end.0, month_end.1, month_end.2);
             let month_length = (month_end_epoch - month_start_epoch).abs();
             if month_length == 0 { return Ok(diff_m as f64); }
             let days_into_month = end_epoch - month_start_epoch;
-            // Single division: (diff_m * length + days_into + frac_day) / length
             let numerator = diff_m as f64 * month_length as f64 + days_into_month as f64 + frac_day;
             Ok(numerator / month_length as f64)
         }
@@ -369,6 +396,7 @@ fn round_relative_duration(
     smallest_unit: &str, largest_unit: &str,
     increment: f64, rounding_mode: &str,
     base_year: i32, base_month: u8, base_day: u8,
+    is_zdt: bool,
 ) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64), String> {
     let su_order = temporal_unit_order(smallest_unit);
     let lu_order = temporal_unit_order(largest_unit);
@@ -402,8 +430,8 @@ fn round_relative_duration(
         let (ry, rm, rw, rd) = super::round_date_duration_with_frac_days(
             y as i32, mo as i32, w as i32, frac_days, time_ns_i128,
             smallest_unit, largest_unit, increment, rounding_mode,
-            base_year, base_month, base_day,
-        );
+            base_year, base_month, base_day, is_zdt,
+        )?;
 
         // BalanceDateDurationRelative: re-balance via add + re-difference
         // Per spec, skip when largestUnit == smallestUnit (no balancing needed)
@@ -843,18 +871,24 @@ impl Interpreter {
                     ));
                 }
 
-                // If we have relativeTo, use round_relative_duration
-                // Early return for zero duration
-                let is_zero = y == 0.0 && mo == 0.0 && w == 0.0 && d == 0.0
-                    && h == 0.0 && mi == 0.0 && s == 0.0 && ms == 0.0
-                    && us == 0.0 && ns == 0.0;
-                if is_zero {
-                    return create_duration_result(interp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
-                }
-
                 if let Some((by, bm, bd, zdt_epoch_ns)) = relative_to {
-                    // Range check: ZDT epoch_ns + time_ns must stay in range;
-                    // PlainDate at midnight must be within ISODateTimeWithinLimits
+                    // Spec early return: zero duration returns P0D before boundary checks
+                    // For PlainDate: always (ISODateTimeWithinLimits at midnight is skipped)
+                    // For ZDT: only when largestUnit < "day" (day+ units need boundary checks)
+                    let is_zero = y == 0.0 && mo == 0.0 && w == 0.0 && d == 0.0
+                        && h == 0.0 && mi == 0.0 && s == 0.0
+                        && ms == 0.0 && us == 0.0 && ns == 0.0;
+                    let lu_order = temporal_unit_order(largest_unit);
+                    if is_zero
+                        && (zdt_epoch_ns.is_none()
+                            || lu_order < temporal_unit_order("day"))
+                    {
+                        return create_duration_result(
+                            interp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                        );
+                    }
+
+                    // Range checks after early return
                     let time_ns_total: i128 = h as i128 * 3_600_000_000_000
                         + mi as i128 * 60_000_000_000
                         + s as i128 * 1_000_000_000
@@ -869,16 +903,36 @@ impl Interpreter {
                                 "duration out of range when applied to relativeTo",
                             ));
                         }
-                    } else if !super::iso_date_time_within_limits(by, bm, bd, 0, 0, 0, 0, 0, 0) {
+                    } else if !super::iso_date_time_within_limits(
+                        by, bm, bd, 0, 0, 0, 0, 0, 0,
+                    ) {
                         return Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         ));
+                    }
+                    // NudgeToZonedTime pre-check: next-day boundary must be in range
+                    if zdt_epoch_ns.is_some()
+                        && temporal_unit_order(smallest_unit) < temporal_unit_order("day")
+                    {
+                        let target = super::add_iso_date(
+                            by, bm, bd,
+                            y as i32, mo as i32, w as i32, d as i32,
+                        );
+                        let (ny, nm, nd) = super::balance_iso_date(
+                            target.0, target.1 as i32, target.2 as i32 + 1,
+                        );
+                        let next_days = super::iso_date_to_epoch_days(ny, nm, nd);
+                        if next_days.abs() > 100_000_000 {
+                            return Completion::Throw(interp.create_range_error(
+                                "next day boundary is out of range",
+                            ));
+                        }
                     }
                     match round_relative_duration(
                         y, mo, w, d, h, mi, s, ms, us, ns,
                         smallest_unit, largest_unit,
                         increment, rounding_mode,
-                        by, bm, bd,
+                        by, bm, bd, zdt_epoch_ns.is_some(),
                     ) {
                         Ok((ry, rm, rw, rd, rh, rmi, rs, rms, rus, rns)) => {
                             create_duration_result(interp, ry, rm, rw, rd, rh, rmi, rs, rms, rus, rns)
@@ -1004,7 +1058,9 @@ impl Interpreter {
                                 "duration out of range when applied to relativeTo",
                             ));
                         }
-                    } else if !super::iso_date_time_within_limits(by, bm, bd, 0, 0, 0, 0, 0, 0) {
+                    } else if !super::iso_date_time_within_limits(
+                        by, bm, bd, 0, 0, 0, 0, 0, 0,
+                    ) {
                         return Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         ));

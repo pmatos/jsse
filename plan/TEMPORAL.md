@@ -1,12 +1,12 @@
 # Temporal: Path to 100% (4482/4482)
 
-**Current state:** 4449/4482 passing (99.26%), 33 failing
+**Current state:** 4460/4482 passing (99.51%), 22 failing
 
 ## Current Pass Rates by Subdirectory
 
 | Subdirectory | Passing | Total | Rate |
 |---|---|---|---|
-| Duration | 510 | 522 | 97.70% |
+| Duration | 515 | 522 | 98.66% |
 | Instant | 459 | 459 | 100% |
 | Now | 66 | 66 | 100% |
 | PlainDate | 635 | 635 | 100% |
@@ -14,7 +14,7 @@
 | PlainMonthDay | 194 | 194 | 100% |
 | PlainTime | 481 | 481 | 100% |
 | PlainYearMonth | 496 | 496 | 100% |
-| ZonedDateTime | 854 | 874 | 97.71% |
+| ZonedDateTime | 860 | 874 | 98.40% |
 | Top-level + toStringTag | 5 | 5 | 100% |
 
 ---
@@ -137,31 +137,33 @@ in Duration round/total.
 
 ---
 
-## Phase 5: Boundary Arithmetic Range Checks (+8 tests → 4458/4482)
+## Phase 5: Boundary Arithmetic Range Checks (+11 tests → 4460/4482) ✅ COMPLETE
 
 **Root cause:** Operations near the representable limits should throw RangeError when the
 result would be out of range, but jsse silently produces out-of-range results.
 
-**Fixes needed:**
-1. **`AddZonedDateTime`**: Validate result epoch ns is within valid range
-2. **`GetStartOfDay`**: Throw RangeError if the computed start-of-day is out of valid limits
-3. **`NudgeToCalendarUnit` / `CalendarDateAdd`**: Throw RangeError if `end` date is out of range
-4. **`AddDateTime` with large `roundingIncrement`**: Throw RangeError if result is out of range
-5. **`roundingIncrement` addition**: When computing the upper bound for rounding, check that
-   the addition doesn't overflow the valid epoch ns range
+**Fixes applied:**
+1. **hoursInDay getter**: CheckISODaysRange on today/tomorrow + IsValidEpochNanoseconds on UTC start/next
+2. **ZDT.round day case**: CheckISODaysRange on tomorrow before day rounding
+3. **NudgeToCalendarUnit (ZDT-only)**: CheckISODaysRange on end boundary in `round_date_duration_with_frac_days`
+4. **NudgeToZonedTime (Duration.round)**: CheckISODaysRange on next-day for ZDT + time unit + non-zero duration
+5. **Duration.round/total zero-duration early return**: PlainDate always returns P0D; ZDT only for time-only largestUnit
+6. **Duration.round/total PlainDate range check**: ISODateTimeWithinLimits at midnight (not noon)
+7. **Duration.total range checks**: iso_date_within_limits in total_relative_duration for boundary dates
+8. **Duration.compare/total ZDT path**: iso_date_within_limits in duration_total_ns_relative
 
-**Tests expected to pass:**
+**Tests now passing:**
 ```
-Duration/compare/throws-when-target-zoned-date-time-outside-valid-limits.js
-Duration/prototype/round/next-day-out-of-range.js
-Duration/prototype/total/throws-if-date-time-invalid-with-plaindate-relative.js
-Duration/prototype/total/throws-if-date-time-invalid-with-zoneddatetime-relative.js
-Duration/prototype/total/throws-if-target-nanoseconds-outside-valid-limits.js
-ZonedDateTime/prototype/hoursInDay/get-start-of-day-throws.js
-ZonedDateTime/prototype/hoursInDay/next-day-out-of-range.js
-ZonedDateTime/prototype/round/day-rounding-out-of-range.js
-ZonedDateTime/prototype/since/roundingincrement-addition-out-of-range.js
-ZonedDateTime/prototype/until/roundingincrement-addition-out-of-range.js
+Duration/compare/throws-when-target-zoned-date-time-outside-valid-limits.js ✅
+Duration/prototype/round/next-day-out-of-range.js ✅
+Duration/prototype/total/throws-if-date-time-invalid-with-plaindate-relative.js ✅
+Duration/prototype/total/throws-if-date-time-invalid-with-zoneddatetime-relative.js ✅
+Duration/prototype/total/throws-if-target-nanoseconds-outside-valid-limits.js ✅
+ZonedDateTime/prototype/hoursInDay/get-start-of-day-throws.js ✅
+ZonedDateTime/prototype/hoursInDay/next-day-out-of-range.js ✅
+ZonedDateTime/prototype/round/day-rounding-out-of-range.js ✅
+ZonedDateTime/prototype/since/roundingincrement-addition-out-of-range.js ✅
+ZonedDateTime/prototype/until/roundingincrement-addition-out-of-range.js ✅
 ```
 
 ---
@@ -265,7 +267,7 @@ The negative direction DifferenceISODate month-day balancing is wrong.
 | Phase 2 | TZ string validation | +15 | 4438/4482 | 99.02% |
 | Phase 3 | Infinity rejection | +18 | 4456/4482 | 99.42% |
 | Phase 4 | Epoch ns range checks | +29 | 4449/4482 | 99.26% |
-| Phase 5 | Boundary arithmetic | +8 | 4457/4482 | 99.44% |
+| Phase 5 | Boundary arithmetic | +11 | 4460/4482 | 99.51% |
 | Phase 6 | Property-read order | +13 | 4470/4482 | 99.73% |
 | Phase 7 | Options-read order | +7 | 4477/4482 | 99.89% |
 | Phase 8 | Duration correctness | +5 | 4482/4482 | 100.00% |

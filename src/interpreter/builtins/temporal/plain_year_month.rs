@@ -629,11 +629,14 @@ impl Interpreter {
                                 );
                             }
                         }
-                        let (ry2, rm2, _, _) = round_date_duration(
+                        let (ry2, rm2, _, _) = match round_date_duration(
                             dy, dm, 0, 0,
                             &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
                             ry, rm, rd,
-                        );
+                        ) {
+                            Ok(v) => v,
+                            Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                        };
                         dy = ry2;
                         dm = rm2;
                         // Check that rounded date is within valid ISO range

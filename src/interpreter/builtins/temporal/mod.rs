@@ -2858,11 +2858,11 @@ pub(crate) fn round_date_duration(
     ref_year: i32,
     ref_month: u8,
     ref_day: u8,
-) -> (i32, i32, i32, i32) {
+) -> Result<(i32, i32, i32, i32), String> {
     round_date_duration_with_frac_days(
         years, months, weeks, days as f64, 0i128,
         smallest_unit, largest_unit, rounding_increment, rounding_mode,
-        ref_year, ref_month, ref_day,
+        ref_year, ref_month, ref_day, false,
     )
 }
 
@@ -2879,7 +2879,8 @@ pub(crate) fn round_date_duration_with_frac_days(
     ref_year: i32,
     ref_month: u8,
     ref_day: u8,
-) -> (i32, i32, i32, i32) {
+    is_zdt: bool,
+) -> Result<(i32, i32, i32, i32), String> {
     let days = frac_days.trunc() as i32;
     match smallest_unit {
         "year" => {
@@ -2893,7 +2894,7 @@ pub(crate) fn round_date_duration_with_frac_days(
             let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
             let sign = if end_epoch > iso_date_to_epoch_days(ref_year, ref_month, ref_day) { 1 }
                 else if end_epoch < iso_date_to_epoch_days(ref_year, ref_month, ref_day) { -1 }
-                else { return (0, 0, 0, 0); };
+                else { return Ok((0, 0, 0, 0)); };
             let year_end = add_iso_date(ref_year, ref_month, ref_day, diff_y + sign, 0, 0, 0);
             let year_end_epoch = iso_date_to_epoch_days(year_end.0, year_end.1, year_end.2);
             let days_in_year = (year_end_epoch - year_start_epoch).abs() as f64;
@@ -2901,7 +2902,7 @@ pub(crate) fn round_date_duration_with_frac_days(
             let fractional =
                 diff_y as f64 + if days_in_year > 0.0 { remaining_days / days_in_year } else { 0.0 };
             let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
-            (rounded as i32, 0, 0, 0)
+            Ok((rounded as i32, 0, 0, 0))
         }
         "month" => {
             let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
@@ -2909,7 +2910,7 @@ pub(crate) fn round_date_duration_with_frac_days(
             let base_epoch = iso_date_to_epoch_days(ref_year, ref_month, ref_day);
             let sign = if end_epoch > base_epoch { 1 }
                 else if end_epoch < base_epoch { -1 }
-                else { return (0, 0, 0, 0); };
+                else { return Ok((0, 0, 0, 0)); };
             if largest_unit == "year" {
                 // Per spec NudgeToCalendarUnit: keep years fixed, round only months component
                 let month_base = add_iso_date(ref_year, ref_month, ref_day, years, months, 0, 0);
@@ -2921,7 +2922,7 @@ pub(crate) fn round_date_duration_with_frac_days(
                 let fractional = months as f64
                     + if days_in_month > 0.0 { remaining_days / days_in_month } else { 0.0 };
                 let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
-                (years, rounded as i32, 0, 0)
+                Ok((years, rounded as i32, 0, 0))
             } else {
                 // Flatten to total months
                 let (_, total_months, _, _) = difference_iso_date(
@@ -2936,7 +2937,7 @@ pub(crate) fn round_date_duration_with_frac_days(
                 let fractional = total_months as f64
                     + if days_in_month > 0.0 { remaining_days / days_in_month } else { 0.0 };
                 let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
-                (0, rounded as i32, 0, 0)
+                Ok((0, rounded as i32, 0, 0))
             }
         }
         "week" => {
@@ -2954,44 +2955,60 @@ pub(crate) fn round_date_duration_with_frac_days(
                 let remaining = (end_epoch - month_start_epoch) as f64 + frac_days.fract();
                 let fractional_weeks = remaining / 7.0;
                 let rounded = round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
-                (0, total_months, rounded as i32, 0)
+                Ok((0, total_months, rounded as i32, 0))
             } else {
                 // Flatten everything to total weeks
                 let base_epoch = iso_date_to_epoch_days(ref_year, ref_month, ref_day);
                 let total_days = (end_epoch - base_epoch) as f64 + frac_days.fract();
                 let fractional_weeks = total_days / 7.0;
                 let rounded = round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
-                (0, 0, rounded as i32, 0)
+                Ok((0, 0, rounded as i32, 0))
             }
         }
         "day" => {
+            // NudgeToCalendarUnit pre-check for ZDT: GetStartOfDay calls CheckISODaysRange
+            if is_zdt {
+                let sign_f = if frac_days > 0.0 { 1.0 }
+                    else if frac_days < 0.0 { -1.0 }
+                    else if time_ns_i128 > 0 { 1.0 }
+                    else if time_ns_i128 < 0 { -1.0 }
+                    else { 0.0 };
+                if sign_f != 0.0 {
+                    let end_days_i64 = frac_days.trunc() as i64 + sign_f as i64 * rounding_increment as i64;
+                    let nudge_base = if years != 0 || months != 0 || weeks != 0 {
+                        add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, 0)
+                    } else {
+                        (ref_year, ref_month, ref_day)
+                    };
+                    let nudge_end = add_iso_date(nudge_base.0, nudge_base.1, nudge_base.2, 0, 0, 0, end_days_i64 as i32);
+                    if iso_date_to_epoch_days(nudge_end.0, nudge_end.1, nudge_end.2).abs() > 100_000_000 {
+                        return Err("Rounded date outside valid ISO range".to_string());
+                    }
+                }
+            }
             if years != 0 || months != 0 || weeks != 0 {
-                // Preserve years/months/weeks, round remaining days
                 let days = frac_days.trunc() as i32;
                 let start = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, 0);
                 let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
                 let start_epoch = iso_date_to_epoch_days(start.0, start.1, start.2);
                 let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
-                // Use i128: remaining = calendar_days * NS_PER_DAY + sub-day ns
                 let calendar_days = (end_epoch - start_epoch) as i128;
-                // sub-day ns: time_ns modulo one day (the part not folded into days)
                 let sub_day_ns = time_ns_i128 % 86_400_000_000_000;
                 let remaining_ns: i128 = calendar_days * 86_400_000_000_000 + sub_day_ns;
                 let inc_ns: i128 = rounding_increment as i128 * 86_400_000_000_000;
                 let rounded_ns = round_i128_to_increment(remaining_ns, inc_ns, rounding_mode);
                 let rounded_days = (rounded_ns / 86_400_000_000_000) as i32;
-                (years, months, weeks, rounded_days)
+                Ok((years, months, weeks, rounded_days))
             } else {
-                // Use i128: days * NS_PER_DAY + sub-day ns for exact rounding
                 let days_i = frac_days.trunc() as i128;
                 let sub_day_ns = time_ns_i128 % 86_400_000_000_000;
                 let total_day_ns: i128 = days_i * 86_400_000_000_000 + sub_day_ns;
                 let inc_ns: i128 = rounding_increment as i128 * 86_400_000_000_000;
                 let rounded_ns = round_i128_to_increment(total_day_ns, inc_ns, rounding_mode);
                 let rounded_days = (rounded_ns / 86_400_000_000_000) as i32;
-                (0, 0, 0, rounded_days)
+                Ok((0, 0, 0, rounded_days))
             }
         }
-        _ => (years, months, weeks, days),
+        _ => Ok((years, months, weeks, days)),
     }
 }
