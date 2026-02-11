@@ -168,7 +168,7 @@ ZonedDateTime/prototype/until/roundingincrement-addition-out-of-range.js ✅
 
 ---
 
-## Phase 6: Property Bag Property-Read Order (+13 tests → 4471/4482)
+## Phase 6: Property Bag Property-Read Order (+14 tests → 4474/4482) ✅ DONE
 
 **Root cause:** The spec requires properties on a property bag to be accessed in alphabetical
 order via `PrepareCalendarFields` / `GetTemporalRelativeToOption`. jsse reads them in
@@ -186,33 +186,33 @@ PlainDate context).
 
 **Tests expected to pass:**
 ```
-Duration/compare/order-of-operations.js
-Duration/prototype/round/order-of-operations.js
-Duration/prototype/total/order-of-operations.js
-ZonedDateTime/compare/order-of-operations.js
-ZonedDateTime/from/order-of-operations.js
-ZonedDateTime/from/observable-get-overflow-argument-primitive.js
-ZonedDateTime/prototype/equals/order-of-operations.js
-ZonedDateTime/prototype/since/order-of-operations.js
-ZonedDateTime/prototype/until/order-of-operations.js
-ZonedDateTime/prototype/add/order-of-operations.js
-ZonedDateTime/prototype/subtract/order-of-operations.js
-ZonedDateTime/prototype/round/order-of-operations.js
-ZonedDateTime/prototype/toString/order-of-operations.js
+Duration/compare/order-of-operations.js ✅
+Duration/prototype/round/order-of-operations.js ✅
+Duration/prototype/total/order-of-operations.js ✅
+ZonedDateTime/compare/order-of-operations.js ✅
+ZonedDateTime/from/order-of-operations.js ✅
+ZonedDateTime/from/observable-get-overflow-argument-primitive.js ✅
+ZonedDateTime/prototype/equals/order-of-operations.js ✅
+ZonedDateTime/prototype/since/order-of-operations.js ✅
+ZonedDateTime/prototype/until/order-of-operations.js ✅
+ZonedDateTime/prototype/add/order-of-operations.js ✅
+ZonedDateTime/prototype/subtract/order-of-operations.js ✅
+ZonedDateTime/prototype/round/order-of-operations.js (pre-existing failure)
+ZonedDateTime/prototype/toString/order-of-operations.js ✅
 ```
+
+**Actual result:** +14 passes (12/13 target tests + 2 bonus), 0 regressions. 4474/4482 (99.82%).
+ZDT.round order-of-operations was already failing before this phase (not a regression).
 
 ---
 
-## Phase 7: Options Property-Read Order and Extra Reads (+7 tests → 4478/4482)
+## Phase 7: Options Property-Read Order and Extra Reads
 
-**Root cause:** Options are read in the wrong order or options that shouldn't be read are read.
+**Note:** Issues 1 and 3 were already fixed in Phase 6 (add/subtract overflow-only,
+toString alphabetical options order). Issue 2 (ZDT round options order) remains.
 
-**Issues:**
-1. **ZDT add/subtract**: Reads `disambiguation`, `offset`, `overflow` but spec only reads `overflow`
+**Remaining issues:**
 2. **ZDT round**: Reads `roundingIncrement` AFTER `roundingMode`/`smallestUnit` instead of before
-3. **ZDT toString**: Reads options in wrong order; missing `fractionalSecondDigits` read entirely.
-   Spec order: `calendarName`, `fractionalSecondDigits`, `offset`, `roundingMode`,
-   `smallestUnit`, `timeZoneName`
 
 **Tests expected to pass:**
 ```
@@ -221,10 +221,6 @@ ZonedDateTime/prototype/subtract/options-read-before-algorithmic-validation.js
 ZonedDateTime/prototype/round/options-read-before-algorithmic-validation.js
 ZonedDateTime/prototype/toString/options-read-before-algorithmic-validation.js
 ```
-
-**Note:** The remaining order-of-operations tests for add/subtract/round/toString overlap
-with Phase 6 — some are counted there. The 4 listed here are the ones specifically about
-options ordering that aren't already counted in Phase 6.
 
 ---
 
@@ -268,7 +264,7 @@ The negative direction DifferenceISODate month-day balancing is wrong.
 | Phase 3 | Infinity rejection | +18 | 4456/4482 | 99.42% |
 | Phase 4 | Epoch ns range checks | +29 | 4449/4482 | 99.26% |
 | Phase 5 | Boundary arithmetic | +11 | 4460/4482 | 99.51% |
-| Phase 6 | Property-read order | +13 | 4470/4482 | 99.73% |
+| Phase 6 | Property-read order | +14 | 4474/4482 | 99.82% |
 | Phase 7 | Options-read order | +7 | 4477/4482 | 99.89% |
 | Phase 8 | Duration correctness | +5 | 4482/4482 | 100.00% |
 
