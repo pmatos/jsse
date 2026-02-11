@@ -2943,8 +2943,7 @@ pub(crate) fn round_date_duration_with_frac_days(
         "week" => {
             let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
             let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
-            let preserve_months = (years != 0 || months != 0)
-                && matches!(largest_unit, "year" | "month");
+            let preserve_months = matches!(largest_unit, "year" | "month");
             if preserve_months {
                 // largestUnit preserves months: round remaining weeks within current month
                 let (_, total_months, _, _) = difference_iso_date(

@@ -506,8 +506,11 @@ fn total_relative_duration(
             let year_length = (year_end_epoch - year_start_epoch).abs();
             if year_length == 0 { return Ok(diff_y as f64); }
             let days_into_year = end_epoch - year_start_epoch;
-            let numerator = diff_y as f64 * year_length as f64 + days_into_year as f64 + frac_day;
-            Ok(numerator / year_length as f64)
+            let numerator_ns: i128 = diff_y as i128 * year_length as i128 * 86_400_000_000_000
+                + days_into_year as i128 * 86_400_000_000_000
+                + frac_day_ns;
+            let denominator_ns: i128 = year_length as i128 * 86_400_000_000_000;
+            Ok(divide_i128_to_f64(numerator_ns, denominator_ns))
         }
         "month" => {
             let (_, diff_m, _, _) = super::difference_iso_date(
@@ -531,8 +534,11 @@ fn total_relative_duration(
             let month_length = (month_end_epoch - month_start_epoch).abs();
             if month_length == 0 { return Ok(diff_m as f64); }
             let days_into_month = end_epoch - month_start_epoch;
-            let numerator = diff_m as f64 * month_length as f64 + days_into_month as f64 + frac_day;
-            Ok(numerator / month_length as f64)
+            let numerator_ns: i128 = diff_m as i128 * month_length as i128 * 86_400_000_000_000
+                + days_into_month as i128 * 86_400_000_000_000
+                + frac_day_ns;
+            let denominator_ns: i128 = month_length as i128 * 86_400_000_000_000;
+            Ok(divide_i128_to_f64(numerator_ns, denominator_ns))
         }
         "week" => {
             // Decompose to preserve f64 precision: integer weeks + fractional remainder
@@ -602,21 +608,11 @@ fn round_relative_duration(
             base_year, base_month, base_day, is_zdt,
         )?;
 
-        // BalanceDateDurationRelative: re-balance via add + re-difference
-        // Per spec, skip when largestUnit == smallestUnit (no balancing needed)
-        if largest_unit == smallest_unit {
-            // For calendar units, validate the intermediate end date is within range
-            // (NudgeToCalendarUnit computes end_date = base + duration → must be within limits)
-            if matches!(smallest_unit, "year" | "month" | "week") {
-                let days_int = frac_days.trunc() as i32;
-                let end_date = add_iso_date(base_year, base_month, base_day,
-                    y as i32, mo as i32, w as i32, days_int);
-                if !super::iso_date_within_limits(end_date.0, end_date.1, end_date.2) {
-                    return Err("Rounded date outside valid ISO range".to_string());
-                }
-            }
-            Ok((ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-        } else {
+        // BalanceDateDurationRelative: needed for calendar largest units, or "day" when
+        // the rounded result still has calendar components that need collapsing
+        if matches!(largest_unit, "year" | "month" | "week")
+            || (largest_unit == "day" && (ry != 0 || rm != 0 || rw != 0))
+        {
             let result_date = add_iso_date(base_year, base_month, base_day, ry, rm, rw, rd);
             if !super::iso_date_within_limits(result_date.0, result_date.1, result_date.2) {
                 return Err("Rounded date outside valid ISO range".to_string());
@@ -626,12 +622,13 @@ fn round_relative_duration(
                 result_date.0, result_date.1, result_date.2,
                 largest_unit,
             );
-            // When smallestUnit is "week", convert remaining days to weeks
             if smallest_unit == "week" && dd != 0 {
                 dw = dd / 7;
                 dd = dd % 7;
             }
             Ok((dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+        } else {
+            Ok((ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
         }
     } else {
         // Time unit rounding: flatten to ns with calendar-aware day resolution
@@ -1194,39 +1191,69 @@ impl Interpreter {
                     );
                 }
 
-                // Early return for zero duration (spec step 12)
-                let is_zero = y == 0.0 && mo == 0.0 && w == 0.0 && d == 0.0
-                    && h == 0.0 && mi == 0.0 && s == 0.0 && ms == 0.0
-                    && us == 0.0 && ns == 0.0;
-                if is_zero {
-                    return Completion::Normal(JsValue::Number(0.0));
-                }
-
-                if let Some((by, bm, bd, zdt_epoch_ns)) = relative_to {
-                    // Range check: ZDT epoch_ns + time_ns must stay in range;
-                    // PlainDate at midnight must be within ISODateTimeWithinLimits
+                if let Some((by, bm, bd, Some(ens))) = relative_to {
+                    // ZDT relativeTo path
                     let time_ns_total: i128 = h as i128 * 3_600_000_000_000
                         + mi as i128 * 60_000_000_000
                         + s as i128 * 1_000_000_000
                         + ms as i128 * 1_000_000
                         + us as i128 * 1_000
                         + ns as i128;
-                    if let Some(ens) = zdt_epoch_ns {
-                        let end_ns = ens + d as i128 * 86_400_000_000_000 + time_ns_total;
-                        let ns_max: i128 = 8_640_000_000_000_000_000_000;
-                        if end_ns < -ns_max || end_ns > ns_max {
+                    let end_ns = ens + d as i128 * 86_400_000_000_000 + time_ns_total;
+                    let ns_max: i128 = 8_640_000_000_000_000_000_000;
+                    if end_ns < -ns_max || end_ns > ns_max {
+                        return Completion::Throw(interp.create_range_error(
+                            "duration out of range when applied to relativeTo",
+                        ));
+                    }
+                    // NudgeToCalendarUnit window check: for "day" or calendar units
+                    // with ZDT relativeTo, the spec computes endDateTime = isoDate + 1
+                    // unit at the same wall-clock time, and validates via
+                    // GetEpochNanosecondsFor. We must check that this endpoint is valid.
+                    if matches!(unit, "year" | "month" | "week" | "day") {
+                        let base_epoch_days = iso_date_to_epoch_days(by, bm, bd);
+                        let time_of_day_ns = ens - base_epoch_days as i128 * 86_400_000_000_000;
+                        let nudge_date = match unit {
+                            "day" => add_iso_date(by, bm, bd, 0, 0, 0, d as i32 + 1),
+                            "week" => add_iso_date(by, bm, bd, 0, 0, w as i32 + 1, 0),
+                            "month" => add_iso_date(by, bm, bd, y as i32, mo as i32 + 1, 0, 0),
+                            "year" => add_iso_date(by, bm, bd, y as i32 + 1, 0, 0, 0),
+                            _ => unreachable!(),
+                        };
+                        let nudge_epoch_days = iso_date_to_epoch_days(nudge_date.0, nudge_date.1, nudge_date.2);
+                        let nudge_epoch_ns = nudge_epoch_days as i128 * 86_400_000_000_000 + time_of_day_ns;
+                        if nudge_epoch_ns < -ns_max || nudge_epoch_ns > ns_max {
                             return Completion::Throw(interp.create_range_error(
                                 "duration out of range when applied to relativeTo",
                             ));
                         }
-                    } else if !super::iso_date_time_within_limits(
+                    }
+                    match total_relative_duration(
+                        y, mo, w, d, h, mi, s, ms, us, ns,
+                        unit, by, bm, bd,
+                    ) {
+                        Ok(result) => Completion::Normal(JsValue::Number(result)),
+                        Err(()) => Completion::Throw(interp.create_range_error(
+                            "duration out of range when applied to relativeTo",
+                        )),
+                    }
+                } else if let Some((by, bm, bd, None)) = relative_to {
+                    // PlainDate relativeTo path
+                    // Spec: DifferencePlainDateTimeWithTotal step 1: if isoDateTime1 = isoDateTime2, return 0
+                    let is_zero = y == 0.0 && mo == 0.0 && w == 0.0 && d == 0.0
+                        && h == 0.0 && mi == 0.0 && s == 0.0 && ms == 0.0
+                        && us == 0.0 && ns == 0.0;
+                    if is_zero {
+                        return Completion::Normal(JsValue::Number(0.0));
+                    }
+                    // Spec step 2: ISODateTimeWithinLimits on base at midnight
+                    if !super::iso_date_time_within_limits(
                         by, bm, bd, 0, 0, 0, 0, 0, 0,
                     ) {
                         return Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         ));
                     }
-                    // Use calendar-aware TotalRelativeDuration
                     match total_relative_duration(
                         y, mo, w, d, h, mi, s, ms, us, ns,
                         unit, by, bm, bd,

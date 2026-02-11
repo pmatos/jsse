@@ -2071,27 +2071,17 @@ fn diff_date_time(
     ns2: i128,
     largest_unit: &str,
 ) -> (i32, i32, i32, i32, i64, i64, i64, i64, i64, i64) {
-    // If datetime1 > datetime2, compute forward and negate
-    let epoch1 = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y1, m1, d1)
-        as i128
-        * 86_400_000_000_000i128
-        + ns1;
-    let epoch2 = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y2, m2, d2)
-        as i128
-        * 86_400_000_000_000i128
-        + ns2;
-    if epoch1 > epoch2 {
-        let (dy, dm, dw, dd, dh, dmi, ds, dms, dus, dns) =
-            diff_date_time(y2, m2, d2, ns2, y1, m1, d1, ns1, largest_unit);
-        return (-dy, -dm, -dw, -dd, -dh, -dmi, -ds, -dms, -dus, -dns);
-    }
-
     let time_units = matches!(
         largest_unit,
         "hour" | "minute" | "second" | "millisecond" | "microsecond" | "nanosecond"
     );
 
     if time_units {
+        // Flatten to total nanoseconds
+        let epoch1 = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y1, m1, d1)
+            as i128 * 86_400_000_000_000i128 + ns1;
+        let epoch2 = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y2, m2, d2)
+            as i128 * 86_400_000_000_000i128 + ns2;
         let diff = epoch2 - epoch1;
         let (hours, minutes, seconds, milliseconds, microseconds, nanoseconds) = match largest_unit
         {
@@ -2155,26 +2145,30 @@ fn diff_date_time(
             nanoseconds as i64,
         )
     } else {
-        // Date difference + time remainder (forward direction: epoch1 <= epoch2)
-        let time_diff_ns = ns2 - ns1;
-        let (extra_days, time_ns) = if time_diff_ns < 0 {
-            (-1i32, time_diff_ns + 86_400_000_000_000)
-        } else if time_diff_ns >= 86_400_000_000_000 {
-            (1i32, time_diff_ns - 86_400_000_000_000)
+        // DifferenceISODateTime spec: compute natively in both directions
+        let time_diff_ns = ns2 - ns1; // end_time - start_time
+        let time_sign: i32 = if time_diff_ns > 0 { 1 } else if time_diff_ns < 0 { -1 } else { 0 };
+        let date1_epoch = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y1, m1, d1);
+        let date2_epoch = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y2, m2, d2);
+        let date_sign: i32 = if date1_epoch > date2_epoch { 1 }
+            else if date1_epoch < date2_epoch { -1 }
+            else { 0 };
+
+        // Per spec step 7: if timeSign = dateSign (same non-zero sign), adjust
+        let (adjusted_end, time_ns) = if time_sign != 0 && time_sign == date_sign {
+            let adj_epoch = date2_epoch + time_sign as i64;
+            let adj_date = crate::interpreter::builtins::temporal::epoch_days_to_iso_date(adj_epoch);
+            let adj_time = time_diff_ns - time_sign as i128 * 86_400_000_000_000;
+            (adj_date, adj_time)
         } else {
-            (0i32, time_diff_ns)
+            ((y2, m2, d2), time_diff_ns)
         };
 
-        // Adjust the end date by extra_days before computing the date difference
-        let adjusted_end = if extra_days != 0 {
-            let epoch_end = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y2, m2, d2)
-                + extra_days as i64;
-            crate::interpreter::builtins::temporal::epoch_days_to_iso_date(epoch_end)
-        } else {
-            (y2, m2, d2)
-        };
-        let (dy, dm, dw, dd) = difference_iso_date(y1, m1, d1, adjusted_end.0, adjusted_end.1, adjusted_end.2, largest_unit);
+        let (dy, dm, dw, dd) = difference_iso_date(
+            y1, m1, d1, adjusted_end.0, adjusted_end.1, adjusted_end.2, largest_unit,
+        );
 
+        // Decompose time_ns (may be negative)
         let h = time_ns / 3_600_000_000_000;
         let rem = time_ns % 3_600_000_000_000;
         let mi = rem / 60_000_000_000;
