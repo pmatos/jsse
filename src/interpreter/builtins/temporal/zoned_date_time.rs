@@ -2002,6 +2002,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             c => return c,
                         };
+                        let increment_raw = match super::coerce_rounding_increment(interp, &ri_val)
+                        {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                         let rm_val = match get_prop(interp, &options_arg, "roundingMode") {
                             Completion::Normal(v) => v,
                             c => return c,
@@ -2049,11 +2054,13 @@ impl Interpreter {
                                 );
                             }
                         };
-                        let increment = match super::validate_rounding_increment(
-                            interp, &ri_val, unit, false,
+                        let increment = match super::validate_rounding_increment_raw(
+                            increment_raw, unit, false,
                         ) {
                             Ok(v) => v,
-                            Err(c) => return c,
+                            Err(msg) => {
+                                return Completion::Throw(interp.create_range_error(&msg))
+                            }
                         };
                         // ZDT.round per-unit max check (stricter than Instant):
                         // day: must be 1; others: < unit max and divides max
@@ -2882,16 +2889,44 @@ fn parse_zdt_to_string_options(
         }
     };
 
-    // smallestUnit — if defined, overrides fractionalSecondDigits for precision
+    // smallestUnit — read and coerce but defer validation until after timeZoneName
     let su_val = match get_prop(interp, options, "smallestUnit") {
         Completion::Normal(v) => v,
         c => return Err(c),
     };
-    let precision = if !is_undefined(&su_val) {
+    let su_coerced = if !is_undefined(&su_val) {
         let su_str = match interp.to_string_value(&su_val) {
             Ok(s) => s,
             Err(c) => return Err(Completion::Throw(c)),
         };
+        Some(su_str)
+    } else {
+        None
+    };
+
+    // timeZoneName — must be read before smallestUnit validation per spec
+    let tzn_val = match get_prop(interp, options, "timeZoneName") {
+        Completion::Normal(v) => v,
+        c => return Err(c),
+    };
+    let tz_display = if is_undefined(&tzn_val) {
+        "auto".to_string()
+    } else {
+        match interp.to_string_value(&tzn_val) {
+            Ok(s) => {
+                if !matches!(s.as_str(), "auto" | "never" | "critical") {
+                    return Err(Completion::Throw(
+                        interp.create_range_error(&format!("Invalid timeZoneName option: {s}")),
+                    ));
+                }
+                s
+            }
+            Err(c) => return Err(Completion::Throw(c)),
+        }
+    };
+
+    // Now validate smallestUnit
+    let precision = if let Some(su_str) = su_coerced {
         match temporal_unit_singular(&su_str) {
             Some("minute") => Some(-1),
             Some("second") => Some(0),
@@ -2911,27 +2946,6 @@ fn parse_zdt_to_string_options(
         }
     } else {
         fsd_precision
-    };
-
-    // timeZoneName
-    let tzn_val = match get_prop(interp, options, "timeZoneName") {
-        Completion::Normal(v) => v,
-        c => return Err(c),
-    };
-    let tz_display = if is_undefined(&tzn_val) {
-        "auto".to_string()
-    } else {
-        match interp.to_string_value(&tzn_val) {
-            Ok(s) => {
-                if !matches!(s.as_str(), "auto" | "never" | "critical") {
-                    return Err(Completion::Throw(
-                        interp.create_range_error(&format!("Invalid timeZoneName option: {s}")),
-                    ));
-                }
-                s
-            }
-            Err(c) => return Err(Completion::Throw(c)),
-        }
     };
 
     Ok((

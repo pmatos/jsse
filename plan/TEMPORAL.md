@@ -206,20 +206,22 @@ ZDT.round order-of-operations was already failing before this phase (not a regre
 
 ---
 
-## Phase 7: Options Property-Read Order and Extra Reads
+## Phase 7: Options Property-Read Order and Extra Reads ✅
 
-**Note:** Issues 1 and 3 were already fixed in Phase 6 (add/subtract overflow-only,
-toString alphabetical options order). Issue 2 (ZDT round options order) remains.
+**COMPLETE** — +3 new passes (ZDT 874/874 = 100%, 0 regressions)
 
-**Remaining issues:**
-2. **ZDT round**: Reads `roundingIncrement` AFTER `roundingMode`/`smallestUnit` instead of before
+**Fixes applied:**
+1. ZDT.round: coerce `roundingIncrement` (valueOf) immediately after reading, before
+   `roundingMode`/`smallestUnit` reads
+2. ZDT.toString: read and coerce `timeZoneName` before validating `smallestUnit`
+   (defer "is it a time unit?" check until after all options are read)
 
-**Tests expected to pass:**
+**Tests now passing:**
 ```
-ZonedDateTime/prototype/add/options-read-before-algorithmic-validation.js
-ZonedDateTime/prototype/subtract/options-read-before-algorithmic-validation.js
-ZonedDateTime/prototype/round/options-read-before-algorithmic-validation.js
-ZonedDateTime/prototype/toString/options-read-before-algorithmic-validation.js
+ZonedDateTime/prototype/add/options-read-before-algorithmic-validation.js (Phase 6)
+ZonedDateTime/prototype/subtract/options-read-before-algorithmic-validation.js (Phase 6)
+ZonedDateTime/prototype/round/options-read-before-algorithmic-validation.js ✅
+ZonedDateTime/prototype/toString/options-read-before-algorithmic-validation.js ✅
 ```
 
 ---
