@@ -133,7 +133,7 @@ Ordered roughly by dependency and importance.
   - [ ] `toLocaleString`, `[@@unscopables]`
   - [ ] Array species (`@@species`)
   - [ ] Array groupBy
-- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (947/1,438 = 65.9%, 498/736 constructors = 67.7%)
+- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (1,119/1,438 = 77.8%, 543/736 constructors = 73.8%)
   - [x] `%TypedArray%` intrinsic (abstract base) with shared prototype methods
   - [x] `%TypedArray%` constructor wiring: `.prototype`, `.constructor`, `@@species`, prototype chain inheritance
   - [x] All concrete constructors: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`
