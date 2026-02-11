@@ -56,10 +56,11 @@ fn divide_i128_to_f64(numerator: i128, divisor: i128) -> f64 {
 /// Extract a PlainDate (year, month, day) from a relativeTo value.
 /// Accepts PlainDate, PlainDateTime, ZonedDateTime objects, property bags, or strings.
 /// For ZonedDateTime-like inputs, extracts just the date portion.
+/// Returns (year, month, day, zdt_epoch_ns) where zdt_epoch_ns is Some for ZDT strings.
 fn to_relative_to_date(
     interp: &mut Interpreter,
     val: &JsValue,
-) -> Result<Option<(i32, u8, u8)>, Completion> {
+) -> Result<Option<(i32, u8, u8, Option<i128>)>, Completion> {
     if is_undefined(val) {
         return Ok(None);
     }
@@ -104,7 +105,41 @@ fn to_relative_to_date(
                             }
                         }
                     }
-                    return Ok(Some((parsed.year, parsed.month, parsed.day)));
+                    // CheckISODaysRange + epoch_ns validation for ZDT relativeTo
+                    let zdt_epoch_ns = if let Some(ref offset) = parsed.offset {
+                        let wall_epoch_days = iso_date_to_epoch_days(parsed.year, parsed.month, parsed.day);
+                        // CheckISODaysRange for non-Z strings (reject semantics)
+                        if !parsed.has_utc_designator && wall_epoch_days.abs() > 100_000_000 {
+                            return Err(Completion::Throw(interp.create_range_error(
+                                "ZonedDateTime relativeTo is outside the representable range",
+                            )));
+                        }
+                        // Compute and validate epoch_ns
+                        let epoch_days_i = wall_epoch_days as i128;
+                        let day_ns = parsed.hour as i128 * 3_600_000_000_000
+                            + parsed.minute as i128 * 60_000_000_000
+                            + parsed.second as i128 * 1_000_000_000
+                            + parsed.millisecond as i128 * 1_000_000
+                            + parsed.microsecond as i128 * 1_000
+                            + parsed.nanosecond as i128;
+                        let local_ns = epoch_days_i * 86_400_000_000_000 + day_ns;
+                        let off_ns = offset.sign as i128
+                            * (offset.hours as i128 * 3_600_000_000_000
+                                + offset.minutes as i128 * 60_000_000_000
+                                + offset.seconds as i128 * 1_000_000_000
+                                + offset.nanoseconds as i128);
+                        let computed_epoch_ns = local_ns - off_ns;
+                        let epoch_ns_bi = num_bigint::BigInt::from(computed_epoch_ns);
+                        if !super::instant::is_valid_epoch_ns(&epoch_ns_bi) {
+                            return Err(Completion::Throw(interp.create_range_error(
+                                "ZonedDateTime relativeTo is outside the representable range",
+                            )));
+                        }
+                        Some(computed_epoch_ns)
+                    } else {
+                        None
+                    };
+                    return Ok(Some((parsed.year, parsed.month, parsed.day, zdt_epoch_ns)));
                 }
                 return Err(Completion::Throw(
                     interp.create_range_error(&format!("Invalid relativeTo string: {raw}")),
@@ -171,9 +206,9 @@ fn to_relative_to_date(
             }
         }
     }
-    // Extract date portion
+    // Extract date portion (non-ZDT path: no epoch_ns)
     let (y, m, d, _) = super::plain_date::to_temporal_plain_date(interp, val.clone())?;
-    Ok(Some((y, m, d)))
+    Ok(Some((y, m, d, None)))
 }
 
 /// Compute total nanoseconds for a duration relative to a PlainDate.
@@ -809,7 +844,36 @@ impl Interpreter {
                 }
 
                 // If we have relativeTo, use round_relative_duration
-                if let Some((by, bm, bd)) = relative_to {
+                // Early return for zero duration
+                let is_zero = y == 0.0 && mo == 0.0 && w == 0.0 && d == 0.0
+                    && h == 0.0 && mi == 0.0 && s == 0.0 && ms == 0.0
+                    && us == 0.0 && ns == 0.0;
+                if is_zero {
+                    return create_duration_result(interp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+                }
+
+                if let Some((by, bm, bd, zdt_epoch_ns)) = relative_to {
+                    // Range check: ZDT epoch_ns + time_ns must stay in range;
+                    // PlainDate at midnight must be within ISODateTimeWithinLimits
+                    let time_ns_total: i128 = h as i128 * 3_600_000_000_000
+                        + mi as i128 * 60_000_000_000
+                        + s as i128 * 1_000_000_000
+                        + ms as i128 * 1_000_000
+                        + us as i128 * 1_000
+                        + ns as i128;
+                    if let Some(ens) = zdt_epoch_ns {
+                        let end_ns = ens + d as i128 * 86_400_000_000_000 + time_ns_total;
+                        let ns_max: i128 = 8_640_000_000_000_000_000_000;
+                        if end_ns < -ns_max || end_ns > ns_max {
+                            return Completion::Throw(interp.create_range_error(
+                                "duration out of range when applied to relativeTo",
+                            ));
+                        }
+                    } else if !super::iso_date_time_within_limits(by, bm, bd, 0, 0, 0, 0, 0, 0) {
+                        return Completion::Throw(interp.create_range_error(
+                            "duration out of range when applied to relativeTo",
+                        ));
+                    }
                     match round_relative_duration(
                         y, mo, w, d, h, mi, s, ms, us, ns,
                         smallest_unit, largest_unit,
@@ -915,7 +979,36 @@ impl Interpreter {
                     );
                 }
 
-                if let Some((by, bm, bd)) = relative_to {
+                // Early return for zero duration (spec step 12)
+                let is_zero = y == 0.0 && mo == 0.0 && w == 0.0 && d == 0.0
+                    && h == 0.0 && mi == 0.0 && s == 0.0 && ms == 0.0
+                    && us == 0.0 && ns == 0.0;
+                if is_zero {
+                    return Completion::Normal(JsValue::Number(0.0));
+                }
+
+                if let Some((by, bm, bd, zdt_epoch_ns)) = relative_to {
+                    // Range check: ZDT epoch_ns + time_ns must stay in range;
+                    // PlainDate at midnight must be within ISODateTimeWithinLimits
+                    let time_ns_total: i128 = h as i128 * 3_600_000_000_000
+                        + mi as i128 * 60_000_000_000
+                        + s as i128 * 1_000_000_000
+                        + ms as i128 * 1_000_000
+                        + us as i128 * 1_000
+                        + ns as i128;
+                    if let Some(ens) = zdt_epoch_ns {
+                        let end_ns = ens + d as i128 * 86_400_000_000_000 + time_ns_total;
+                        let ns_max: i128 = 8_640_000_000_000_000_000_000;
+                        if end_ns < -ns_max || end_ns > ns_max {
+                            return Completion::Throw(interp.create_range_error(
+                                "duration out of range when applied to relativeTo",
+                            ));
+                        }
+                    } else if !super::iso_date_time_within_limits(by, bm, bd, 0, 0, 0, 0, 0, 0) {
+                        return Completion::Throw(interp.create_range_error(
+                            "duration out of range when applied to relativeTo",
+                        ));
+                    }
                     // Use calendar-aware TotalRelativeDuration
                     match total_relative_duration(
                         y, mo, w, d, h, mi, s, ms, us, ns,
@@ -1229,7 +1322,7 @@ impl Interpreter {
                     ));
                 }
 
-                let (ns1, ns2) = if let Some((by, bm, bd)) = relative_to {
+                let (ns1, ns2) = if let Some((by, bm, bd, _zdt_epoch_ns)) = relative_to {
                     let n1 = match duration_total_ns_relative(
                         one.0, one.1, one.2, one.3, one.4, one.5, one.6, one.7, one.8, one.9,
                         by, bm, bd,

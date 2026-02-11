@@ -639,6 +639,12 @@ fn to_temporal_zoned_date_time_with_options(
 
                         match offset_option {
                             "reject" => {
+                                // CheckISODaysRange: wall-clock date must be in representable range
+                                if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
+                                    return Completion::Throw(interp.create_range_error(
+                                        "ZonedDateTime is outside the representable range",
+                                    ));
+                                }
                                 // Skip validation for Z designator — Z means "use exact time"
                                 if !parsed.has_utc_designator && off_ns != tz_off {
                                     return Completion::Throw(interp.create_range_error(
@@ -656,6 +662,12 @@ fn to_temporal_zoned_date_time_with_options(
                                 BigInt::from(local_ns - tz_off)
                             }
                             "prefer" => {
+                                // CheckISODaysRange: wall-clock date must be in representable range
+                                if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
+                                    return Completion::Throw(interp.create_range_error(
+                                        "ZonedDateTime is outside the representable range",
+                                    ));
+                                }
                                 // Use offset if it matches, otherwise use tz
                                 if off_ns == tz_off || parsed.has_utc_designator {
                                     BigInt::from(exact_ns)
@@ -786,6 +798,12 @@ fn from_string_with_options(
 
         match offset_opt.as_str() {
             "reject" => {
+                // CheckISODaysRange: wall-clock date must be in representable range
+                if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
+                    return Completion::Throw(
+                        interp.create_range_error("ZonedDateTime is outside the representable range"),
+                    );
+                }
                 if !parsed.has_utc_designator && off_ns != tz_off {
                     return Completion::Throw(
                         interp.create_range_error("UTC offset mismatch with time zone"),
@@ -796,6 +814,12 @@ fn from_string_with_options(
             "use" => BigInt::from(exact_ns),
             "ignore" => BigInt::from(local_ns - tz_off),
             "prefer" => {
+                // CheckISODaysRange: wall-clock date must be in representable range
+                if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
+                    return Completion::Throw(
+                        interp.create_range_error("ZonedDateTime is outside the representable range"),
+                    );
+                }
                 if off_ns == tz_off || parsed.has_utc_designator {
                     BigInt::from(exact_ns)
                 } else {
