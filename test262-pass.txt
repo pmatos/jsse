@@ -14480,6 +14480,7 @@ test262/test/built-ins/Temporal/Duration/compare/options-object.js
 test262/test/built-ins/Temporal/Duration/compare/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/Duration/compare/options-undefined.js
 test262/test/built-ins/Temporal/Duration/compare/options-wrong-type.js
+test262/test/built-ins/Temporal/Duration/compare/order-of-operations.js
 test262/test/built-ins/Temporal/Duration/compare/prop-desc.js
 test262/test/built-ins/Temporal/Duration/compare/relativeto-argument-propertybag-calendar-invalid-iso-string.js
 test262/test/built-ins/Temporal/Duration/compare/relativeto-argument-string-calendar-invalid-iso-string.js
@@ -14677,6 +14678,7 @@ test262/test/built-ins/Temporal/Duration/prototype/round/next-day-out-of-range.j
 test262/test/built-ins/Temporal/Duration/prototype/round/not-a-constructor.js
 test262/test/built-ins/Temporal/Duration/prototype/round/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/Duration/prototype/round/options-wrong-type.js
+test262/test/built-ins/Temporal/Duration/prototype/round/order-of-operations.js
 test262/test/built-ins/Temporal/Duration/prototype/round/out-of-range-when-converting-from-normalized-duration.js
 test262/test/built-ins/Temporal/Duration/prototype/round/precision-exact-in-balance-time-duration.js
 test262/test/built-ins/Temporal/Duration/prototype/round/precision-exact-in-round-duration.js
@@ -14876,6 +14878,7 @@ test262/test/built-ins/Temporal/Duration/prototype/total/no-precision-loss-for-s
 test262/test/built-ins/Temporal/Duration/prototype/total/not-a-constructor.js
 test262/test/built-ins/Temporal/Duration/prototype/total/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/Duration/prototype/total/options-wrong-type.js
+test262/test/built-ins/Temporal/Duration/prototype/total/order-of-operations.js
 test262/test/built-ins/Temporal/Duration/prototype/total/precision-exact-mathematical-values-1.js
 test262/test/built-ins/Temporal/Duration/prototype/total/precision-exact-mathematical-values-2.js
 test262/test/built-ins/Temporal/Duration/prototype/total/precision-exact-mathematical-values-5.js
@@ -18099,6 +18102,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/compare/length.js
 test262/test/built-ins/Temporal/ZonedDateTime/compare/name.js
 test262/test/built-ins/Temporal/ZonedDateTime/compare/no-fractional-minutes-hours.js
 test262/test/built-ins/Temporal/ZonedDateTime/compare/not-a-constructor.js
+test262/test/built-ins/Temporal/ZonedDateTime/compare/order-of-operations.js
 test262/test/built-ins/Temporal/ZonedDateTime/compare/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/compare/requires-properties.js
 test262/test/built-ins/Temporal/ZonedDateTime/compare/year-zero.js
@@ -18169,6 +18173,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/from/name.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/negative-month-or-day.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/no-fractional-minutes-hours.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/not-a-constructor.js
+test262/test/built-ins/Temporal/ZonedDateTime/from/observable-get-overflow-argument-primitive.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/observable-get-overflow-argument-string-invalid.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/offset-does-not-match-iana-time-zone.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/offset-invalid-string.js
@@ -18179,6 +18184,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/from/offset-wrong-type.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/options-object.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/options-wrong-type.js
+test262/test/built-ins/Temporal/ZonedDateTime/from/order-of-operations.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/overflow-invalid-string.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/overflow-options.js
 test262/test/built-ins/Temporal/ZonedDateTime/from/overflow-undefined.js
@@ -18226,8 +18232,10 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/negative-epochnanose
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/not-a-constructor.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/options-object.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/options-undefined.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/options-wrong-type.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/order-of-operations.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/overflow-adding-months-to-max-year.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/overflow-invalid-string.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/add/overflow-undefined.js
@@ -18313,6 +18321,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/equals/length.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/equals/name.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/equals/no-fractional-minutes-hours.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/equals/not-a-constructor.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/equals/order-of-operations.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/equals/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/equals/requires-properties.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/equals/year-zero.js
@@ -18485,6 +18494,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/options-object.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/options-undefined.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/options-wrong-type.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/order-of-operations.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/reversibility-of-differences.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/since/round-cross-unit-boundary.js
@@ -18554,8 +18564,10 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/negative-epochn
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/non-integer-throws-rangeerror.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/not-a-constructor.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/options-object.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/options-undefined.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/options-wrong-type.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/order-of-operations.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/overflow-invalid-string.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/overflow-subtracting-months-from-min-year.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/subtract/overflow-undefined.js
@@ -18656,6 +18668,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/toString/offset-wrong-ty
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/toString/offset.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/toString/options-object.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/toString/options-wrong-type.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/toString/order-of-operations.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/toString/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/toString/rounding-cross-midnight.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/toString/rounding-direction.js
@@ -18746,6 +18759,7 @@ test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/options-object.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/options-read-before-algorithmic-validation.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/options-undefined.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/options-wrong-type.js
+test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/order-of-operations.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/prop-desc.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/round-cross-unit-boundary.js
 test262/test/built-ins/Temporal/ZonedDateTime/prototype/until/rounding-increments.js

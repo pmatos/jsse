@@ -147,79 +147,248 @@ fn to_relative_to_date(
             }
         }
     }
-    if let JsValue::Object(_) = val {
-        let tz_val = match get_prop(interp, val, "timeZone") {
-            Completion::Normal(v) => v,
-            other => return Err(other),
-        };
-        if !is_undefined(&tz_val) {
-            let _tz = super::to_temporal_time_zone_identifier(interp, &tz_val)?;
-
-            let offset_val = match get_prop(interp, val, "offset") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            if !is_undefined(&offset_val) {
-                match &offset_val {
-                    JsValue::String(s) => {
-                        let s_str = s.to_rust_string();
-                        if super::parse_offset_string(&s_str).is_none() {
-                            return Err(Completion::Throw(
-                                interp.create_range_error(&format!(
-                                    "{s_str} is not a valid offset string"
-                                )),
-                            ));
-                        }
-                    }
-                    _ => {
-                        return Err(Completion::Throw(
-                            interp.create_type_error("offset must be a string"),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    // Read and validate time fields for Infinity rejection (values are discarded).
-    // Only for property bags — skip for Temporal objects (PlainDate, ZonedDateTime, etc.)
-    if let JsValue::Object(obj_ref) = val {
-        let is_temporal = interp
-            .get_object(obj_ref.id)
-            .map(|o| o.borrow().temporal_data.is_some())
-            .unwrap_or(false);
-        if !is_temporal {
-            for field in &[
-                "hour",
-                "minute",
-                "second",
-                "millisecond",
-                "microsecond",
-                "nanosecond",
-            ] {
-                let fval = match get_prop(interp, val, field) {
-                    Completion::Normal(v) => v,
-                    other => return Err(other),
-                };
-                if !is_undefined(&fval) {
-                    super::to_integer_with_truncation(interp, &fval)?;
-                }
-            }
-        }
-    }
-    // If the value is a ZDT object, extract its epoch_ns for range checking
+    // If the value is a Temporal object, handle directly (no property bag reading)
     if let JsValue::Object(obj_ref) = val {
         if let Some(obj) = interp.get_object(obj_ref.id) {
-            if let Some(super::TemporalData::ZonedDateTime { epoch_nanoseconds, time_zone, .. }) =
-                &obj.borrow().temporal_data
+            let td = obj.borrow().temporal_data.clone();
+            if let Some(super::TemporalData::ZonedDateTime {
+                epoch_nanoseconds,
+                time_zone,
+                ..
+            }) = &td
             {
                 let ns: i128 = epoch_nanoseconds.try_into().unwrap_or(0);
                 let (y, m, d, _, _, _, _, _, _) =
                     super::zoned_date_time::epoch_ns_to_components(epoch_nanoseconds, time_zone);
                 return Ok(Some((y, m, d, Some(ns))));
             }
+            if let Some(super::TemporalData::PlainDate {
+                iso_year,
+                iso_month,
+                iso_day,
+                ..
+            }) = &td
+            {
+                return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
+            }
+            if let Some(super::TemporalData::PlainDateTime {
+                iso_year,
+                iso_month,
+                iso_day,
+                ..
+            }) = &td
+            {
+                return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
+            }
         }
     }
-    // Extract date portion (non-ZDT path: no epoch_ns)
+
+    // Property bag: read ALL fields in alphabetical order per spec PrepareTemporalFields.
+    if let JsValue::Object(_) = val {
+        // 1. calendar
+        let cal_val = match get_prop(interp, val, "calendar") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let _cal = super::to_temporal_calendar_slot_value(interp, &cal_val)?;
+
+        // 2. day (required, coerce if defined)
+        let d_val = match get_prop(interp, val, "day") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let has_day = !is_undefined(&d_val);
+        let day_f = if has_day {
+            super::to_integer_with_truncation(interp, &d_val)?
+        } else {
+            0.0
+        };
+
+        // 3. hour (coerce if defined)
+        let hour_val = match get_prop(interp, val, "hour") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !is_undefined(&hour_val) {
+            super::to_integer_with_truncation(interp, &hour_val)?;
+        }
+
+        // 4. microsecond (coerce if defined)
+        let us_val = match get_prop(interp, val, "microsecond") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !is_undefined(&us_val) {
+            super::to_integer_with_truncation(interp, &us_val)?;
+        }
+
+        // 5. millisecond (coerce if defined)
+        let ms_val = match get_prop(interp, val, "millisecond") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !is_undefined(&ms_val) {
+            super::to_integer_with_truncation(interp, &ms_val)?;
+        }
+
+        // 6. minute (coerce if defined)
+        let min_val = match get_prop(interp, val, "minute") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !is_undefined(&min_val) {
+            super::to_integer_with_truncation(interp, &min_val)?;
+        }
+
+        // 7. month (coerce if defined)
+        let m_val = match get_prop(interp, val, "month") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let has_month = !is_undefined(&m_val);
+        let month_coerced: Option<i32> = if has_month {
+            Some(super::to_integer_with_truncation(interp, &m_val)? as i32)
+        } else {
+            None
+        };
+
+        // 8. monthCode (coerce + syntax validate immediately)
+        let mc_val = match get_prop(interp, val, "monthCode") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let has_month_code = !is_undefined(&mc_val);
+        let month_code_str: Option<String> = if has_month_code {
+            let mc = super::to_primitive_and_require_string(interp, &mc_val, "monthCode")?;
+            if !super::is_month_code_syntax_valid(&mc) {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+                ));
+            }
+            Some(mc)
+        } else {
+            None
+        };
+
+        // 9. nanosecond (coerce if defined)
+        let ns_val = match get_prop(interp, val, "nanosecond") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !is_undefined(&ns_val) {
+            super::to_integer_with_truncation(interp, &ns_val)?;
+        }
+
+        // 10. offset (ToPrimitiveAndRequireString + validate syntax immediately)
+        let offset_val = match get_prop(interp, val, "offset") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let offset_str: Option<String> = if is_undefined(&offset_val) {
+            None
+        } else {
+            let os = super::to_primitive_and_require_string(interp, &offset_val, "offset")?;
+            if super::parse_offset_string(&os).is_none() {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!("{os} is not a valid offset string")),
+                ));
+            }
+            Some(os)
+        };
+
+        // 11. second (coerce if defined)
+        let sec_val = match get_prop(interp, val, "second") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !is_undefined(&sec_val) {
+            super::to_integer_with_truncation(interp, &sec_val)?;
+        }
+
+        // 12. timeZone
+        let tz_val = match get_prop(interp, val, "timeZone") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+
+        // 13. year (required, coerce)
+        let y_val = match get_prop(interp, val, "year") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if is_undefined(&y_val) {
+            return Err(Completion::Throw(
+                interp.create_type_error("year is required"),
+            ));
+        }
+        let year = super::to_integer_with_truncation(interp, &y_val)? as i32;
+
+        // --- After all reads, validate ---
+        if !has_day {
+            return Err(Completion::Throw(
+                interp.create_type_error("day is required"),
+            ));
+        }
+        let day = day_f as u8;
+        if day_f < 1.0 {
+            return Err(Completion::Throw(
+                interp.create_range_error("day must be a positive integer"),
+            ));
+        }
+
+        // Resolve month/monthCode (syntax already validated at step 8)
+        let month = if let Some(ref mc) = month_code_str {
+            match super::plain_date::month_code_to_number_pub(mc) {
+                Some(n) => {
+                    if let Some(explicit_m) = month_coerced {
+                        if explicit_m != n as i32 {
+                            return Err(Completion::Throw(
+                                interp.create_range_error("month and monthCode conflict"),
+                            ));
+                        }
+                    }
+                    n
+                }
+                None => {
+                    return Err(Completion::Throw(
+                        interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+                    ));
+                }
+            }
+        } else if let Some(m) = month_coerced {
+            if m < 1 {
+                return Err(Completion::Throw(
+                    interp.create_range_error("month must be a positive integer"),
+                ));
+            }
+            m as u8
+        } else {
+            return Err(Completion::Throw(
+                interp.create_type_error("month or monthCode is required"),
+            ));
+        };
+
+        // Determine PlainDate vs ZDT context
+        if !is_undefined(&tz_val) {
+            // ZDT context
+            let tz = super::to_temporal_time_zone_identifier(interp, &tz_val)?;
+
+            // Compute epoch_ns for ZDT context
+            let epoch_days = iso_date_to_epoch_days(year, month, day) as i128;
+            let local_ns = epoch_days * 86_400_000_000_000;
+            let approx = num_bigint::BigInt::from(local_ns);
+            let tz_offset =
+                super::zoned_date_time::get_tz_offset_ns_pub(&tz, &approx) as i128;
+            let epoch_ns = local_ns - tz_offset;
+
+            return Ok(Some((year, month, day, Some(epoch_ns))));
+        } else {
+            // PlainDate context
+            return Ok(Some((year, month, day, None)));
+        }
+    }
+
+    // Non-object, non-string, non-undefined — fall through to to_temporal_plain_date
     let (y, m, d, _) = super::plain_date::to_temporal_plain_date(interp, val.clone())?;
     Ok(Some((y, m, d, None)))
 }
@@ -839,7 +1008,7 @@ impl Interpreter {
                     );
                 }
 
-                let (smallest_unit, rounding_mode, increment, largest_unit, relative_to_raw) =
+                let (smallest_unit, rounding_mode, increment, largest_unit, relative_to) =
                     match parse_round_options(interp, &round_to, y, mo, w, d, h, mi, s, ms, us, ns)
                     {
                         Ok(opts) => opts,
@@ -851,12 +1020,6 @@ impl Interpreter {
                         "largestUnit must be at least as large as smallestUnit",
                     ));
                 }
-
-                // Use relativeTo from options (already read in parse_round_options)
-                let relative_to = match to_relative_to_date(interp, &relative_to_raw) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
 
                 // Calendar units require relativeTo:
                 // - Duration has calendar units (years/months/weeks), OR
@@ -991,18 +1154,16 @@ impl Interpreter {
                     };
                     (u, None)
                 } else if matches!(total_of, JsValue::Object(_)) {
-                    // Read options in alphabetical order: relativeTo, unit
+                    // Per spec: get + process relativeTo first, then get + coerce unit
                     let rt = match get_prop(interp, &total_of, "relativeTo") {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    let u = try_completion!(get_prop(interp, &total_of, "unit"));
-                    // Coerce relativeTo
                     let relative = match to_relative_to_date(interp, &rt) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    // Coerce unit
+                    let u = try_completion!(get_prop(interp, &total_of, "unit"));
                     if is_undefined(&u) {
                         return Completion::Throw(interp.create_range_error("unit is required"));
                     }
@@ -1702,7 +1863,7 @@ fn parse_round_options(
     ms: f64,
     us: f64,
     ns: f64,
-) -> Result<(&'static str, &'static str, f64, &'static str, JsValue), Completion> {
+) -> Result<(&'static str, &'static str, f64, &'static str, Option<(i32, u8, u8, Option<i128>)>), Completion> {
     if let JsValue::String(su) = round_to {
         let su_str = su.to_rust_string();
         let unit = temporal_unit_singular(&su_str).ok_or_else(|| {
@@ -1714,7 +1875,7 @@ fn parse_round_options(
         } else {
             def
         };
-        return Ok((unit, "halfExpand", 1.0, largest, JsValue::Undefined));
+        return Ok((unit, "halfExpand", 1.0, largest, None));
     }
     if !matches!(round_to, JsValue::Object(_)) {
         return Err(Completion::Throw(
@@ -1736,11 +1897,12 @@ fn parse_round_options(
         None
     };
 
-    // 2. relativeTo: get only (no coercion here, processed later)
+    // 2. relativeTo: get + process (bag fields read here for correct observable order)
     let relative_to_val = match get_prop(interp, round_to, "relativeTo") {
         Completion::Normal(v) => v,
         other => return Err(other),
     };
+    let relative_to = to_relative_to_date(interp, &relative_to_val)?;
 
     // 3. roundingIncrement: get + coerce
     let inc_val = match get_prop(interp, round_to, "roundingIncrement") {
@@ -1838,7 +2000,7 @@ fn parse_round_options(
         }
     }
 
-    Ok((small_unit, rounding_mode, increment, large_unit, relative_to_val))
+    Ok((small_unit, rounding_mode, increment, large_unit, relative_to))
 }
 
 /// Returns (precision, rounding_mode).

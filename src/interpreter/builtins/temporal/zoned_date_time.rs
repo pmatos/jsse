@@ -245,15 +245,19 @@ pub(super) fn create_zdt_pub(
 }
 
 pub(super) fn to_temporal_zoned_date_time(interp: &mut Interpreter, item: &JsValue) -> Completion {
-    to_temporal_zoned_date_time_with_options(interp, item, "constrain", "compatible", "reject")
+    to_temporal_zoned_date_time_with_options(interp, item, "constrain", "compatible", "reject", None)
 }
 
+/// If `deferred_options` is Some((raw_options, default_offset)), options are read from
+/// raw_options AFTER property bag fields (for observable order in ZDT.from).
+/// When None, the pre-parsed overflow/disambiguation/offset_option are used.
 fn to_temporal_zoned_date_time_with_options(
     interp: &mut Interpreter,
     item: &JsValue,
     overflow: &str,
     disambiguation: &str,
     offset_option: &str,
+    deferred_options: Option<(&JsValue, &str)>,
 ) -> Completion {
     match item {
         JsValue::Object(o) => {
@@ -270,7 +274,8 @@ fn to_temporal_zoned_date_time_with_options(
             {
                 return create_zdt(interp, epoch_nanoseconds, time_zone, calendar);
             }
-            // Property bag — per spec, read calendar first, then date/time, then offset, then timeZone
+            // Property bag — read all fields in alphabetical order per spec
+            // 1. calendar
             let cal_val = match get_prop(interp, item, "calendar") {
                 Completion::Normal(v) => v,
                 c => return c,
@@ -280,9 +285,121 @@ fn to_temporal_zoned_date_time_with_options(
                 Err(c) => return c,
             };
 
+            // 2. day (required)
+            let d_val = match get_prop(interp, item, "day") {
+                Completion::Normal(v) => v,
+                c => return c,
+            };
+            let has_day = !is_undefined(&d_val);
+            let day_i = if has_day {
+                match to_integer_with_truncation(interp, &d_val) {
+                    Ok(n) => n,
+                    Err(c) => return c,
+                }
+            } else {
+                0.0
+            };
+
+            // 3. hour (default 0)
+            let hour_raw = match get_time_field(interp, item, "hour") {
+                Ok(v) => v as i32,
+                Err(c) => return c,
+            };
+
+            // 4. microsecond (default 0)
+            let microsecond_raw = match get_time_field(interp, item, "microsecond") {
+                Ok(v) => v as i32,
+                Err(c) => return c,
+            };
+
+            // 5. millisecond (default 0)
+            let millisecond_raw = match get_time_field(interp, item, "millisecond") {
+                Ok(v) => v as i32,
+                Err(c) => return c,
+            };
+
+            // 6. minute (default 0)
+            let minute_raw = match get_time_field(interp, item, "minute") {
+                Ok(v) => v as i32,
+                Err(c) => return c,
+            };
+
+            // 7. month (optional, coerce if defined)
+            let m_val = match get_prop(interp, item, "month") {
+                Completion::Normal(v) => v,
+                c => return c,
+            };
+            let has_month = !is_undefined(&m_val);
+            let month_coerced: Option<i32> = if has_month {
+                Some(match to_integer_with_truncation(interp, &m_val) {
+                    Ok(n) => n as i32,
+                    Err(c) => return c,
+                })
+            } else {
+                None
+            };
+
+            // 8. monthCode (optional, coerce + SYNTAX validate immediately)
+            let mc_val = match get_prop(interp, item, "monthCode") {
+                Completion::Normal(v) => v,
+                c => return c,
+            };
+            let has_month_code = !is_undefined(&mc_val);
+            let month_code_str: Option<String> = if has_month_code {
+                let mc =
+                    match super::to_primitive_and_require_string(interp, &mc_val, "monthCode") {
+                        Ok(s) => s,
+                        Err(c) => return c,
+                    };
+                if !is_valid_month_code_syntax(&mc) {
+                    return Completion::Throw(
+                        interp.create_range_error(&format!("Invalid monthCode: {mc}")),
+                    );
+                }
+                Some(mc)
+            } else {
+                None
+            };
+
+            // 9. nanosecond (default 0)
+            let nanosecond_raw = match get_time_field(interp, item, "nanosecond") {
+                Ok(v) => v as i32,
+                Err(c) => return c,
+            };
+
+            // 10. offset (optional, ToPrimitiveAndRequireString + validate syntax immediately)
+            let offset_val = match get_prop(interp, item, "offset") {
+                Completion::Normal(v) => v,
+                c => return c,
+            };
+            let bag_offset_ns: Option<i64> = if is_undefined(&offset_val) {
+                None
+            } else {
+                let os =
+                    match super::to_primitive_and_require_string(interp, &offset_val, "offset") {
+                        Ok(s) => s,
+                        Err(c) => return c,
+                    };
+                match super::parse_utc_offset_timezone(&os) {
+                    Some(normalized) => Some(parse_offset_to_ns(&normalized)),
+                    None => {
+                        return Completion::Throw(
+                            interp.create_range_error(&format!("invalid offset string: {os}")),
+                        );
+                    }
+                }
+            };
+
+            // 11. second (default 0)
+            let second_raw = match get_time_field(interp, item, "second") {
+                Ok(v) => v as i32,
+                Err(c) => return c,
+            };
+
+            // 12. timeZone (required)
             let tz_val = match get_prop(interp, item, "timeZone") {
                 Completion::Normal(v) => v,
-                other => return other,
+                c => return c,
             };
             if is_undefined(&tz_val) {
                 return Completion::Throw(
@@ -293,115 +410,48 @@ fn to_temporal_zoned_date_time_with_options(
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            // Get fields from bag — read offset first (per spec alphabetical PrepareTemporalFields)
-            let d_val = match get_prop(interp, item, "day") {
-                Completion::Normal(v) => v,
-                c => return c,
-            };
-            let m_val = match get_prop(interp, item, "month") {
-                Completion::Normal(v) => v,
-                c => return c,
-            };
-            let mc_val = match get_prop(interp, item, "monthCode") {
-                Completion::Normal(v) => v,
-                c => return c,
-            };
+
+            // 13. year (required)
             let y_val = match get_prop(interp, item, "year") {
                 Completion::Normal(v) => v,
                 c => return c,
             };
-            let has_year = !is_undefined(&y_val);
-            let has_month = !is_undefined(&m_val);
-            let has_month_code = !is_undefined(&mc_val);
-            let has_day = !is_undefined(&d_val);
-            if !has_year {
-                return Completion::Throw(
-                    interp.create_type_error("year is required"),
-                );
+            if is_undefined(&y_val) {
+                return Completion::Throw(interp.create_type_error("year is required"));
             }
-            if !has_day {
-                return Completion::Throw(
-                    interp.create_type_error("day is required"),
-                );
-            }
-
-            // Read and validate offset BEFORE coercing year/month/day
-            let offset_val = match get_prop(interp, item, "offset") {
-                Completion::Normal(v) => v,
-                c => return c,
-            };
-            let bag_offset_ns: Option<i64> = if is_undefined(&offset_val) {
-                None
-            } else {
-                match &offset_val {
-                    JsValue::String(s) => {
-                        let s_str = s.to_rust_string();
-                        match super::parse_utc_offset_timezone(&s_str) {
-                            Some(normalized) => Some(parse_offset_to_ns(&normalized)),
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_range_error(&format!(
-                                        "invalid offset string: {s_str}"
-                                    )),
-                                );
-                            }
-                        }
-                    }
-                    JsValue::Object(_) => {
-                        let s_str = match interp.to_string_value(&offset_val) {
-                            Ok(s) => s,
-                            Err(c) => return Completion::Throw(c),
-                        };
-                        match super::parse_utc_offset_timezone(&s_str) {
-                            Some(normalized) => Some(parse_offset_to_ns(&normalized)),
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_range_error(&format!(
-                                        "invalid offset string: {s_str}"
-                                    )),
-                                );
-                            }
-                        }
-                    }
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("offset must be a string"),
-                        );
-                    }
-                }
-            };
-
-            // Validate monthCode syntax BEFORE year coercion (per spec PrepareTemporalFields)
-            if has_month_code {
-                let mc = match super::to_primitive_and_require_string(interp, &mc_val, "monthCode")
-                {
-                    Ok(s) => s,
-                    Err(c) => return c,
-                };
-                if !is_valid_month_code_syntax(&mc) {
-                    return Completion::Throw(
-                        interp.create_range_error(&format!("Invalid monthCode: {mc}")),
-                    );
-                }
-            }
-
             let year = match to_integer_with_truncation(interp, &y_val) {
                 Ok(n) => n as i32,
                 Err(c) => return c,
             };
-            let month_raw: i32 = if has_month_code {
-                let mc = match super::to_primitive_and_require_string(interp, &mc_val, "monthCode")
-                {
-                    Ok(s) => s,
-                    Err(c) => return c,
+
+            // If deferred options, read them now (after all bag field reads)
+            let (eff_overflow, eff_disambiguation, eff_offset_option) =
+                if let Some((opts, default_off)) = deferred_options {
+                    match parse_zdt_options(interp, opts, default_off) {
+                        Ok((d, o, ovf)) => (ovf, d, o),
+                        Err(c) => return c,
+                    }
+                } else {
+                    (
+                        overflow.to_string(),
+                        disambiguation.to_string(),
+                        offset_option.to_string(),
+                    )
                 };
-                match super::plain_date::month_code_to_number_pub(&mc) {
+            let overflow = &eff_overflow;
+            let _disambiguation = &eff_disambiguation;
+            let offset_option = &eff_offset_option;
+
+            // --- Validation (after all reads) ---
+            if !has_day {
+                return Completion::Throw(interp.create_type_error("day is required"));
+            }
+
+            // Resolve month/monthCode (syntax already validated at step 8)
+            let month_raw: i32 = if let Some(ref mc) = month_code_str {
+                match super::plain_date::month_code_to_number_pub(mc) {
                     Some(n) => {
-                        if has_month {
-                            let explicit_m = match to_integer_with_truncation(interp, &m_val) {
-                                Ok(v) => v as i32,
-                                Err(c) => return c,
-                            };
+                        if let Some(explicit_m) = month_coerced {
                             if explicit_m != n as i32 {
                                 return Completion::Throw(
                                     interp.create_range_error("month and monthCode conflict"),
@@ -416,43 +466,12 @@ fn to_temporal_zoned_date_time_with_options(
                         );
                     }
                 }
-            } else if has_month {
-                match to_integer_with_truncation(interp, &m_val) {
-                    Ok(n) => n as i32,
-                    Err(c) => return c,
-                }
+            } else if let Some(m) = month_coerced {
+                m
             } else {
                 return Completion::Throw(
                     interp.create_type_error("month or monthCode is required"),
                 );
-            };
-            let day_i = match to_integer_with_truncation(interp, &d_val) {
-                Ok(n) => n,
-                Err(c) => return c,
-            };
-            let hour_raw = match get_time_field(interp, item, "hour") {
-                Ok(v) => v as i32,
-                Err(c) => return c,
-            };
-            let minute_raw = match get_time_field(interp, item, "minute") {
-                Ok(v) => v as i32,
-                Err(c) => return c,
-            };
-            let second_raw = match get_time_field(interp, item, "second") {
-                Ok(v) => v as i32,
-                Err(c) => return c,
-            };
-            let millisecond_raw = match get_time_field(interp, item, "millisecond") {
-                Ok(v) => v as i32,
-                Err(c) => return c,
-            };
-            let microsecond_raw = match get_time_field(interp, item, "microsecond") {
-                Ok(v) => v as i32,
-                Err(c) => return c,
-            };
-            let nanosecond_raw = match get_time_field(interp, item, "nanosecond") {
-                Ok(v) => v as i32,
-                Err(c) => return c,
             };
 
             // Per spec: negative month/day always throws regardless of overflow
@@ -534,9 +553,8 @@ fn to_temporal_zoned_date_time_with_options(
             let approx_ns = BigInt::from(local_ns);
             let tz_offset = get_tz_offset_ns(&tz, &approx_ns) as i128;
 
-            let effective_offset = match offset_option {
+            let effective_offset = match offset_option.as_str() {
                 "use" => {
-                    // Use bag's offset if present, else tz offset
                     bag_offset_ns.map(|o| o as i128).unwrap_or(tz_offset)
                 }
                 "ignore" => tz_offset,
@@ -551,7 +569,6 @@ fn to_temporal_zoned_date_time_with_options(
                     tz_offset
                 }
                 "prefer" => {
-                    // Use bag's offset if it's a valid offset for this tz, else tz
                     if let Some(bag_ns) = bag_offset_ns {
                         let candidate = BigInt::from(local_ns - bag_ns as i128);
                         let actual_offset =
@@ -2272,22 +2289,48 @@ impl Interpreter {
                     let item = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     if matches!(&item, JsValue::String(_)) {
-                        // Per spec: parse string first; if invalid, throw without reading options
-                        // If valid, read options then apply offset/disambiguation
                         return from_string_with_options(interp, &item, &options);
                     }
-                    // Property bag or ZDT object: read options first
-                    let (disambiguation, offset_opt, overflow) =
-                        match parse_zdt_options(interp, &options, "reject") {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+                    if !matches!(&item, JsValue::Object(_)) {
+                        return Completion::Throw(
+                            interp.create_type_error("invalid type for ZonedDateTime.from"),
+                        );
+                    }
+                    // Check if item is already a ZDT — read options then clone
+                    let is_zdt = if let JsValue::Object(o) = &item {
+                        interp
+                            .get_object(o.id)
+                            .map(|obj| {
+                                matches!(
+                                    obj.borrow().temporal_data,
+                                    Some(TemporalData::ZonedDateTime { .. })
+                                )
+                            })
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+                    if is_zdt {
+                        let (disambiguation, offset_opt, overflow) =
+                            match parse_zdt_options(interp, &options, "reject") {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        return to_temporal_zoned_date_time_with_options(
+                            interp,
+                            &item,
+                            &overflow,
+                            &disambiguation,
+                            &offset_opt,
+                            None,
+                        );
+                    }
+                    // Property bag: read bag fields first, then options (deferred)
                     to_temporal_zoned_date_time_with_options(
                         interp,
                         &item,
-                        &overflow,
-                        &disambiguation,
-                        &offset_opt,
+                        "", "", "", // unused when deferred_options is Some
+                        Some((&options, "reject")),
                     )
                 },
             ));
@@ -2363,11 +2406,10 @@ fn zdt_add_subtract(
         Err(c) => return c,
     };
     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-    let (_disambiguation, _offset_opt, overflow) =
-        match parse_zdt_options(interp, &options, "compatible") {
-            Ok(v) => v,
-            Err(c) => return c,
-        };
+    let overflow = match parse_overflow_option(interp, &options) {
+        Ok(v) => v,
+        Err(c) => return c,
+    };
 
     let (
         years,
@@ -2727,71 +2769,84 @@ fn parse_zdt_to_string_options(
         ));
     }
 
-    // Per spec (ToSecondsStringPrecision): smallestUnit takes priority over
-    // fractionalSecondDigits. Check smallestUnit first.
-    let su_val = match get_prop(interp, options, "smallestUnit") {
+    // Per spec: read options in alphabetical order.
+    // calendarName
+    let cn_val = match get_prop(interp, options, "calendarName") {
         Completion::Normal(v) => v,
         c => return Err(c),
     };
-    let precision = if !is_undefined(&su_val) {
-        let su_str = match interp.to_string_value(&su_val) {
-            Ok(s) => s,
+    let cal_display = if is_undefined(&cn_val) {
+        "auto".to_string()
+    } else {
+        match interp.to_string_value(&cn_val) {
+            Ok(s) => {
+                if !matches!(s.as_str(), "auto" | "always" | "never" | "critical") {
+                    return Err(Completion::Throw(
+                        interp.create_range_error(&format!("Invalid calendarName option: {s}")),
+                    ));
+                }
+                s
+            }
+            Err(c) => return Err(Completion::Throw(c)),
+        }
+    };
+
+    // fractionalSecondDigits — ALWAYS read (even if smallestUnit overrides it)
+    let fsd_val = match get_prop(interp, options, "fractionalSecondDigits") {
+        Completion::Normal(v) => v,
+        c => return Err(c),
+    };
+    let fsd_precision = if is_undefined(&fsd_val) {
+        None
+    } else if matches!(&fsd_val, JsValue::Number(_)) {
+        let n = match interp.to_number_value(&fsd_val) {
+            Ok(n) => n,
             Err(c) => return Err(Completion::Throw(c)),
         };
-        match temporal_unit_singular(&su_str) {
-            Some("minute") => Some(-1),
-            Some("second") => Some(0),
-            Some("millisecond") => Some(3),
-            Some("microsecond") => Some(6),
-            Some("nanosecond") => Some(9),
-            Some(u) => {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "{u} is not a valid value for smallestUnit"
-                ))));
-            }
-            None => {
-                return Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid unit: {su_str}")),
-                ));
-            }
+        if n.is_nan() || n.is_infinite() {
+            return Err(Completion::Throw(interp.create_range_error(
+                "fractionalSecondDigits must be a finite number",
+            )));
         }
+        let digits = n.floor() as i32;
+        if digits < 0 || digits > 9 {
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "fractionalSecondDigits must be 0-9 or auto, got {n}"
+            ))));
+        }
+        Some(digits)
     } else {
-        // smallestUnit not provided, check fractionalSecondDigits
-        let fsd_val = match get_prop(interp, options, "fractionalSecondDigits") {
-            Completion::Normal(v) => v,
-            c => return Err(c),
+        let s = match interp.to_string_value(&fsd_val) {
+            Ok(v) => v,
+            Err(c) => return Err(Completion::Throw(c)),
         };
-        if is_undefined(&fsd_val) {
+        if s == "auto" {
             None
-        } else if matches!(&fsd_val, JsValue::Number(_)) {
-            let n = match interp.to_number_value(&fsd_val) {
-                Ok(n) => n,
-                Err(c) => return Err(Completion::Throw(c)),
-            };
-            if n.is_nan() || n.is_infinite() {
-                return Err(Completion::Throw(interp.create_range_error(
-                    "fractionalSecondDigits must be a finite number",
-                )));
-            }
-            let digits = n.floor() as i32;
-            if digits < 0 || digits > 9 {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "fractionalSecondDigits must be 0-9 or auto, got {n}"
-                ))));
-            }
-            Some(digits)
         } else {
-            let s = match interp.to_string_value(&fsd_val) {
-                Ok(v) => v,
-                Err(c) => return Err(Completion::Throw(c)),
-            };
-            if s == "auto" {
-                None
-            } else {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "Invalid fractionalSecondDigits: {s}"
-                ))));
+            return Err(Completion::Throw(interp.create_range_error(&format!(
+                "Invalid fractionalSecondDigits: {s}"
+            ))));
+        }
+    };
+
+    // offset
+    let off_val = match get_prop(interp, options, "offset") {
+        Completion::Normal(v) => v,
+        c => return Err(c),
+    };
+    let offset_display = if is_undefined(&off_val) {
+        "auto".to_string()
+    } else {
+        match interp.to_string_value(&off_val) {
+            Ok(s) => {
+                if !matches!(s.as_str(), "auto" | "never") {
+                    return Err(Completion::Throw(
+                        interp.create_range_error(&format!("Invalid offset option: {s}")),
+                    ));
+                }
+                s
             }
+            Err(c) => return Err(Completion::Throw(c)),
         }
     };
 
@@ -2827,25 +2882,35 @@ fn parse_zdt_to_string_options(
         }
     };
 
-    // offset
-    let off_val = match get_prop(interp, options, "offset") {
+    // smallestUnit — if defined, overrides fractionalSecondDigits for precision
+    let su_val = match get_prop(interp, options, "smallestUnit") {
         Completion::Normal(v) => v,
         c => return Err(c),
     };
-    let offset_display = if is_undefined(&off_val) {
-        "auto".to_string()
-    } else {
-        match interp.to_string_value(&off_val) {
-            Ok(s) => {
-                if !matches!(s.as_str(), "auto" | "never") {
-                    return Err(Completion::Throw(
-                        interp.create_range_error(&format!("Invalid offset option: {s}")),
-                    ));
-                }
-                s
-            }
+    let precision = if !is_undefined(&su_val) {
+        let su_str = match interp.to_string_value(&su_val) {
+            Ok(s) => s,
             Err(c) => return Err(Completion::Throw(c)),
+        };
+        match temporal_unit_singular(&su_str) {
+            Some("minute") => Some(-1),
+            Some("second") => Some(0),
+            Some("millisecond") => Some(3),
+            Some("microsecond") => Some(6),
+            Some("nanosecond") => Some(9),
+            Some(u) => {
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "{u} is not a valid value for smallestUnit"
+                ))));
+            }
+            None => {
+                return Err(Completion::Throw(
+                    interp.create_range_error(&format!("Invalid unit: {su_str}")),
+                ));
+            }
         }
+    } else {
+        fsd_precision
     };
 
     // timeZoneName
@@ -2861,27 +2926,6 @@ fn parse_zdt_to_string_options(
                 if !matches!(s.as_str(), "auto" | "never" | "critical") {
                     return Err(Completion::Throw(
                         interp.create_range_error(&format!("Invalid timeZoneName option: {s}")),
-                    ));
-                }
-                s
-            }
-            Err(c) => return Err(Completion::Throw(c)),
-        }
-    };
-
-    // calendarName
-    let cn_val = match get_prop(interp, options, "calendarName") {
-        Completion::Normal(v) => v,
-        c => return Err(c),
-    };
-    let cal_display = if is_undefined(&cn_val) {
-        "auto".to_string()
-    } else {
-        match interp.to_string_value(&cn_val) {
-            Ok(s) => {
-                if !matches!(s.as_str(), "auto" | "always" | "never" | "critical") {
-                    return Err(Completion::Throw(
-                        interp.create_range_error(&format!("Invalid calendarName option: {s}")),
                     ));
                 }
                 s
