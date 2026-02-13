@@ -634,20 +634,19 @@ def main():
     fail_file.write_text("\n".join(fail_list) + "\n")
 
     print()
-    print(
-        f"JSON: {json.dumps({
-            'engine': engine_name,
-            'files': num_files,
-            'scenarios': total,
-            'run': run_total,
-            'skip': skipped,
-            'pass': passed,
-            'fail': failed,
-            'percentage': round(percentage, 2),
-            'regressions': len(regressions),
-            'new_passes': len(new_passes),
-        })}"
-    )
+    json_obj = {
+        'engine': engine_name,
+        'files': num_files,
+        'scenarios': total,
+        'run': run_total,
+        'skip': skipped,
+        'pass': passed,
+        'fail': failed,
+        'percentage': round(percentage, 2),
+        'regressions': len(regressions),
+        'new_passes': len(new_passes),
+    }
+    print(f"JSON: {json.dumps(json_obj)}")
 
 
 if __name__ == "__main__":
