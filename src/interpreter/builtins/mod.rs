@@ -973,7 +973,13 @@ impl Interpreter {
                 let arr = if args.len() == 1
                     && let JsValue::Number(n) = &args[0]
                 {
-                    interp.create_array(vec![JsValue::Undefined; *n as usize])
+                    let len = *n;
+                    let uint32_len = len as u32;
+                    if (uint32_len as f64) != len {
+                        let err = interp.create_range_error("Invalid array length");
+                        return Completion::Throw(err);
+                    }
+                    interp.create_array_with_holes(vec![None; uint32_len as usize])
                 } else {
                     interp.create_array(args.to_vec())
                 };

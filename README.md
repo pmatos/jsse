@@ -6,9 +6,11 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 ## Test262 Progress
 
-| Total Tests | Run     | Skipped | Passing | Failing | Pass Rate |
-|-------------|---------|---------|---------|---------|-----------|
-| 48,338      | 48,338  | 0       | 42,305  | 6,033   | 87.52%    |
+| Test Files | Scenarios | Passing | Failing | Pass Rate |
+|------------|-----------|---------|---------|-----------|
+| 48,338     | 92,658    | 81,581  | 11,077  | 88.05%    |
+
+Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution, expanding 48,338 test files into 92,658 scenarios.
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 
@@ -94,3 +96,11 @@ uv run python scripts/run-test262.py
 ```
 
 Options: `-j <n>` for parallelism (default: nproc), `--timeout <s>` (default: 60).
+
+The runner supports multiple engines via `--engine`:
+
+```bash
+uv run python scripts/run-test262.py --engine node     # test node
+uv run python scripts/run-test262.py --engine boa       # test boa
+uv run python scripts/run-test262.py --engine jsse      # default
+```

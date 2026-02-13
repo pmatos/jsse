@@ -136,18 +136,6 @@ fn obj_set_throw(
         // Normal set
         if let Some(obj) = interp.get_object(obj_ref.id) {
             let mut borrow = obj.borrow_mut();
-            if let Some(ref mut elems) = borrow.array_elements
-                && let Ok(idx) = key.parse::<usize>()
-            {
-                if idx < elems.len() {
-                    elems[idx] = value.clone();
-                } else {
-                    while elems.len() < idx {
-                        elems.push(JsValue::Undefined);
-                    }
-                    elems.push(value.clone());
-                }
-            }
             if !borrow.extensible && !borrow.has_own_property(key) {
                 return Err(interp.create_type_error(&format!(
                     "Cannot add property {key}, object is not extensible"

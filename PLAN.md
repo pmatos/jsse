@@ -2,8 +2,8 @@
 
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
-**Total test262 tests:** ~48,257 (excluding Temporal/intl402)
-**Current pass rate:** 42,305 / 48,338 run (87.52%)
+**Total test262 scenarios:** 92,658 (48,338 files, dual strict/non-strict per spec)
+**Current pass rate:** 81,581 / 92,658 (88.05%)
 
 ---
 
@@ -28,27 +28,34 @@ The engine is broken into 10 phases, ordered by dependency. Each phase has a det
 
 ## Current Built-in Status
 
-| Built-in | Pass Rate | Tests |
-|----------|-----------|-------|
-| Object | 94% | 3,216/3,411 |
-| Array | 89% | 2,734/3,079 |
-| String | 95% | 1,157/1,215 |
-| Function | 88% | 446/509 |
-| Iterator | 96% | 490/510 |
-| Promise | 94% | 599/639 |
-| Map | 99% | 203/204 |
-| Set | 97% | 372/383 |
-| Date | 94% | 561/594 |
-| DataView | 85% | 476/561 |
-| Reflect | 100% | 153/153 |
-| for-in | 94% | 108/115 |
-| Proxy | 79% | 245/311 |
-| Symbol | 75% | 71/94 |
-| RegExp | 74% | 1,398/1,879 |
-| Number | 98% | 331/335 |
-| Math | 96% | 316/327 |
-| WeakRef | 97% | 28/29 |
-| FinalizationRegistry | 98% | 46/47 |
+Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
+
+| Built-in | Pass Rate | Scenarios |
+|----------|-----------|-----------|
+| Temporal | 100% | 8,964/8,964 |
+| Reflect | 100% | 306/306 |
+| Map | 99% | 425/427 |
+| Number | 99% | 662/670 |
+| FinalizationRegistry | 98% | 92/94 |
+| Set | 97% | 764/786 |
+| Math | 97% | 652/674 |
+| WeakRef | 97% | 56/58 |
+| Iterator | 96% | 980/1,020 |
+| String | 95% | 2,532/2,663 |
+| Date | 95% | 1,190/1,256 |
+| for-in | 95% | 199/210 |
+| Object | 94% | 6,435/6,824 |
+| Promise | 90% | 1,238/1,372 |
+| Array | 91% | 5,567/6,111 |
+| DataView | 85% | 956/1,122 |
+| Function | 81% | 736/905 |
+| Proxy | 78% | 476/607 |
+| Symbol | 77% | 142/184 |
+| TypedArray | 77% | 3,294/4,304 |
+| TypedArrayConstructors | 74% | 1,072/1,444 |
+| RegExp | 72% | 2,830/3,914 |
+| block-scope | 70% | 201/287 |
+| annexB | 64% | 884/1,377 |
 
 ---
 
@@ -194,14 +201,14 @@ These are tracked across all phases:
 | `language/types` | 113 | |
 | `language/asi` | 102 | |
 | `language/` (other) | ~400 | white-space, comments, keywords, etc. |
-| `built-ins/Temporal` | 4,482 | 4,482 (100%) |
-| `built-ins/Object` | 3,411 | |
-| `built-ins/Array` | 3,079 | |
-| `built-ins/RegExp` | 1,879 | 1,398 (74.4%) |
-| `built-ins/TypedArray` | 1,438 | 1,119 (77.8%) |
-| `built-ins/String` | 1,215 | |
-| `built-ins/` (rest) | ~8,000+ | All other built-ins |
-| `annexB` | 1,086 | 674 (62.1%) |
+| `built-ins/Temporal` | 8,964 | 8,964 (100%) |
+| `built-ins/Object` | 6,824 | 6,435 (94.3%) |
+| `built-ins/Array` | 6,551 | 5,749 (87.8%) |
+| `built-ins/RegExp` | 3,914 | 2,830 (72.3%) |
+| `built-ins/TypedArray` | 4,304 | 3,294 (76.5%) |
+| `built-ins/String` | 2,663 | 2,532 (95.1%) |
+| `built-ins/` (rest) | ~16,000+ | All other built-ins |
+| `annexB` | 1,377 | 884 (64.2%) |
 | `intl402` | varies | Internationalization — optional |
 
 ---
@@ -218,6 +225,6 @@ These are tracked across all phases:
 | M5 | Objects + prototypes | ~6,000 | ✅ |
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
-| M8 | Classes, iterators, generators, async/await | ~35,000 | ✅ 37,104 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~45,000 | ⬜ |
-| M10 | Full spec compliance | ~48,000+ | ⬜ |
+| M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 81,655 |
+| M10 | Full spec compliance | ~92,658 | ⬜ |

@@ -1408,6 +1408,56 @@ impl JsObjectData {
                 return false;
             }
         }
+        // ArraySetLength (spec §10.4.2.1): reducing length deletes configurable properties
+        if self.class_name == "Array" && key == "length" {
+            if let JsValue::Number(new_len_f) = &value {
+                let new_len_u32 = *new_len_f as u32;
+                if (new_len_u32 as f64) == *new_len_f {
+                    let mut actual_new_len = new_len_u32;
+                    let old_len = self
+                        .properties
+                        .get("length")
+                        .and_then(|d| d.value.as_ref())
+                        .and_then(|v| if let JsValue::Number(n) = v { Some(*n as u32) } else { None });
+                    if let Some(old_len) = old_len {
+                        if new_len_u32 < old_len {
+                            let mut idx_keys: Vec<(u32, String)> = self
+                                .properties
+                                .keys()
+                                .filter_map(|k| {
+                                    k.parse::<u32>()
+                                        .ok()
+                                        .filter(|&idx| idx >= new_len_u32)
+                                        .map(|idx| (idx, k.clone()))
+                                })
+                                .collect();
+                            idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
+
+                            for (idx, k) in &idx_keys {
+                                let is_non_configurable = self
+                                    .properties
+                                    .get(k.as_str())
+                                    .is_some_and(|d| d.configurable == Some(false));
+                                if is_non_configurable {
+                                    actual_new_len = idx + 1;
+                                    break;
+                                } else {
+                                    self.properties.remove(k.as_str());
+                                    self.property_order.retain(|p| p != k);
+                                }
+                            }
+                            if let Some(ref mut elements) = self.array_elements {
+                                elements.truncate(actual_new_len as usize);
+                            }
+                        }
+                    }
+                    if let Some(desc) = self.properties.get_mut("length") {
+                        desc.value = Some(JsValue::Number(actual_new_len as f64));
+                        return true;
+                    }
+                }
+            }
+        }
         if let Some(ref map) = self.parameter_map
             && let Some((env_ref, param_name)) = map.get(key)
         {
