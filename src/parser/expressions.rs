@@ -437,7 +437,9 @@ impl<'a> Parser<'a> {
                 Token::Dot => {
                     self.advance()?;
                     let prop = self.parse_dot_member_property()?;
-                    if matches!(expr, Expression::Super) && matches!(prop, MemberProperty::Private(_)) {
+                    if matches!(expr, Expression::Super)
+                        && matches!(prop, MemberProperty::Private(_))
+                    {
                         return Err(self.error("Private fields are not accessible on 'super'"));
                     }
                     expr = Expression::Member(Box::new(expr), prop);

@@ -660,7 +660,8 @@ impl Interpreter {
                         let is_ta = src_obj.borrow().typed_array_info.is_some();
                         if is_ta {
                             // TypedArray-arg path
-                            let src_ta = src_obj.borrow().typed_array_info.as_ref().unwrap().clone();
+                            let src_ta =
+                                src_obj.borrow().typed_array_info.as_ref().unwrap().clone();
                             if src_ta.is_detached.get() {
                                 return Completion::Throw(
                                     interp.create_type_error("source typed array is detached"),
@@ -696,8 +697,9 @@ impl Interpreter {
                                 } else {
                                     let src_buf = src_ta.buffer.borrow();
                                     let mut dst_buf = ta.buffer.borrow_mut();
-                                    dst_buf[dst_start..dst_start + byte_count]
-                                        .copy_from_slice(&src_buf[src_start..src_start + byte_count]);
+                                    dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
+                                        &src_buf[src_start..src_start + byte_count],
+                                    );
                                 }
                             } else {
                                 if same_buffer {
@@ -725,7 +727,8 @@ impl Interpreter {
                         other => return other,
                     };
                     if let JsValue::Object(src_o) = &src_obj {
-                        let len_val = match interp.get_object_property(src_o.id, "length", &src_obj) {
+                        let len_val = match interp.get_object_property(src_o.id, "length", &src_obj)
+                        {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
@@ -874,10 +877,9 @@ impl Interpreter {
                     let count = end.saturating_sub(begin);
 
                     // Use TypedArraySpeciesCreate
-                    let new_ta_val = match interp.typed_array_species_create(
-                        this_val,
-                        &[JsValue::Number(count as f64)],
-                    ) {
+                    let new_ta_val = match interp
+                        .typed_array_species_create(this_val, &[JsValue::Number(count as f64)])
+                    {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -2206,10 +2208,9 @@ impl Interpreter {
                 let len = ta.array_length;
 
                 // Use TypedArraySpeciesCreate
-                let new_ta_val = match interp.typed_array_species_create(
-                    this_val,
-                    &[JsValue::Number(len as f64)],
-                ) {
+                let new_ta_val = match interp
+                    .typed_array_species_create(this_val, &[JsValue::Number(len as f64)])
+                {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -2269,10 +2270,9 @@ impl Interpreter {
                 let len = kept.len();
 
                 // Use TypedArraySpeciesCreate
-                let new_ta_val = match interp.typed_array_species_create(
-                    this_val,
-                    &[JsValue::Number(len as f64)],
-                ) {
+                let new_ta_val = match interp
+                    .typed_array_species_create(this_val, &[JsValue::Number(len as f64)])
+                {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -3096,7 +3096,9 @@ impl Interpreter {
                 }
                 ta.kind
             } else {
-                return Err(self.create_type_error("species constructor did not return a TypedArray"));
+                return Err(
+                    self.create_type_error("species constructor did not return a TypedArray")
+                );
             }
         } else {
             return Err(self.create_type_error("species constructor did not return a TypedArray"));

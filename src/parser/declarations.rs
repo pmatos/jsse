@@ -295,7 +295,9 @@ impl<'a> Parser<'a> {
             // Check for duplicate private names and register declarations
             if let Some((name, kind)) = Self::get_private_name_info(&element) {
                 if name == "constructor" {
-                    return Err(self.error("Class fields and methods cannot be named '#constructor'"));
+                    return Err(
+                        self.error("Class fields and methods cannot be named '#constructor'")
+                    );
                 }
                 let entry = private_names
                     .entry(name.clone())

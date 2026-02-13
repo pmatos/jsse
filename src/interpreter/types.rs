@@ -1418,7 +1418,13 @@ impl JsObjectData {
                         .properties
                         .get("length")
                         .and_then(|d| d.value.as_ref())
-                        .and_then(|v| if let JsValue::Number(n) = v { Some(*n as u32) } else { None });
+                        .and_then(|v| {
+                            if let JsValue::Number(n) = v {
+                                Some(*n as u32)
+                            } else {
+                                None
+                            }
+                        });
                     if let Some(old_len) = old_len {
                         if new_len_u32 < old_len {
                             let mut idx_keys: Vec<(u32, String)> = self

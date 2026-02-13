@@ -182,7 +182,8 @@ impl<'a> Parser<'a> {
     }
 
     fn push_private_scope(&mut self) {
-        self.private_name_scopes.push((std::collections::HashSet::new(), Vec::new()));
+        self.private_name_scopes
+            .push((std::collections::HashSet::new(), Vec::new()));
     }
 
     fn declare_private_name(&mut self, name: &str) {

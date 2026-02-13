@@ -2111,9 +2111,10 @@ impl Interpreter {
                     Ok(None) => {
                         match Environment::check_set_binding(env, name) {
                             SetBindingCheck::TdzError => {
-                                return Completion::Throw(self.create_reference_error(
-                                    &format!("Cannot access '{}' before initialization", name),
-                                ));
+                                return Completion::Throw(self.create_reference_error(&format!(
+                                    "Cannot access '{}' before initialization",
+                                    name
+                                )));
                             }
                             SetBindingCheck::ConstAssign => {
                                 return Completion::Throw(
@@ -2122,15 +2123,16 @@ impl Interpreter {
                             }
                             SetBindingCheck::Unresolvable => {
                                 if env.borrow().strict {
-                                    return Completion::Throw(
-                                        self.create_reference_error(&format!("{name} is not defined")),
-                                    );
+                                    return Completion::Throw(self.create_reference_error(
+                                        &format!("{name} is not defined"),
+                                    ));
                                 }
                                 let var_scope = Environment::find_var_scope(env);
                                 if !var_scope.borrow().bindings.contains_key(name) {
                                     var_scope.borrow_mut().declare(name, BindingKind::Var);
                                 }
-                                if let Err(_e) = var_scope.borrow_mut().set(name, final_val.clone()) {
+                                if let Err(_e) = var_scope.borrow_mut().set(name, final_val.clone())
+                                {
                                     return Completion::Throw(
                                         self.create_type_error("Assignment to constant variable."),
                                     );
@@ -2288,7 +2290,11 @@ impl Interpreter {
                 if obj_val.is_null() || obj_val.is_undefined() {
                     return Completion::Throw(self.create_type_error(&format!(
                         "Cannot set properties of {} (setting '{}')",
-                        if obj_val.is_null() { "null" } else { "undefined" },
+                        if obj_val.is_null() {
+                            "null"
+                        } else {
+                            "undefined"
+                        },
                         key
                     )));
                 }
@@ -2970,13 +2976,9 @@ impl Interpreter {
                     .iter()
                     .map(|elem| {
                         elem.as_ref().map(|e| match e {
-                            ArrayPatternElement::Pattern(p) => {
-                                Self::pattern_to_assignment_expr(p)
-                            }
+                            ArrayPatternElement::Pattern(p) => Self::pattern_to_assignment_expr(p),
                             ArrayPatternElement::Rest(p) => {
-                                Expression::Spread(Box::new(
-                                    Self::pattern_to_assignment_expr(p),
-                                ))
+                                Expression::Spread(Box::new(Self::pattern_to_assignment_expr(p)))
                             }
                         })
                     })
@@ -3003,9 +3005,9 @@ impl Interpreter {
                         },
                         ObjectPatternProperty::Rest(p) => Property {
                             key: PropertyKey::Identifier("__rest__".to_string()),
-                            value: Expression::Spread(Box::new(
-                                Self::pattern_to_assignment_expr(p),
-                            )),
+                            value: Expression::Spread(Box::new(Self::pattern_to_assignment_expr(
+                                p,
+                            ))),
                             kind: PropertyKind::Init,
                             computed: false,
                             shorthand: false,
@@ -3026,7 +3028,6 @@ impl Interpreter {
         }
     }
 
-
     fn put_value_to_target(
         &mut self,
         target: &Expression,
@@ -3036,36 +3037,32 @@ impl Interpreter {
         match target {
             Expression::Identifier(name) => match self.resolve_with_set(name, val.clone(), env) {
                 Ok(Some(())) => Ok(()),
-                Ok(None) => {
-                    match Environment::check_set_binding(env, name) {
-                        SetBindingCheck::TdzError => {
-                            Err(self.create_reference_error(
-                                &format!("Cannot access '{}' before initialization", name),
-                            ))
-                        }
-                        SetBindingCheck::ConstAssign => {
-                            Err(self.create_type_error("Assignment to constant variable."))
-                        }
-                        SetBindingCheck::Unresolvable => {
-                            if env.borrow().strict {
-                                Err(self.create_reference_error(
-                                    &format!("{name} is not defined"),
-                                ))
-                            } else {
-                                let var_scope = Environment::find_var_scope(env);
-                                if !var_scope.borrow().bindings.contains_key(name) {
-                                    var_scope.borrow_mut().declare(name, BindingKind::Var);
-                                }
-                                var_scope.borrow_mut().set(name, val).map_err(|_| {
-                                    self.create_type_error("Assignment to constant variable.")
-                                })
-                            }
-                        }
-                        SetBindingCheck::Ok => env.borrow_mut().set(name, val).map_err(|_| {
-                            self.create_type_error("Assignment to constant variable.")
-                        }),
+                Ok(None) => match Environment::check_set_binding(env, name) {
+                    SetBindingCheck::TdzError => Err(self.create_reference_error(&format!(
+                        "Cannot access '{}' before initialization",
+                        name
+                    ))),
+                    SetBindingCheck::ConstAssign => {
+                        Err(self.create_type_error("Assignment to constant variable."))
                     }
-                }
+                    SetBindingCheck::Unresolvable => {
+                        if env.borrow().strict {
+                            Err(self.create_reference_error(&format!("{name} is not defined")))
+                        } else {
+                            let var_scope = Environment::find_var_scope(env);
+                            if !var_scope.borrow().bindings.contains_key(name) {
+                                var_scope.borrow_mut().declare(name, BindingKind::Var);
+                            }
+                            var_scope.borrow_mut().set(name, val).map_err(|_| {
+                                self.create_type_error("Assignment to constant variable.")
+                            })
+                        }
+                    }
+                    SetBindingCheck::Ok => env
+                        .borrow_mut()
+                        .set(name, val)
+                        .map_err(|_| self.create_type_error("Assignment to constant variable.")),
+                },
                 Err(e) => Err(e),
             },
             Expression::Member(obj_expr, prop) => {
@@ -7035,10 +7032,7 @@ impl Interpreter {
                         if env.borrow().bindings.contains_key(name) {
                             return Err(self.create_error(
                                 "SyntaxError",
-                                &format!(
-                                    "Identifier '{}' has already been declared",
-                                    name
-                                ),
+                                &format!("Identifier '{}' has already been declared", name),
                             ));
                         }
                     }
@@ -7061,7 +7055,8 @@ impl Interpreter {
                                 && desc.enumerable == Some(true);
                             if !is_valid_data {
                                 return Err(self.create_type_error(&format!(
-                                    "Cannot declare global function '{}'", fname
+                                    "Cannot declare global function '{}'",
+                                    fname
                                 )));
                             }
                         }
