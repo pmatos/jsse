@@ -215,6 +215,7 @@ impl<'a> Parser<'a> {
     fn parse_relational(&mut self) -> Result<Expression, ParseError> {
         let mut left = if let Token::PrivateName(name) = &self.current {
             let name = name.clone();
+            self.use_private_name(&name)?;
             self.advance()?;
             if matches!(self.current, Token::Keyword(Keyword::In)) {
                 Expression::PrivateIdentifier(name)
@@ -397,6 +398,7 @@ impl<'a> Parser<'a> {
         match &self.current {
             Token::PrivateName(name) => {
                 let name = name.clone();
+                self.use_private_name(&name)?;
                 self.advance()?;
                 Ok(MemberProperty::Private(name))
             }
@@ -435,6 +437,9 @@ impl<'a> Parser<'a> {
                 Token::Dot => {
                     self.advance()?;
                     let prop = self.parse_dot_member_property()?;
+                    if matches!(expr, Expression::Super) && matches!(prop, MemberProperty::Private(_)) {
+                        return Err(self.error("Private fields are not accessible on 'super'"));
+                    }
                     expr = Expression::Member(Box::new(expr), prop);
                 }
                 Token::LeftBracket => {
@@ -469,6 +474,7 @@ impl<'a> Parser<'a> {
                         )
                     } else if let Token::PrivateName(name) = &self.current {
                         let name = name.clone();
+                        self.use_private_name(&name)?;
                         self.advance()?;
                         Expression::Member(
                             Box::new(Expression::Identifier("".into())),

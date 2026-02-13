@@ -281,6 +281,7 @@ impl<'a> Parser<'a> {
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
         self.set_strict(true); // class bodies are always strict
+        self.push_private_scope();
         let mut elements = Vec::new();
         // Track private names: value is (has_getter, has_setter, has_other)
         let mut private_names: std::collections::HashMap<String, (bool, bool, bool)> =
@@ -291,8 +292,11 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let element = self.parse_class_element()?;
-            // Check for duplicate private names
+            // Check for duplicate private names and register declarations
             if let Some((name, kind)) = Self::get_private_name_info(&element) {
+                if name == "constructor" {
+                    return Err(self.error("Class fields and methods cannot be named '#constructor'"));
+                }
                 let entry = private_names
                     .entry(name.clone())
                     .or_insert((false, false, false));
@@ -320,9 +324,11 @@ impl<'a> Parser<'a> {
                         entry.2 = true;
                     }
                 }
+                self.declare_private_name(&name);
             }
             elements.push(element);
         }
+        self.pop_private_scope()?;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok(elements)

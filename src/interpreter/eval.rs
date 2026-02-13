@@ -67,17 +67,17 @@ impl Interpreter {
         // Create env for evaluating field initializers.
         // Use the class_env's parent (the outer scope) so that __super__ is NOT
         // accessible via eval() in field initializers (super() should be SyntaxError there).
-        let outer_env = if let JsValue::Object(ref o) = new_target_val
+        let (outer_env, class_pn) = if let JsValue::Object(ref o) = new_target_val
             && let Some(func_obj) = self.get_object(o.id)
         {
             if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
                 let cls_env = closure.borrow();
-                cls_env.parent.clone()
+                (cls_env.parent.clone(), cls_env.class_private_names.clone())
             } else {
-                None
+                (None, None)
             }
         } else {
-            None
+            (None, None)
         };
         let init_parent = outer_env.unwrap_or_else(|| env.clone());
         let init_env = Environment::new(Some(init_parent));
@@ -89,6 +89,7 @@ impl Interpreter {
                 initialized: true,
             },
         );
+        init_env.borrow_mut().class_private_names = class_pn;
         for def in &private_field_defs {
             match def {
                 PrivateFieldDef::Field { name, initializer } => {
@@ -2070,46 +2071,15 @@ impl Interpreter {
             op,
             AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign
         ) {
-            let lval = match self.eval_expr(left, env) {
-                Completion::Normal(v) => v,
-                other => return other,
-            };
-            let should_assign = match op {
-                AssignOp::LogicalAndAssign => to_boolean(&lval),
-                AssignOp::LogicalOrAssign => !to_boolean(&lval),
-                AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
-                _ => unreachable!(),
-            };
-            if !should_assign {
-                return Completion::Normal(lval);
-            }
-            let rval = match self.eval_expr(right, env) {
-                Completion::Normal(v) => v,
-                other => return other,
-            };
-            if let Expression::Identifier(name) = left {
-                match self.resolve_with_set(name, rval.clone(), env) {
-                    Ok(Some(())) => {}
-                    Ok(None) => {
-                        if let Err(_e) = env.borrow_mut().set(name, rval.clone()) {
-                            return Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            );
-                        }
-                    }
-                    Err(e) => return Completion::Throw(e),
-                }
-            }
-            return Completion::Normal(rval);
+            return self.eval_logical_assign(op, left, right, env);
         }
-
-        let rval = match self.eval_expr(right, env) {
-            Completion::Normal(v) => v,
-            other => return other,
-        };
 
         match left {
             Expression::Identifier(name) => {
+                let rval = match self.eval_expr(right, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
                 let final_val = if op == AssignOp::Assign {
                     if right.is_anonymous_function_definition() {
                         self.set_function_name(&rval, name);
@@ -2139,18 +2109,40 @@ impl Interpreter {
                 match self.resolve_with_set(name, final_val.clone(), env) {
                     Ok(Some(())) => Completion::Normal(final_val),
                     Ok(None) => {
-                        if !env.borrow().has(name) {
-                            if env.borrow().strict {
+                        match Environment::check_set_binding(env, name) {
+                            SetBindingCheck::TdzError => {
+                                return Completion::Throw(self.create_reference_error(
+                                    &format!("Cannot access '{}' before initialization", name),
+                                ));
+                            }
+                            SetBindingCheck::ConstAssign => {
                                 return Completion::Throw(
-                                    self.create_reference_error(&format!("{name} is not defined")),
+                                    self.create_type_error("Assignment to constant variable."),
                                 );
                             }
-                            env.borrow_mut().declare(name, BindingKind::Var);
-                        }
-                        if let Err(_e) = env.borrow_mut().set(name, final_val.clone()) {
-                            return Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            );
+                            SetBindingCheck::Unresolvable => {
+                                if env.borrow().strict {
+                                    return Completion::Throw(
+                                        self.create_reference_error(&format!("{name} is not defined")),
+                                    );
+                                }
+                                let var_scope = Environment::find_var_scope(env);
+                                if !var_scope.borrow().bindings.contains_key(name) {
+                                    var_scope.borrow_mut().declare(name, BindingKind::Var);
+                                }
+                                if let Err(_e) = var_scope.borrow_mut().set(name, final_val.clone()) {
+                                    return Completion::Throw(
+                                        self.create_type_error("Assignment to constant variable."),
+                                    );
+                                }
+                            }
+                            SetBindingCheck::Ok => {
+                                if let Err(_e) = env.borrow_mut().set(name, final_val.clone()) {
+                                    return Completion::Throw(
+                                        self.create_type_error("Assignment to constant variable."),
+                                    );
+                                }
+                            }
                         }
                         Completion::Normal(final_val)
                     }
@@ -2163,6 +2155,10 @@ impl Interpreter {
                     other => return other,
                 };
                 if let MemberProperty::Private(name) = prop {
+                    let rval = match self.eval_expr(right, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
                     return match &obj_val {
                         JsValue::Object(o) => {
                             if let Some(obj) = self.get_object(o.id) {
@@ -2234,28 +2230,75 @@ impl Interpreter {
                         ))),
                     };
                 }
-                let key = match prop {
-                    MemberProperty::Dot(name) => name.clone(),
+                // Evaluate computed key expression before RHS
+                let key_val = match prop {
                     MemberProperty::Computed(expr) => {
                         let v = match self.eval_expr(expr, env) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        match self.to_property_key(&v) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        }
+                        Some(v)
                     }
-                    MemberProperty::Private(_) => unreachable!(),
+                    _ => None,
                 };
+                // For compound ops, compute property key and get current value before RHS
+                let (key, lval_for_compound) = if op != AssignOp::Assign {
+                    let key = match prop {
+                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Computed(_) => {
+                            match self.to_property_key(key_val.as_ref().unwrap()) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        MemberProperty::Private(_) => unreachable!(),
+                    };
+                    let lval = if let JsValue::Object(ref o) = obj_val
+                        && let Some(obj) = self.get_object(o.id)
+                    {
+                        obj.borrow().get_property(&key)
+                    } else {
+                        JsValue::Undefined
+                    };
+                    (key, Some(lval))
+                } else {
+                    (String::new(), None) // key computed after RHS for simple assign
+                };
+                // Now evaluate RHS
+                let rval = match self.eval_expr(right, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                // For simple assign, compute key now
+                let key = if op == AssignOp::Assign {
+                    match prop {
+                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Computed(_) => {
+                            match self.to_property_key(key_val.as_ref().unwrap()) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        MemberProperty::Private(_) => unreachable!(),
+                    }
+                } else {
+                    key
+                };
+                // Throw for null/undefined base
+                if obj_val.is_null() || obj_val.is_undefined() {
+                    return Completion::Throw(self.create_type_error(&format!(
+                        "Cannot set properties of {} (setting '{}')",
+                        if obj_val.is_null() { "null" } else { "undefined" },
+                        key
+                    )));
+                }
                 if let JsValue::Object(ref o) = obj_val
                     && let Some(obj) = self.get_object(o.id)
                 {
                     let final_val = if op == AssignOp::Assign {
                         rval
                     } else {
-                        let lval = obj.borrow().get_property(&key);
-                        match self.apply_compound_assign(op, &lval, &rval) {
+                        match self.apply_compound_assign(op, &lval_for_compound.unwrap(), &rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         }
@@ -2368,18 +2411,341 @@ impl Interpreter {
                 Completion::Normal(rval)
             }
             Expression::Array(elements) if op == AssignOp::Assign => {
+                let rval = match self.eval_expr(right, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
                 match self.destructure_array_assignment(elements, &rval, env) {
                     Ok(()) => Completion::Normal(rval),
                     Err(e) => Completion::Throw(e),
                 }
             }
             Expression::Object(props) if op == AssignOp::Assign => {
+                let rval = match self.eval_expr(right, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
                 match self.destructure_object_assignment(props, &rval, env) {
                     Ok(()) => Completion::Normal(rval),
                     Err(e) => Completion::Throw(e),
                 }
             }
-            _ => Completion::Normal(rval),
+            _ => {
+                let rval = match self.eval_expr(right, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                Completion::Normal(rval)
+            }
+        }
+    }
+
+    fn eval_logical_assign(
+        &mut self,
+        op: AssignOp,
+        left: &Expression,
+        right: &Expression,
+        env: &EnvRef,
+    ) -> Completion {
+        match left {
+            Expression::Identifier(name) => {
+                let lval = if let Some(result) = self.resolve_with_get(name, env) {
+                    match result {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
+                } else {
+                    match env.borrow().get(name) {
+                        Some(v) => v,
+                        None => {
+                            return Completion::Throw(
+                                self.create_reference_error(&format!("{name} is not defined")),
+                            );
+                        }
+                    }
+                };
+                let should_assign = match op {
+                    AssignOp::LogicalAndAssign => to_boolean(&lval),
+                    AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                    AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                    _ => unreachable!(),
+                };
+                if !should_assign {
+                    return Completion::Normal(lval);
+                }
+                let rval = match self.eval_expr(right, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if right.is_anonymous_function_definition() {
+                    self.set_function_name(&rval, name);
+                }
+                match self.resolve_with_set(name, rval.clone(), env) {
+                    Ok(Some(())) => {}
+                    Ok(None) => {
+                        if let Err(_e) = env.borrow_mut().set(name, rval.clone()) {
+                            return Completion::Throw(
+                                self.create_type_error("Assignment to constant variable."),
+                            );
+                        }
+                    }
+                    Err(e) => return Completion::Throw(e),
+                }
+                Completion::Normal(rval)
+            }
+            Expression::Member(obj_expr, MemberProperty::Private(name)) => {
+                let obj_val = match self.eval_expr(obj_expr, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                let lval = match &obj_val {
+                    JsValue::Object(o) => {
+                        if let Some(obj) = self.get_object(o.id) {
+                            let elem = obj.borrow().private_fields.get(name).cloned();
+                            match elem {
+                                Some(PrivateElement::Field(v)) => v,
+                                Some(PrivateElement::Method(v)) => v,
+                                Some(PrivateElement::Accessor { get, .. }) => {
+                                    if let Some(ref getter) = get {
+                                        match self.call_function(getter, &obj_val, &[]) {
+                                            Completion::Normal(v) => v,
+                                            other => return other,
+                                        }
+                                    } else {
+                                        JsValue::Undefined
+                                    }
+                                }
+                                None => {
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot read private member #{name} from an object whose class did not declare it"
+                                    )));
+                                }
+                            }
+                        } else {
+                            JsValue::Undefined
+                        }
+                    }
+                    _ => {
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot read private member #{name} from a non-object"
+                        )));
+                    }
+                };
+                let should_assign = match op {
+                    AssignOp::LogicalAndAssign => to_boolean(&lval),
+                    AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                    AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                    _ => unreachable!(),
+                };
+                if !should_assign {
+                    return Completion::Normal(lval);
+                }
+                let rval = match self.eval_expr(right, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                match &obj_val {
+                    JsValue::Object(o) => {
+                        if let Some(obj) = self.get_object(o.id) {
+                            let elem = obj.borrow().private_fields.get(name).cloned();
+                            match elem {
+                                Some(PrivateElement::Field(_)) => {
+                                    obj.borrow_mut()
+                                        .private_fields
+                                        .insert(name.clone(), PrivateElement::Field(rval.clone()));
+                                }
+                                Some(PrivateElement::Method(_)) => {
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot assign to private method #{name}"
+                                    )));
+                                }
+                                Some(PrivateElement::Accessor { set, .. }) => {
+                                    if let Some(setter) = &set {
+                                        let setter = setter.clone();
+                                        self.call_function(&setter, &obj_val, &[rval.clone()]);
+                                    } else {
+                                        return Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot set private member #{name} which has no setter"
+                                        )));
+                                    }
+                                }
+                                None => {
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot write private member #{name} to an object whose class did not declare it"
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot write private member #{name} to a non-object"
+                        )));
+                    }
+                }
+                Completion::Normal(rval)
+            }
+            Expression::Member(obj_expr, prop) => {
+                let obj_val = match self.eval_expr(obj_expr, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                // Evaluate key expression (but defer ToPropertyKey for null/undefined base)
+                let key_expr_val = match prop {
+                    MemberProperty::Computed(expr) => {
+                        let v = match self.eval_expr(expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        Some(v)
+                    }
+                    _ => None,
+                };
+                // GetValue: ToObject(base) first, then ToPropertyKey
+                let (boxed_obj, key) = if let JsValue::Object(ref _o) = obj_val {
+                    let key = match prop {
+                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Computed(_) => {
+                            match self.to_property_key(key_expr_val.as_ref().unwrap()) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        MemberProperty::Private(_) => unreachable!(),
+                    };
+                    (obj_val.clone(), key)
+                } else {
+                    let boxed = match self.to_object(&obj_val) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => return Completion::Normal(JsValue::Undefined),
+                    };
+                    let key = match prop {
+                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Computed(_) => {
+                            match self.to_property_key(key_expr_val.as_ref().unwrap()) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        MemberProperty::Private(_) => unreachable!(),
+                    };
+                    (boxed, key)
+                };
+                let lval = if let JsValue::Object(ref o) = boxed_obj {
+                    match self.get_object_property(o.id, &key, &obj_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
+                } else {
+                    JsValue::Undefined
+                };
+                let should_assign = match op {
+                    AssignOp::LogicalAndAssign => to_boolean(&lval),
+                    AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                    AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                    _ => unreachable!(),
+                };
+                if !should_assign {
+                    return Completion::Normal(lval);
+                }
+                let rval = match self.eval_expr(right, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                // Write back (boxed_obj is already the ToObject result)
+                if let JsValue::Object(ref o) = boxed_obj
+                    && let Some(obj) = self.get_object(o.id)
+                {
+                    if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                        let receiver = boxed_obj.clone();
+                        match self.proxy_set(o.id, &key, rval.clone(), &receiver) {
+                            Ok(success) => {
+                                if !success && env.borrow().strict {
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot assign to read only property '{key}'"
+                                    )));
+                                }
+                                return Completion::Normal(rval);
+                            }
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    }
+                    let desc = obj.borrow().get_property_descriptor(&key);
+                    if let Some(ref d) = desc
+                        && let Some(ref setter) = d.set
+                        && !matches!(setter, JsValue::Undefined)
+                    {
+                        let setter = setter.clone();
+                        let this = boxed_obj.clone();
+                        return match self.call_function(&setter, &this, &[rval.clone()]) {
+                            Completion::Normal(_) => Completion::Normal(rval),
+                            other => other,
+                        };
+                    }
+                    if desc
+                        .as_ref()
+                        .map(|d| d.is_accessor_descriptor())
+                        .unwrap_or(false)
+                    {
+                        if env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot set property '{key}' which has only a getter"
+                            )));
+                        }
+                        return Completion::Normal(rval);
+                    }
+                    if !obj.borrow().has_own_property(&key) {
+                        let proto = obj.borrow().prototype.clone();
+                        if let Some(proto_rc) = proto {
+                            let proto_id = proto_rc.borrow().id.unwrap();
+                            if self.has_proxy_in_prototype_chain(proto_id) {
+                                let receiver = boxed_obj.clone();
+                                match self.proxy_set(proto_id, &key, rval.clone(), &receiver) {
+                                    Ok(success) => {
+                                        if !success && env.borrow().strict {
+                                            return Completion::Throw(self.create_type_error(
+                                                &format!(
+                                                    "Cannot assign to read only property '{key}'"
+                                                ),
+                                            ));
+                                        }
+                                        return Completion::Normal(rval);
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                        }
+                    }
+                    let success = obj.borrow_mut().set_property_value(&key, rval.clone());
+                    if !success && env.borrow().strict {
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot assign to read only property '{key}'"
+                        )));
+                    }
+                }
+                Completion::Normal(rval)
+            }
+            _ => {
+                // Fallback: just evaluate both sides
+                let lval = match self.eval_expr(left, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                let should_assign = match op {
+                    AssignOp::LogicalAndAssign => to_boolean(&lval),
+                    AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                    AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                    _ => unreachable!(),
+                };
+                if !should_assign {
+                    return Completion::Normal(lval);
+                }
+                match self.eval_expr(right, env) {
+                    Completion::Normal(v) => Completion::Normal(v),
+                    other => other,
+                }
+            }
         }
     }
 
@@ -2585,6 +2951,81 @@ impl Interpreter {
         }
         Ok(())
     }
+    pub(crate) fn assign_to_for_pattern(
+        &mut self,
+        pat: &crate::ast::Pattern,
+        val: JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        let expr = Self::pattern_to_assignment_expr(pat);
+        self.put_value_to_target(&expr, val, env)
+    }
+
+    fn pattern_to_assignment_expr(pat: &crate::ast::Pattern) -> crate::ast::Expression {
+        use crate::ast::*;
+        match pat {
+            Pattern::Identifier(name) => Expression::Identifier(name.clone()),
+            Pattern::Array(elements) => {
+                let exprs = elements
+                    .iter()
+                    .map(|elem| {
+                        elem.as_ref().map(|e| match e {
+                            ArrayPatternElement::Pattern(p) => {
+                                Self::pattern_to_assignment_expr(p)
+                            }
+                            ArrayPatternElement::Rest(p) => {
+                                Expression::Spread(Box::new(
+                                    Self::pattern_to_assignment_expr(p),
+                                ))
+                            }
+                        })
+                    })
+                    .collect();
+                Expression::Array(exprs)
+            }
+            Pattern::Object(props) => {
+                let obj_props = props
+                    .iter()
+                    .map(|prop| match prop {
+                        ObjectPatternProperty::KeyValue(key, p) => Property {
+                            key: key.clone(),
+                            value: Self::pattern_to_assignment_expr(p),
+                            kind: PropertyKind::Init,
+                            computed: matches!(key, PropertyKey::Computed(_)),
+                            shorthand: false,
+                        },
+                        ObjectPatternProperty::Shorthand(name) => Property {
+                            key: PropertyKey::Identifier(name.clone()),
+                            value: Expression::Identifier(name.clone()),
+                            kind: PropertyKind::Init,
+                            computed: false,
+                            shorthand: true,
+                        },
+                        ObjectPatternProperty::Rest(p) => Property {
+                            key: PropertyKey::Identifier("__rest__".to_string()),
+                            value: Expression::Spread(Box::new(
+                                Self::pattern_to_assignment_expr(p),
+                            )),
+                            kind: PropertyKind::Init,
+                            computed: false,
+                            shorthand: false,
+                        },
+                    })
+                    .collect();
+                Expression::Object(obj_props)
+            }
+            Pattern::Assign(inner, default) => Expression::Assign(
+                AssignOp::Assign,
+                Box::new(Self::pattern_to_assignment_expr(inner)),
+                default.clone(),
+            ),
+            Pattern::Rest(inner) => {
+                Expression::Spread(Box::new(Self::pattern_to_assignment_expr(inner)))
+            }
+            Pattern::MemberExpression(expr) => *expr.clone(),
+        }
+    }
+
 
     fn put_value_to_target(
         &mut self,
@@ -2596,15 +3037,34 @@ impl Interpreter {
             Expression::Identifier(name) => match self.resolve_with_set(name, val.clone(), env) {
                 Ok(Some(())) => Ok(()),
                 Ok(None) => {
-                    if !env.borrow().has(name) {
-                        if env.borrow().strict {
-                            return Err(
-                                self.create_reference_error(&format!("{name} is not defined"))
-                            );
+                    match Environment::check_set_binding(env, name) {
+                        SetBindingCheck::TdzError => {
+                            Err(self.create_reference_error(
+                                &format!("Cannot access '{}' before initialization", name),
+                            ))
                         }
-                        env.borrow_mut().declare(name, BindingKind::Var);
+                        SetBindingCheck::ConstAssign => {
+                            Err(self.create_type_error("Assignment to constant variable."))
+                        }
+                        SetBindingCheck::Unresolvable => {
+                            if env.borrow().strict {
+                                Err(self.create_reference_error(
+                                    &format!("{name} is not defined"),
+                                ))
+                            } else {
+                                let var_scope = Environment::find_var_scope(env);
+                                if !var_scope.borrow().bindings.contains_key(name) {
+                                    var_scope.borrow_mut().declare(name, BindingKind::Var);
+                                }
+                                var_scope.borrow_mut().set(name, val).map_err(|_| {
+                                    self.create_type_error("Assignment to constant variable.")
+                                })
+                            }
+                        }
+                        SetBindingCheck::Ok => env.borrow_mut().set(name, val).map_err(|_| {
+                            self.create_type_error("Assignment to constant variable.")
+                        }),
                     }
-                    env.borrow_mut().set(name, val)
                 }
                 Err(e) => Err(e),
             },
@@ -6340,6 +6800,22 @@ impl Interpreter {
         if caller_strict {
             p.set_strict(true);
         }
+        if direct {
+            // Walk caller env chain to find enclosing class private names
+            let mut env_walk = Some(caller_env.clone());
+            loop {
+                let e = match env_walk {
+                    Some(ref e) => e.clone(),
+                    None => break,
+                };
+                let borrowed = e.borrow();
+                if let Some(ref names) = borrowed.class_private_names {
+                    p.set_eval_in_class_with_names(names.clone());
+                    break;
+                }
+                env_walk = borrowed.parent.clone();
+            }
+        }
         let program = match p.parse_program() {
             Ok(prog) => prog,
             Err(e) => {
@@ -6350,28 +6826,287 @@ impl Interpreter {
             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
         });
         let is_strict = caller_strict || eval_code_strict;
-        let env = if is_strict {
-            let new_env = Environment::new_function_scope(if direct {
-                Some(caller_env.clone())
+
+        // Determine varEnv and lexEnv per spec PerformEval / EvalDeclarationInstantiation
+        let (var_env, lex_env) = if is_strict {
+            // Strict eval: both var and lex are a new function scope
+            let base = if direct {
+                caller_env.clone()
             } else {
-                Some(self.global_env.clone())
-            });
+                self.global_env.clone()
+            };
+            let new_env = Environment::new_function_scope(Some(base));
             new_env.borrow_mut().strict = true;
-            new_env
+            (new_env.clone(), new_env)
         } else if direct {
-            caller_env.clone()
+            // Non-strict direct eval: var goes to caller's var scope,
+            // lex is a new declarative environment for let/const/class
+            let var_env = Environment::find_var_scope(caller_env);
+            let lex_env = Environment::new(Some(caller_env.clone()));
+            (var_env, lex_env)
         } else {
-            self.global_env.clone()
+            // Non-strict indirect eval: var is global, lex is new child of global
+            let lex_env = Environment::new(Some(self.global_env.clone()));
+            (self.global_env.clone(), lex_env)
         };
+
+        // EvalDeclarationInstantiation
+        if let Err(e) = self.eval_declaration_instantiation(
+            &program.body,
+            &var_env,
+            &lex_env,
+            is_strict,
+            direct,
+            caller_env,
+        ) {
+            return Completion::Throw(e);
+        }
+
+        // Execute statements in lex_env
+        self.call_stack_envs.push(lex_env.clone());
         let mut last = Completion::Empty;
         for stmt in &program.body {
-            match self.exec_statement(stmt, &env) {
+            self.maybe_gc();
+            match self.exec_statement(stmt, &lex_env) {
                 Completion::Normal(v) => last = Completion::Normal(v),
                 Completion::Empty => {}
-                other => return other,
+                other => {
+                    self.call_stack_envs.pop();
+                    return other;
+                }
             }
         }
+        self.call_stack_envs.pop();
         last.update_empty(JsValue::Undefined)
+    }
+
+    /// Collect top-level var-declared names from eval body (recursively into blocks, etc.)
+    fn collect_eval_var_names(stmts: &[Statement], names: &mut Vec<String>) {
+        for stmt in stmts {
+            Self::collect_eval_var_names_from_stmt(stmt, names);
+        }
+    }
+
+    fn collect_eval_var_names_from_stmt(stmt: &Statement, names: &mut Vec<String>) {
+        match stmt {
+            Statement::Variable(decl) if decl.kind == VarKind::Var => {
+                for d in &decl.declarations {
+                    Self::collect_pattern_names(&d.pattern, names);
+                }
+            }
+            Statement::Block(stmts) => {
+                for s in stmts {
+                    Self::collect_eval_var_names_from_stmt(s, names);
+                }
+            }
+            Statement::If(i) => {
+                Self::collect_eval_var_names_from_stmt(&i.consequent, names);
+                if let Some(alt) = &i.alternate {
+                    Self::collect_eval_var_names_from_stmt(alt, names);
+                }
+            }
+            Statement::While(w) => Self::collect_eval_var_names_from_stmt(&w.body, names),
+            Statement::DoWhile(d) => Self::collect_eval_var_names_from_stmt(&d.body, names),
+            Statement::For(f) => {
+                if let Some(ForInit::Variable(decl)) = &f.init {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, names);
+                        }
+                    }
+                }
+                Self::collect_eval_var_names_from_stmt(&f.body, names);
+            }
+            Statement::ForIn(fi) => {
+                if let ForInOfLeft::Variable(decl) = &fi.left {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, names);
+                        }
+                    }
+                }
+                Self::collect_eval_var_names_from_stmt(&fi.body, names);
+            }
+            Statement::ForOf(fo) => {
+                if let ForInOfLeft::Variable(decl) = &fo.left {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, names);
+                        }
+                    }
+                }
+                Self::collect_eval_var_names_from_stmt(&fo.body, names);
+            }
+            Statement::Switch(sw) => {
+                for case in &sw.cases {
+                    for s in &case.consequent {
+                        Self::collect_eval_var_names_from_stmt(s, names);
+                    }
+                }
+            }
+            Statement::Try(t) => {
+                for s in &t.block {
+                    Self::collect_eval_var_names_from_stmt(s, names);
+                }
+                if let Some(handler) = &t.handler {
+                    for s in &handler.body {
+                        Self::collect_eval_var_names_from_stmt(s, names);
+                    }
+                }
+                if let Some(finalizer) = &t.finalizer {
+                    for s in finalizer {
+                        Self::collect_eval_var_names_from_stmt(s, names);
+                    }
+                }
+            }
+            Statement::Labeled(_, inner) => {
+                Self::collect_eval_var_names_from_stmt(inner, names);
+            }
+            Statement::With(_, inner) => {
+                Self::collect_eval_var_names_from_stmt(inner, names);
+            }
+            _ => {}
+        }
+    }
+
+    /// Collect top-level function declarations from eval body (only top-level, not inside blocks)
+    fn collect_eval_function_decls(stmts: &[Statement]) -> Vec<FunctionDecl> {
+        let mut funcs = Vec::new();
+        for stmt in stmts {
+            if let Some(f) = Self::unwrap_labeled_function(stmt) {
+                funcs.push(f.clone());
+            }
+        }
+        // Per spec: reverse order, keep last occurrence of each name
+        funcs.reverse();
+        let mut seen = std::collections::HashSet::new();
+        funcs.retain(|f| seen.insert(f.name.clone()));
+        funcs
+    }
+
+    /// EvalDeclarationInstantiation per spec 19.2.1.4
+    fn eval_declaration_instantiation(
+        &mut self,
+        body: &[Statement],
+        var_env: &EnvRef,
+        lex_env: &EnvRef,
+        strict: bool,
+        direct: bool,
+        caller_env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        let is_global = var_env.borrow().global_object.is_some();
+
+        // Collect function declarations to initialize
+        let functions_to_init = Self::collect_eval_function_decls(body);
+        let declared_func_names: Vec<String> =
+            functions_to_init.iter().map(|f| f.name.clone()).collect();
+
+        // Collect var-declared names (excluding those that are also function names)
+        let mut all_var_names = Vec::new();
+        Self::collect_eval_var_names(body, &mut all_var_names);
+        let declared_var_names: Vec<String> = {
+            let mut seen = std::collections::HashSet::new();
+            all_var_names
+                .into_iter()
+                .filter(|n| !declared_func_names.contains(n) && seen.insert(n.clone()))
+                .collect()
+        };
+
+        if !strict {
+            // Check for conflicts with lexical declarations in intermediate scopes
+            // (between lex_env/caller_env and var_env)
+            if !is_global {
+                let all_names: Vec<String> = declared_func_names
+                    .iter()
+                    .chain(declared_var_names.iter())
+                    .cloned()
+                    .collect();
+                // Walk from caller_env up to (but not including) var_env
+                let mut check_env: Option<EnvRef> = if direct {
+                    Some(caller_env.clone())
+                } else {
+                    None
+                };
+                while let Some(env) = check_env {
+                    if Rc::ptr_eq(&env, var_env) {
+                        break;
+                    }
+                    for name in &all_names {
+                        if env.borrow().bindings.contains_key(name) {
+                            return Err(self.create_error(
+                                "SyntaxError",
+                                &format!(
+                                    "Identifier '{}' has already been declared",
+                                    name
+                                ),
+                            ));
+                        }
+                    }
+                    let next = env.borrow().parent.clone();
+                    check_env = next;
+                }
+            }
+        }
+
+        // Check CanDeclareGlobalFunction / CanDeclareGlobalVar for global context
+        if is_global {
+            let global_obj = var_env.borrow().global_object.clone();
+            if let Some(ref gobj) = global_obj {
+                let gb = gobj.borrow();
+                for fname in &declared_func_names {
+                    if let Some(desc) = gb.properties.get(fname) {
+                        if desc.configurable != Some(true) {
+                            let is_valid_data = desc.value.is_some()
+                                && desc.writable == Some(true)
+                                && desc.enumerable == Some(true);
+                            if !is_valid_data {
+                                return Err(self.create_type_error(&format!(
+                                    "Cannot declare global function '{}'", fname
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Hoist function declarations to var_env
+        for f in &functions_to_init {
+            if is_global {
+                if !var_env.borrow().bindings.contains_key(&f.name) {
+                    var_env.borrow_mut().declare_global_var(&f.name);
+                }
+            } else if !var_env.borrow().bindings.contains_key(&f.name) {
+                var_env.borrow_mut().declare(&f.name, BindingKind::Var);
+            }
+            let func = JsFunction::User {
+                name: Some(f.name.clone()),
+                params: f.params.clone(),
+                body: f.body.clone(),
+                closure: lex_env.clone(),
+                is_arrow: false,
+                is_strict: Self::is_strict_mode_body(&f.body) || lex_env.borrow().strict,
+                is_generator: f.is_generator,
+                is_async: f.is_async,
+                is_method: false,
+                source_text: f.source_text.clone(),
+            };
+            let val = self.create_function(func);
+            let _ = var_env.borrow_mut().set(&f.name, val);
+        }
+
+        // Hoist var declarations to var_env
+        for name in &declared_var_names {
+            if !var_env.borrow().bindings.contains_key(name) {
+                if is_global {
+                    var_env.borrow_mut().declare_global_var(name);
+                } else {
+                    var_env.borrow_mut().declare(name, BindingKind::Var);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn eval_new(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
@@ -6516,6 +7251,17 @@ impl Interpreter {
             let init_env = Environment::new(Some(env.clone()));
             init_env.borrow_mut().declare("this", BindingKind::Const);
             let _ = init_env.borrow_mut().set("this", this_val.clone());
+            // Set private name context from class env for eval() inside field initializers
+            if let JsValue::Object(o) = &callee_val
+                && let Some(func_obj) = self.get_object(o.id)
+            {
+                if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
+                    let cls_env = closure.borrow();
+                    if let Some(ref names) = cls_env.class_private_names {
+                        init_env.borrow_mut().class_private_names = Some(names.clone());
+                    }
+                }
+            }
             for def in &private_field_defs {
                 match def {
                     PrivateFieldDef::Field { name, initializer } => {
@@ -8312,6 +9058,37 @@ impl Interpreter {
         env: &EnvRef,
         class_source_text: Option<String>,
     ) -> Completion {
+        // Collect private names for eval() support
+        let mut pn_set = std::collections::HashSet::new();
+        for elem in body {
+            match elem {
+                ClassElement::Method(m) => {
+                    if let PropertyKey::Private(n) = &m.key {
+                        pn_set.insert(n.clone());
+                    }
+                }
+                ClassElement::Property(p) => {
+                    if let PropertyKey::Private(n) = &p.key {
+                        pn_set.insert(n.clone());
+                    }
+                }
+                ClassElement::StaticBlock(_) => {}
+            }
+        }
+        self.class_private_names.push(pn_set);
+        let result = self.eval_class_inner(name, super_class, body, env, class_source_text);
+        self.class_private_names.pop();
+        result
+    }
+
+    fn eval_class_inner(
+        &mut self,
+        name: &str,
+        super_class: &Option<Box<Expression>>,
+        body: &[ClassElement],
+        env: &EnvRef,
+        class_source_text: Option<String>,
+    ) -> Completion {
         // Find constructor method
         let ctor_method = body.iter().find_map(|elem| {
             if let ClassElement::Method(m) = elem
@@ -8341,8 +9118,9 @@ impl Interpreter {
             }
         }
 
-        // Create class environment with __super__ binding
+        // Create class environment with __super__ binding and private names
         let class_env = Environment::new(Some(env.clone()));
+        class_env.borrow_mut().class_private_names = self.class_private_names.last().cloned();
         if let Some(ref sv) = super_val {
             class_env
                 .borrow_mut()

@@ -115,7 +115,7 @@ impl Interpreter {
         result
     }
 
-    fn unwrap_labeled_function(stmt: &Statement) -> Option<&FunctionDecl> {
+    pub(crate) fn unwrap_labeled_function(stmt: &Statement) -> Option<&FunctionDecl> {
         match stmt {
             Statement::FunctionDeclaration(f) => Some(f),
             Statement::Labeled(_, inner) => Self::unwrap_labeled_function(inner),
@@ -145,7 +145,7 @@ impl Interpreter {
         let _ = env.borrow_mut().set(&f.name, val);
     }
 
-    fn collect_pattern_names(pat: &Pattern, names: &mut Vec<String>) {
+    pub(crate) fn collect_pattern_names(pat: &Pattern, names: &mut Vec<String>) {
         match pat {
             Pattern::Identifier(name) => names.push(name.clone()),
             Pattern::Array(elems) => {
@@ -602,6 +602,7 @@ impl Interpreter {
                             dispose_stack: None,
                             global_object: None,
                             annexb_function_names: None,
+                            class_private_names: None,
                         }));
                         self.exec_statement(body, &with_env)
                     } else {
@@ -1311,29 +1312,12 @@ impl Interpreter {
                         return Completion::Throw(e);
                     }
                 }
-                ForInOfLeft::Pattern(pat) => match pat {
-                    Pattern::Identifier(name) => {
-                        if !env.borrow().has(name) && env.borrow().strict {
-                            self.iterator_close(&iterator, JsValue::Undefined);
-                            return Completion::Throw(
-                                self.create_reference_error(&format!("{name} is not defined")),
-                            );
-                        }
-                        let _ = env.borrow_mut().set(name, val);
+                ForInOfLeft::Pattern(pat) => {
+                    if let Err(e) = self.assign_to_for_pattern(pat, val, env) {
+                        self.iterator_close(&iterator, e.clone());
+                        return Completion::Throw(e);
                     }
-                    Pattern::MemberExpression(expr) => {
-                        if let Err(e) = self.assign_to_expr(expr, val, env) {
-                            self.iterator_close(&iterator, e.clone());
-                            return Completion::Throw(e);
-                        }
-                    }
-                    _ => {
-                        if let Err(e) = self.bind_pattern(pat, val, BindingKind::Let, &for_env) {
-                            self.iterator_close(&iterator, e.clone());
-                            return Completion::Throw(e);
-                        }
-                    }
-                },
+                }
             }
             let body_result = self.exec_statement(&fo.body, &for_env);
             let body_result = self.dispose_resources(&for_env, body_result);

@@ -55,6 +55,7 @@ pub struct Parser<'a> {
     in_switch_case: bool,
     no_in: bool,
     pub last_string_literal_has_escape: bool,
+    private_name_scopes: Vec<(std::collections::HashSet<String>, Vec<(String, usize)>)>,
 }
 
 impl<'a> Parser<'a> {
@@ -95,6 +96,7 @@ impl<'a> Parser<'a> {
             in_switch_case: false,
             no_in: false,
             last_string_literal_has_escape: false,
+            private_name_scopes: Vec::new(),
         })
     }
 
@@ -173,6 +175,59 @@ impl<'a> Parser<'a> {
     pub fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
         self.lexer.strict = strict;
+    }
+
+    pub fn set_eval_in_class_with_names(&mut self, names: std::collections::HashSet<String>) {
+        self.private_name_scopes.push((names, Vec::new()));
+    }
+
+    fn push_private_scope(&mut self) {
+        self.private_name_scopes.push((std::collections::HashSet::new(), Vec::new()));
+    }
+
+    fn declare_private_name(&mut self, name: &str) {
+        if let Some((declared, _)) = self.private_name_scopes.last_mut() {
+            declared.insert(name.to_string());
+        }
+    }
+
+    pub(super) fn use_private_name(&mut self, name: &str) -> Result<(), ParseError> {
+        if name == "constructor" {
+            return Err(self.error("#constructor is not a valid private name"));
+        }
+        if self.private_name_scopes.is_empty() {
+            return Err(self.error(format!(
+                "Reference to undeclared private field or method '#{name}'"
+            )));
+        }
+        if let Some((_, used)) = self.private_name_scopes.last_mut() {
+            used.push((name.to_string(), self.current_token_start));
+        }
+        Ok(())
+    }
+
+    fn pop_private_scope(&mut self) -> Result<(), ParseError> {
+        if let Some((declared, used)) = self.private_name_scopes.pop() {
+            for (name, _pos) in &used {
+                let mut found = declared.contains(name);
+                if !found {
+                    for (parent_declared, _) in self.private_name_scopes.iter().rev() {
+                        if parent_declared.contains(name) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if !found {
+                    return Err(self.error(format!(
+                        "Reference to undeclared private field or method '#{name}'"
+                    )));
+                }
+            }
+            Ok(())
+        } else {
+            Ok(())
+        }
     }
 
     fn eat_star(&mut self) -> Result<bool, ParseError> {

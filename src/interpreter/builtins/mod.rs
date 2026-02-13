@@ -2128,44 +2128,9 @@ impl Interpreter {
             "eval",
             BindingKind::Var,
             JsFunction::native("eval".to_string(), 1, |interp, _this, args| {
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&arg, JsValue::String(_)) {
-                    return Completion::Normal(arg);
-                }
-                let code = to_js_string(&arg);
-                let mut p = match parser::Parser::new(&code) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        return Completion::Throw(
-                            interp.create_error("SyntaxError", "Invalid eval source"),
-                        );
-                    }
-                };
-                let program = match p.parse_program() {
-                    Ok(prog) => prog,
-                    Err(_) => {
-                        return Completion::Throw(
-                            interp.create_error("SyntaxError", "Invalid eval source"),
-                        );
-                    }
-                };
-                let is_strict = program.body.first().is_some_and(|s| {
-                    matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
-                });
-                let env = if is_strict {
-                    Environment::new_function_scope(Some(interp.global_env.clone()))
-                } else {
-                    interp.global_env.clone()
-                };
-                let mut last = Completion::Empty;
-                for stmt in &program.body {
-                    match interp.exec_statement(stmt, &env) {
-                        Completion::Normal(v) => last = Completion::Normal(v),
-                        Completion::Empty => {}
-                        other => return other,
-                    }
-                }
-                last.update_empty(JsValue::Undefined)
+                // Indirect eval: direct=false, caller_env=global
+                let global = interp.global_env.clone();
+                interp.perform_eval(args, false, false, &global)
             }),
         );
 

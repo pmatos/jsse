@@ -89,6 +89,7 @@ pub struct Environment {
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
+    pub(crate) class_private_names: Option<std::collections::HashSet<String>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -134,6 +135,14 @@ pub(crate) enum BindingKind {
     Const,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SetBindingCheck {
+    Ok,
+    ConstAssign,
+    TdzError,
+    Unresolvable,
+}
+
 impl Environment {
     pub fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
@@ -146,6 +155,7 @@ impl Environment {
             dispose_stack: None,
             global_object: None,
             annexb_function_names: None,
+            class_private_names: None,
         }))
     }
 
@@ -160,6 +170,7 @@ impl Environment {
             dispose_stack: None,
             global_object: None,
             annexb_function_names: None,
+            class_private_names: None,
         }))
     }
 
@@ -301,6 +312,30 @@ impl Environment {
         } else {
             false
         }
+    }
+
+    /// Walk the scope chain and check what error (if any) setting a binding would produce.
+    pub fn check_set_binding(env: &EnvRef, name: &str) -> SetBindingCheck {
+        let e = env.borrow();
+        if let Some(binding) = e.bindings.get(name) {
+            if !binding.initialized && binding.kind != BindingKind::Var {
+                return SetBindingCheck::TdzError;
+            }
+            if binding.kind == BindingKind::Const && binding.initialized {
+                return SetBindingCheck::ConstAssign;
+            }
+            return SetBindingCheck::Ok;
+        }
+        if let Some(ref global_obj) = e.global_object {
+            if global_obj.borrow().has_property(name) {
+                return SetBindingCheck::Ok;
+            }
+            return SetBindingCheck::Unresolvable;
+        }
+        if let Some(ref parent) = e.parent {
+            return Self::check_set_binding(parent, name);
+        }
+        SetBindingCheck::Unresolvable
     }
 
     pub fn has(&self, name: &str) -> bool {
