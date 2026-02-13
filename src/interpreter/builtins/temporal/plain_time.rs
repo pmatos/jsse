@@ -89,25 +89,28 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 has_any |= has_h;
-                let (new_us, has_us) = match read_time_field_new(interp, &item, "microsecond", us as f64) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
+                let (new_us, has_us) =
+                    match read_time_field_new(interp, &item, "microsecond", us as f64) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                 has_any |= has_us;
-                let (new_ms, has_ms) = match read_time_field_new(interp, &item, "millisecond", ms as f64) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
+                let (new_ms, has_ms) =
+                    match read_time_field_new(interp, &item, "millisecond", ms as f64) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                 has_any |= has_ms;
                 let (new_m, has_mi) = match read_time_field_new(interp, &item, "minute", m as f64) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 has_any |= has_mi;
-                let (new_ns, has_ns) = match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
+                let (new_ns, has_ns) =
+                    match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                 has_any |= has_ns;
                 let (new_s, has_s) = match read_time_field_new(interp, &item, "second", s as f64) {
                     Ok(v) => v,
@@ -116,7 +119,8 @@ impl Interpreter {
                 has_any |= has_s;
                 if !has_any {
                     return Completion::Throw(
-                        interp.create_type_error("with() requires at least one recognized property"),
+                        interp
+                            .create_type_error("with() requires at least one recognized property"),
                     );
                 }
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -126,13 +130,16 @@ impl Interpreter {
                 };
                 if overflow == "reject" {
                     if !iso_time_valid_f64(new_h, new_m, new_s, new_ms, new_us, new_ns) {
-                        return Completion::Throw(
-                            interp.create_range_error("Invalid time fields"),
-                        );
+                        return Completion::Throw(interp.create_range_error("Invalid time fields"));
                     }
                     create_plain_time_result(
-                        interp, new_h as u8, new_m as u8, new_s as u8,
-                        new_ms as u16, new_us as u16, new_ns as u16,
+                        interp,
+                        new_h as u8,
+                        new_m as u8,
+                        new_s as u8,
+                        new_ms as u16,
+                        new_us as u16,
+                        new_ns as u16,
                     )
                 } else {
                     let ch = (new_h.max(0.0).min(23.0)) as u8;
@@ -725,16 +732,18 @@ impl Interpreter {
                 };
                 if overflow == "reject" {
                     if !iso_time_valid(raw.0, raw.1, raw.2, raw.3, raw.4, raw.5) {
-                        return Completion::Throw(
-                            interp.create_range_error("Invalid time fields"),
-                        );
+                        return Completion::Throw(interp.create_range_error("Invalid time fields"));
                     }
                     create_plain_time_result(interp, raw.0, raw.1, raw.2, raw.3, raw.4, raw.5)
                 } else {
                     create_plain_time_result(
                         interp,
-                        raw.0.min(23), raw.1.min(59), raw.2.min(59),
-                        raw.3.min(999), raw.4.min(999), raw.5.min(999),
+                        raw.0.min(23),
+                        raw.1.min(59),
+                        raw.2.min(59),
+                        raw.3.min(999),
+                        raw.4.min(999),
+                        raw.5.min(999),
                     )
                 }
             },
@@ -1038,11 +1047,9 @@ fn parse_time_string(
     match parse_temporal_time_string(s) {
         Some((h, m, sec, ms, us, ns, has_utc)) => {
             if has_utc {
-                return Err(Completion::Throw(
-                    interp.create_range_error(
-                        "UTC designator Z is not allowed in a PlainTime string",
-                    ),
-                ));
+                return Err(Completion::Throw(interp.create_range_error(
+                    "UTC designator Z is not allowed in a PlainTime string",
+                )));
             }
             Ok((h, m, sec, ms, us, ns))
         }
@@ -1254,13 +1261,12 @@ fn parse_time_diff_options<'a>(
     };
 
     // Auto-bump largestUnit if smallestUnit is larger
-    let largest: &str = if largest_auto
-        && temporal_unit_order(smallest) > temporal_unit_order(largest)
-    {
-        smallest
-    } else {
-        largest
-    };
+    let largest: &str =
+        if largest_auto && temporal_unit_order(smallest) > temporal_unit_order(largest) {
+            smallest
+        } else {
+            largest
+        };
 
     // Validate: smallestUnit <= largestUnit
     if temporal_unit_order(smallest) > temporal_unit_order(largest) {
@@ -1326,7 +1332,9 @@ fn parse_time_to_string_options(
             precision = Some(floored as i32);
         } else {
             // GetStringOrNumberOption: non-Number → ToString then check for "auto"
-            let s = interp.to_string_value(&fsd_val).map_err(Completion::Throw)?;
+            let s = interp
+                .to_string_value(&fsd_val)
+                .map_err(Completion::Throw)?;
             if s != "auto" {
                 return Err(Completion::Throw(interp.create_range_error(
                     "fractionalSecondDigits must be 0-9 or 'auto'",

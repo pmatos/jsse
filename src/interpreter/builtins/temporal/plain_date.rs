@@ -435,7 +435,8 @@ impl Interpreter {
                 has_any |= has_y;
                 if !has_any {
                     return Completion::Throw(
-                        interp.create_type_error("with() requires at least one recognized property"),
+                        interp
+                            .create_type_error("with() requires at least one recognized property"),
                     );
                 }
                 // GetTemporalOverflowOption
@@ -517,7 +518,9 @@ impl Interpreter {
                     ) {
                         Ok(v) => v,
                         Err(()) => {
-                            return Completion::Throw(interp.create_range_error("Date out of range"));
+                            return Completion::Throw(
+                                interp.create_range_error("Date out of range"),
+                            );
                         }
                     };
                     if !super::iso_date_within_limits(ry, rm, rd) {
@@ -567,13 +570,20 @@ impl Interpreter {
                     };
 
                     // Apply rounding on signed values
-                    if smallest_unit != "day" || rounding_increment != 1.0 || rounding_mode != "trunc" {
+                    if smallest_unit != "day"
+                        || rounding_increment != 1.0
+                        || rounding_mode != "trunc"
+                    {
                         let (ry, rm, rd) = (y1, m1, d1);
                         // Pre-check: NudgeToCalendarUnit end boundary within limits
                         if matches!(smallest_unit.as_str(), "month" | "year") {
-                            let dur_sign = if dy > 0 || dm > 0 || dw > 0 || dd > 0 { 1i64 }
-                                else if dy < 0 || dm < 0 || dw < 0 || dd < 0 { -1i64 }
-                                else { 1 };
+                            let dur_sign = if dy > 0 || dm > 0 || dw > 0 || dd > 0 {
+                                1i64
+                            } else if dy < 0 || dm < 0 || dw < 0 || dd < 0 {
+                                -1i64
+                            } else {
+                                1
+                            };
                             let inc = rounding_increment as i64;
                             let end_date = match smallest_unit.as_str() {
                                 "month" => {
@@ -587,14 +597,23 @@ impl Interpreter {
                             };
                             if !iso_date_within_limits(end_date.0, end_date.1, end_date.2) {
                                 return Completion::Throw(
-                                    interp.create_range_error("Rounded date outside valid ISO range"),
+                                    interp
+                                        .create_range_error("Rounded date outside valid ISO range"),
                                 );
                             }
                         }
                         let (ry2, rm2, rw2, rd2) = match round_date_duration(
-                            dy, dm, dw, dd,
-                            &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
-                            ry, rm, rd,
+                            dy,
+                            dm,
+                            dw,
+                            dd,
+                            &smallest_unit,
+                            &largest_unit,
+                            rounding_increment,
+                            &effective_mode,
+                            ry,
+                            rm,
+                            rd,
                         ) {
                             Ok(v) => v,
                             Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
@@ -606,9 +625,11 @@ impl Interpreter {
                         // Check that rounded date is within valid ISO range (calendar units only)
                         if matches!(smallest_unit.as_str(), "month" | "year") {
                             let rounded_end = add_iso_date(ry, rm, rd, dy, dm, dw, dd);
-                            if !iso_date_within_limits(rounded_end.0, rounded_end.1, rounded_end.2) {
+                            if !iso_date_within_limits(rounded_end.0, rounded_end.1, rounded_end.2)
+                            {
                                 return Completion::Throw(
-                                    interp.create_range_error("Rounded date outside valid ISO range"),
+                                    interp
+                                        .create_range_error("Rounded date outside valid ISO range"),
                                 );
                             }
                         }
@@ -621,7 +642,10 @@ impl Interpreter {
 
                     // For since: negate the result
                     if sign == -1 {
-                        dy = -dy; dm = -dm; dw = -dw; dd = -dd;
+                        dy = -dy;
+                        dm = -dm;
+                        dw = -dw;
+                        dd = -dd;
                     }
 
                     super::duration::create_duration_result(
@@ -1253,7 +1277,9 @@ fn read_pd_property_bag_raw(
         other => return Err(other),
     };
     let d = if is_undefined(&d_val) {
-        return Err(Completion::Throw(interp.create_type_error("day is required")));
+        return Err(Completion::Throw(
+            interp.create_type_error("day is required"),
+        ));
     } else {
         let d_f = to_integer_with_truncation(interp, &d_val)?;
         if d_f < 1.0 {
@@ -1298,7 +1324,9 @@ fn read_pd_property_bag_raw(
         other => return Err(other),
     };
     let y = if is_undefined(&y_val) {
-        return Err(Completion::Throw(interp.create_type_error("year is required")));
+        return Err(Completion::Throw(
+            interp.create_type_error("year is required"),
+        ));
     } else {
         to_integer_with_truncation(interp, &y_val)? as i32
     };
@@ -1509,15 +1537,15 @@ fn parse_date_string(
     };
     // PlainDate does not accept UTC designator (Z)
     if parsed.has_utc_designator {
-        return Err(Completion::Throw(
-            interp.create_range_error("UTC designator Z is not allowed in a PlainDate string"),
-        ));
+        return Err(Completion::Throw(interp.create_range_error(
+            "UTC designator Z is not allowed in a PlainDate string",
+        )));
     }
     // Date-only string with UTC offset is not valid for PlainDate
     if !parsed.has_time && parsed.offset.is_some() {
-        return Err(Completion::Throw(
-            interp.create_range_error("UTC offset without time is not valid for PlainDate"),
-        ));
+        return Err(Completion::Throw(interp.create_range_error(
+            "UTC offset without time is not valid for PlainDate",
+        )));
     }
     let cal = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
     let cal = match validate_calendar(&cal) {

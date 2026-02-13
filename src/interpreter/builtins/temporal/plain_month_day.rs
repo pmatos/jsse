@@ -1,8 +1,8 @@
 use super::*;
 use crate::interpreter::builtins::temporal::{
     get_prop, is_undefined, iso_date_valid, iso_days_in_month, iso_month_code,
-    parse_overflow_option, parse_temporal_month_day_string, read_month_fields, resolve_month_fields,
-    to_temporal_calendar_slot_value, validate_calendar,
+    parse_overflow_option, parse_temporal_month_day_string, read_month_fields,
+    resolve_month_fields, to_temporal_calendar_slot_value, validate_calendar,
 };
 
 pub(super) fn create_plain_month_day_result(
@@ -75,7 +75,9 @@ fn read_pmd_property_bag_raw(
         other => return Err(other),
     };
     let d_f = if is_undefined(&d_val) {
-        return Err(Completion::Throw(interp.create_type_error("day is required")));
+        return Err(Completion::Throw(
+            interp.create_type_error("day is required"),
+        ));
     } else {
         to_integer_with_truncation(interp, &d_val)?
     };
@@ -278,7 +280,11 @@ fn to_temporal_plain_month_day(
                 }
             };
             // For ISO calendar, reference year is always 1972 (a leap year)
-            let ref_year = if cal == "iso8601" { 1972 } else { parsed.2.unwrap_or(1972) };
+            let ref_year = if cal == "iso8601" {
+                1972
+            } else {
+                parsed.2.unwrap_or(1972)
+            };
             Ok((parsed.0, parsed.1, ref_year, cal))
         }
         _ => Err(Completion::Throw(
@@ -423,7 +429,8 @@ impl Interpreter {
                 has_any |= has_y;
                 if !has_any {
                     return Completion::Throw(
-                        interp.create_type_error("with() requires at least one recognized property"),
+                        interp
+                            .create_type_error("with() requires at least one recognized property"),
                     );
                 }
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -514,7 +521,11 @@ impl Interpreter {
                     "auto".to_string()
                 };
                 Completion::Normal(JsValue::String(JsString::from_str(&format_month_day(
-                    m, d, ref_year, &cal, &show_cal_owned,
+                    m,
+                    d,
+                    ref_year,
+                    &cal,
+                    &show_cal_owned,
                 ))))
             },
         ));
@@ -726,7 +737,10 @@ impl Interpreter {
                 let is_temporal = if let JsValue::Object(ref o) = item {
                     if let Some(obj) = interp.get_object(o.id) {
                         let data = obj.borrow();
-                        matches!(&data.temporal_data, Some(TemporalData::PlainMonthDay { .. }))
+                        matches!(
+                            &data.temporal_data,
+                            Some(TemporalData::PlainMonthDay { .. })
+                        )
                     } else {
                         false
                     }
@@ -746,10 +760,11 @@ impl Interpreter {
                     create_plain_month_day_result(interp, m, d, ry, &cal)
                 } else {
                     // Property bag: read fields raw, then overflow, then validate
-                    let (month_num, mc_str, d_f, cal, year_opt) = match read_pmd_property_bag_raw(interp, &item) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
+                    let (month_num, mc_str, d_f, cal, year_opt) =
+                        match read_pmd_property_bag_raw(interp, &item) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                     let overflow = match parse_overflow_option(interp, &options) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -764,9 +779,7 @@ impl Interpreter {
                     let validation_year = year_opt.unwrap_or(1972);
                     let d = d_f as u8;
                     if m < 1 {
-                        return Completion::Throw(
-                            interp.create_range_error("Invalid month"),
-                        );
+                        return Completion::Throw(interp.create_range_error("Invalid month"));
                     }
                     if overflow == "constrain" {
                         let cm = m.min(12);
@@ -776,15 +789,11 @@ impl Interpreter {
                     } else {
                         // reject
                         if m > 12 {
-                            return Completion::Throw(
-                                interp.create_range_error("Invalid month"),
-                            );
+                            return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         let max_day = iso_days_in_month(validation_year, m);
                         if d < 1 || d > max_day {
-                            return Completion::Throw(
-                                interp.create_range_error("Invalid day"),
-                            );
+                            return Completion::Throw(interp.create_range_error("Invalid day"));
                         }
                         create_plain_month_day_result(interp, m, d, 1972, &cal)
                     }

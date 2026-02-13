@@ -92,9 +92,9 @@ pub(crate) fn to_temporal_calendar_slot_value(
                     _ => {}
                 }
             }
-            Err(Completion::Throw(
-                interp.create_type_error("Invalid calendar value: expected a string or Temporal object"),
-            ))
+            Err(Completion::Throw(interp.create_type_error(
+                "Invalid calendar value: expected a string or Temporal object",
+            )))
         }
         JsValue::String(s) => {
             let raw = s.to_rust_string();
@@ -105,9 +105,9 @@ pub(crate) fn to_temporal_calendar_slot_value(
                 )),
             }
         }
-        _ => Err(Completion::Throw(
-            interp.create_type_error("Invalid calendar value: expected a string or Temporal object"),
-        )),
+        _ => Err(Completion::Throw(interp.create_type_error(
+            "Invalid calendar value: expected a string or Temporal object",
+        ))),
     }
 }
 
@@ -168,11 +168,9 @@ pub(crate) fn is_partial_temporal_object(
                 | TemporalData::PlainMonthDay { .. }
                 | TemporalData::PlainYearMonth { .. }
                 | TemporalData::ZonedDateTime { .. } => {
-                    return Err(Completion::Throw(
-                        interp.create_type_error(
-                            "a Temporal object is not allowed as argument to with()",
-                        ),
-                    ));
+                    return Err(Completion::Throw(interp.create_type_error(
+                        "a Temporal object is not allowed as argument to with()",
+                    )));
                 }
                 _ => {}
             }
@@ -184,9 +182,9 @@ pub(crate) fn is_partial_temporal_object(
         other => return Err(other),
     };
     if !is_undefined(&cal_val) {
-        return Err(Completion::Throw(
-            interp.create_type_error("calendar property not allowed in with() argument"),
-        ));
+        return Err(Completion::Throw(interp.create_type_error(
+            "calendar property not allowed in with() argument",
+        )));
     }
 
     let tz_val = match get_prop(interp, value, "timeZone") {
@@ -194,9 +192,9 @@ pub(crate) fn is_partial_temporal_object(
         other => return Err(other),
     };
     if !is_undefined(&tz_val) {
-        return Err(Completion::Throw(
-            interp.create_type_error("timeZone property not allowed in with() argument"),
-        ));
+        return Err(Completion::Throw(interp.create_type_error(
+            "timeZone property not allowed in with() argument",
+        )));
     }
 
     Ok(())
@@ -297,9 +295,9 @@ pub(crate) fn get_options_object(
     if matches!(options, JsValue::Object(_)) {
         return Ok(true);
     }
-    Err(Completion::Throw(
-        interp.create_type_error("Options must be an object or undefined"),
-    ))
+    Err(Completion::Throw(interp.create_type_error(
+        "Options must be an object or undefined",
+    )))
 }
 
 /// Maximum rounding increment for a given unit (for since/until / round)
@@ -408,10 +406,14 @@ pub(crate) fn validate_rounding_increment_raw(
     if let Some(max) = max_rounding_increment(unit) {
         let i = int_inc as u64;
         if i >= max {
-            return Err(format!("roundingIncrement {int_inc} is out of range for {unit}"));
+            return Err(format!(
+                "roundingIncrement {int_inc} is out of range for {unit}"
+            ));
         }
         if max % i != 0 {
-            return Err(format!("roundingIncrement {int_inc} does not divide evenly into {max}"));
+            return Err(format!(
+                "roundingIncrement {int_inc} does not divide evenly into {max}"
+            ));
         }
     } else if !is_difference {
         let unit_ns = temporal_unit_length_ns(unit) as u64;
@@ -419,7 +421,9 @@ pub(crate) fn validate_rounding_increment_raw(
             let total_ns = int_inc as u64 * unit_ns;
             let day_ns: u64 = 86_400_000_000_000;
             if day_ns % total_ns != 0 {
-                return Err(format!("roundingIncrement {int_inc} for {unit} does not divide evenly into a day"));
+                return Err(format!(
+                    "roundingIncrement {int_inc} for {unit} does not divide evenly into a day"
+                ));
             }
         }
     }
@@ -451,9 +455,9 @@ pub(crate) fn parse_overflow_option(
     };
     match s.as_str() {
         "constrain" | "reject" => Ok(s),
-        _ => Err(Completion::Throw(
-            interp.create_range_error(&format!("{s} is not a valid value for overflow")),
-        )),
+        _ => Err(Completion::Throw(interp.create_range_error(&format!(
+            "{s} is not a valid value for overflow"
+        )))),
     }
 }
 
@@ -561,12 +565,18 @@ pub(crate) fn iso_time_valid_f64(
     microsecond: f64,
     nanosecond: f64,
 ) -> bool {
-    hour >= 0.0 && hour <= 23.0
-        && minute >= 0.0 && minute <= 59.0
-        && second >= 0.0 && second <= 59.0
-        && millisecond >= 0.0 && millisecond <= 999.0
-        && microsecond >= 0.0 && microsecond <= 999.0
-        && nanosecond >= 0.0 && nanosecond <= 999.0
+    hour >= 0.0
+        && hour <= 23.0
+        && minute >= 0.0
+        && minute <= 59.0
+        && second >= 0.0
+        && second <= 59.0
+        && millisecond >= 0.0
+        && millisecond <= 999.0
+        && microsecond >= 0.0
+        && microsecond <= 999.0
+        && nanosecond >= 0.0
+        && nanosecond <= 999.0
 }
 
 pub(crate) fn iso_day_of_year(year: i32, month: u8, day: u8) -> u16 {
@@ -719,22 +729,53 @@ pub(crate) fn add_iso_date_with_overflow(
 /// Uses the ORIGINAL unclamped day from baseDate for comparison (spec key insight).
 fn iso_date_surpasses(
     sign: i32,
-    base_y: i32, base_m: u8, base_d: u8,
-    target_y: i32, target_m: u8, target_d: u8,
-    years: i32, months: i32,
+    base_y: i32,
+    base_m: u8,
+    base_d: u8,
+    target_y: i32,
+    target_m: u8,
+    target_d: u8,
+    years: i32,
+    months: i32,
 ) -> bool {
     let y0 = base_y + years;
-    if compare_surpasses(sign, y0, base_m as i32, base_d as i32, target_y as i32, target_m as i32, target_d as i32) {
+    if compare_surpasses(
+        sign,
+        y0,
+        base_m as i32,
+        base_d as i32,
+        target_y as i32,
+        target_m as i32,
+        target_d as i32,
+    ) {
         return true;
     }
-    if months == 0 { return false; }
+    if months == 0 {
+        return false;
+    }
     let m0 = base_m as i32 + months;
     let bal_y = y0 + (m0 - 1).div_euclid(12);
     let bal_m = (m0 - 1).rem_euclid(12) + 1;
-    compare_surpasses(sign, bal_y, bal_m, base_d as i32, target_y as i32, target_m as i32, target_d as i32)
+    compare_surpasses(
+        sign,
+        bal_y,
+        bal_m,
+        base_d as i32,
+        target_y as i32,
+        target_m as i32,
+        target_d as i32,
+    )
 }
 
-fn compare_surpasses(sign: i32, year: i32, month: i32, day: i32, ty: i32, tm: i32, td: i32) -> bool {
+fn compare_surpasses(
+    sign: i32,
+    year: i32,
+    month: i32,
+    day: i32,
+    ty: i32,
+    tm: i32,
+    td: i32,
+) -> bool {
     // ConstrainISODate: clamp day to max days in month (e.g., Feb 29 → Feb 28 in non-leap year)
     let clamped_day = day.min(iso_days_in_month(year, month as u8) as i32);
     if year != ty {
@@ -760,9 +801,13 @@ pub(crate) fn difference_iso_date(
     d2: u8,
     largest_unit: &str,
 ) -> (i32, i32, i32, i32) {
-    let sign = if (y1, m1, d1) < (y2, m2, d2) { 1 }
-        else if (y1, m1, d1) > (y2, m2, d2) { -1 }
-        else { return (0, 0, 0, 0); };
+    let sign = if (y1, m1, d1) < (y2, m2, d2) {
+        1
+    } else if (y1, m1, d1) > (y2, m2, d2) {
+        -1
+    } else {
+        return (0, 0, 0, 0);
+    };
 
     match largest_unit {
         "year" | "years" | "month" | "months" => {
@@ -772,7 +817,9 @@ pub(crate) fn difference_iso_date(
             if matches!(largest_unit, "year" | "years" | "month" | "months") {
                 // Find years
                 let mut candidate_years = y2 - y1;
-                if candidate_years != 0 { candidate_years -= sign; }
+                if candidate_years != 0 {
+                    candidate_years -= sign;
+                }
                 while !iso_date_surpasses(sign, y1, m1, d1, y2, m2, d2, candidate_years, 0) {
                     years = candidate_years;
                     candidate_years += sign;
@@ -797,7 +844,8 @@ pub(crate) fn difference_iso_date(
             let bal_y = int_y + (int_m0 - 1).div_euclid(12);
             let bal_m = ((int_m0 - 1).rem_euclid(12) + 1) as u8;
             let int_d = d1.min(iso_days_in_month(bal_y, bal_m));
-            let days = (iso_date_to_epoch_days(y2, m2, d2) - iso_date_to_epoch_days(bal_y, bal_m, int_d)) as i32;
+            let days = (iso_date_to_epoch_days(y2, m2, d2)
+                - iso_date_to_epoch_days(bal_y, bal_m, int_d)) as i32;
             (years, months, 0, days)
         }
         "week" | "weeks" => {
@@ -1335,9 +1383,10 @@ pub(super) fn validate_timezone_identifier_strict(
             } else if is_iana_timezone(&s_str) {
                 Ok(normalize_iana_timezone(&s_str))
             } else {
-                Err(Completion::Throw(
-                    interp.create_range_error(&format!("Invalid time zone: {}", s_str)),
-                ))
+                Err(Completion::Throw(interp.create_range_error(&format!(
+                    "Invalid time zone: {}",
+                    s_str
+                ))))
             }
         }
         _ => to_temporal_time_zone_identifier(interp, arg),
@@ -1406,9 +1455,9 @@ pub(super) fn to_temporal_time_zone_identifier(
                 interp.create_type_error("Expected a string for time zone"),
             ))
         }
-        JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) => Err(
-            Completion::Throw(interp.create_type_error("Expected a string for time zone")),
-        ),
+        JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) => Err(Completion::Throw(
+            interp.create_type_error("Expected a string for time zone"),
+        )),
         JsValue::Symbol(_) => Err(Completion::Throw(
             interp.create_type_error("Cannot convert a Symbol value to a string"),
         )),
@@ -1547,9 +1596,7 @@ pub(crate) fn parse_temporal_date_time_string(s: &str) -> Option<ParsedIsoDateTi
                 return None;
             }
             // If it looks like a UTC offset, validate no sub-minute precision
-            if annotation.starts_with('+')
-                || annotation.starts_with('-')
-            {
+            if annotation.starts_with('+') || annotation.starts_with('-') {
                 if let Some(parsed_off) = parse_utc_offset_timezone(annotation) {
                     time_zone = Some(parsed_off);
                 } else {
@@ -1655,9 +1702,7 @@ fn is_ambiguous_time_string(bytes: &[u8]) -> bool {
 }
 
 /// Parse a Temporal time string. Returns (h, m, s, ms, us, ns, has_utc_designator).
-pub(crate) fn parse_temporal_time_string(
-    s: &str,
-) -> Option<(u8, u8, u8, u16, u16, u16, bool)> {
+pub(crate) fn parse_temporal_time_string(s: &str) -> Option<(u8, u8, u8, u16, u16, u16, bool)> {
     let s = s.trim();
     let bytes = s.as_bytes();
     let has_t_prefix = !bytes.is_empty() && (bytes[0] == b'T' || bytes[0] == b't');
@@ -1668,10 +1713,7 @@ pub(crate) fn parse_temporal_time_string(
         let mut p = result.6;
         let mut has_z = false;
         if p < bytes.len()
-            && (bytes[p] == b'Z'
-                || bytes[p] == b'z'
-                || bytes[p] == b'+'
-                || bytes[p] == b'-')
+            && (bytes[p] == b'Z' || bytes[p] == b'z' || bytes[p] == b'+' || bytes[p] == b'-')
         {
             if bytes[p] == b'Z' || bytes[p] == b'z' {
                 has_z = true;
@@ -1836,7 +1878,8 @@ pub(crate) fn parse_temporal_month_day_string(
     // Fall back to full date-time
     let parsed = parse_temporal_date_time_string(s)?;
     // Reject date-only strings with UTC offset (no time component)
-    let date_only_offset = !parsed.has_time && (parsed.offset.is_some() || parsed.has_utc_designator);
+    let date_only_offset =
+        !parsed.has_time && (parsed.offset.is_some() || parsed.has_utc_designator);
     Some((
         parsed.month,
         parsed.day,
@@ -2286,7 +2329,15 @@ pub(crate) fn is_valid_duration(
     // integer arithmetic (i128) to avoid f64 precision loss, then check against
     // maxTimeDuration = 2^53 × 10^9 - 1.
     // Guard against f64 values too large for i128 (e.g. Number.MAX_VALUE).
-    for &v in &[days, hours, minutes, seconds, milliseconds, microseconds, nanoseconds] {
+    for &v in &[
+        days,
+        hours,
+        minutes,
+        seconds,
+        milliseconds,
+        microseconds,
+        nanoseconds,
+    ] {
         if v.abs() > 1e35 {
             return false;
         }
@@ -2339,9 +2390,17 @@ pub(crate) fn round_number_to_increment(x: f64, increment: f64, rounding_mode: &
             if f == 0.0 {
                 quotient
             } else if quotient > 0.0 {
-                if f > 0.5 { quotient.ceil() } else { quotient.floor() }
+                if f > 0.5 {
+                    quotient.ceil()
+                } else {
+                    quotient.floor()
+                }
             } else {
-                if f < -0.5 { quotient.floor() } else { quotient.ceil() }
+                if f < -0.5 {
+                    quotient.floor()
+                } else {
+                    quotient.ceil()
+                }
             }
         }
         "halfCeil" => (quotient + 0.5).floor(),
@@ -2368,33 +2427,71 @@ pub(crate) fn round_number_to_increment(x: f64, increment: f64, rounding_mode: &
 /// Integer-precision rounding for i128 values (avoids f64 precision loss for large ns values)
 pub(crate) fn round_i128_to_increment(x: i128, increment: i128, rounding_mode: &str) -> i128 {
     let remainder = x % increment;
-    if remainder == 0 { return x; }
+    if remainder == 0 {
+        return x;
+    }
     let truncated = x - remainder;
     let sign = if x >= 0 { 1i128 } else { -1i128 };
     let abs_rem = remainder.abs();
     match rounding_mode {
         "trunc" => truncated,
-        "ceil" => if remainder > 0 { truncated + increment } else { truncated },
-        "floor" => if remainder < 0 { truncated - increment } else { truncated },
+        "ceil" => {
+            if remainder > 0 {
+                truncated + increment
+            } else {
+                truncated
+            }
+        }
+        "floor" => {
+            if remainder < 0 {
+                truncated - increment
+            } else {
+                truncated
+            }
+        }
         "expand" => truncated + sign * increment,
         "halfExpand" => {
-            if 2 * abs_rem >= increment { truncated + sign * increment } else { truncated }
+            if 2 * abs_rem >= increment {
+                truncated + sign * increment
+            } else {
+                truncated
+            }
         }
         "halfTrunc" => {
-            if 2 * abs_rem > increment { truncated + sign * increment } else { truncated }
+            if 2 * abs_rem > increment {
+                truncated + sign * increment
+            } else {
+                truncated
+            }
         }
         "halfCeil" => {
             if remainder > 0 {
-                if 2 * remainder >= increment { truncated + increment } else { truncated }
+                if 2 * remainder >= increment {
+                    truncated + increment
+                } else {
+                    truncated
+                }
             } else {
-                if 2 * abs_rem > increment { truncated - increment } else { truncated }
+                if 2 * abs_rem > increment {
+                    truncated - increment
+                } else {
+                    truncated
+                }
             }
         }
         "halfFloor" => {
             if remainder > 0 {
-                if 2 * remainder > increment { truncated + increment } else { truncated }
+                if 2 * remainder > increment {
+                    truncated + increment
+                } else {
+                    truncated
+                }
             } else {
-                if 2 * abs_rem >= increment { truncated - increment } else { truncated }
+                if 2 * abs_rem >= increment {
+                    truncated - increment
+                } else {
+                    truncated
+                }
             }
         }
         "halfEven" => {
@@ -2404,7 +2501,11 @@ pub(crate) fn round_i128_to_increment(x: i128, increment: i128, rounding_mode: &
             } else if 2 * abs_rem < increment {
                 truncated
             } else {
-                if q_trunc % 2 == 0 { truncated } else { truncated + sign * increment }
+                if q_trunc % 2 == 0 {
+                    truncated
+                } else {
+                    truncated + sign * increment
+                }
             }
         }
         _ => truncated,
@@ -2422,9 +2523,9 @@ pub(crate) fn to_integer_with_truncation(
         Err(e) => return Err(Completion::Throw(e)),
     };
     if n.is_nan() || n.is_infinite() {
-        return Err(Completion::Throw(
-            interp.create_range_error("Infinity is not allowed as a Temporal field value"),
-        ));
+        return Err(Completion::Throw(interp.create_range_error(
+            "Infinity is not allowed as a Temporal field value",
+        )));
     }
     Ok(n.trunc())
 }
@@ -2498,7 +2599,11 @@ pub(crate) fn read_month_fields(
     let month_code = if is_undefined(&mc_val) {
         None
     } else {
-        Some(to_primitive_and_require_string(interp, &mc_val, "monthCode")?)
+        Some(to_primitive_and_require_string(
+            interp,
+            &mc_val,
+            "monthCode",
+        )?)
     };
     Ok((month, month_code))
 }
@@ -2508,7 +2613,9 @@ pub(crate) fn to_primitive_and_require_string(
     val: &JsValue,
     field_name: &str,
 ) -> Result<String, Completion> {
-    let primitive = interp.to_primitive(val, "string").map_err(Completion::Throw)?;
+    let primitive = interp
+        .to_primitive(val, "string")
+        .map_err(Completion::Throw)?;
     match primitive {
         JsValue::String(s) => Ok(s.to_rust_string()),
         _ => Err(Completion::Throw(
@@ -2634,8 +2741,12 @@ pub(crate) fn default_largest_unit_for_duration(
 /// DateDurationSign: returns the sign of a date duration's components.
 pub(crate) fn duration_date_sign(years: i32, months: i32, weeks: i32, days: i32) -> i32 {
     for &v in &[years, months, weeks, days] {
-        if v > 0 { return 1; }
-        if v < 0 { return -1; }
+        if v > 0 {
+            return 1;
+        }
+        if v < 0 {
+            return -1;
+        }
     }
     0
 }
@@ -2753,11 +2864,9 @@ pub(crate) fn parse_difference_options(
             match temporal_unit_singular(ls) {
                 Some(u) => {
                     if !allowed_units.contains(&u) {
-                        return Err(Completion::Throw(
-                            interp.create_range_error(&format!(
-                                "{ls} is not a valid value for largestUnit"
-                            )),
-                        ));
+                        return Err(Completion::Throw(interp.create_range_error(&format!(
+                            "{ls} is not a valid value for largestUnit"
+                        ))));
                     }
                     u.to_string()
                 }
@@ -2777,9 +2886,9 @@ pub(crate) fn parse_difference_options(
             "ceil" | "floor" | "trunc" | "expand" | "halfExpand" | "halfTrunc" | "halfCeil"
             | "halfFloor" | "halfEven" => rs.clone(),
             _ => {
-                return Err(Completion::Throw(
-                    interp.create_range_error(&format!("{rs} is not a valid value for roundingMode")),
-                ));
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "{rs} is not a valid value for roundingMode"
+                ))));
             }
         }
     } else {
@@ -2790,11 +2899,9 @@ pub(crate) fn parse_difference_options(
         match temporal_unit_singular(ss) {
             Some(u) => {
                 if !allowed_units.contains(&u) {
-                    return Err(Completion::Throw(
-                        interp.create_range_error(&format!(
-                            "{ss} is not a valid value for smallestUnit"
-                        )),
-                    ));
+                    return Err(Completion::Throw(interp.create_range_error(&format!(
+                        "{ss} is not a valid value for smallestUnit"
+                    ))));
                 }
                 u.to_string()
             }
@@ -2840,7 +2947,12 @@ pub(crate) fn parse_difference_options(
         }
     }
 
-    Ok((largest_unit, smallest_unit, rounding_mode, rounding_increment))
+    Ok((
+        largest_unit,
+        smallest_unit,
+        rounding_mode,
+        rounding_increment,
+    ))
 }
 
 /// Round a date duration per RoundRelativeDuration (simplified for ISO 8601 calendar).
@@ -2860,9 +2972,19 @@ pub(crate) fn round_date_duration(
     ref_day: u8,
 ) -> Result<(i32, i32, i32, i32), String> {
     round_date_duration_with_frac_days(
-        years, months, weeks, days as f64, 0i128,
-        smallest_unit, largest_unit, rounding_increment, rounding_mode,
-        ref_year, ref_month, ref_day, false,
+        years,
+        months,
+        weeks,
+        days as f64,
+        0i128,
+        smallest_unit,
+        largest_unit,
+        rounding_increment,
+        rounding_mode,
+        ref_year,
+        ref_month,
+        ref_day,
+        false,
     )
 }
 
@@ -2892,15 +3014,23 @@ pub(crate) fn round_date_duration_with_frac_days(
             let year_start = add_iso_date(ref_year, ref_month, ref_day, diff_y, 0, 0, 0);
             let year_start_epoch = iso_date_to_epoch_days(year_start.0, year_start.1, year_start.2);
             let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
-            let sign = if end_epoch > iso_date_to_epoch_days(ref_year, ref_month, ref_day) { 1 }
-                else if end_epoch < iso_date_to_epoch_days(ref_year, ref_month, ref_day) { -1 }
-                else { return Ok((0, 0, 0, 0)); };
+            let sign = if end_epoch > iso_date_to_epoch_days(ref_year, ref_month, ref_day) {
+                1
+            } else if end_epoch < iso_date_to_epoch_days(ref_year, ref_month, ref_day) {
+                -1
+            } else {
+                return Ok((0, 0, 0, 0));
+            };
             let year_end = add_iso_date(ref_year, ref_month, ref_day, diff_y + sign, 0, 0, 0);
             let year_end_epoch = iso_date_to_epoch_days(year_end.0, year_end.1, year_end.2);
             let days_in_year = (year_end_epoch - year_start_epoch).abs() as f64;
             let remaining_days = (end_epoch - year_start_epoch) as f64 + frac_days.fract();
-            let fractional =
-                diff_y as f64 + if days_in_year > 0.0 { remaining_days / days_in_year } else { 0.0 };
+            let fractional = diff_y as f64
+                + if days_in_year > 0.0 {
+                    remaining_days / days_in_year
+                } else {
+                    0.0
+                };
             let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
             Ok((rounded as i32, 0, 0, 0))
         }
@@ -2908,20 +3038,32 @@ pub(crate) fn round_date_duration_with_frac_days(
             let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
             let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
             let base_epoch = iso_date_to_epoch_days(ref_year, ref_month, ref_day);
-            let sign = if end_epoch > base_epoch { 1 }
-                else if end_epoch < base_epoch { -1 }
-                else { return Ok((0, 0, 0, 0)); };
+            let sign = if end_epoch > base_epoch {
+                1
+            } else if end_epoch < base_epoch {
+                -1
+            } else {
+                return Ok((0, 0, 0, 0));
+            };
             if largest_unit == "year" {
                 // Per spec NudgeToCalendarUnit: keep years fixed, round only months component
                 let month_base = add_iso_date(ref_year, ref_month, ref_day, years, months, 0, 0);
-                let month_base_epoch = iso_date_to_epoch_days(month_base.0, month_base.1, month_base.2);
-                let month_next = add_iso_date(ref_year, ref_month, ref_day, years, months + sign, 0, 0);
-                let month_next_epoch = iso_date_to_epoch_days(month_next.0, month_next.1, month_next.2);
+                let month_base_epoch =
+                    iso_date_to_epoch_days(month_base.0, month_base.1, month_base.2);
+                let month_next =
+                    add_iso_date(ref_year, ref_month, ref_day, years, months + sign, 0, 0);
+                let month_next_epoch =
+                    iso_date_to_epoch_days(month_next.0, month_next.1, month_next.2);
                 let days_in_month = (month_next_epoch - month_base_epoch).abs() as f64;
                 let remaining_days = (end_epoch - month_base_epoch) as f64 + frac_days.fract();
                 let fractional = months as f64
-                    + if days_in_month > 0.0 { remaining_days / days_in_month } else { 0.0 };
-                let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
+                    + if days_in_month > 0.0 {
+                        remaining_days / days_in_month
+                    } else {
+                        0.0
+                    };
+                let rounded =
+                    round_number_to_increment(fractional, rounding_increment, rounding_mode);
                 Ok((years, rounded as i32, 0, 0))
             } else {
                 // Flatten to total months
@@ -2929,14 +3071,21 @@ pub(crate) fn round_date_duration_with_frac_days(
                     ref_year, ref_month, ref_day, end_date.0, end_date.1, end_date.2, "month",
                 );
                 let month_start = add_iso_date(ref_year, ref_month, ref_day, 0, total_months, 0, 0);
-                let month_start_epoch = iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
-                let month_end = add_iso_date(ref_year, ref_month, ref_day, 0, total_months + sign, 0, 0);
+                let month_start_epoch =
+                    iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
+                let month_end =
+                    add_iso_date(ref_year, ref_month, ref_day, 0, total_months + sign, 0, 0);
                 let month_end_epoch = iso_date_to_epoch_days(month_end.0, month_end.1, month_end.2);
                 let days_in_month = (month_end_epoch - month_start_epoch).abs() as f64;
                 let remaining_days = (end_epoch - month_start_epoch) as f64 + frac_days.fract();
                 let fractional = total_months as f64
-                    + if days_in_month > 0.0 { remaining_days / days_in_month } else { 0.0 };
-                let rounded = round_number_to_increment(fractional, rounding_increment, rounding_mode);
+                    + if days_in_month > 0.0 {
+                        remaining_days / days_in_month
+                    } else {
+                        0.0
+                    };
+                let rounded =
+                    round_number_to_increment(fractional, rounding_increment, rounding_mode);
                 Ok((0, rounded as i32, 0, 0))
             }
         }
@@ -2950,37 +3099,57 @@ pub(crate) fn round_date_duration_with_frac_days(
                     ref_year, ref_month, ref_day, end_date.0, end_date.1, end_date.2, "month",
                 );
                 let month_start = add_iso_date(ref_year, ref_month, ref_day, 0, total_months, 0, 0);
-                let month_start_epoch = iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
+                let month_start_epoch =
+                    iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
                 let remaining = (end_epoch - month_start_epoch) as f64 + frac_days.fract();
                 let fractional_weeks = remaining / 7.0;
-                let rounded = round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
+                let rounded =
+                    round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
                 Ok((0, total_months, rounded as i32, 0))
             } else {
                 // Flatten everything to total weeks
                 let base_epoch = iso_date_to_epoch_days(ref_year, ref_month, ref_day);
                 let total_days = (end_epoch - base_epoch) as f64 + frac_days.fract();
                 let fractional_weeks = total_days / 7.0;
-                let rounded = round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
+                let rounded =
+                    round_number_to_increment(fractional_weeks, rounding_increment, rounding_mode);
                 Ok((0, 0, rounded as i32, 0))
             }
         }
         "day" => {
             // NudgeToCalendarUnit pre-check for ZDT: GetStartOfDay calls CheckISODaysRange
             if is_zdt {
-                let sign_f = if frac_days > 0.0 { 1.0 }
-                    else if frac_days < 0.0 { -1.0 }
-                    else if time_ns_i128 > 0 { 1.0 }
-                    else if time_ns_i128 < 0 { -1.0 }
-                    else { 0.0 };
+                let sign_f = if frac_days > 0.0 {
+                    1.0
+                } else if frac_days < 0.0 {
+                    -1.0
+                } else if time_ns_i128 > 0 {
+                    1.0
+                } else if time_ns_i128 < 0 {
+                    -1.0
+                } else {
+                    0.0
+                };
                 if sign_f != 0.0 {
-                    let end_days_i64 = frac_days.trunc() as i64 + sign_f as i64 * rounding_increment as i64;
+                    let end_days_i64 =
+                        frac_days.trunc() as i64 + sign_f as i64 * rounding_increment as i64;
                     let nudge_base = if years != 0 || months != 0 || weeks != 0 {
                         add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, 0)
                     } else {
                         (ref_year, ref_month, ref_day)
                     };
-                    let nudge_end = add_iso_date(nudge_base.0, nudge_base.1, nudge_base.2, 0, 0, 0, end_days_i64 as i32);
-                    if iso_date_to_epoch_days(nudge_end.0, nudge_end.1, nudge_end.2).abs() > 100_000_000 {
+                    let nudge_end = add_iso_date(
+                        nudge_base.0,
+                        nudge_base.1,
+                        nudge_base.2,
+                        0,
+                        0,
+                        0,
+                        end_days_i64 as i32,
+                    );
+                    if iso_date_to_epoch_days(nudge_end.0, nudge_end.1, nudge_end.2).abs()
+                        > 100_000_000
+                    {
                         return Err("Rounded date outside valid ISO range".to_string());
                     }
                 }
@@ -2988,7 +3157,8 @@ pub(crate) fn round_date_duration_with_frac_days(
             if years != 0 || months != 0 || weeks != 0 {
                 let days = frac_days.trunc() as i32;
                 let start = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, 0);
-                let end_date = add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
+                let end_date =
+                    add_iso_date(ref_year, ref_month, ref_day, years, months, weeks, days);
                 let start_epoch = iso_date_to_epoch_days(start.0, start.1, start.2);
                 let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
                 let calendar_days = (end_epoch - start_epoch) as i128;

@@ -118,8 +118,11 @@ pub(super) fn to_temporal_plain_date_time_with_overflow(
                     return Ok((y, mo, d, h, mi, s, ms, us, ns, calendar.clone()));
                 }
             }
-            let (y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal) = read_pdt_property_bag(interp, &item)?;
-            apply_pdt_overflow(interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, overflow)
+            let (y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal) =
+                read_pdt_property_bag(interp, &item)?;
+            apply_pdt_overflow(
+                interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, overflow,
+            )
         }
         JsValue::String(s) => parse_date_time_string(interp, &s.to_rust_string()),
         _ => Err(Completion::Throw(
@@ -142,15 +145,15 @@ fn parse_date_time_string(
     };
     // PlainDateTime does not accept UTC designator (Z)
     if parsed.has_utc_designator {
-        return Err(Completion::Throw(
-            interp.create_range_error("UTC designator Z is not allowed in a PlainDateTime string"),
-        ));
+        return Err(Completion::Throw(interp.create_range_error(
+            "UTC designator Z is not allowed in a PlainDateTime string",
+        )));
     }
     // Date-only string with UTC offset is not valid for PlainDateTime
     if !parsed.has_time && parsed.offset.is_some() {
-        return Err(Completion::Throw(
-            interp.create_range_error("UTC offset without time is not valid for PlainDateTime"),
-        ));
+        return Err(Completion::Throw(interp.create_range_error(
+            "UTC offset without time is not valid for PlainDateTime",
+        )));
     }
     let cal = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
     let cal = match validate_calendar(&cal) {
@@ -226,14 +229,28 @@ fn get_opt_u16(
     }
 }
 
-
 /// Read PlainDateTime fields from a property bag without applying overflow.
 /// Returns (year_f64, month_num_opt, month_code_opt, day_f64, hour, minute, second, ms, us, ns, calendar).
 /// month validation and monthCode resolution are deferred to apply_pdt_overflow.
 fn read_pdt_property_bag(
     interp: &mut Interpreter,
     item: &JsValue,
-) -> Result<(f64, Option<f64>, Option<String>, f64, u8, u8, u8, u16, u16, u16, String), Completion> {
+) -> Result<
+    (
+        f64,
+        Option<f64>,
+        Option<String>,
+        f64,
+        u8,
+        u8,
+        u8,
+        u16,
+        u16,
+        u16,
+        String,
+    ),
+    Completion,
+> {
     let cal_val = match get_prop(interp, item, "calendar") {
         Completion::Normal(v) => v,
         other => return Err(other),
@@ -244,7 +261,9 @@ fn read_pdt_property_bag(
         other => return Err(other),
     };
     let d_f: f64 = if is_undefined(&d_val) {
-        return Err(Completion::Throw(interp.create_type_error("day is required")));
+        return Err(Completion::Throw(
+            interp.create_type_error("day is required"),
+        ));
     } else {
         to_integer_with_truncation(interp, &d_val)?
     };
@@ -283,7 +302,9 @@ fn read_pdt_property_bag(
         other => return Err(other),
     };
     let y_f = if is_undefined(&y_val) {
-        return Err(Completion::Throw(interp.create_type_error("year is required")));
+        return Err(Completion::Throw(
+            interp.create_type_error("year is required"),
+        ));
     } else {
         to_integer_with_truncation(interp, &y_val)?
     };
@@ -708,17 +729,20 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 has_any |= has_h;
-                let (new_us, has_us) = match read_time_field_new(interp, &item, "microsecond", us as f64) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
+                let (new_us, has_us) =
+                    match read_time_field_new(interp, &item, "microsecond", us as f64) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                 has_any |= has_us;
-                let (new_ms, has_ms) = match read_time_field_new(interp, &item, "millisecond", ms as f64) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
+                let (new_ms, has_ms) =
+                    match read_time_field_new(interp, &item, "millisecond", ms as f64) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                 has_any |= has_ms;
-                let (new_mi, has_mi) = match read_time_field_new(interp, &item, "minute", mi as f64) {
+                let (new_mi, has_mi) = match read_time_field_new(interp, &item, "minute", mi as f64)
+                {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -734,10 +758,11 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 has_any |= has_mc;
-                let (new_ns, has_ns) = match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
+                let (new_ns, has_ns) =
+                    match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                 has_any |= has_ns;
                 let (new_s, has_s) = match read_time_field_new(interp, &item, "second", s as f64) {
                     Ok(v) => v,
@@ -751,7 +776,8 @@ impl Interpreter {
                 has_any |= has_y;
                 if !has_any {
                     return Completion::Throw(
-                        interp.create_type_error("with() requires at least one recognized property"),
+                        interp
+                            .create_type_error("with() requires at least one recognized property"),
                     );
                 }
                 // GetTemporalOverflowOption
@@ -773,11 +799,18 @@ impl Interpreter {
                         return Completion::Throw(interp.create_range_error("Invalid time"));
                     }
                     let (ch, cmi, cs, cms, cus, cns) = (
-                        new_h as u8, new_mi as u8, new_s as u8,
-                        new_ms as u16, new_us as u16, new_ns as u16,
+                        new_h as u8,
+                        new_mi as u8,
+                        new_s as u8,
+                        new_ms as u16,
+                        new_us as u16,
+                        new_ns as u16,
                     );
-                    if !iso_date_time_within_limits(new_y, new_m, new_d, ch, cmi, cs, cms, cus, cns) {
-                        return Completion::Throw(interp.create_range_error("DateTime outside valid range"));
+                    if !iso_date_time_within_limits(new_y, new_m, new_d, ch, cmi, cs, cms, cus, cns)
+                    {
+                        return Completion::Throw(
+                            interp.create_range_error("DateTime outside valid range"),
+                        );
                     }
                     create_plain_date_time_result(
                         interp, new_y, new_m, new_d, ch, cmi, cs, cms, cus, cns, &cal,
@@ -792,7 +825,9 @@ impl Interpreter {
                     let cus = (new_us.max(0.0).min(999.0)) as u16;
                     let cns = (new_ns.max(0.0).min(999.0)) as u16;
                     if !iso_date_time_within_limits(new_y, cm, cd, ch, cmi, cs, cms, cus, cns) {
-                        return Completion::Throw(interp.create_range_error("DateTime outside valid range"));
+                        return Completion::Throw(
+                            interp.create_range_error("DateTime outside valid range"),
+                        );
                     }
                     create_plain_date_time_result(
                         interp, new_y, cm, cd, ch, cmi, cs, cms, cus, cns, &cal,
@@ -912,16 +947,15 @@ impl Interpreter {
                     ) {
                         Ok(v) => v,
                         Err(()) => {
-                            return Completion::Throw(
-                                interp.create_range_error("Ambiguous date in add/subtract with reject overflow"),
-                            );
+                            return Completion::Throw(interp.create_range_error(
+                                "Ambiguous date in add/subtract with reject overflow",
+                            ));
                         }
                     };
                     if !super::iso_date_time_within_limits(ry, rm, rd, nh, nmi, nse, nms, nus, nns)
                     {
                         return Completion::Throw(
-                            interp
-                                .create_range_error("Result date-time outside valid ISO range"),
+                            interp.create_range_error("Result date-time outside valid ISO range"),
                         );
                     }
                     create_plain_date_time_result(
@@ -951,8 +985,16 @@ impl Interpreter {
                         };
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     let all_units: &[&str] = &[
-                        "year", "month", "week", "day", "hour", "minute", "second",
-                        "millisecond", "microsecond", "nanosecond",
+                        "year",
+                        "month",
+                        "week",
+                        "day",
+                        "hour",
+                        "minute",
+                        "second",
+                        "millisecond",
+                        "microsecond",
+                        "nanosecond",
                     ];
                     let (largest_unit, smallest_unit, rounding_mode, rounding_increment) =
                         match parse_difference_options(interp, &options, "day", all_units) {
@@ -963,8 +1005,18 @@ impl Interpreter {
                     let ns1_total = time_to_nanoseconds(h1, mi1, s1, ms1, us1, ns1);
                     let ns2_total = time_to_nanoseconds(h2, mi2, s2, ms2, us2, ns2);
 
-                    let (mut dy, mut dm, mut dw, mut dd, mut dh, mut dmi, mut ds, mut dms, mut dus, mut dns) =
-                        diff_date_time(y1, m1, d1, ns1_total, y2, m2, d2, ns2_total, &largest_unit);
+                    let (
+                        mut dy,
+                        mut dm,
+                        mut dw,
+                        mut dd,
+                        mut dh,
+                        mut dmi,
+                        mut ds,
+                        mut dms,
+                        mut dus,
+                        mut dns,
+                    ) = diff_date_time(y1, m1, d1, ns1_total, y2, m2, d2, ns2_total, &largest_unit);
 
                     // Per spec: for since, negate rounding mode, round signed values, then negate result
                     let effective_mode = if sign == -1 {
@@ -988,42 +1040,70 @@ impl Interpreter {
                             let (ry, rm, rd) = (y1, m1, d1);
                             // Pre-check: verify the NudgeToCalendarUnit end boundary is within limits
                             if matches!(smallest_unit.as_str(), "month" | "year") {
-                                let dur_sign = if dy > 0 || dm > 0 || dw > 0 || fractional_days > 0.0 { 1i64 }
-                                    else if dy < 0 || dm < 0 || dw < 0 || fractional_days < 0.0 { -1i64 }
-                                    else { 1 };
+                                let dur_sign =
+                                    if dy > 0 || dm > 0 || dw > 0 || fractional_days > 0.0 {
+                                        1i64
+                                    } else if dy < 0 || dm < 0 || dw < 0 || fractional_days < 0.0 {
+                                        -1i64
+                                    } else {
+                                        1
+                                    };
                                 let inc = rounding_increment as i64;
                                 let end_date = match smallest_unit.as_str() {
                                     "month" => {
                                         let end_m = dm as i64 + dur_sign * inc;
                                         super::add_iso_date(ry, rm, rd, dy, end_m as i32, 0, 0)
                                     }
-                                    _ => { // year
+                                    _ => {
+                                        // year
                                         let end_y = dy as i64 + dur_sign * inc;
                                         super::add_iso_date(ry, rm, rd, end_y as i32, 0, 0, 0)
                                     }
                                 };
-                                if !super::iso_date_within_limits(end_date.0, end_date.1, end_date.2) {
-                                    return Completion::Throw(
-                                        interp.create_range_error("Rounded date outside valid ISO range"),
-                                    );
+                                if !super::iso_date_within_limits(
+                                    end_date.0, end_date.1, end_date.2,
+                                ) {
+                                    return Completion::Throw(interp.create_range_error(
+                                        "Rounded date outside valid ISO range",
+                                    ));
                                 }
                             }
-                            let (ry2, rm2, rw2, rd2) = match super::round_date_duration_with_frac_days(
-                                dy, dm, dw, fractional_days, time_ns_i128,
-                                &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
-                                ry, rm, rd, false,
-                            ) {
-                                Ok(v) => v,
-                                Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
-                            };
-                            dy = ry2; dm = rm2; dw = rw2; dd = rd2;
+                            let (ry2, rm2, rw2, rd2) =
+                                match super::round_date_duration_with_frac_days(
+                                    dy,
+                                    dm,
+                                    dw,
+                                    fractional_days,
+                                    time_ns_i128,
+                                    &smallest_unit,
+                                    &largest_unit,
+                                    rounding_increment,
+                                    &effective_mode,
+                                    ry,
+                                    rm,
+                                    rd,
+                                    false,
+                                ) {
+                                    Ok(v) => v,
+                                    Err(msg) => {
+                                        return Completion::Throw(interp.create_range_error(&msg));
+                                    }
+                                };
+                            dy = ry2;
+                            dm = rm2;
+                            dw = rw2;
+                            dd = rd2;
                             // Check that rounded date is within valid ISO range (calendar units only)
                             if matches!(smallest_unit.as_str(), "month" | "year") {
                                 let rounded_end = super::add_iso_date(ry, rm, rd, dy, dm, dw, dd);
-                                if !super::iso_date_within_limits(rounded_end.0, rounded_end.1, rounded_end.2) {
-                                    return Completion::Throw(
-                                        interp.create_range_error("Rounded date outside valid ISO range"),
-                                    );
+                                if !super::iso_date_within_limits(
+                                    rounded_end.0,
+                                    rounded_end.1,
+                                    rounded_end.2,
+                                ) {
+                                    return Completion::Throw(interp.create_range_error(
+                                        "Rounded date outside valid ISO range",
+                                    ));
                                 }
                             }
                             // Rebalance months overflow into years when largestUnit is year
@@ -1031,7 +1111,12 @@ impl Interpreter {
                                 dy += dm / 12;
                                 dm %= 12;
                             }
-                            dh = 0; dmi = 0; ds = 0; dms = 0; dus = 0; dns = 0;
+                            dh = 0;
+                            dmi = 0;
+                            ds = 0;
+                            dms = 0;
+                            dus = 0;
+                            dns = 0;
                         } else {
                             let time_ns = dh as f64 * 3_600_000_000_000.0
                                 + dmi as f64 * 60_000_000_000.0
@@ -1041,7 +1126,8 @@ impl Interpreter {
                                 + dns as f64;
                             let unit_ns = super::temporal_unit_length_ns(&smallest_unit);
                             let increment_ns = unit_ns * rounding_increment;
-                            let rounded_ns = round_number_to_increment(time_ns, increment_ns, &effective_mode);
+                            let rounded_ns =
+                                round_number_to_increment(time_ns, increment_ns, &effective_mode);
                             let total = rounded_ns as i64;
                             let lu_order = super::temporal_unit_order(&largest_unit);
                             let day_order = super::temporal_unit_order("day");
@@ -1098,7 +1184,8 @@ impl Interpreter {
                                         dmi = 0;
                                         dh = 0;
                                     }
-                                    _ => { // nanosecond
+                                    _ => {
+                                        // nanosecond
                                         dns = total;
                                         dus = 0;
                                         dms = 0;
@@ -1121,16 +1208,34 @@ impl Interpreter {
                                 let rem = rem / 60;
                                 dh = rem;
                                 if dh.abs() >= 24 {
-                                    let day_overflow = (if dh >= 0 { dh / 24 } else { -((-dh) / 24) }) as i32;
+                                    let day_overflow =
+                                        (if dh >= 0 { dh / 24 } else { -((-dh) / 24) }) as i32;
                                     dh -= day_overflow as i64 * 24;
                                     dd += day_overflow;
                                     if lu_order >= super::temporal_unit_order("month") {
-                                        let intermediate = super::add_iso_date(y1, m1, d1, dy, dm, 0, 0);
-                                        let target = super::add_iso_date(intermediate.0, intermediate.1, intermediate.2, 0, 0, 0, dd);
-                                        let (ny, nm, _, nd) = super::difference_iso_date(
-                                            y1, m1, d1, target.0, target.1, target.2, &largest_unit,
+                                        let intermediate =
+                                            super::add_iso_date(y1, m1, d1, dy, dm, 0, 0);
+                                        let target = super::add_iso_date(
+                                            intermediate.0,
+                                            intermediate.1,
+                                            intermediate.2,
+                                            0,
+                                            0,
+                                            0,
+                                            dd,
                                         );
-                                        dy = ny; dm = nm; dd = nd;
+                                        let (ny, nm, _, nd) = super::difference_iso_date(
+                                            y1,
+                                            m1,
+                                            d1,
+                                            target.0,
+                                            target.1,
+                                            target.2,
+                                            &largest_unit,
+                                        );
+                                        dy = ny;
+                                        dm = nm;
+                                        dd = nd;
                                     }
                                 }
                             }
@@ -1139,8 +1244,16 @@ impl Interpreter {
 
                     // For since: negate the result
                     if sign == -1 {
-                        dy = -dy; dm = -dm; dw = -dw; dd = -dd;
-                        dh = -dh; dmi = -dmi; ds = -ds; dms = -dms; dus = -dus; dns = -dns;
+                        dy = -dy;
+                        dm = -dm;
+                        dw = -dw;
+                        dd = -dd;
+                        dh = -dh;
+                        dmi = -dmi;
+                        ds = -ds;
+                        dms = -dms;
+                        dus = -dus;
+                        dns = -dns;
                     }
 
                     super::duration::create_duration_result(
@@ -1228,7 +1341,8 @@ impl Interpreter {
                             | "halfCeil" | "halfFloor" | "halfEven" => rs.clone(),
                             _ => {
                                 return Completion::Throw(
-                                    interp.create_range_error(&format!("Invalid roundingMode: {rs}")),
+                                    interp
+                                        .create_range_error(&format!("Invalid roundingMode: {rs}")),
                                 );
                             }
                         }
@@ -1336,103 +1450,124 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let (show_calendar, precision, rounding_mode) = if has_opts {
-                    let cv = match get_prop(interp, &options, "calendarName") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let sc = if is_undefined(&cv) {
-                        "auto"
-                    } else {
-                        let sv = match interp.to_string_value(&cv) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                let (show_calendar, precision, rounding_mode) =
+                    if has_opts {
+                        let cv = match get_prop(interp, &options, "calendarName") {
+                            Completion::Normal(v) => v,
+                            other => return other,
                         };
-                        match sv.as_str() {
-                            "auto" => "auto",
-                            "always" => "always",
-                            "never" => "never",
-                            "critical" => "critical",
-                            _ => {
-                                return Completion::Throw(
-                                    interp
-                                        .create_range_error(&format!("Invalid calendarName: {sv}")),
-                                );
+                        let sc = if is_undefined(&cv) {
+                            "auto"
+                        } else {
+                            let sv = match interp.to_string_value(&cv) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            match sv.as_str() {
+                                "auto" => "auto",
+                                "always" => "always",
+                                "never" => "never",
+                                "critical" => "critical",
+                                _ => {
+                                    return Completion::Throw(interp.create_range_error(&format!(
+                                        "Invalid calendarName: {sv}"
+                                    )));
+                                }
                             }
-                        }
-                    };
-                    // fractionalSecondDigits
-                    let fsd = match get_prop(interp, &options, "fractionalSecondDigits") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let mut prec: Option<i32> = if is_undefined(&fsd) {
-                        None
-                    } else if matches!(fsd, JsValue::Number(_)) {
-                        let n = match interp.to_number_value(&fsd) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
                         };
-                        if n.is_nan() || !n.is_finite() {
-                            return Completion::Throw(interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"));
+                        // fractionalSecondDigits
+                        let fsd = match get_prop(interp, &options, "fractionalSecondDigits") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let mut prec: Option<i32> = if is_undefined(&fsd) {
+                            None
+                        } else if matches!(fsd, JsValue::Number(_)) {
+                            let n = match interp.to_number_value(&fsd) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if n.is_nan() || !n.is_finite() {
+                                return Completion::Throw(interp.create_range_error(
+                                    "fractionalSecondDigits must be 0-9 or 'auto'",
+                                ));
+                            }
+                            let floored = n.floor();
+                            if floored < 0.0 || floored > 9.0 {
+                                return Completion::Throw(interp.create_range_error(
+                                    "fractionalSecondDigits must be 0-9 or 'auto'",
+                                ));
+                            }
+                            Some(floored as i32)
+                        } else {
+                            let s = match interp.to_string_value(&fsd) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if s == "auto" {
+                                None
+                            } else {
+                                return Completion::Throw(interp.create_range_error(
+                                    "fractionalSecondDigits must be 0-9 or 'auto'",
+                                ));
+                            }
+                        };
+                        // roundingMode
+                        let rm_val = match get_prop(interp, &options, "roundingMode") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let rm: &str = if is_undefined(&rm_val) {
+                            "trunc"
+                        } else {
+                            let sv = match interp.to_string_value(&rm_val) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            match sv.as_str() {
+                                "ceil" => "ceil",
+                                "floor" => "floor",
+                                "trunc" => "trunc",
+                                "expand" => "expand",
+                                "halfExpand" => "halfExpand",
+                                "halfTrunc" => "halfTrunc",
+                                "halfCeil" => "halfCeil",
+                                "halfFloor" => "halfFloor",
+                                "halfEven" => "halfEven",
+                                _ => {
+                                    return Completion::Throw(interp.create_range_error(&format!(
+                                        "Invalid roundingMode: {sv}"
+                                    )));
+                                }
+                            }
+                        };
+                        // smallestUnit overrides fractionalSecondDigits
+                        let su_val = match get_prop(interp, &options, "smallestUnit") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if !is_undefined(&su_val) {
+                            let sv = match interp.to_string_value(&su_val) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            prec = match super::temporal_unit_singular(&sv) {
+                                Some("minute") => Some(-1),
+                                Some("second") => Some(0),
+                                Some("millisecond") => Some(3),
+                                Some("microsecond") => Some(6),
+                                Some("nanosecond") => Some(9),
+                                _ => {
+                                    return Completion::Throw(
+                                        interp.create_range_error(&format!("Invalid unit: {sv}")),
+                                    );
+                                }
+                            };
                         }
-                        let floored = n.floor();
-                        if floored < 0.0 || floored > 9.0 {
-                            return Completion::Throw(interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"));
-                        }
-                        Some(floored as i32)
+                        (sc, prec, rm)
                     } else {
-                        let s = match interp.to_string_value(&fsd) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        if s == "auto" { None } else {
-                            return Completion::Throw(interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"));
-                        }
+                        ("auto", None, "trunc")
                     };
-                    // roundingMode
-                    let rm_val = match get_prop(interp, &options, "roundingMode") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let rm: &str = if is_undefined(&rm_val) {
-                        "trunc"
-                    } else {
-                        let sv = match interp.to_string_value(&rm_val) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match sv.as_str() {
-                            "ceil" => "ceil", "floor" => "floor", "trunc" => "trunc",
-                            "expand" => "expand", "halfExpand" => "halfExpand",
-                            "halfTrunc" => "halfTrunc", "halfCeil" => "halfCeil",
-                            "halfFloor" => "halfFloor", "halfEven" => "halfEven",
-                            _ => return Completion::Throw(interp.create_range_error(&format!("Invalid roundingMode: {sv}"))),
-                        }
-                    };
-                    // smallestUnit overrides fractionalSecondDigits
-                    let su_val = match get_prop(interp, &options, "smallestUnit") {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    if !is_undefined(&su_val) {
-                        let sv = match interp.to_string_value(&su_val) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        prec = match super::temporal_unit_singular(&sv) {
-                            Some("minute") => Some(-1),
-                            Some("second") => Some(0),
-                            Some("millisecond") => Some(3),
-                            Some("microsecond") => Some(6),
-                            Some("nanosecond") => Some(9),
-                            _ => return Completion::Throw(interp.create_range_error(&format!("Invalid unit: {sv}"))),
-                        };
-                    }
-                    (sc, prec, rm)
-                } else {
-                    ("auto", None, "trunc")
-                };
                 // Apply rounding to the time component
                 let (ry, rm, rd, rh, rmi, rs, rms, rus, rns) = if let Some(prec) = precision {
                     let time_ns = super::time_to_nanoseconds(h, mi, s, ms, us, ns);
@@ -1443,7 +1578,8 @@ impl Interpreter {
                     } else {
                         10i128.pow(9 - prec as u32)
                     };
-                    let rounded = super::plain_time::round_i128_to_increment(time_ns, unit_ns, rounding_mode);
+                    let rounded =
+                        super::plain_time::round_i128_to_increment(time_ns, unit_ns, rounding_mode);
                     let ns_per_day: i128 = 86_400_000_000_000;
                     let extra_days = if rounded >= ns_per_day {
                         (rounded / ns_per_day) as i32
@@ -1469,7 +1605,18 @@ impl Interpreter {
                     );
                 }
                 let result = format_plain_date_time(
-                    ry, rm, rd, rh, rmi, rs, rms, rus, rns, &cal, show_calendar, precision,
+                    ry,
+                    rm,
+                    rd,
+                    rh,
+                    rmi,
+                    rs,
+                    rms,
+                    rus,
+                    rns,
+                    &cal,
+                    show_calendar,
+                    precision,
                 );
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
@@ -1830,8 +1977,7 @@ impl Interpreter {
                 // Per spec: if item is a string, parse first, then validate overflow (but don't use it)
                 if matches!(&item, JsValue::String(_)) {
                     let (y, m, d, h, mi, s, ms, us, ns, cal) =
-                        match to_temporal_plain_date_time_with_overflow(interp, item, "constrain")
-                        {
+                        match to_temporal_plain_date_time_with_overflow(interp, item, "constrain") {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
@@ -1886,11 +2032,12 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let (y, m, d, h, mi, s, ms, us, ns, cal) =
-                        match apply_pdt_overflow(interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, &overflow) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        };
+                    let (y, m, d, h, mi, s, ms, us, ns, cal) = match apply_pdt_overflow(
+                        interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, &overflow,
+                    ) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                     if !super::iso_date_time_within_limits(y, m, d, h, mi, s, ms, us, ns) {
                         return Completion::Throw(
                             interp.create_range_error("DateTime outside valid ISO range"),
@@ -2079,9 +2226,13 @@ fn diff_date_time(
     if time_units {
         // Flatten to total nanoseconds
         let epoch1 = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y1, m1, d1)
-            as i128 * 86_400_000_000_000i128 + ns1;
+            as i128
+            * 86_400_000_000_000i128
+            + ns1;
         let epoch2 = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y2, m2, d2)
-            as i128 * 86_400_000_000_000i128 + ns2;
+            as i128
+            * 86_400_000_000_000i128
+            + ns2;
         let diff = epoch2 - epoch1;
         let (hours, minutes, seconds, milliseconds, microseconds, nanoseconds) = match largest_unit
         {
@@ -2147,17 +2298,30 @@ fn diff_date_time(
     } else {
         // DifferenceISODateTime spec: compute natively in both directions
         let time_diff_ns = ns2 - ns1; // end_time - start_time
-        let time_sign: i32 = if time_diff_ns > 0 { 1 } else if time_diff_ns < 0 { -1 } else { 0 };
-        let date1_epoch = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y1, m1, d1);
-        let date2_epoch = crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y2, m2, d2);
-        let date_sign: i32 = if date1_epoch > date2_epoch { 1 }
-            else if date1_epoch < date2_epoch { -1 }
-            else { 0 };
+        let time_sign: i32 = if time_diff_ns > 0 {
+            1
+        } else if time_diff_ns < 0 {
+            -1
+        } else {
+            0
+        };
+        let date1_epoch =
+            crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y1, m1, d1);
+        let date2_epoch =
+            crate::interpreter::builtins::temporal::iso_date_to_epoch_days(y2, m2, d2);
+        let date_sign: i32 = if date1_epoch > date2_epoch {
+            1
+        } else if date1_epoch < date2_epoch {
+            -1
+        } else {
+            0
+        };
 
         // Per spec step 7: if timeSign = dateSign (same non-zero sign), adjust
         let (adjusted_end, time_ns) = if time_sign != 0 && time_sign == date_sign {
             let adj_epoch = date2_epoch + time_sign as i64;
-            let adj_date = crate::interpreter::builtins::temporal::epoch_days_to_iso_date(adj_epoch);
+            let adj_date =
+                crate::interpreter::builtins::temporal::epoch_days_to_iso_date(adj_epoch);
             let adj_time = time_diff_ns - time_sign as i128 * 86_400_000_000_000;
             (adj_date, adj_time)
         } else {
@@ -2165,7 +2329,13 @@ fn diff_date_time(
         };
 
         let (dy, dm, dw, dd) = difference_iso_date(
-            y1, m1, d1, adjusted_end.0, adjusted_end.1, adjusted_end.2, largest_unit,
+            y1,
+            m1,
+            d1,
+            adjusted_end.0,
+            adjusted_end.1,
+            adjusted_end.2,
+            largest_unit,
         );
 
         // Decompose time_ns (may be negative)

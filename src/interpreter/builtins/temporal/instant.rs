@@ -212,10 +212,17 @@ impl Interpreter {
                     // Parse options
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     let time_units: &[&str] = &[
-                        "hour", "minute", "second", "millisecond", "microsecond", "nanosecond",
+                        "hour",
+                        "minute",
+                        "second",
+                        "millisecond",
+                        "microsecond",
+                        "nanosecond",
                     ];
                     let (largest_unit, smallest_unit, rounding_mode, rounding_increment) =
-                        match super::parse_difference_options(interp, &options, "second", time_units) {
+                        match super::parse_difference_options(
+                            interp, &options, "second", time_units,
+                        ) {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
@@ -1035,11 +1042,7 @@ fn round_temporal_instant(n: &BigInt, increment: i128, mode: &str) -> BigInt {
             } else if d2 < d1 {
                 r2
             } else {
-                let r1_abs = if r1_q < zero {
-                    -&r1_q
-                } else {
-                    r1_q.clone()
-                };
+                let r1_abs = if r1_q < zero { -&r1_q } else { r1_q.clone() };
                 if r1_abs % BigInt::from(2) == zero {
                     r1
                 } else {
@@ -1296,11 +1299,9 @@ fn parse_to_string_options(
                 Some(u)
             }
             _ => {
-                return Err(Completion::Throw(
-                    interp.create_range_error(&format!(
-                        "{ss} is not a valid value for smallest unit"
-                    )),
-                ));
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "{ss} is not a valid value for smallest unit"
+                ))));
             }
         }
     } else {
@@ -1337,13 +1338,17 @@ fn parse_plain_offset(s: &str) -> Option<(String, i64)> {
             // ±HH or ±HHMM
             if parts[0].len() == 2 {
                 let h: i64 = parts[0].parse().ok()?;
-                if h > 23 { return None; }
+                if h > 23 {
+                    return None;
+                }
                 let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, 0);
                 Some((id, sign * h * 3_600_000_000_000))
             } else if parts[0].len() == 4 {
                 let h: i64 = parts[0][..2].parse().ok()?;
                 let m: i64 = parts[0][2..].parse().ok()?;
-                if h > 23 || m > 59 { return None; }
+                if h > 23 || m > 59 {
+                    return None;
+                }
                 let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, m);
                 Some((id, sign * (h * 3_600_000_000_000 + m * 60_000_000_000)))
             } else {
@@ -1352,10 +1357,14 @@ fn parse_plain_offset(s: &str) -> Option<(String, i64)> {
         }
         2 => {
             // ±HH:MM — exactly 2 parts
-            if parts[0].len() != 2 || parts[1].len() != 2 { return None; }
+            if parts[0].len() != 2 || parts[1].len() != 2 {
+                return None;
+            }
             let h: i64 = parts[0].parse().ok()?;
             let m: i64 = parts[1].parse().ok()?;
-            if h > 23 || m > 59 { return None; }
+            if h > 23 || m > 59 {
+                return None;
+            }
             let id = format!("{}{:02}:{:02}", if sign < 0 { "-" } else { "+" }, h, m);
             Some((id, sign * (h * 3_600_000_000_000 + m * 60_000_000_000)))
         }

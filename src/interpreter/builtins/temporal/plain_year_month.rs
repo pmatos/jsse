@@ -3,8 +3,8 @@ use crate::interpreter::builtins::temporal::{
     add_iso_date, difference_iso_date, get_options_object, get_prop, is_undefined, iso_date_valid,
     iso_days_in_month, iso_days_in_year, iso_is_leap_year, iso_month_code,
     parse_difference_options, parse_overflow_option, parse_temporal_year_month_string,
-    read_month_fields, resolve_month_fields, round_date_duration,
-    to_temporal_calendar_slot_value, validate_calendar,
+    read_month_fields, resolve_month_fields, round_date_duration, to_temporal_calendar_slot_value,
+    validate_calendar,
 };
 
 pub(super) fn create_plain_year_month_result(
@@ -106,7 +106,9 @@ fn read_pym_property_bag_raw(
         other => return Err(other),
     };
     let y = if is_undefined(&y_val) {
-        return Err(Completion::Throw(interp.create_type_error("year is required")));
+        return Err(Completion::Throw(
+            interp.create_type_error("year is required"),
+        ));
     } else {
         to_integer_with_truncation(interp, &y_val)? as i32
     };
@@ -464,7 +466,8 @@ impl Interpreter {
                 has_any |= has_y;
                 if !has_any {
                     return Completion::Throw(
-                        interp.create_type_error("with() requires at least one recognized property"),
+                        interp
+                            .create_type_error("with() requires at least one recognized property"),
                     );
                 }
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -515,9 +518,9 @@ impl Interpreter {
                     };
                     // Check ISODateWithinLimits on intermediate date (day=rd)
                     if !super::iso_date_within_limits(y, m, rd) {
-                        return Completion::Throw(
-                            interp.create_range_error("PlainYearMonth intermediate date outside valid ISO range"),
-                        );
+                        return Completion::Throw(interp.create_range_error(
+                            "PlainYearMonth intermediate date outside valid ISO range",
+                        ));
                     }
                     // Check no sub-month units per AddDurationToYearMonth
                     let time_ns: i128 = (dur.3 as i128) * 86_400_000_000_000
@@ -528,24 +531,17 @@ impl Interpreter {
                         + (dur.8 as i128) * 1_000
                         + (dur.9 as i128);
                     if time_ns != 0 {
-                        return Completion::Throw(
-                            interp.create_range_error("Duration days/time must be zero for PlainYearMonth arithmetic"),
-                        );
+                        return Completion::Throw(interp.create_range_error(
+                            "Duration days/time must be zero for PlainYearMonth arithmetic",
+                        ));
                     }
                     if dur.2 != 0.0 {
-                        return Completion::Throw(
-                            interp.create_range_error("Duration weeks must be zero for PlainYearMonth arithmetic"),
-                        );
+                        return Completion::Throw(interp.create_range_error(
+                            "Duration weeks must be zero for PlainYearMonth arithmetic",
+                        ));
                     }
-                    let (ry, rm, _) = add_iso_date(
-                        y,
-                        m,
-                        rd,
-                        (dur.0 as i32) * sign,
-                        (dur.1 as i32) * sign,
-                        0,
-                        0,
-                    );
+                    let (ry, rm, _) =
+                        add_iso_date(y, m, rd, (dur.0 as i32) * sign, (dur.1 as i32) * sign, 0, 0);
                     let cm = rm.max(1).min(12);
                     let final_rd = rd.min(iso_days_in_month(ry, cm));
                     if !super::iso_date_within_limits(ry, cm, final_rd) {
@@ -584,9 +580,9 @@ impl Interpreter {
                     if !super::iso_date_within_limits(y1, m1, 1)
                         || !super::iso_date_within_limits(y2, m2, 1)
                     {
-                        return Completion::Throw(
-                            interp.create_range_error("PlainYearMonth outside representable range for since/until"),
-                        );
+                        return Completion::Throw(interp.create_range_error(
+                            "PlainYearMonth outside representable range for since/until",
+                        ));
                     }
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     let ym_units: &[&str] = &["year", "month"];
@@ -605,13 +601,20 @@ impl Interpreter {
                         rounding_mode.clone()
                     };
 
-                    if smallest_unit != "month" || rounding_increment != 1.0 || rounding_mode != "trunc" {
+                    if smallest_unit != "month"
+                        || rounding_increment != 1.0
+                        || rounding_mode != "trunc"
+                    {
                         let (ry, rm, rd) = (y1, m1, rd1);
                         // Pre-check: verify NudgeToCalendarUnit boundary is within ISO range
                         if matches!(smallest_unit.as_str(), "month" | "year") {
-                            let dur_sign = if dy > 0 || dm > 0 { 1i64 }
-                                else if dy < 0 || dm < 0 { -1i64 }
-                                else { 1 };
+                            let dur_sign = if dy > 0 || dm > 0 {
+                                1i64
+                            } else if dy < 0 || dm < 0 {
+                                -1i64
+                            } else {
+                                1
+                            };
                             let inc = rounding_increment as i64;
                             let end_date = match smallest_unit.as_str() {
                                 "month" => {
@@ -625,14 +628,23 @@ impl Interpreter {
                             };
                             if !super::iso_date_within_limits(end_date.0, end_date.1, end_date.2) {
                                 return Completion::Throw(
-                                    interp.create_range_error("Rounded date outside valid ISO range"),
+                                    interp
+                                        .create_range_error("Rounded date outside valid ISO range"),
                                 );
                             }
                         }
                         let (ry2, rm2, _, _) = match round_date_duration(
-                            dy, dm, 0, 0,
-                            &smallest_unit, &largest_unit, rounding_increment, &effective_mode,
-                            ry, rm, rd,
+                            dy,
+                            dm,
+                            0,
+                            0,
+                            &smallest_unit,
+                            &largest_unit,
+                            rounding_increment,
+                            &effective_mode,
+                            ry,
+                            rm,
+                            rd,
                         ) {
                             Ok(v) => v,
                             Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
@@ -654,7 +666,8 @@ impl Interpreter {
                     }
 
                     if sign == -1 {
-                        dy = -dy; dm = -dm;
+                        dy = -dy;
+                        dm = -dm;
                     }
 
                     super::duration::create_duration_result(
@@ -743,7 +756,11 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 Completion::Normal(JsValue::String(JsString::from_str(&format_year_month(
-                    y, m, ref_day as u8, &cal, "auto",
+                    y,
+                    m,
+                    ref_day as u8,
+                    &cal,
+                    "auto",
                 ))))
             },
         ));
@@ -760,7 +777,11 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 Completion::Normal(JsValue::String(JsString::from_str(&format_year_month(
-                    y, m, ref_day as u8, &cal, "auto",
+                    y,
+                    m,
+                    ref_day as u8,
+                    &cal,
+                    "auto",
                 ))))
             },
         ));
@@ -928,14 +949,12 @@ impl Interpreter {
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 // Per spec: if item is a string, parse first, then validate overflow (but don't use it)
                 if matches!(&item, JsValue::String(_)) {
-                    let (y, m, rd, cal) = match to_temporal_plain_year_month_with_overflow(
-                        interp,
-                        item,
-                        "constrain",
-                    ) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
+                    let (y, m, rd, cal) =
+                        match to_temporal_plain_year_month_with_overflow(interp, item, "constrain")
+                        {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                     match parse_overflow_option(interp, &options) {
                         Ok(_) => {}
                         Err(c) => return c,
@@ -946,7 +965,10 @@ impl Interpreter {
                 let is_temporal = if let JsValue::Object(ref o) = item {
                     if let Some(obj) = interp.get_object(o.id) {
                         let data = obj.borrow();
-                        matches!(&data.temporal_data, Some(TemporalData::PlainYearMonth { .. }))
+                        matches!(
+                            &data.temporal_data,
+                            Some(TemporalData::PlainYearMonth { .. })
+                        )
                     } else {
                         false
                     }
@@ -966,7 +988,8 @@ impl Interpreter {
                     create_plain_year_month_result(interp, y, m, rd, &cal)
                 } else {
                     // Property bag: read fields raw, then overflow, then validate
-                    let (y, month_num, mc_str, cal) = match read_pym_property_bag_raw(interp, &item) {
+                    let (y, month_num, mc_str, cal) = match read_pym_property_bag_raw(interp, &item)
+                    {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -980,17 +1003,13 @@ impl Interpreter {
                     };
                     let (y, m, rd, cal) = if overflow == "constrain" {
                         if m < 1 {
-                            return Completion::Throw(
-                                interp.create_range_error("Invalid month"),
-                            );
+                            return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         let cm = m.min(12);
                         (y, cm, 1, cal)
                     } else {
                         if m < 1 || m > 12 {
-                            return Completion::Throw(
-                                interp.create_range_error("Invalid month"),
-                            );
+                            return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         (y, m, 1, cal)
                     };

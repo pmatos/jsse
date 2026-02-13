@@ -1,10 +1,10 @@
 use super::*;
 use crate::interpreter::builtins::temporal::{
-    add_iso_date, default_largest_unit_for_duration, duration_sign, get_prop, is_undefined,
-    is_valid_duration, iso_date_to_epoch_days, parse_temporal_duration_string,
-    round_number_to_increment, temporal_unit_length_ns, temporal_unit_order,
-    temporal_unit_singular, to_integer_if_integral, validate_rounding_increment,
-    coerce_rounding_increment, max_rounding_increment,
+    add_iso_date, coerce_rounding_increment, default_largest_unit_for_duration, duration_sign,
+    get_prop, is_undefined, is_valid_duration, iso_date_to_epoch_days, max_rounding_increment,
+    parse_temporal_duration_string, round_number_to_increment, temporal_unit_length_ns,
+    temporal_unit_order, temporal_unit_singular, to_integer_if_integral,
+    validate_rounding_increment,
 };
 
 macro_rules! try_completion {
@@ -30,8 +30,14 @@ macro_rules! try_result {
 /// string with enough digits and lets f64 parsing handle the rounding.
 fn divide_i128_to_f64(numerator: i128, divisor: i128) -> f64 {
     debug_assert!(divisor != 0);
-    if numerator == 0 { return 0.0; }
-    let sign = if (numerator < 0) != (divisor < 0) { -1.0f64 } else { 1.0f64 };
+    if numerator == 0 {
+        return 0.0;
+    }
+    let sign = if (numerator < 0) != (divisor < 0) {
+        -1.0f64
+    } else {
+        1.0f64
+    };
     let abs_num = numerator.unsigned_abs();
     let abs_div = divisor.unsigned_abs();
     let whole = abs_num / abs_div;
@@ -86,13 +92,19 @@ fn to_relative_to_date(
                             let tz_name = &after[..tz_end];
                             if let Some(canonical_tz) = super::parse_utc_offset_timezone(tz_name) {
                                 let offset_sign = if offset.sign < 0 { '-' } else { '+' };
-                                let iso_truncated = format!("{}{:02}:{:02}", offset_sign, offset.hours, offset.minutes);
+                                let iso_truncated = format!(
+                                    "{}{:02}:{:02}",
+                                    offset_sign, offset.hours, offset.minutes
+                                );
                                 if iso_truncated != canonical_tz {
                                     return Err(Completion::Throw(interp.create_range_error(
                                         "UTC offset mismatch in ZonedDateTime string",
                                     )));
                                 }
-                            } else if tz_name == "UTC" || tz_name == "Etc/UTC" || tz_name == "Etc/GMT" {
+                            } else if tz_name == "UTC"
+                                || tz_name == "Etc/UTC"
+                                || tz_name == "Etc/GMT"
+                            {
                                 let is_zero = offset.hours == 0
                                     && offset.minutes == 0
                                     && offset.seconds == 0
@@ -107,7 +119,8 @@ fn to_relative_to_date(
                     }
                     // CheckISODaysRange + epoch_ns validation for ZDT relativeTo
                     let zdt_epoch_ns = if let Some(ref offset) = parsed.offset {
-                        let wall_epoch_days = iso_date_to_epoch_days(parsed.year, parsed.month, parsed.day);
+                        let wall_epoch_days =
+                            iso_date_to_epoch_days(parsed.year, parsed.month, parsed.day);
                         // CheckISODaysRange for non-Z strings (reject semantics)
                         if !parsed.has_utc_designator && wall_epoch_days.abs() > 100_000_000 {
                             return Err(Completion::Throw(interp.create_range_error(
@@ -377,8 +390,7 @@ fn to_relative_to_date(
             let epoch_days = iso_date_to_epoch_days(year, month, day) as i128;
             let local_ns = epoch_days * 86_400_000_000_000;
             let approx = num_bigint::BigInt::from(local_ns);
-            let tz_offset =
-                super::zoned_date_time::get_tz_offset_ns_pub(&tz, &approx) as i128;
+            let tz_offset = super::zoned_date_time::get_tz_offset_ns_pub(&tz, &approx) as i128;
             let epoch_ns = local_ns - tz_offset;
 
             return Ok(Some((year, month, day, Some(epoch_ns))));
@@ -413,13 +425,7 @@ fn duration_total_ns_relative(
     base_day: u8,
 ) -> Result<i128, ()> {
     let (ry, rm, rd) = add_iso_date(
-        base_year,
-        base_month,
-        base_day,
-        y as i32,
-        mo as i32,
-        w as i32,
-        d as i32,
+        base_year, base_month, base_day, y as i32, mo as i32, w as i32, d as i32,
     );
     if !super::iso_date_within_limits(ry, rm, rd) {
         return Err(());
@@ -446,13 +452,25 @@ fn duration_total_ns_relative(
 /// Adds date fields (Y/M/W) to relativeTo to get targetDate, then computes
 /// the fractional total in the given unit using calendar-aware boundaries.
 fn total_relative_duration(
-    y: f64, mo: f64, w: f64, d: f64,
-    h: f64, mi: f64, s: f64, ms: f64, us: f64, ns: f64,
+    y: f64,
+    mo: f64,
+    w: f64,
+    d: f64,
+    h: f64,
+    mi: f64,
+    s: f64,
+    ms: f64,
+    us: f64,
+    ns: f64,
     unit: &str,
-    base_year: i32, base_month: u8, base_day: u8,
+    base_year: i32,
+    base_month: u8,
+    base_day: u8,
 ) -> Result<f64, ()> {
     // Step 1: Add date fields (years, months, weeks) to get targetDate — NOT days
-    let target = add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0);
+    let target = add_iso_date(
+        base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
+    );
     if !super::iso_date_within_limits(target.0, target.1, target.2) {
         return Err(());
     }
@@ -469,7 +487,12 @@ fn total_relative_duration(
     let whole_days = if norm_ns >= 0 {
         norm_ns / 86_400_000_000_000
     } else {
-        -(-norm_ns / 86_400_000_000_000) - if (-norm_ns) % 86_400_000_000_000 != 0 { 1 } else { 0 }
+        -(-norm_ns / 86_400_000_000_000)
+            - if (-norm_ns) % 86_400_000_000_000 != 0 {
+                1
+            } else {
+                0
+            }
     };
     let frac_day_ns = norm_ns - whole_days * 86_400_000_000_000;
     let frac_day = frac_day_ns as f64 / 86_400_000_000_000.0;
@@ -489,13 +512,21 @@ fn total_relative_duration(
                 base_year, base_month, base_day, end.0, end.1, end.2, "year",
             );
             let year_start = add_iso_date(base_year, base_month, base_day, diff_y, 0, 0, 0);
-            let mut sign = if diff_y > 0 || (diff_y == 0 && end_epoch > base_epoch) { 1 }
-                else if diff_y < 0 || (diff_y == 0 && end_epoch < base_epoch) { -1 }
-                else { 0 };
+            let mut sign = if diff_y > 0 || (diff_y == 0 && end_epoch > base_epoch) {
+                1
+            } else if diff_y < 0 || (diff_y == 0 && end_epoch < base_epoch) {
+                -1
+            } else {
+                0
+            };
             if sign == 0 {
-                if frac_day_ns > 0 { sign = 1; }
-                else if frac_day_ns < 0 { sign = -1; }
-                else { return Ok(0.0); }
+                if frac_day_ns > 0 {
+                    sign = 1;
+                } else if frac_day_ns < 0 {
+                    sign = -1;
+                } else {
+                    return Ok(0.0);
+                }
             }
             let year_end = add_iso_date(base_year, base_month, base_day, diff_y + sign, 0, 0, 0);
             if !super::iso_date_within_limits(year_end.0, year_end.1, year_end.2) {
@@ -504,7 +535,9 @@ fn total_relative_duration(
             let year_start_epoch = iso_date_to_epoch_days(year_start.0, year_start.1, year_start.2);
             let year_end_epoch = iso_date_to_epoch_days(year_end.0, year_end.1, year_end.2);
             let year_length = (year_end_epoch - year_start_epoch).abs();
-            if year_length == 0 { return Ok(diff_y as f64); }
+            if year_length == 0 {
+                return Ok(diff_y as f64);
+            }
             let days_into_year = end_epoch - year_start_epoch;
             let numerator_ns: i128 = diff_y as i128 * year_length as i128 * 86_400_000_000_000
                 + days_into_year as i128 * 86_400_000_000_000
@@ -517,22 +550,33 @@ fn total_relative_duration(
                 base_year, base_month, base_day, end.0, end.1, end.2, "month",
             );
             let month_start = add_iso_date(base_year, base_month, base_day, 0, diff_m, 0, 0);
-            let mut sign = if diff_m > 0 || (diff_m == 0 && end_epoch > base_epoch) { 1 }
-                else if diff_m < 0 || (diff_m == 0 && end_epoch < base_epoch) { -1 }
-                else { 0 };
+            let mut sign = if diff_m > 0 || (diff_m == 0 && end_epoch > base_epoch) {
+                1
+            } else if diff_m < 0 || (diff_m == 0 && end_epoch < base_epoch) {
+                -1
+            } else {
+                0
+            };
             if sign == 0 {
-                if frac_day_ns > 0 { sign = 1; }
-                else if frac_day_ns < 0 { sign = -1; }
-                else { return Ok(0.0); }
+                if frac_day_ns > 0 {
+                    sign = 1;
+                } else if frac_day_ns < 0 {
+                    sign = -1;
+                } else {
+                    return Ok(0.0);
+                }
             }
             let month_end = add_iso_date(base_year, base_month, base_day, 0, diff_m + sign, 0, 0);
             if !super::iso_date_within_limits(month_end.0, month_end.1, month_end.2) {
                 return Err(());
             }
-            let month_start_epoch = iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
+            let month_start_epoch =
+                iso_date_to_epoch_days(month_start.0, month_start.1, month_start.2);
             let month_end_epoch = iso_date_to_epoch_days(month_end.0, month_end.1, month_end.2);
             let month_length = (month_end_epoch - month_start_epoch).abs();
-            if month_length == 0 { return Ok(diff_m as f64); }
+            if month_length == 0 {
+                return Ok(diff_m as f64);
+            }
             let days_into_month = end_epoch - month_start_epoch;
             let numerator_ns: i128 = diff_m as i128 * month_length as i128 * 86_400_000_000_000
                 + days_into_month as i128 * 86_400_000_000_000
@@ -566,11 +610,23 @@ fn total_relative_duration(
 /// Implements NudgeToCalendarUnit + BalanceDateDurationRelative.
 /// Returns (years, months, weeks, days, hours, minutes, seconds, ms, µs, ns).
 fn round_relative_duration(
-    y: f64, mo: f64, w: f64, d: f64,
-    h: f64, mi: f64, s: f64, ms: f64, us: f64, ns: f64,
-    smallest_unit: &str, largest_unit: &str,
-    increment: f64, rounding_mode: &str,
-    base_year: i32, base_month: u8, base_day: u8,
+    y: f64,
+    mo: f64,
+    w: f64,
+    d: f64,
+    h: f64,
+    mi: f64,
+    s: f64,
+    ms: f64,
+    us: f64,
+    ns: f64,
+    smallest_unit: &str,
+    largest_unit: &str,
+    increment: f64,
+    rounding_mode: &str,
+    base_year: i32,
+    base_month: u8,
+    base_day: u8,
     is_zdt: bool,
 ) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64), String> {
     let su_order = temporal_unit_order(smallest_unit);
@@ -603,9 +659,19 @@ fn round_relative_duration(
         let frac_days = d + time_ns / 86_400_000_000_000.0;
 
         let (ry, rm, rw, rd) = super::round_date_duration_with_frac_days(
-            y as i32, mo as i32, w as i32, frac_days, time_ns_i128,
-            smallest_unit, largest_unit, increment, rounding_mode,
-            base_year, base_month, base_day, is_zdt,
+            y as i32,
+            mo as i32,
+            w as i32,
+            frac_days,
+            time_ns_i128,
+            smallest_unit,
+            largest_unit,
+            increment,
+            rounding_mode,
+            base_year,
+            base_month,
+            base_day,
+            is_zdt,
         )?;
 
         // BalanceDateDurationRelative: needed for calendar largest units, or "day" when
@@ -618,22 +684,32 @@ fn round_relative_duration(
                 return Err("Rounded date outside valid ISO range".to_string());
             }
             let (dy, dm, mut dw, mut dd) = super::difference_iso_date(
-                base_year, base_month, base_day,
-                result_date.0, result_date.1, result_date.2,
+                base_year,
+                base_month,
+                base_day,
+                result_date.0,
+                result_date.1,
+                result_date.2,
                 largest_unit,
             );
             if smallest_unit == "week" && dd != 0 {
                 dw = dd / 7;
                 dd = dd % 7;
             }
-            Ok((dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            Ok((
+                dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ))
         } else {
-            Ok((ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            Ok((
+                ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            ))
         }
     } else {
         // Time unit rounding: flatten to ns with calendar-aware day resolution
         // Use i128 arithmetic throughout to avoid f64 precision loss for large ns values
-        let target = add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0);
+        let target = add_iso_date(
+            base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
+        );
         let base_epoch = iso_date_to_epoch_days(base_year, base_month, base_day);
         let target_epoch = iso_date_to_epoch_days(target.0, target.1, target.2);
         let calendar_days = (target_epoch - base_epoch) as i128;
@@ -662,13 +738,25 @@ fn round_relative_duration(
             let (ry, rm, rd_result) =
                 add_iso_date(base_year, base_month, base_day, 0, 0, 0, total_days as i32);
             let (dy, dm, dw, dd) = super::difference_iso_date(
-                base_year, base_month, base_day, ry, rm, rd_result, largest_unit,
+                base_year,
+                base_month,
+                base_day,
+                ry,
+                rm,
+                rd_result,
+                largest_unit,
             );
             let r = unbalance_time_ns_i128(remainder_ns, "hour");
-            Ok((dy as f64, dm as f64, dw as f64, dd as f64, r.1 as f64, r.2 as f64, r.3 as f64, r.4 as f64, r.5 as f64, r.6 as f64))
+            Ok((
+                dy as f64, dm as f64, dw as f64, dd as f64, r.1 as f64, r.2 as f64, r.3 as f64,
+                r.4 as f64, r.5 as f64, r.6 as f64,
+            ))
         } else {
             let r = unbalance_time_ns_i128(rounded_ns, largest_unit);
-            Ok((0.0, 0.0, 0.0, r.0 as f64, r.1 as f64, r.2 as f64, r.3 as f64, r.4 as f64, r.5 as f64, r.6 as f64))
+            Ok((
+                0.0, 0.0, 0.0, r.0 as f64, r.1 as f64, r.2 as f64, r.3 as f64, r.4 as f64,
+                r.5 as f64, r.6 as f64,
+            ))
         }
     }
 }
@@ -1022,9 +1110,8 @@ impl Interpreter {
                 // - Duration has calendar units (years/months/weeks), OR
                 // - Target unit is a calendar unit (years/months/weeks)
                 let has_calendar = y != 0.0 || mo != 0.0 || w != 0.0;
-                let target_is_calendar = matches!(
-                    smallest_unit, "year" | "month" | "week"
-                ) || matches!(largest_unit, "year" | "month" | "week");
+                let target_is_calendar = matches!(smallest_unit, "year" | "month" | "week")
+                    || matches!(largest_unit, "year" | "month" | "week");
                 if (has_calendar || target_is_calendar) && relative_to.is_none() {
                     return Completion::Throw(interp.create_range_error(
                         "relativeTo is required for rounding durations with calendar units",
@@ -1035,13 +1122,18 @@ impl Interpreter {
                     // Spec early return: zero duration returns P0D before boundary checks
                     // For PlainDate: always (ISODateTimeWithinLimits at midnight is skipped)
                     // For ZDT: only when largestUnit < "day" (day+ units need boundary checks)
-                    let is_zero = y == 0.0 && mo == 0.0 && w == 0.0 && d == 0.0
-                        && h == 0.0 && mi == 0.0 && s == 0.0
-                        && ms == 0.0 && us == 0.0 && ns == 0.0;
+                    let is_zero = y == 0.0
+                        && mo == 0.0
+                        && w == 0.0
+                        && d == 0.0
+                        && h == 0.0
+                        && mi == 0.0
+                        && s == 0.0
+                        && ms == 0.0
+                        && us == 0.0
+                        && ns == 0.0;
                     let lu_order = temporal_unit_order(largest_unit);
-                    if is_zero
-                        && (zdt_epoch_ns.is_none()
-                            || lu_order < temporal_unit_order("day"))
+                    if is_zero && (zdt_epoch_ns.is_none() || lu_order < temporal_unit_order("day"))
                     {
                         return create_duration_result(
                             interp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -1063,9 +1155,7 @@ impl Interpreter {
                                 "duration out of range when applied to relativeTo",
                             ));
                         }
-                    } else if !super::iso_date_time_within_limits(
-                        by, bm, bd, 0, 0, 0, 0, 0, 0,
-                    ) {
+                    } else if !super::iso_date_time_within_limits(by, bm, bd, 0, 0, 0, 0, 0, 0) {
                         return Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         ));
@@ -1075,28 +1165,40 @@ impl Interpreter {
                         && temporal_unit_order(smallest_unit) < temporal_unit_order("day")
                     {
                         let target = super::add_iso_date(
-                            by, bm, bd,
-                            y as i32, mo as i32, w as i32, d as i32,
+                            by, bm, bd, y as i32, mo as i32, w as i32, d as i32,
                         );
-                        let (ny, nm, nd) = super::balance_iso_date(
-                            target.0, target.1 as i32, target.2 as i32 + 1,
-                        );
+                        let (ny, nm, nd) =
+                            super::balance_iso_date(target.0, target.1 as i32, target.2 as i32 + 1);
                         let next_days = super::iso_date_to_epoch_days(ny, nm, nd);
                         if next_days.abs() > 100_000_000 {
-                            return Completion::Throw(interp.create_range_error(
-                                "next day boundary is out of range",
-                            ));
+                            return Completion::Throw(
+                                interp.create_range_error("next day boundary is out of range"),
+                            );
                         }
                     }
                     match round_relative_duration(
-                        y, mo, w, d, h, mi, s, ms, us, ns,
-                        smallest_unit, largest_unit,
-                        increment, rounding_mode,
-                        by, bm, bd, zdt_epoch_ns.is_some(),
+                        y,
+                        mo,
+                        w,
+                        d,
+                        h,
+                        mi,
+                        s,
+                        ms,
+                        us,
+                        ns,
+                        smallest_unit,
+                        largest_unit,
+                        increment,
+                        rounding_mode,
+                        by,
+                        bm,
+                        bd,
+                        zdt_epoch_ns.is_some(),
                     ) {
-                        Ok((ry, rm, rw, rd, rh, rmi, rs, rms, rus, rns)) => {
-                            create_duration_result(interp, ry, rm, rw, rd, rh, rmi, rs, rms, rus, rns)
-                        }
+                        Ok((ry, rm, rw, rd, rh, rmi, rs, rms, rus, rns)) => create_duration_result(
+                            interp, ry, rm, rw, rd, rh, rmi, rs, rms, rus, rns,
+                        ),
                         Err(msg) => Completion::Throw(interp.create_range_error(&msg)),
                     }
                 } else {
@@ -1114,7 +1216,10 @@ impl Interpreter {
                     let rounded_ns =
                         super::round_i128_to_increment(total_ns, unit_ns * inc, rounding_mode);
                     let r = unbalance_time_ns_i128(rounded_ns, largest_unit);
-                    create_duration_result(interp, y, mo, w, r.0 as f64, r.1 as f64, r.2 as f64, r.3 as f64, r.4 as f64, r.5 as f64, r.6 as f64)
+                    create_duration_result(
+                        interp, y, mo, w, r.0 as f64, r.1 as f64, r.2 as f64, r.3 as f64,
+                        r.4 as f64, r.5 as f64, r.6 as f64,
+                    )
                 }
             },
         ));
@@ -1220,8 +1325,10 @@ impl Interpreter {
                             "year" => add_iso_date(by, bm, bd, y as i32 + 1, 0, 0, 0),
                             _ => unreachable!(),
                         };
-                        let nudge_epoch_days = iso_date_to_epoch_days(nudge_date.0, nudge_date.1, nudge_date.2);
-                        let nudge_epoch_ns = nudge_epoch_days as i128 * 86_400_000_000_000 + time_of_day_ns;
+                        let nudge_epoch_days =
+                            iso_date_to_epoch_days(nudge_date.0, nudge_date.1, nudge_date.2);
+                        let nudge_epoch_ns =
+                            nudge_epoch_days as i128 * 86_400_000_000_000 + time_of_day_ns;
                         if nudge_epoch_ns < -ns_max || nudge_epoch_ns > ns_max {
                             return Completion::Throw(interp.create_range_error(
                                 "duration out of range when applied to relativeTo",
@@ -1229,8 +1336,7 @@ impl Interpreter {
                         }
                     }
                     match total_relative_duration(
-                        y, mo, w, d, h, mi, s, ms, us, ns,
-                        unit, by, bm, bd,
+                        y, mo, w, d, h, mi, s, ms, us, ns, unit, by, bm, bd,
                     ) {
                         Ok(result) => Completion::Normal(JsValue::Number(result)),
                         Err(()) => Completion::Throw(interp.create_range_error(
@@ -1240,23 +1346,27 @@ impl Interpreter {
                 } else if let Some((by, bm, bd, None)) = relative_to {
                     // PlainDate relativeTo path
                     // Spec: DifferencePlainDateTimeWithTotal step 1: if isoDateTime1 = isoDateTime2, return 0
-                    let is_zero = y == 0.0 && mo == 0.0 && w == 0.0 && d == 0.0
-                        && h == 0.0 && mi == 0.0 && s == 0.0 && ms == 0.0
-                        && us == 0.0 && ns == 0.0;
+                    let is_zero = y == 0.0
+                        && mo == 0.0
+                        && w == 0.0
+                        && d == 0.0
+                        && h == 0.0
+                        && mi == 0.0
+                        && s == 0.0
+                        && ms == 0.0
+                        && us == 0.0
+                        && ns == 0.0;
                     if is_zero {
                         return Completion::Normal(JsValue::Number(0.0));
                     }
                     // Spec step 2: ISODateTimeWithinLimits on base at midnight
-                    if !super::iso_date_time_within_limits(
-                        by, bm, bd, 0, 0, 0, 0, 0, 0,
-                    ) {
+                    if !super::iso_date_time_within_limits(by, bm, bd, 0, 0, 0, 0, 0, 0) {
                         return Completion::Throw(interp.create_range_error(
                             "duration out of range when applied to relativeTo",
                         ));
                     }
                     match total_relative_duration(
-                        y, mo, w, d, h, mi, s, ms, us, ns,
-                        unit, by, bm, bd,
+                        y, mo, w, d, h, mi, s, ms, us, ns, unit, by, bm, bd,
                     ) {
                         Ok(result) => Completion::Normal(JsValue::Number(result)),
                         Err(()) => Completion::Throw(interp.create_range_error(
@@ -1292,14 +1402,25 @@ impl Interpreter {
                 };
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
 
-                let (precision, rounding_mode) =
-                    match parse_to_string_options(interp, args.first()) {
-                        Ok(p) => p,
-                        Err(c) => return c,
-                    };
+                let (precision, rounding_mode) = match parse_to_string_options(interp, args.first())
+                {
+                    Ok(p) => p,
+                    Err(c) => return c,
+                };
 
                 let result = match format_duration_iso(
-                    y, mo, w, d, h, mi, s, ms, us, ns, precision, rounding_mode,
+                    y,
+                    mo,
+                    w,
+                    d,
+                    h,
+                    mi,
+                    s,
+                    ms,
+                    us,
+                    ns,
+                    precision,
+                    rounding_mode,
                 ) {
                     Ok(s) => s,
                     Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
@@ -1321,10 +1442,11 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                let result = match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
-                    Ok(s) => s,
-                    Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
-                };
+                let result =
+                    match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
+                        Ok(s) => s,
+                        Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                    };
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -1342,10 +1464,11 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                let result = match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
-                    Ok(s) => s,
-                    Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
-                };
+                let result =
+                    match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
+                        Ok(s) => s,
+                        Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                    };
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -1546,9 +1669,16 @@ impl Interpreter {
                 };
 
                 // If both durations are identical, return 0 without needing relativeTo
-                if one.0 == two.0 && one.1 == two.1 && one.2 == two.2 && one.3 == two.3
-                    && one.4 == two.4 && one.5 == two.5 && one.6 == two.6 && one.7 == two.7
-                    && one.8 == two.8 && one.9 == two.9
+                if one.0 == two.0
+                    && one.1 == two.1
+                    && one.2 == two.2
+                    && one.3 == two.3
+                    && one.4 == two.4
+                    && one.5 == two.5
+                    && one.6 == two.6
+                    && one.7 == two.7
+                    && one.8 == two.8
+                    && one.9 == two.9
                 {
                     return Completion::Normal(JsValue::Number(0.0));
                 }
@@ -1568,22 +1698,26 @@ impl Interpreter {
 
                 let (ns1, ns2) = if let Some((by, bm, bd, _zdt_epoch_ns)) = relative_to {
                     let n1 = match duration_total_ns_relative(
-                        one.0, one.1, one.2, one.3, one.4, one.5, one.6, one.7, one.8, one.9,
-                        by, bm, bd,
+                        one.0, one.1, one.2, one.3, one.4, one.5, one.6, one.7, one.8, one.9, by,
+                        bm, bd,
                     ) {
                         Ok(v) => v,
-                        Err(()) => return Completion::Throw(interp.create_range_error(
-                            "duration out of range when applied to relativeTo",
-                        )),
+                        Err(()) => {
+                            return Completion::Throw(interp.create_range_error(
+                                "duration out of range when applied to relativeTo",
+                            ));
+                        }
                     };
                     let n2 = match duration_total_ns_relative(
-                        two.0, two.1, two.2, two.3, two.4, two.5, two.6, two.7, two.8, two.9,
-                        by, bm, bd,
+                        two.0, two.1, two.2, two.3, two.4, two.5, two.6, two.7, two.8, two.9, by,
+                        bm, bd,
                     ) {
                         Ok(v) => v,
-                        Err(()) => return Completion::Throw(interp.create_range_error(
-                            "duration out of range when applied to relativeTo",
-                        )),
+                        Err(()) => {
+                            return Completion::Throw(interp.create_range_error(
+                                "duration out of range when applied to relativeTo",
+                            ));
+                        }
                     };
                     (n1, n2)
                 } else {
@@ -1748,9 +1882,7 @@ pub(crate) fn to_temporal_duration_record(
     // String path first
     if let JsValue::String(s) = &item {
         let parsed = parse_temporal_duration_string(&s.to_rust_string()).ok_or_else(|| {
-            Completion::Throw(
-                interp.create_range_error(&format!("Invalid duration string: {s}")),
-            )
+            Completion::Throw(interp.create_range_error(&format!("Invalid duration string: {s}")))
         })?;
         let sign = parsed.sign;
         let (y, mo, w, d, h, mi, sec, ms, us, ns) = (
@@ -1774,9 +1906,9 @@ pub(crate) fn to_temporal_duration_record(
     }
     // Must be an object (reject null, booleans, numbers, etc.)
     if !matches!(&item, JsValue::Object(_)) {
-        return Err(Completion::Throw(interp.create_type_error(
-            "Invalid duration: expected string or object",
-        )));
+        return Err(Completion::Throw(
+            interp.create_type_error("Invalid duration: expected string or object"),
+        ));
     }
     // Check for existing Duration instance
     if let JsValue::Object(o) = &item {
@@ -1890,7 +2022,16 @@ fn parse_round_options(
     ms: f64,
     us: f64,
     ns: f64,
-) -> Result<(&'static str, &'static str, f64, &'static str, Option<(i32, u8, u8, Option<i128>)>), Completion> {
+) -> Result<
+    (
+        &'static str,
+        &'static str,
+        f64,
+        &'static str,
+        Option<(i32, u8, u8, Option<i128>)>,
+    ),
+    Completion,
+> {
     if let JsValue::String(su) = round_to {
         let su_str = su.to_rust_string();
         let unit = temporal_unit_singular(&su_str).ok_or_else(|| {
@@ -1919,7 +2060,11 @@ fn parse_round_options(
         other => return Err(other),
     };
     let large_unit_str = if !is_undefined(&large_unit_val) {
-        Some(interp.to_string_value(&large_unit_val).map_err(Completion::Throw)?)
+        Some(
+            interp
+                .to_string_value(&large_unit_val)
+                .map_err(Completion::Throw)?,
+        )
     } else {
         None
     };
@@ -2027,7 +2172,13 @@ fn parse_round_options(
         }
     }
 
-    Ok((small_unit, rounding_mode, increment, large_unit, relative_to))
+    Ok((
+        small_unit,
+        rounding_mode,
+        increment,
+        large_unit,
+        relative_to,
+    ))
 }
 
 /// Returns (precision, rounding_mode).
@@ -2060,15 +2211,15 @@ fn parse_to_string_options(
     } else if matches!(fp, JsValue::Number(_)) {
         let n = interp.to_number_value(&fp).map_err(Completion::Throw)?;
         if n.is_nan() || !n.is_finite() {
-            return Err(Completion::Throw(
-                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
-            ));
+            return Err(Completion::Throw(interp.create_range_error(
+                "fractionalSecondDigits must be 0-9 or 'auto'",
+            )));
         }
         let floored = n.floor();
         if floored < 0.0 || floored > 9.0 {
-            return Err(Completion::Throw(
-                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
-            ));
+            return Err(Completion::Throw(interp.create_range_error(
+                "fractionalSecondDigits must be 0-9 or 'auto'",
+            )));
         }
         Some(Some(floored as u8))
     } else {
@@ -2076,9 +2227,9 @@ fn parse_to_string_options(
         if s == "auto" {
             Some(None)
         } else {
-            return Err(Completion::Throw(
-                interp.create_range_error("fractionalSecondDigits must be 0-9 or 'auto'"),
-            ));
+            return Err(Completion::Throw(interp.create_range_error(
+                "fractionalSecondDigits must be 0-9 or 'auto'",
+            )));
         }
     };
 
@@ -2136,7 +2287,8 @@ fn parse_to_string_options(
 
 /// Balance total nanoseconds into a duration tuple using i128 precision.
 fn balance_from_i128_ns(
-    total_ns: i128, largest_unit: &str,
+    total_ns: i128,
+    largest_unit: &str,
 ) -> (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) {
     let sign = if total_ns < 0 { -1i128 } else { 1 };
     let mut remaining = total_ns.abs();
@@ -2146,36 +2298,50 @@ fn balance_from_i128_ns(
         let d = remaining / 86_400_000_000_000;
         remaining %= 86_400_000_000_000;
         d
-    } else { 0 };
+    } else {
+        0
+    };
     let hours = if lu_order >= super::temporal_unit_order("hour") {
         let h = remaining / 3_600_000_000_000;
         remaining %= 3_600_000_000_000;
         h
-    } else { 0 };
+    } else {
+        0
+    };
     let minutes = if lu_order >= super::temporal_unit_order("minute") {
         let m = remaining / 60_000_000_000;
         remaining %= 60_000_000_000;
         m
-    } else { 0 };
+    } else {
+        0
+    };
     let seconds = if lu_order >= super::temporal_unit_order("second") {
         let s = remaining / 1_000_000_000;
         remaining %= 1_000_000_000;
         s
-    } else { 0 };
+    } else {
+        0
+    };
     let milliseconds = if lu_order >= super::temporal_unit_order("millisecond") {
         let ms = remaining / 1_000_000;
         remaining %= 1_000_000;
         ms
-    } else { 0 };
+    } else {
+        0
+    };
     let microseconds = if lu_order >= super::temporal_unit_order("microsecond") {
         let us = remaining / 1_000;
         remaining %= 1_000;
         us
-    } else { 0 };
+    } else {
+        0
+    };
     let nanoseconds = remaining;
 
     (
-        0.0, 0.0, 0.0,
+        0.0,
+        0.0,
+        0.0,
         (sign * days) as f64,
         (sign * hours) as f64,
         (sign * minutes) as f64,
@@ -2187,27 +2353,52 @@ fn balance_from_i128_ns(
 }
 
 fn default_temporal_largest_unit(
-    years: f64, months: f64, weeks: f64, days: f64,
-    hours: f64, minutes: f64, seconds: f64, milliseconds: f64, microseconds: f64,
+    years: f64,
+    months: f64,
+    weeks: f64,
+    days: f64,
+    hours: f64,
+    minutes: f64,
+    seconds: f64,
+    milliseconds: f64,
+    microseconds: f64,
 ) -> String {
-    if years != 0.0 { "year" }
-    else if months != 0.0 { "month" }
-    else if weeks != 0.0 { "week" }
-    else if days != 0.0 { "day" }
-    else if hours != 0.0 { "hour" }
-    else if minutes != 0.0 { "minute" }
-    else if seconds != 0.0 { "second" }
-    else if milliseconds != 0.0 { "millisecond" }
-    else if microseconds != 0.0 { "microsecond" }
-    else { "nanosecond" }
+    if years != 0.0 {
+        "year"
+    } else if months != 0.0 {
+        "month"
+    } else if weeks != 0.0 {
+        "week"
+    } else if days != 0.0 {
+        "day"
+    } else if hours != 0.0 {
+        "hour"
+    } else if minutes != 0.0 {
+        "minute"
+    } else if seconds != 0.0 {
+        "second"
+    } else if milliseconds != 0.0 {
+        "millisecond"
+    } else if microseconds != 0.0 {
+        "microsecond"
+    } else {
+        "nanosecond"
+    }
     .to_string()
 }
 
 fn larger_of_two_temporal_units(a: &str, b: &str) -> String {
     let order = |u: &str| match u {
-        "year" => 9, "month" => 8, "week" => 7, "day" => 6,
-        "hour" => 5, "minute" => 4, "second" => 3,
-        "millisecond" => 2, "microsecond" => 1, _ => 0,
+        "year" => 9,
+        "month" => 8,
+        "week" => 7,
+        "day" => 6,
+        "hour" => 5,
+        "minute" => 4,
+        "second" => 3,
+        "millisecond" => 2,
+        "microsecond" => 1,
+        _ => 0,
     };
     if order(a) >= order(b) { a } else { b }.to_string()
 }
@@ -2215,21 +2406,40 @@ fn larger_of_two_temporal_units(a: &str, b: &str) -> String {
 /// Balance total nanoseconds into (days, hours, minutes, seconds, frac_ns)
 fn balance_time_ns(total_ns: i128, largest_unit: &str) -> (i128, i128, i128, i128, u64) {
     let mut remaining = total_ns;
-    let days = if largest_unit == "day" || largest_unit == "week" || largest_unit == "month" || largest_unit == "year" {
+    let days = if largest_unit == "day"
+        || largest_unit == "week"
+        || largest_unit == "month"
+        || largest_unit == "year"
+    {
         let d = remaining / 86_400_000_000_000;
         remaining -= d * 86_400_000_000_000;
         d
-    } else { 0 };
-    let hours = if largest_unit != "minute" && largest_unit != "second" && largest_unit != "millisecond" && largest_unit != "microsecond" && largest_unit != "nanosecond" {
+    } else {
+        0
+    };
+    let hours = if largest_unit != "minute"
+        && largest_unit != "second"
+        && largest_unit != "millisecond"
+        && largest_unit != "microsecond"
+        && largest_unit != "nanosecond"
+    {
         let h = remaining / 3_600_000_000_000;
         remaining -= h * 3_600_000_000_000;
         h
-    } else { 0 };
-    let minutes = if largest_unit != "second" && largest_unit != "millisecond" && largest_unit != "microsecond" && largest_unit != "nanosecond" {
+    } else {
+        0
+    };
+    let minutes = if largest_unit != "second"
+        && largest_unit != "millisecond"
+        && largest_unit != "microsecond"
+        && largest_unit != "nanosecond"
+    {
         let m = remaining / 60_000_000_000;
         remaining -= m * 60_000_000_000;
         m
-    } else { 0 };
+    } else {
+        0
+    };
     let seconds = remaining / 1_000_000_000;
     let frac_ns = (remaining - seconds * 1_000_000_000) as u64;
     (days, hours, minutes, seconds, frac_ns)
@@ -2294,7 +2504,15 @@ fn format_duration_iso(
         // BalanceTimeDuration: extract days, hours, minutes, seconds from rounded total
         // Use LargerOfTwoTemporalUnits(DefaultTemporalLargestUnit, "seconds")
         let largest_orig = default_temporal_largest_unit(
-            years, months, weeks, days, hours, minutes, seconds, milliseconds, microseconds,
+            years,
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+            microseconds,
         );
         let balance_unit = larger_of_two_temporal_units(&largest_orig, "seconds");
 
@@ -2314,7 +2532,11 @@ fn format_duration_iso(
     // After rounding, validate result (IsValidDuration)
     const MAX_SAFE: i128 = (1i128 << 53) - 1;
     // When rounding was applied, extra_days already includes original days
-    let total_days = if precision.is_some() { extra_days } else { days.abs() as i128 };
+    let total_days = if precision.is_some() {
+        extra_days
+    } else {
+        days.abs() as i128
+    };
     if precision.is_some() {
         if balanced_s > MAX_SAFE || ami > MAX_SAFE || ah > MAX_SAFE || total_days > MAX_SAFE {
             return Err("Rounded duration is out of range".to_string());
@@ -2417,16 +2639,30 @@ fn round_i128_to_increment(value: i128, increment: i128, mode: &str) -> i128 {
         "trunc" | "floor" => truncated,
         "ceil" | "expand" => expanded,
         "halfExpand" | "halfCeil" => {
-            if remainder * 2 >= increment { expanded } else { truncated }
+            if remainder * 2 >= increment {
+                expanded
+            } else {
+                truncated
+            }
         }
         "halfTrunc" | "halfFloor" => {
-            if remainder * 2 > increment { expanded } else { truncated }
+            if remainder * 2 > increment {
+                expanded
+            } else {
+                truncated
+            }
         }
         "halfEven" => {
-            if remainder * 2 > increment { expanded }
-            else if remainder * 2 < increment { truncated }
-            else {
-                if (truncated / increment) % 2 == 0 { truncated } else { expanded }
+            if remainder * 2 > increment {
+                expanded
+            } else if remainder * 2 < increment {
+                truncated
+            } else {
+                if (truncated / increment) % 2 == 0 {
+                    truncated
+                } else {
+                    expanded
+                }
             }
         }
         _ => truncated,
@@ -2580,7 +2816,13 @@ pub(crate) fn balance_duration_relative(
         + hours as i128 * 3_600_000_000_000
         + days as i128 * 86_400_000_000_000;
 
-    let sign: i128 = if total_ns < 0 { -1 } else if total_ns > 0 { 1 } else { 0 };
+    let sign: i128 = if total_ns < 0 {
+        -1
+    } else if total_ns > 0 {
+        1
+    } else {
+        0
+    };
     let abs_ns = total_ns.abs();
     let (rd, rh, rmi, rs, rms, rus, rns) = unbalance_time_ns_i128(abs_ns, largest);
 
