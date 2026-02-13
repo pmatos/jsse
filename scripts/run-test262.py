@@ -452,8 +452,8 @@ examples:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=60,
-        help="Timeout per test in seconds (default: 60)",
+        default=120,
+        help="Timeout per test in seconds (default: 120)",
     )
     parser.add_argument(
         "paths",

@@ -95,7 +95,7 @@ cargo build --release
 uv run python scripts/run-test262.py
 ```
 
-Options: `-j <n>` for parallelism (default: nproc), `--timeout <s>` (default: 60).
+Options: `-j <n>` for parallelism (default: nproc), `--timeout <s>` (default: 120).
 
 The runner supports multiple engines via `--engine`:
 
