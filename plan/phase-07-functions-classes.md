@@ -83,7 +83,19 @@ Implement all function types (normal, arrow, generator, async, async generator) 
 - [x] Class name binding (const in class body, not const outside)
 - [ ] `toString()` of class
 
-### 7.8 Tail Position Calls (§15.10)
+### 7.8 Function Built-in Compliance (§20.2) — ✅ 94% (839/893)
+- [x] Function() constructor strict mode inheritance (sloppy closure env)
+- [x] Function() constructor ToString coercion (to_string_value)
+- [x] Function.prototype.toString Proxy handling (callable vs non-callable)
+- [x] Function.prototype.apply CreateListFromArrayLike (getter-aware, arity fix)
+- [x] Class constructor callable check (TypeError without `new`)
+- [x] Derived constructor return value check order (TypeError before ReferenceError)
+- [x] Bound function target tracking (bound_target_function, bound_args, newTarget resolution)
+- [x] OrdinaryHasInstance bound function chain + getter-aware prototype
+- [x] bind length Infinity/edge cases (HasOwnProperty, Number type check, f64)
+- [x] bind name getter-aware error propagation
+
+### 7.9 Tail Position Calls (§15.10)
 - [ ] IsInTailPosition
 - [ ] PrepareForTailCall (optional optimization)
 

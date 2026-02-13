@@ -41,13 +41,16 @@ Ordered roughly by dependency and importance.
   - [x] `Object.prototype.toLocaleString()`, `Object.prototype.toString()`, `Object.prototype.valueOf()`
   - [ ] `Object.prototype.__proto__` (Annex B)
   - [x] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__` (Annex B)
-- [x] **Function** (§20.2) — 81% pass rate (736/905 scenarios)
-  - [x] `Function()` constructor (dynamic function creation)
-  - [x] `Function.prototype.apply()`, `.bind()`, `.call()`
-  - [x] `Function.prototype.toString()`
-  - [x] `Function.prototype[@@hasInstance]`
+- [x] **Function** (§20.2) — 94% pass rate (839/893 scenarios)
+  - [x] `Function()` constructor (sloppy closure env, ToString coercion)
+  - [x] `Function.prototype.apply()` (CreateListFromArrayLike, getter-aware, arity=2)
+  - [x] `Function.prototype.bind()` (bound_target_function, HasOwnProperty length, getter-aware name)
+  - [x] `Function.prototype.call()`
+  - [x] `Function.prototype.toString()` (Proxy callable check)
+  - [x] `Function.prototype[@@hasInstance]` (bound function chain)
   - [x] `Function.prototype.constructor`
   - [x] `name`, `length` properties
+  - [x] Class constructor callable check, derived constructor return order
 - [x] **Boolean** (§20.3)
   - [x] `Boolean()` constructor
   - [x] `Boolean.prototype.toString()`, `.valueOf()`

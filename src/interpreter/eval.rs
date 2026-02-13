@@ -1208,7 +1208,7 @@ impl Interpreter {
         Completion::Normal(JsValue::Number(integer_index))
     }
 
-    fn to_length(val: &JsValue) -> f64 {
+    pub(crate) fn to_length(val: &JsValue) -> f64 {
         let len = to_number(val);
         if len.is_nan() || len <= 0.0 {
             return 0.0;
@@ -6365,6 +6365,12 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 }
             }
+            let is_class_ctor = obj.borrow().is_class_constructor;
+            if is_class_ctor && self.new_target.is_none() {
+                return Completion::Throw(
+                    self.create_type_error("Class constructor cannot be invoked without 'new'"),
+                );
+            }
             let callable = obj.borrow().callable.clone();
             if let Some(func) = callable {
                 return match func {
@@ -7203,8 +7209,12 @@ impl Interpreter {
                 Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
                     Completion::Normal(v)
                 }
+                Completion::Normal(ref v) if had_explicit_return && !matches!(v, JsValue::Undefined) => {
+                    Completion::Throw(self.create_type_error(
+                        "Derived constructors may only return object or undefined",
+                    ))
+                }
                 Completion::Normal(_) | Completion::Empty => {
-                    // If super() was never called, this is still uninitialized
                     match final_this {
                         Some(v) if matches!(v, JsValue::Object(_)) => Completion::Normal(v),
                         Some(v) if !matches!(v, JsValue::Undefined) => Completion::Normal(v),
@@ -7369,6 +7379,23 @@ impl Interpreter {
             }
         }
 
+        // Bound function [[Construct]]: resolve newTarget through bound chain
+        if let Some(func_obj) = self.get_object(co.id) {
+            let b = func_obj.borrow();
+            if let Some(target) = b.bound_target_function.clone() {
+                let ba = b.bound_args.clone().unwrap_or_default();
+                drop(b);
+                let mut all_args = ba;
+                all_args.extend_from_slice(args);
+                let resolved_nt = if same_value(constructor, &new_target) {
+                    target.clone()
+                } else {
+                    new_target
+                };
+                return self.construct_with_new_target(&target, &all_args, resolved_nt);
+            }
+        }
+
         // Check is_constructor
         if let Some(func_obj) = self.get_object(co.id) {
             let b = func_obj.borrow();
@@ -7409,6 +7436,11 @@ impl Interpreter {
             match result {
                 Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
                     Completion::Normal(v)
+                }
+                Completion::Normal(ref v) if had_explicit_return && !matches!(v, JsValue::Undefined) => {
+                    Completion::Throw(self.create_type_error(
+                        "Derived constructors may only return object or undefined",
+                    ))
                 }
                 Completion::Normal(_) | Completion::Empty => {
                     match final_this {
@@ -7691,6 +7723,14 @@ impl Interpreter {
     }
 
     pub(crate) fn ordinary_has_instance(&mut self, ctor: &JsValue, obj: &JsValue) -> Completion {
+        // Step 2: bound function → recurse with target
+        if let JsValue::Object(co) = ctor {
+            if let Some(obj_data) = self.get_object(co.id) {
+                if let Some(target) = obj_data.borrow().bound_target_function.clone() {
+                    return self.eval_instanceof(obj, &target);
+                }
+            }
+        }
         if !self.is_callable(ctor) {
             return Completion::Normal(JsValue::Boolean(false));
         }
@@ -7698,10 +7738,12 @@ impl Interpreter {
             JsValue::Object(o) => o.clone(),
             _ => return Completion::Normal(JsValue::Boolean(false)),
         };
-        let Some(ctor_data) = self.get_object(ctor_obj_ref.id) else {
-            return Completion::Normal(JsValue::Boolean(false));
+        // Use getter-aware access for prototype
+        let proto_val = match self.get_object_property(ctor_obj_ref.id, "prototype", ctor) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Completion::Throw(e),
+            _ => JsValue::Undefined,
         };
-        let proto_val = ctor_data.borrow().get_property("prototype");
         let JsValue::Object(proto_ref) = &proto_val else {
             return Completion::Throw(
                 self.create_type_error("Function has non-object prototype in instanceof check"),
@@ -9175,6 +9217,7 @@ impl Interpreter {
         // Mark derived class constructors and make .prototype writable:false
         if let JsValue::Object(ref o) = ctor_val {
             if let Some(func_obj) = self.get_object(o.id) {
+                func_obj.borrow_mut().is_class_constructor = true;
                 if super_val.is_some() {
                     func_obj.borrow_mut().is_derived_class_constructor = true;
                 }

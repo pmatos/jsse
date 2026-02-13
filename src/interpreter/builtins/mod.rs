@@ -2158,11 +2158,23 @@ impl Interpreter {
                 let (params_str, body_str) = if args.is_empty() {
                     (String::new(), String::new())
                 } else if args.len() == 1 {
-                    (String::new(), to_js_string(&args[0]))
+                    match interp.to_string_value(&args[0]) {
+                        Ok(s) => (String::new(), s),
+                        Err(e) => return Completion::Throw(e),
+                    }
                 } else {
-                    let params: Vec<String> =
-                        args[..args.len() - 1].iter().map(to_js_string).collect();
-                    (params.join(","), to_js_string(args.last().unwrap()))
+                    let mut params = Vec::new();
+                    for arg in &args[..args.len() - 1] {
+                        match interp.to_string_value(arg) {
+                            Ok(s) => params.push(s),
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    }
+                    let body = match interp.to_string_value(args.last().unwrap()) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    (params.join(","), body)
                 };
 
                 let fn_source_text = format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
@@ -2190,11 +2202,13 @@ impl Interpreter {
                     let is_strict = fe.body.first().is_some_and(|s| {
                         matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
                     });
+                    let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
+                    dynamic_fn_env.borrow_mut().strict = false;
                     let js_func = JsFunction::User {
                         name: Some("anonymous".to_string()),
                         params: fe.params.clone(),
                         body: fe.body.clone(),
-                        closure: interp.global_env.clone(),
+                        closure: dynamic_fn_env,
                         is_arrow: false,
                         is_strict,
                         is_generator: false,
@@ -2536,11 +2550,23 @@ impl Interpreter {
                     let (params_str, body_str) = if args.is_empty() {
                         (String::new(), String::new())
                     } else if args.len() == 1 {
-                        (String::new(), to_js_string(&args[0]))
+                        match interp.to_string_value(&args[0]) {
+                            Ok(s) => (String::new(), s),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     } else {
-                        let params: Vec<String> =
-                            args[..args.len() - 1].iter().map(to_js_string).collect();
-                        (params.join(","), to_js_string(args.last().unwrap()))
+                        let mut params = Vec::new();
+                        for arg in &args[..args.len() - 1] {
+                            match interp.to_string_value(arg) {
+                                Ok(s) => params.push(s),
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        let body = match interp.to_string_value(args.last().unwrap()) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        (params.join(","), body)
                     };
 
                     let fn_source_text =
@@ -2570,11 +2596,13 @@ impl Interpreter {
                         let is_strict = fe.body.first().is_some_and(|s| {
                             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
                         });
+                        let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
+                        dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
                             params: fe.params.clone(),
                             body: fe.body.clone(),
-                            closure: interp.global_env.clone(),
+                            closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
                             is_generator: false,
@@ -2623,11 +2651,23 @@ impl Interpreter {
                     let (params_str, body_str) = if args.is_empty() {
                         (String::new(), String::new())
                     } else if args.len() == 1 {
-                        (String::new(), to_js_string(&args[0]))
+                        match interp.to_string_value(&args[0]) {
+                            Ok(s) => (String::new(), s),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     } else {
-                        let params: Vec<String> =
-                            args[..args.len() - 1].iter().map(to_js_string).collect();
-                        (params.join(","), to_js_string(args.last().unwrap()))
+                        let mut params = Vec::new();
+                        for arg in &args[..args.len() - 1] {
+                            match interp.to_string_value(arg) {
+                                Ok(s) => params.push(s),
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        let body = match interp.to_string_value(args.last().unwrap()) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        (params.join(","), body)
                     };
 
                     let fn_source_text = format!(
@@ -2659,11 +2699,13 @@ impl Interpreter {
                         let is_strict = fe.body.first().is_some_and(|s| {
                             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
                         });
+                        let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
+                        dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
                             params: fe.params.clone(),
                             body: fe.body.clone(),
-                            closure: interp.global_env.clone(),
+                            closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
                             is_generator: true,
@@ -2712,11 +2754,23 @@ impl Interpreter {
                     let (params_str, body_str) = if args.is_empty() {
                         (String::new(), String::new())
                     } else if args.len() == 1 {
-                        (String::new(), to_js_string(&args[0]))
+                        match interp.to_string_value(&args[0]) {
+                            Ok(s) => (String::new(), s),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     } else {
-                        let params: Vec<String> =
-                            args[..args.len() - 1].iter().map(to_js_string).collect();
-                        (params.join(","), to_js_string(args.last().unwrap()))
+                        let mut params = Vec::new();
+                        for arg in &args[..args.len() - 1] {
+                            match interp.to_string_value(arg) {
+                                Ok(s) => params.push(s),
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        let body = match interp.to_string_value(args.last().unwrap()) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        (params.join(","), body)
                     };
 
                     let fn_source_text = format!(
@@ -2748,11 +2802,13 @@ impl Interpreter {
                         let is_strict = fe.body.first().is_some_and(|s| {
                             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
                         });
+                        let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
+                        dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
                             params: fe.params.clone(),
                             body: fe.body.clone(),
-                            closure: interp.global_env.clone(),
+                            closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
                             is_generator: true,
@@ -6280,24 +6336,40 @@ impl Interpreter {
         // Add apply
         let apply_fn = self.create_function(JsFunction::native(
             "apply".to_string(),
-            3,
+            2,
             |interp, _this, args| {
+                if !interp.is_callable(_this) {
+                    return Completion::Throw(
+                        interp.create_type_error("Function.prototype.apply called on non-callable"),
+                    );
+                }
                 let this_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let arr_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let mut call_args = Vec::new();
-                if let JsValue::Object(ref o) = arr_arg
-                    && let Some(arr_obj) = interp.get_object(o.id)
-                {
-                    let b = arr_obj.borrow();
-                    if let Some(elems) = &b.array_elements {
-                        call_args = elems.clone();
-                    } else {
-                        let len = to_number(&b.get_property("length")) as usize;
+                let call_args = match &arr_arg {
+                    JsValue::Undefined | JsValue::Null => vec![],
+                    JsValue::Object(o) => {
+                        let len_val = match interp.get_object_property(o.id, "length", &arr_arg) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+                        let len = Interpreter::to_length(&len_val) as usize;
+                        let mut list = Vec::with_capacity(len);
                         for i in 0..len {
-                            call_args.push(b.get_property(&i.to_string()));
+                            match interp.get_object_property(o.id, &i.to_string(), &arr_arg) {
+                                Completion::Normal(v) => list.push(v),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => list.push(JsValue::Undefined),
+                            }
                         }
+                        list
                     }
-                }
+                    _ => {
+                        return Completion::Throw(
+                            interp.create_type_error("CreateListFromArrayLike called on non-object"),
+                        );
+                    }
+                };
                 interp.call_function(_this, &this_arg, &call_args)
             },
         ));
@@ -6333,33 +6405,42 @@ impl Interpreter {
                 let bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
                 let func = this_val.clone();
 
-                // Read target length and compute bound length
-                let target_length = if let JsValue::Object(o) = this_val
+                // Spec §20.2.3.2: HasOwnProperty(Target, "length"), then Get, then type check
+                let target_length_f64: f64 = if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    obj.borrow()
-                        .get_property_value("length")
-                        .and_then(|v| match v {
-                            JsValue::Number(n) => Some(n as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0)
+                    let has_own_length = obj.borrow().get_own_property("length").is_some();
+                    if has_own_length {
+                        match interp.get_object_property(o.id, "length", this_val) {
+                            Completion::Normal(JsValue::Number(n)) => {
+                                let int = to_integer_or_infinity(n);
+                                if int < 0.0 { 0.0 } else { int }
+                            }
+                            Completion::Normal(_) => 0.0,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => 0.0,
+                        }
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+                let bound_length_f64 = (target_length_f64 - bound_args.len() as f64).max(0.0);
+                let bound_length = if bound_length_f64.is_finite() {
+                    bound_length_f64 as usize
                 } else {
                     0
                 };
-                let bound_length = target_length.saturating_sub(bound_args.len());
 
-                // Read target name
-                let target_name = if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    obj.borrow()
-                        .get_property_value("name")
-                        .and_then(|v| match v {
-                            JsValue::String(s) => Some(s.to_string()),
-                            _ => None,
-                        })
-                        .unwrap_or_default()
+                // Read target name using getter-aware access
+                let target_name = if let JsValue::Object(o) = this_val {
+                    match interp.get_object_property(o.id, "name", this_val) {
+                        Completion::Normal(JsValue::String(s)) => s.to_string(),
+                        Completion::Normal(_) => String::new(),
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => String::new(),
+                    }
                 } else {
                     String::new()
                 };
@@ -6412,12 +6493,26 @@ impl Interpreter {
                     )
                 };
                 let result = interp.create_function(bound);
-                // Per spec, bound functions do not have own .prototype property
                 if let JsValue::Object(ref o) = result
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    // Per spec, bound functions do not have own .prototype property
                     obj.borrow_mut().properties.remove("prototype");
                     obj.borrow_mut().property_order.retain(|k| k != "prototype");
+                    // Track [[BoundTargetFunction]] and [[BoundArguments]] for instanceof and newTarget resolution
+                    obj.borrow_mut().bound_target_function = Some(this_val.clone());
+                    let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
+                    obj.borrow_mut().bound_args = Some(stored_bound_args);
+                    // Overwrite length with correct f64 value (handles Infinity)
+                    obj.borrow_mut().insert_property(
+                        "length".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::Number(bound_length_f64),
+                            false,
+                            false,
+                            true,
+                        ),
+                    );
                 }
                 Completion::Normal(result)
             },
@@ -6434,6 +6529,25 @@ impl Interpreter {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    let b = obj.borrow();
+                    if b.is_proxy() || b.proxy_revoked {
+                        if b.proxy_revoked {
+                            drop(b);
+                            return Completion::Throw(interp.create_type_error(
+                                "Function.prototype.toString requires that 'this' be a Function",
+                            ));
+                        }
+                        drop(b);
+                        // Only callable proxies return NativeFunction string
+                        if interp.is_callable(this_val) {
+                            return Completion::Normal(JsValue::String(
+                                JsString::from_str("function () { [native code] }"),
+                            ));
+                        }
+                        // Non-callable proxy falls through to TypeError
+                    } else {
+                        drop(b);
+                    }
                     if let Some(ref func) = obj.borrow().callable {
                         let s = match func {
                             JsFunction::User {
