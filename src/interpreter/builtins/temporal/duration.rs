@@ -2,9 +2,8 @@ use super::*;
 use crate::interpreter::builtins::temporal::{
     add_iso_date, coerce_rounding_increment, default_largest_unit_for_duration, duration_sign,
     get_prop, is_undefined, is_valid_duration, iso_date_to_epoch_days, max_rounding_increment,
-    parse_temporal_duration_string, round_number_to_increment, temporal_unit_length_ns,
-    temporal_unit_order, temporal_unit_singular, to_integer_if_integral,
-    validate_rounding_increment,
+    parse_temporal_duration_string, temporal_unit_length_ns, temporal_unit_order,
+    temporal_unit_singular, to_integer_if_integral,
 };
 
 macro_rules! try_completion {
@@ -297,7 +296,7 @@ fn to_relative_to_date(
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        let offset_str: Option<String> = if is_undefined(&offset_val) {
+        let _offset_str: Option<String> = if is_undefined(&offset_val) {
             None
         } else {
             let os = super::to_primitive_and_require_string(interp, &offset_val, "offset")?;

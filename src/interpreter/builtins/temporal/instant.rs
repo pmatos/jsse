@@ -1,8 +1,7 @@
 use super::*;
 use crate::interpreter::builtins::temporal::{
     coerce_rounding_increment, get_prop, is_undefined, parse_temporal_instant_string,
-    round_number_to_increment, temporal_unit_length_ns, temporal_unit_singular,
-    validate_rounding_increment, validate_rounding_increment_day_divisible,
+    temporal_unit_length_ns, temporal_unit_singular,
 };
 use num_bigint::BigInt;
 
@@ -1444,7 +1443,7 @@ fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
         }
     }
     // Look for Z
-    let upper = s.to_uppercase();
+    let _upper = s.to_uppercase();
     // Find time portion (after T)
     let t_pos = s.find(|c: char| c == 'T' || c == 't')?;
     let time_part = &s[t_pos + 1..];
@@ -1481,7 +1480,7 @@ fn find_offset_in_time(time: &str) -> Option<usize> {
     if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
         // Validate the offset portion has no sub-minute (seconds) parts
         let offset_part = &time[i..];
-        let offset_bytes = offset_part.as_bytes();
+        let _offset_bytes = offset_part.as_bytes();
         // Check for sub-minute: if there are more than 2 colon-separated parts, reject
         let colon_count = offset_part.chars().filter(|&c| c == ':').count();
         if colon_count > 1 {

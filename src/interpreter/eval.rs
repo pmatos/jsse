@@ -8283,7 +8283,7 @@ impl Interpreter {
     /// Proxy-aware [[DefineOwnProperty]] - checks proxy `defineProperty` trap, recurses on target if no trap.
     /// IsCompatiblePropertyDescriptor (§10.1.6.3)
     fn is_compatible_property_desc(
-        extensible: bool,
+        _extensible: bool,
         desc: &PropertyDescriptor,
         current: &PropertyDescriptor,
     ) -> bool {

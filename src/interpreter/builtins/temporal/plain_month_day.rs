@@ -1,8 +1,8 @@
 use super::*;
 use crate::interpreter::builtins::temporal::{
     get_prop, is_undefined, iso_date_valid, iso_days_in_month, iso_month_code,
-    parse_overflow_option, parse_temporal_month_day_string, read_month_fields,
-    resolve_month_fields, to_temporal_calendar_slot_value, validate_calendar,
+    parse_overflow_option, parse_temporal_month_day_string, resolve_month_fields,
+    to_temporal_calendar_slot_value, validate_calendar,
 };
 
 pub(super) fn create_plain_month_day_result(
@@ -422,7 +422,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 has_any |= has_mc;
-                let (new_ry, has_y) = match read_field_i32(interp, &item, "year", ry) {
+                let (_new_ry, has_y) = match read_field_i32(interp, &item, "year", ry) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };

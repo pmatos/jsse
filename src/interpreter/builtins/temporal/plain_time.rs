@@ -1,9 +1,8 @@
 use super::*;
 use crate::interpreter::builtins::temporal::{
-    balance_time, coerce_rounding_increment, get_options_object, get_prop, is_undefined,
-    iso_time_valid, nanoseconds_to_time, parse_overflow_option, parse_temporal_time_string,
-    round_number_to_increment, temporal_unit_length_ns, temporal_unit_order,
-    temporal_unit_singular, time_to_nanoseconds, validate_rounding_increment,
+    coerce_rounding_increment, get_options_object, get_prop, is_undefined, iso_time_valid,
+    nanoseconds_to_time, parse_overflow_option, parse_temporal_time_string,
+    temporal_unit_length_ns, temporal_unit_order, temporal_unit_singular, time_to_nanoseconds,
     validate_rounding_increment_raw,
 };
 

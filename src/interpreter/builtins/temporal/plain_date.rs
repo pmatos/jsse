@@ -3,8 +3,8 @@ use crate::interpreter::builtins::temporal::{
     add_iso_date, add_iso_date_with_overflow, difference_iso_date, get_prop, is_undefined,
     iso_date_valid, iso_day_of_week, iso_day_of_year, iso_days_in_month, iso_days_in_year,
     iso_is_leap_year, iso_month_code, iso_week_of_year, parse_difference_options,
-    parse_overflow_option, parse_temporal_date_time_string, read_month_fields,
-    resolve_month_fields, round_date_duration, to_temporal_calendar_slot_value, validate_calendar,
+    parse_overflow_option, parse_temporal_date_time_string, resolve_month_fields,
+    round_date_duration, to_temporal_calendar_slot_value, validate_calendar,
 };
 
 impl Interpreter {
