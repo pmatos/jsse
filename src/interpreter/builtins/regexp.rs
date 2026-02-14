@@ -362,9 +362,6 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     if flags.contains('i') {
         result.push_str("(?i)");
     }
-    if flags.contains('s') {
-        result.push_str("(?s)");
-    }
     if flags.contains('m') {
         result.push_str("(?m)");
     }
@@ -374,6 +371,12 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     let mut i = 0;
     let mut in_char_class = false;
     let mut groups_seen: u32 = 0;
+    let dot_all_base = flags.contains('s');
+    // Stack for tracking dotAll state through modifier groups.
+    // Each entry is Some(previous_dotall) for modifier groups that change s,
+    // or None for regular groups.
+    let mut dotall_stack: Vec<Option<bool>> = Vec::new();
+    let mut dot_all = dot_all_base;
 
     // Pre-count total capturing groups in the pattern
     let total_groups = {
@@ -716,21 +719,133 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
             // Check it's not (?<=...) or (?<!...)
             if i + 3 < len && (chars[i + 3] == '=' || chars[i + 3] == '!') {
                 // Lookbehind - pass through
+                dotall_stack.push(None);
                 result.push_str("(?<");
                 result.push(chars[i + 3]);
                 i += 4;
             } else {
                 // Named group (capturing)
                 groups_seen += 1;
+                dotall_stack.push(None);
                 result.push_str("(?P<");
                 i += 3;
             }
             continue;
         }
 
-        // Count capturing groups: '(' not followed by '?'
-        if c == '(' && !in_char_class && (i + 1 >= len || chars[i + 1] != '?') {
-            groups_seen += 1;
+        // Modifier group: (?[ims]*(-[ims]*)?:...)
+        if c == '('
+            && !in_char_class
+            && i + 1 < len
+            && chars[i + 1] == '?'
+            && i + 2 < len
+            && (chars[i + 2] == 'i'
+                || chars[i + 2] == 'm'
+                || chars[i + 2] == 's'
+                || chars[i + 2] == '-')
+        {
+            let mut j = i + 2;
+            let mut add_i = false;
+            let mut add_m = false;
+            let mut add_s = false;
+            let mut remove_i = false;
+            let mut remove_m = false;
+            let mut remove_s = false;
+
+            // Parse add flags
+            while j < len && chars[j] != '-' && chars[j] != ':' {
+                match chars[j] {
+                    'i' => add_i = true,
+                    'm' => add_m = true,
+                    's' => add_s = true,
+                    _ => break,
+                }
+                j += 1;
+            }
+
+            if j < len && chars[j] == '-' {
+                j += 1;
+                while j < len && chars[j] != ':' {
+                    match chars[j] {
+                        'i' => remove_i = true,
+                        'm' => remove_m = true,
+                        's' => remove_s = true,
+                        _ => break,
+                    }
+                    j += 1;
+                }
+            }
+
+            if j < len && chars[j] == ':' {
+                // Compute new dotAll for this group
+                let prev_dot_all = dot_all;
+                if add_s {
+                    dot_all = true;
+                }
+                if remove_s {
+                    dot_all = false;
+                }
+                dotall_stack.push(Some(prev_dot_all));
+
+                // Emit the group with s stripped from flags
+                result.push_str("(?");
+                if add_i {
+                    result.push('i');
+                }
+                if add_m {
+                    result.push('m');
+                }
+                let has_add = add_i || add_m;
+                let has_remove = remove_i || remove_m;
+                if has_remove {
+                    result.push('-');
+                    if remove_i {
+                        result.push('i');
+                    }
+                    if remove_m {
+                        result.push('m');
+                    }
+                }
+                if !has_add && !has_remove {
+                    // All flags were s-only, emit as plain non-capturing group
+                    result.push(':');
+                } else {
+                    result.push(':');
+                }
+                i = j + 1; // skip past ':'
+                continue;
+            }
+        }
+
+        // Close group: pop dotall state if needed
+        if c == ')' && !in_char_class {
+            if let Some(saved) = dotall_stack.pop() {
+                if let Some(prev) = saved {
+                    dot_all = prev;
+                }
+            }
+            result.push(')');
+            i += 1;
+            continue;
+        }
+
+        // Handle '(' for other group types (non-capturing (?:), lookahead (?=), (?!), plain)
+        if c == '(' && !in_char_class {
+            dotall_stack.push(None);
+            if i + 1 >= len || chars[i + 1] != '?' {
+                groups_seen += 1;
+            }
+        }
+
+        // Dot handling: expand based on dotAll state
+        if c == '.' && !in_char_class {
+            if dot_all {
+                result.push_str("(?s:.)");
+            } else {
+                result.push_str("[^\\n\\r\\u{2028}\\u{2029}]");
+            }
+            i += 1;
+            continue;
         }
 
         result.push(c);
@@ -890,6 +1005,94 @@ fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
     }
 }
 
+fn validate_modifier_group(chars: &[char], start: usize, source: &str) -> Result<(), String> {
+    let len = chars.len();
+    let mut j = start;
+    let mut add_flags: Vec<char> = Vec::new();
+    let mut has_dash = false;
+    let mut remove_flags: Vec<char> = Vec::new();
+
+    // Parse add flags
+    while j < len && chars[j] != '-' && chars[j] != ':' && chars[j] != ')' {
+        let c = chars[j];
+        if c == 'i' || c == 'm' || c == 's' {
+            if add_flags.contains(&c) {
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid flags in modifier group",
+                    source
+                ));
+            }
+            add_flags.push(c);
+        } else {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid flags in modifier group",
+                source
+            ));
+        }
+        j += 1;
+    }
+
+    if j < len && chars[j] == '-' {
+        has_dash = true;
+        j += 1;
+        // Parse remove flags
+        while j < len && chars[j] != ':' && chars[j] != ')' {
+            let c = chars[j];
+            if c == 'i' || c == 'm' || c == 's' {
+                if remove_flags.contains(&c) {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Invalid flags in modifier group",
+                        source
+                    ));
+                }
+                remove_flags.push(c);
+            } else {
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid flags in modifier group",
+                    source
+                ));
+            }
+            j += 1;
+        }
+    }
+
+    // Must end with ':'
+    if j >= len || chars[j] != ':' {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Invalid modifier group",
+            source
+        ));
+    }
+
+    // Both sections can't be empty: (?-:...) is invalid
+    if add_flags.is_empty() && remove_flags.is_empty() {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Invalid flags in modifier group",
+            source
+        ));
+    }
+
+    // Same flag can't appear in both add and remove
+    for f in &add_flags {
+        if remove_flags.contains(f) {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid flags in modifier group",
+                source
+            ));
+        }
+    }
+
+    // If has dash but both sections can't be empty (already checked above for no dash case)
+    if has_dash && add_flags.is_empty() && remove_flags.is_empty() {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Invalid flags in modifier group",
+            source
+        ));
+    }
+
+    Ok(())
+}
+
 pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), String> {
     let _unicode = _flags.contains('u') || _flags.contains('v');
     let chars: Vec<char> = source.chars().collect();
@@ -1022,7 +1225,13 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         '<' if i + 1 < len && (chars[i + 1] == '=' || chars[i + 1] == '!') => {
                             i += 2;
                         }
-                        _ => {}
+                        '<' if i + 1 < len && chars[i + 1] != '=' && chars[i + 1] != '!' => {
+                            // Named group (?<name>...) — skip past name
+                        }
+                        _ => {
+                            // Check for modifier group: (?[ims]*(-[ims]*)?:...)
+                            validate_modifier_group(&chars, i, source)?;
+                        }
                     }
                 }
             }

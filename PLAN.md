@@ -53,7 +53,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Symbol | 77% | 142/184 |
 | TypedArray | 77% | 3,294/4,304 |
 | TypedArrayConstructors | 74% | 1,072/1,444 |
-| RegExp | 72% | 2,830/3,914 |
+| RegExp | 83% | 3,112/3,764 |
 | block-scope | 100% | 287/287 |
 | annexB | 64% | 884/1,377 |
 
@@ -169,6 +169,7 @@ These are tracked across all phases:
 - [x] **Strict mode** — enforce throughout parser and runtime
 - [x] **Unicode** — full Unicode support in lexer, identifiers, strings
 - [x] **Unicode RegExp property escapes** — Generated Unicode 17.0.0 tables, expand `\p{...}`/`\P{...}` inline (+292 passes, 88.34% → 88.52%). RegExp property-escapes: 722→1,012/1,074 (94.23%).
+- [x] **RegExp modifiers + dotAll** — Modifier syntax validation (`(?i:...)`, `(?s-m:...)`), dot line terminator fix (`.` no longer matches `\r`/`\u2028`/`\u2029`), modifier dotAll handling (+154 passes, 88.78% → 88.95%). RegExp: 2,830→3,112/3,764 (82.7%).
 - [ ] **Unicode RegExp v flag** — `v` flag (unicodeSets) support
 - [ ] **Error reporting** — quality error messages with source locations
 - [ ] **Spec compliance annotations** — link code to spec section IDs
@@ -205,7 +206,7 @@ These are tracked across all phases:
 | `built-ins/Temporal` | 8,964 | 8,964 (100%) |
 | `built-ins/Object` | 6,824 | 6,435 (94.3%) |
 | `built-ins/Array` | 6,551 | 5,749 (87.8%) |
-| `built-ins/RegExp` | 3,914 | 2,830 (72.3%) |
+| `built-ins/RegExp` | 3,764 | 3,112 (82.7%) |
 | `built-ins/TypedArray` | 4,304 | 3,294 (76.5%) |
 | `built-ins/String` | 2,663 | 2,532 (95.1%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
@@ -227,5 +228,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 81,878 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 82,278 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |
