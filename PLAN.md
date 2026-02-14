@@ -54,7 +54,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | TypedArray | 77% | 3,294/4,304 |
 | TypedArrayConstructors | 74% | 1,072/1,444 |
 | RegExp | 72% | 2,830/3,914 |
-| block-scope | 70% | 201/287 |
+| block-scope | 100% | 287/287 |
 | annexB | 64% | 884/1,377 |
 
 ---
@@ -227,5 +227,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 81,655 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 81,878 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |

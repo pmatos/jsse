@@ -160,6 +160,20 @@ impl<'a> Parser<'a> {
             Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
             stmts.push(stmt);
         }
+        // §14.2.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames
+        if !lexical_names.is_empty() {
+            let mut var_names = Vec::new();
+            for stmt in &stmts {
+                Self::collect_var_declared_names(stmt, &mut var_names);
+            }
+            for name in &var_names {
+                if lexical_names.contains(name) {
+                    return Err(ParseError {
+                        message: format!("Identifier '{name}' has already been declared"),
+                    });
+                }
+            }
+        }
         self.in_block_or_function = prev;
         self.in_switch_case = prev_sc;
         self.eat(&Token::RightBrace)?;
