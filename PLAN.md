@@ -168,7 +168,8 @@ These are tracked across all phases:
 
 - [x] **Strict mode** — enforce throughout parser and runtime
 - [x] **Unicode** — full Unicode support in lexer, identifiers, strings
-- [ ] **Unicode RegExp** — Unicode property escapes, `v` flag
+- [x] **Unicode RegExp property escapes** — Generated Unicode 17.0.0 tables, expand `\p{...}`/`\P{...}` inline (+292 passes, 88.34% → 88.52%). RegExp property-escapes: 722→1,012/1,074 (94.23%).
+- [ ] **Unicode RegExp v flag** — `v` flag (unicodeSets) support
 - [ ] **Error reporting** — quality error messages with source locations
 - [ ] **Spec compliance annotations** — link code to spec section IDs
 - [x] **Garbage collection** — mark-and-sweep GC with ephemeron support for WeakMap/WeakSet

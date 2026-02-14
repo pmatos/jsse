@@ -3,6 +3,7 @@ mod interpreter;
 mod lexer;
 mod parser;
 mod types;
+pub(crate) mod unicode_tables;
 
 use clap::Parser;
 use std::io::{self, BufRead, Write};

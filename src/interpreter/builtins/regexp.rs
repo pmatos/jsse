@@ -673,12 +673,22 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
                     if let Some(end) = chars[start..].iter().position(|&c| c == '}') {
                         let content: String = chars[start..start + end].iter().collect();
                         validate_unicode_property_escape(&content)?;
-                        // Pass through to fancy_regex
-                        result.push('\\');
-                        result.push(next);
-                        result.push('{');
-                        result.push_str(&content);
-                        result.push('}');
+                        let negated = next == 'P';
+                        if let Some(ranges) = crate::unicode_tables::lookup_property(&content) {
+                            expand_property_to_char_class(
+                                &mut result,
+                                ranges,
+                                negated,
+                                in_char_class,
+                            );
+                        } else {
+                            // Fallback to fancy_regex for unrecognized properties
+                            result.push('\\');
+                            result.push(next);
+                            result.push('{');
+                            result.push_str(&content);
+                            result.push('}');
+                        }
                         i = start + end + 1;
                     } else {
                         return Err("Invalid property escape: unterminated".to_string());
@@ -728,6 +738,72 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     }
 
     Ok(result)
+}
+
+fn append_unicode_range(result: &mut String, lo: u32, hi: u32) {
+    if lo == hi {
+        result.push_str(&format!("\\u{{{:X}}}", lo));
+    } else {
+        result.push_str(&format!("\\u{{{:X}}}-\\u{{{:X}}}", lo, hi));
+    }
+}
+
+fn complement_ranges(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut comp = Vec::new();
+    let mut prev = 0u32;
+    for &(lo, hi) in ranges {
+        if prev < lo {
+            comp.push((prev, lo - 1));
+        }
+        prev = hi + 1;
+    }
+    if prev <= 0x10FFFF {
+        comp.push((prev, 0x10FFFF));
+    }
+    // Remove surrogate range [0xD800, 0xDFFF]
+    let mut result = Vec::new();
+    for (lo, hi) in comp {
+        if hi < 0xD800 || lo > 0xDFFF {
+            result.push((lo, hi));
+        } else if lo < 0xD800 && hi > 0xDFFF {
+            result.push((lo, 0xD7FF));
+            result.push((0xE000, hi));
+        } else if lo < 0xD800 {
+            result.push((lo, 0xD7FF));
+        } else if hi > 0xDFFF {
+            result.push((0xE000, hi));
+        }
+    }
+    result
+}
+
+fn expand_property_to_char_class(
+    result: &mut String,
+    ranges: &[(u32, u32)],
+    negated: bool,
+    in_char_class: bool,
+) {
+    let effective_ranges: Vec<(u32, u32)>;
+    let ranges_to_use = if negated {
+        effective_ranges = complement_ranges(ranges);
+        &effective_ranges[..]
+    } else {
+        ranges
+    };
+
+    if in_char_class {
+        // Inside a [...], just insert ranges inline
+        for &(lo, hi) in ranges_to_use {
+            append_unicode_range(result, lo, hi);
+        }
+    } else {
+        // Outside a char class, wrap in [...]
+        result.push('[');
+        for &(lo, hi) in ranges_to_use {
+            append_unicode_range(result, lo, hi);
+        }
+        result.push(']');
+    }
 }
 
 fn push_literal_char(result: &mut String, ch: char, _in_char_class: bool) {
