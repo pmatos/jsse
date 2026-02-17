@@ -2,8 +2,8 @@
 
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
-**Total test262 scenarios:** 92,504 (48,261 files, dual strict/non-strict per spec)
-**Current pass rate:** 81,878 / 92,504 (88.51%)
+**Total test262 scenarios:** 92,632 (48,325 files, dual strict/non-strict per spec)
+**Current pass rate:** 82,610 / 92,632 (89.18%)
 
 ---
 
@@ -34,27 +34,27 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 |----------|-----------|-----------|
 | Temporal | 100% | 8,964/8,964 |
 | Reflect | 100% | 306/306 |
-| Map | 99% | 425/427 |
+| block-scope | 100% | 287/287 |
+| Map | 100% | 403/405 |
 | Number | 99% | 662/670 |
 | FinalizationRegistry | 98% | 92/94 |
-| Set | 97% | 764/786 |
-| Math | 97% | 652/674 |
+| Set | 97% | 742/764 |
+| Math | 97% | 632/654 |
 | WeakRef | 97% | 56/58 |
 | Iterator | 96% | 980/1,020 |
-| String | 95% | 2,532/2,663 |
-| Date | 95% | 1,190/1,256 |
-| for-in | 95% | 199/210 |
-| Object | 94% | 6,435/6,824 |
-| Promise | 90% | 1,238/1,372 |
+| Promise | 96% | 1,220/1,272 |
+| String | 95% | 2,312/2,427 |
+| Date | 95% | 1,124/1,188 |
+| for-in | 95% | 188/198 |
+| Object | 94% | 6,407/6,802 |
+| Function | 94% | 839/893 |
 | Array | 91% | 5,567/6,111 |
 | DataView | 85% | 956/1,122 |
-| Function | 94% | 839/893 |
-| Proxy | 78% | 476/607 |
+| TypedArray | 83% | 2,380/2,860 |
+| RegExp | 83% | 3,240/3,892 |
+| Proxy | 79% | 478/607 |
+| TypedArrayConstructors | 77% | 1,116/1,442 |
 | Symbol | 77% | 142/184 |
-| TypedArray | 77% | 3,294/4,304 |
-| TypedArrayConstructors | 74% | 1,072/1,444 |
-| RegExp | 83% | 3,112/3,764 |
-| block-scope | 100% | 287/287 |
 | annexB | 64% | 884/1,377 |
 
 ---
@@ -169,7 +169,7 @@ These are tracked across all phases:
 - [x] **Strict mode** — enforce throughout parser and runtime
 - [x] **Unicode** — full Unicode support in lexer, identifiers, strings
 - [x] **Unicode RegExp property escapes** — Generated Unicode 17.0.0 tables, expand `\p{...}`/`\P{...}` inline (+292 passes, 88.34% → 88.52%). RegExp property-escapes: 722→1,012/1,074 (94.23%).
-- [x] **RegExp modifiers + dotAll** — Modifier syntax validation (`(?i:...)`, `(?s-m:...)`), dot line terminator fix (`.` no longer matches `\r`/`\u2028`/`\u2029`), modifier dotAll handling (+154 passes, 88.78% → 88.95%). RegExp: 2,830→3,112/3,764 (82.7%).
+- [x] **RegExp modifiers + dotAll** — Modifier syntax validation (`(?i:...)`, `(?s-m:...)`), dot line terminator fix (`.` no longer matches `\r`/`\u2028`/`\u2029`), modifier dotAll handling (+154 passes). RegExp: 3,240/3,892 (83.2%).
 - [ ] **Unicode RegExp v flag** — `v` flag (unicodeSets) support
 - [ ] **Error reporting** — quality error messages with source locations
 - [ ] **Spec compliance annotations** — link code to spec section IDs
@@ -204,11 +204,12 @@ These are tracked across all phases:
 | `language/asi` | 102 | |
 | `language/` (other) | ~400 | white-space, comments, keywords, etc. |
 | `built-ins/Temporal` | 8,964 | 8,964 (100%) |
-| `built-ins/Object` | 6,824 | 6,435 (94.3%) |
-| `built-ins/Array` | 6,551 | 5,749 (87.8%) |
-| `built-ins/RegExp` | 3,764 | 3,112 (82.7%) |
-| `built-ins/TypedArray` | 4,304 | 3,294 (76.5%) |
-| `built-ins/String` | 2,663 | 2,532 (95.1%) |
+| `built-ins/Object` | 6,802 | 6,407 (94.2%) |
+| `built-ins/Array` | 6,111 | 5,567 (91.1%) |
+| `built-ins/RegExp` | 3,892 | 3,240 (83.2%) |
+| `built-ins/TypedArray` | 2,860 | 2,380 (83.2%) |
+| `built-ins/TypedArrayConstructors` | 1,442 | 1,116 (77.4%) |
+| `built-ins/String` | 2,427 | 2,312 (95.3%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
 | `annexB` | 1,377 | 884 (64.2%) |
 | `intl402` | varies | Internationalization — optional |
@@ -228,5 +229,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 82,278 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 82,610 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |

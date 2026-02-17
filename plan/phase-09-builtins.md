@@ -22,7 +22,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/global/` (29), `built-ins/eval/` (10), `built-ins/isFinite/` (15), `built-ins/isNaN/` (15), `built-ins/parseFloat/` (54), `built-ins/parseInt/` (55), `built-ins/decodeURI/` (55), `built-ins/decodeURIComponent/` (56), `built-ins/encodeURI/` (31), `built-ins/encodeURIComponent/` (31), `built-ins/Infinity/` (6), `built-ins/NaN/` (6), `built-ins/undefined/` (8)
 
 ### 9.2 Fundamental Objects (§20)
-- [x] **Object** (§20.1) — 94% pass rate (6,435/6,824 scenarios)
+- [x] **Object** (§20.1) — 94% pass rate (6,407/6,802 scenarios)
   - [x] `Object()` constructor
   - [x] `Object.assign()`, `Object.create()`, `Object.defineProperty()`, `Object.defineProperties()`
   - [x] `Object.entries()`, `Object.fromEntries()`
@@ -103,7 +103,7 @@ Ordered roughly by dependency and importance.
   - [x] RequireObjectCoercible on `this` for all methods, UTF-16 code unit indexing, proper argument coercion via ToPrimitive
   - [ ] `String.prototype[@@iterator]`
   - [ ] String HTML methods (Annex B): `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup`
-- [x] **RegExp** (§22.2) — 1,398/1,879 (74.4%)
+- [x] **RegExp** (§22.2) — 3,240/3,892 (83.2%)
   - [x] `RegExp()` constructor
   - [x] `RegExp.prototype.exec()` (TypeError for non-object `this`)
   - [x] `RegExp.prototype.test()` (TypeError for non-object `this`)
@@ -124,7 +124,7 @@ Ordered roughly by dependency and importance.
   - [ ] Set notation (`v` flag)
   - [ ] `RegExp.$1`–`$9` and legacy features (Annex B)
 
-**Tests:** `built-ins/String/` (1,215), `built-ins/RegExp/` (1,879), `built-ins/StringIteratorPrototype/` (7), `built-ins/RegExpStringIteratorPrototype/` (17)
+**Tests:** `built-ins/String/` (1,215), `built-ins/RegExp/` (1,947), `built-ins/StringIteratorPrototype/` (7), `built-ins/RegExpStringIteratorPrototype/` (17)
 
 ### 9.5 Indexed Collections (§23)
 - [x] **Array** (§23.1) — 89% pass rate (2,734/3,079 tests)
@@ -136,7 +136,7 @@ Ordered roughly by dependency and importance.
   - [ ] `toLocaleString`, `[@@unscopables]`
   - [ ] Array species (`@@species`)
   - [ ] Array groupBy
-- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (1,119/1,438 = 77.8%, 543/736 constructors = 73.8%)
+- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (2,380/2,860 = 83.2%, 1,116/1,442 constructors = 77.4%)
   - [x] `%TypedArray%` intrinsic (abstract base) with shared prototype methods
   - [x] `%TypedArray%` constructor wiring: `.prototype`, `.constructor`, `@@species`, prototype chain inheritance
   - [x] All concrete constructors: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`
