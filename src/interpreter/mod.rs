@@ -12,6 +12,7 @@ pub use types::*;
 mod helpers;
 pub(crate) use helpers::*;
 mod builtins;
+pub(crate) use builtins::regexp::validate_js_pattern;
 mod eval;
 mod exec;
 mod gc;

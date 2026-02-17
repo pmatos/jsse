@@ -357,7 +357,16 @@ fn validate_unicode_property_escape(content: &str) -> Result<(), String> {
     }
 }
 
+struct TranslationResult {
+    pattern: String,
+    dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>>,
+}
+
 fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
+    translate_js_pattern_ex(source, flags).map(|r| r.pattern)
+}
+
+fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResult, String> {
     let mut result = String::new();
     if flags.contains('i') {
         result.push_str("(?i)");
@@ -416,6 +425,52 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
         count
     };
 
+    // Pre-scan to find all named group names and detect duplicates
+    let mut all_group_names: Vec<String> = Vec::new();
+    {
+        let mut j = 0;
+        let mut in_cc = false;
+        while j < len {
+            match chars[j] {
+                '[' if !in_cc => in_cc = true,
+                ']' if in_cc => in_cc = false,
+                '\\' if j + 1 < len => {
+                    j += 1;
+                }
+                '(' if !in_cc && j + 2 < len && chars[j + 1] == '?' && chars[j + 2] == '<' => {
+                    if j + 3 < len && chars[j + 3] != '=' && chars[j + 3] != '!' {
+                        // Named group — extract name
+                        let name_start = j + 3;
+                        let mut k = name_start;
+                        while k < len && chars[k] != '>' {
+                            k += 1;
+                        }
+                        if k < len {
+                            let name: String = chars[name_start..k].iter().collect();
+                            all_group_names.push(name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+    }
+    let mut name_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for name in &all_group_names {
+        *name_count.entry(name.clone()).or_insert(0) += 1;
+    }
+    let duplicated_names: std::collections::HashSet<String> = name_count
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, _)| name)
+        .collect();
+    // Track how many times we've seen each duplicated name during translation
+    let mut dup_seen_count: std::collections::HashMap<String, u32> =
+        std::collections::HashMap::new();
+    let mut dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>> =
+        std::collections::HashMap::new();
+
     while i < len {
         let c = chars[i];
 
@@ -441,12 +496,28 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
         if c == '\\' && i + 1 < len {
             let next = chars[i + 1];
             match next {
-                // Named backreference: \k<name> → (?P=name)
+                // Named backreference: \k<name> → (?P=name) or alternation for duplicates
                 'k' if !in_char_class && i + 2 < len && chars[i + 2] == '<' => {
                     let start = i + 3;
                     if let Some(end) = chars[start..].iter().position(|&c| c == '>') {
                         let name: String = chars[start..start + end].iter().collect();
-                        result.push_str(&format!("(?P={})", name));
+                        if duplicated_names.contains(&name) {
+                            // For duplicate named groups, emit alternation of all variants
+                            // plus empty-match fallback (when no variant captured)
+                            if let Some(variants) = dup_group_map.get(&name) {
+                                let parts: Vec<String> = variants
+                                    .iter()
+                                    .map(|(iname, _)| format!("(?P={})", iname))
+                                    .collect();
+                                // (?=) is zero-width always-succeed for when neither captured
+                                result.push_str(&format!("(?:{}|(?=))", parts.join("|")));
+                            } else {
+                                // Haven't seen the groups yet (forward ref) — use deferred
+                                result.push_str(&format!("(?P={})", name));
+                            }
+                        } else {
+                            result.push_str(&format!("(?P={})", name));
+                        }
                         i = start + end + 1;
                         continue;
                     }
@@ -727,8 +798,27 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
                 // Named group (capturing)
                 groups_seen += 1;
                 dotall_stack.push(None);
-                result.push_str("(?P<");
-                i += 3;
+                // Extract the group name to check if it's duplicated
+                let name_start = i + 3;
+                let mut k = name_start;
+                while k < len && chars[k] != '>' {
+                    k += 1;
+                }
+                let name: String = chars[name_start..k].iter().collect();
+                if duplicated_names.contains(&name) {
+                    let seq = dup_seen_count.entry(name.clone()).or_insert(0);
+                    *seq += 1;
+                    let internal_name = format!("{}__{}", name, seq);
+                    dup_group_map
+                        .entry(name)
+                        .or_default()
+                        .push((internal_name.clone(), groups_seen));
+                    result.push_str(&format!("(?P<{}>", internal_name));
+                    i = k + 1; // skip past name and '>'
+                } else {
+                    result.push_str("(?P<");
+                    i += 3;
+                }
             }
             continue;
         }
@@ -819,10 +909,8 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
 
         // Close group: pop dotall state if needed
         if c == ')' && !in_char_class {
-            if let Some(saved) = dotall_stack.pop() {
-                if let Some(prev) = saved {
-                    dot_all = prev;
-                }
+            if let Some(Some(prev)) = dotall_stack.pop() {
+                dot_all = prev;
             }
             result.push(')');
             i += 1;
@@ -852,7 +940,10 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
         i += 1;
     }
 
-    Ok(result)
+    Ok(TranslationResult {
+        pattern: result,
+        dup_group_map,
+    })
 }
 
 fn append_unicode_range(result: &mut String, lo: u32, hi: u32) {
@@ -998,6 +1089,22 @@ fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
                     }
                 }
                 'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B' | 'p' | 'P' => None,
+                '1'..='7' => {
+                    // Octal escape (Annex B): \1, \12, \123, etc.
+                    let mut val = (next as u32) - ('0' as u32);
+                    if *i < chars.len() && ('0'..='7').contains(&chars[*i]) {
+                        val = val * 8 + (chars[*i] as u32 - '0' as u32);
+                        *i += 1;
+                        if *i < chars.len()
+                            && ('0'..='7').contains(&chars[*i])
+                            && val * 8 + (chars[*i] as u32 - '0' as u32) <= 255
+                        {
+                            val = val * 8 + (chars[*i] as u32 - '0' as u32);
+                            *i += 1;
+                        }
+                    }
+                    Some(val)
+                }
                 _ => Some(next as u32),
             }
         }
@@ -1093,14 +1200,282 @@ fn validate_modifier_group(chars: &[char], start: usize, source: &str) -> Result
     Ok(())
 }
 
+fn is_id_start(c: char) -> bool {
+    if c == '$' || c == '_' {
+        return true;
+    }
+    c.is_alphabetic()
+}
+
+fn is_id_continue(c: char) -> bool {
+    if c == '$' || c == '_' || c == '\u{200C}' || c == '\u{200D}' {
+        return true;
+    }
+    c.is_alphanumeric()
+        || matches!(unicode_general_category(c), Some(cat) if
+        cat == "Mn" || cat == "Mc" || cat == "Pc")
+}
+
+fn unicode_general_category(c: char) -> Option<&'static str> {
+    let cp = c as u32;
+    if cp == 0x5F {
+        return Some("Pc");
+    } // underscore
+    if c.is_ascii_digit() {
+        return Some("Nd");
+    }
+    if c.is_alphabetic() {
+        return Some("L");
+    }
+    // Check combining marks
+    if (0x0300..=0x036F).contains(&cp)
+        || (0x0483..=0x0489).contains(&cp)
+        || (0x0591..=0x05BD).contains(&cp)
+        || (0x064B..=0x065F).contains(&cp)
+        || (0x0670..=0x0670).contains(&cp)
+        || (0x06D6..=0x06DC).contains(&cp)
+        || (0x0730..=0x074A).contains(&cp)
+        || (0x0900..=0x0903).contains(&cp)
+        || (0x093A..=0x094F).contains(&cp)
+        || (0x0951..=0x0957).contains(&cp)
+        || (0x0962..=0x0963).contains(&cp)
+        || (0xFE00..=0xFE0F).contains(&cp)
+        || (0x20D0..=0x20FF).contains(&cp)
+    {
+        return Some("Mn");
+    }
+    None
+}
+
+fn parse_regexp_group_name(
+    chars: &[char],
+    start: usize,
+    source: &str,
+    unicode: bool,
+) -> Result<(String, usize), String> {
+    let len = chars.len();
+    let mut i = start;
+    let mut name = String::new();
+
+    if i >= len || chars[i] == '>' {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Invalid capture group name",
+            source
+        ));
+    }
+
+    // Parse first char - must be ID_Start or unicode escape
+    let first_char;
+    if chars[i] == '\\' && i + 1 < len && chars[i + 1] == 'u' {
+        let (cp, new_i) = parse_unicode_escape_in_name(chars, i, source)?;
+        if let Some(c) = char::from_u32(cp) {
+            if !is_id_start(c) {
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid capture group name",
+                    source
+                ));
+            }
+            first_char = c;
+            i = new_i;
+        } else {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            ));
+        }
+    } else {
+        first_char = chars[i];
+        // Check for lone surrogates
+        if (0xD800..=0xDFFF).contains(&(first_char as u32)) {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            ));
+        }
+        if !is_id_start(first_char) {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            ));
+        }
+        i += 1;
+    }
+    name.push(first_char);
+
+    // Parse remaining chars - must be ID_Continue or unicode escape
+    while i < len && chars[i] != '>' {
+        if chars[i] == '\\' && i + 1 < len && chars[i + 1] == 'u' {
+            let (cp, new_i) = parse_unicode_escape_in_name(chars, i, source)?;
+            if let Some(c) = char::from_u32(cp) {
+                if !is_id_continue(c) {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Invalid capture group name",
+                        source
+                    ));
+                }
+                name.push(c);
+                i = new_i;
+            } else {
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid capture group name",
+                    source
+                ));
+            }
+        } else {
+            let c = chars[i];
+            // Check for lone surrogates
+            if (0xD800..=0xDFFF).contains(&(c as u32)) {
+                if unicode {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Invalid capture group name",
+                        source
+                    ));
+                }
+                // In non-unicode mode, lone surrogates in the source still need to be rejected
+                // if they appear literally (not via escape)
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid capture group name",
+                    source
+                ));
+            }
+            if !is_id_continue(c) {
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid capture group name",
+                    source
+                ));
+            }
+            name.push(c);
+            i += 1;
+        }
+    }
+
+    if i >= len || chars[i] != '>' {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Invalid capture group name",
+            source
+        ));
+    }
+    i += 1; // skip '>'
+
+    Ok((name, i))
+}
+
+fn parse_unicode_escape_in_name(
+    chars: &[char],
+    start: usize,
+    source: &str,
+) -> Result<(u32, usize), String> {
+    let len = chars.len();
+    let mut i = start + 2; // skip \u
+    if i >= len {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Invalid capture group name",
+            source
+        ));
+    }
+    if chars[i] == '{' {
+        i += 1;
+        let hex_start = i;
+        while i < len && chars[i] != '}' {
+            if !chars[i].is_ascii_hexdigit() {
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid capture group name",
+                    source
+                ));
+            }
+            i += 1;
+        }
+        if i >= len {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            ));
+        }
+        let hex: String = chars[hex_start..i].iter().collect();
+        i += 1; // skip }
+        let cp = u32::from_str_radix(&hex, 16).map_err(|_| {
+            format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            )
+        })?;
+        if cp > 0x10FFFF {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            ));
+        }
+        Ok((cp, i))
+    } else {
+        // \uHHHH - exactly 4 hex digits
+        if i + 4 > len {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            ));
+        }
+        for ch in &chars[i..i + 4] {
+            if !ch.is_ascii_hexdigit() {
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid capture group name",
+                    source
+                ));
+            }
+        }
+        let hex: String = chars[i..i + 4].iter().collect();
+        let cp = u32::from_str_radix(&hex, 16).unwrap();
+        i += 4;
+        // Check for surrogate pair
+        if (0xD800..=0xDBFF).contains(&cp) && i + 2 < len && chars[i] == '\\' && chars[i + 1] == 'u'
+        {
+            let trail_start = i + 2;
+            if trail_start + 4 <= len
+                && chars[trail_start..trail_start + 4]
+                    .iter()
+                    .all(|c| c.is_ascii_hexdigit())
+            {
+                let trail_hex: String = chars[trail_start..trail_start + 4].iter().collect();
+                let trail = u32::from_str_radix(&trail_hex, 16).unwrap();
+                if (0xDC00..=0xDFFF).contains(&trail) {
+                    let combined = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
+                    return Ok((combined, trail_start + 4));
+                }
+            }
+            // Lone lead surrogate
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            ));
+        }
+        if (0xDC00..=0xDFFF).contains(&cp) {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Invalid capture group name",
+                source
+            ));
+        }
+        Ok((cp, i))
+    }
+}
+
 pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), String> {
     let _unicode = _flags.contains('u') || _flags.contains('v');
+    let v_flag = _flags.contains('v');
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut i = 0;
-    // Track whether a quantifier is valid at the current position.
-    // false at start, after '(', after '(?:', after '|'
     let mut has_atom = false;
+
+    // Track named groups: (name, group_depth, alternative_id at that depth)
+    let mut named_groups: Vec<(String, usize, usize)> = Vec::new();
+    // Track \k<name> backreferences for later validation
+    let mut backref_names: Vec<String> = Vec::new();
+    // Track group depth and alternative IDs per depth
+    let mut group_depth: usize = 0;
+    // alt_ids[depth] = current alternative counter at that depth
+    let mut alt_ids: Vec<usize> = vec![0];
+    let mut has_any_named_group = false;
+    let mut has_bare_k_escape = false;
+    let mut has_incomplete_backref = false;
 
     while i < len {
         let c = chars[i];
@@ -1112,9 +1487,40 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     source
                 ));
             }
+            let after_escape = chars[i + 1];
             i += 2;
             has_atom = true;
-            let after_escape = chars[i - 1];
+
+            if after_escape == 'k' {
+                if i < len && chars[i] == '<' {
+                    let save_pos = i;
+                    i += 1; // skip '<'
+                    if i < len && chars[i] != '>' {
+                        match parse_regexp_group_name(&chars, i, source, _unicode) {
+                            Ok((name, new_i)) => {
+                                backref_names.push(name);
+                                i = new_i;
+                            }
+                            Err(_) => {
+                                // Invalid/incomplete \k<...> — rewind to after \k
+                                // so the main loop can still parse named groups that follow.
+                                has_incomplete_backref = true;
+                                i = save_pos + 1; // position after '<'
+                            }
+                        }
+                    } else {
+                        // \k<> (empty name)
+                        has_incomplete_backref = true;
+                        if i < len && chars[i] == '>' {
+                            i += 1;
+                        }
+                    }
+                } else {
+                    has_bare_k_escape = true;
+                }
+                continue;
+            }
+
             if after_escape == 'x' && i < len && chars[i].is_ascii_hexdigit() {
                 i += 1;
                 if i < len && chars[i].is_ascii_hexdigit() {
@@ -1158,6 +1564,52 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 } else {
                     i = end;
                 }
+            } else if _unicode {
+                // In unicode mode, only specific escape sequences are valid
+                let valid = matches!(
+                    after_escape,
+                    'd' | 'D'
+                        | 'w'
+                        | 'W'
+                        | 's'
+                        | 'S'
+                        | 'b'
+                        | 'B'
+                        | 'n'
+                        | 'r'
+                        | 't'
+                        | 'f'
+                        | 'v'
+                        | '0'
+                        | 'c'
+                        | 'x'
+                        | 'u'
+                        | 'p'
+                        | 'P'
+                        | 'k'
+                        | '^'
+                        | '$'
+                        | '\\'
+                        | '.'
+                        | '*'
+                        | '+'
+                        | '?'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '|'
+                        | '/'
+                        | '1'..='9'
+                );
+                if !valid {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Invalid escape",
+                        source
+                    ));
+                }
             }
             continue;
         }
@@ -1167,46 +1619,62 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
             if i < len && chars[i] == '^' {
                 i += 1;
             }
-            let mut prev_value: Option<u32> = None;
-            let mut expecting_range_end = false;
 
-            while i < len && chars[i] != ']' {
-                if chars[i] == '-' && !expecting_range_end {
-                    if prev_value.is_some() && i + 1 < len && chars[i + 1] != ']' {
-                        expecting_range_end = true;
+            if v_flag {
+                let mut depth = 1;
+                while i < len && depth > 0 {
+                    match chars[i] {
+                        '[' => depth += 1,
+                        ']' => depth -= 1,
+                        '\\' if i + 1 < len => {
+                            i += 1;
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+            } else {
+                let mut prev_value: Option<u32> = None;
+                let mut expecting_range_end = false;
+
+                while i < len && chars[i] != ']' {
+                    if chars[i] == '-' && !expecting_range_end {
+                        if prev_value.is_some() && i + 1 < len && chars[i + 1] != ']' {
+                            expecting_range_end = true;
+                            i += 1;
+                            continue;
+                        }
+                        prev_value = Some('-' as u32);
                         i += 1;
                         continue;
                     }
-                    prev_value = Some('-' as u32);
-                    i += 1;
-                    continue;
-                }
 
-                let save_i = i;
-                let val = resolve_class_escape(&chars, &mut i);
+                    let save_i = i;
+                    let val = resolve_class_escape(&chars, &mut i);
 
-                if expecting_range_end {
-                    expecting_range_end = false;
-                    if let (Some(start_val), Some(end_val)) = (prev_value, val)
-                        && start_val > end_val
-                    {
-                        return Err(format!(
-                            "Invalid regular expression: /{}/ : Range out of order in character class",
-                            source
-                        ));
+                    if expecting_range_end {
+                        expecting_range_end = false;
+                        if let (Some(start_val), Some(end_val)) = (prev_value, val)
+                            && start_val > end_val
+                        {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Range out of order in character class",
+                                source
+                            ));
+                        }
+                        prev_value = val;
+                        continue;
                     }
+
                     prev_value = val;
-                    continue;
+                    if i == save_i {
+                        i += 1;
+                    }
                 }
 
-                prev_value = val;
-                if i == save_i {
-                    i += 1;
+                if i < len {
+                    i += 1; // skip ']'
                 }
-            }
-
-            if i < len {
-                i += 1; // skip ']'
             }
             has_atom = true;
             continue;
@@ -1214,7 +1682,6 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
         if c == '(' {
             i += 1;
-            // Skip group modifiers: (?:, (?=, (?!, (?<=, (?<!
             if i < len && chars[i] == '?' {
                 i += 1;
                 if i < len {
@@ -1226,14 +1693,34 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                             i += 2;
                         }
                         '<' if i + 1 < len && chars[i + 1] != '=' && chars[i + 1] != '!' => {
-                            // Named group (?<name>...) — skip past name
+                            i += 1; // skip '<'
+                            let (name, new_i) =
+                                parse_regexp_group_name(&chars, i, source, _unicode)?;
+                            has_any_named_group = true;
+                            let current_alt = if group_depth < alt_ids.len() {
+                                alt_ids[group_depth]
+                            } else {
+                                0
+                            };
+                            named_groups.push((name, group_depth, current_alt));
+                            i = new_i;
+                        }
+                        '<' => {
+                            // (?< at end of pattern
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Invalid capture group name",
+                                source
+                            ));
                         }
                         _ => {
-                            // Check for modifier group: (?[ims]*(-[ims]*)?:...)
                             validate_modifier_group(&chars, i, source)?;
                         }
                     }
                 }
+            }
+            group_depth += 1;
+            while alt_ids.len() <= group_depth {
+                alt_ids.push(0);
             }
             has_atom = false;
             continue;
@@ -1241,12 +1728,16 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
         if c == ')' {
             i += 1;
+            group_depth = group_depth.saturating_sub(1);
             has_atom = true;
             continue;
         }
 
         if c == '|' {
             i += 1;
+            if group_depth < alt_ids.len() {
+                alt_ids[group_depth] += 1;
+            }
             has_atom = false;
             continue;
         }
@@ -1385,6 +1876,56 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
         i += 1;
     }
 
+    // Check for duplicate named groups
+    // Two groups with the same name are only allowed if they cannot both participate
+    // (i.e., they must be in different alternatives at the same depth level)
+    for i_idx in 0..named_groups.len() {
+        for j_idx in (i_idx + 1)..named_groups.len() {
+            let (ref name_a, depth_a, alt_a) = named_groups[i_idx];
+            let (ref name_b, depth_b, alt_b) = named_groups[j_idx];
+            if name_a == name_b {
+                // Duplicate names are only OK if they are in different alternatives
+                // at the SAME group depth level (different branches of the same |)
+                if depth_a != depth_b || alt_a == alt_b {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Duplicate capture group name",
+                        source
+                    ));
+                }
+            }
+        }
+    }
+
+    // \k without < is an error if the pattern has named groups or is in unicode mode
+    if has_bare_k_escape && (_unicode || has_any_named_group) {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Invalid escape",
+            source
+        ));
+    }
+
+    // \k<name without closing > is an error if pattern has named groups or in unicode mode
+    if has_incomplete_backref && (_unicode || has_any_named_group) {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Invalid named reference",
+            source
+        ));
+    }
+
+    // Check for dangling \k<name> backreferences
+    if !backref_names.is_empty() {
+        let defined_names: std::collections::HashSet<&str> =
+            named_groups.iter().map(|(n, _, _)| n.as_str()).collect();
+        for bref in &backref_names {
+            if !defined_names.contains(bref.as_str()) && (_unicode || has_any_named_group) {
+                return Err(format!(
+                    "Invalid regular expression: /{}/ : Invalid named reference",
+                    source
+                ));
+            }
+        }
+    }
+
     // Validate property escapes by running translate_js_pattern
     if _unicode {
         translate_js_pattern(source, _flags)?;
@@ -1424,16 +1965,20 @@ impl RegexCaptures {
     }
 }
 
+type DupGroupMap = std::collections::HashMap<String, Vec<(String, u32)>>;
+
 fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
-    let pattern = translate_js_pattern(source, flags)?;
-    match fancy_regex::Regex::new(&pattern) {
-        Ok(r) => Ok(CompiledRegex::Fancy(r)),
-        Err(_) => {
-            // Fallback to standard regex (no backreferences/lookbehind but handles deep nesting)
-            regex::Regex::new(&pattern)
-                .map(CompiledRegex::Standard)
-                .map_err(|e| e.to_string())
-        }
+    build_regex_ex(source, flags).map(|(re, _)| re)
+}
+
+fn build_regex_ex(source: &str, flags: &str) -> Result<(CompiledRegex, DupGroupMap), String> {
+    let tr = translate_js_pattern_ex(source, flags)?;
+    let dup_map = tr.dup_group_map;
+    match fancy_regex::Regex::new(&tr.pattern) {
+        Ok(r) => Ok((CompiledRegex::Fancy(r), dup_map)),
+        Err(_) => regex::Regex::new(&tr.pattern)
+            .map(|r| (CompiledRegex::Standard(r), dup_map))
+            .map_err(|e| e.to_string()),
     }
 }
 
@@ -1851,7 +2396,7 @@ fn regexp_exec_raw(
     };
     let last_index_byte = utf16_to_byte_offset(input, last_index_utf16);
 
-    let re = match build_regex(source, flags) {
+    let (re, dup_map) = match build_regex_ex(source, flags) {
         Ok(r) => r,
         Err(_) => return Completion::Normal(JsValue::Null),
     };
@@ -1899,13 +2444,67 @@ fn regexp_exec_raw(
     let groups_val = if has_named {
         let groups_obj = interp.create_object();
         groups_obj.borrow_mut().prototype = None;
-        for (i, name_opt) in caps.names.iter().enumerate() {
-            if let Some(name) = name_opt {
-                let val = match caps.get(i) {
-                    Some(m) => JsValue::String(JsString::from_str(&m.text)),
-                    None => JsValue::Undefined,
-                };
-                groups_obj.borrow_mut().insert_value(name.to_string(), val);
+        if dup_map.is_empty() {
+            for (i, name_opt) in caps.names.iter().enumerate() {
+                if let Some(name) = name_opt {
+                    let val = match caps.get(i) {
+                        Some(m) => JsValue::String(JsString::from_str(&m.text)),
+                        None => JsValue::Undefined,
+                    };
+                    groups_obj.borrow_mut().insert_value(name.to_string(), val);
+                }
+            }
+        } else {
+            // Build a set of internal names that belong to duplicate groups
+            let mut internal_to_original: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for (orig_name, variants) in &dup_map {
+                for (internal_name, _) in variants {
+                    internal_to_original.insert(internal_name.clone(), orig_name.clone());
+                }
+            }
+            // Track which original dup names we've already set
+            let mut dup_names_set: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            // First pass: handle non-duplicate named groups normally
+            for (i, name_opt) in caps.names.iter().enumerate() {
+                if let Some(name) = name_opt {
+                    if internal_to_original.contains_key(name) {
+                        // This is a duplicate group variant — skip for now
+                        continue;
+                    }
+                    let val = match caps.get(i) {
+                        Some(m) => JsValue::String(JsString::from_str(&m.text)),
+                        None => JsValue::Undefined,
+                    };
+                    groups_obj.borrow_mut().insert_value(name.to_string(), val);
+                }
+            }
+            // Second pass: for each duplicate group name, find which variant matched
+            for (orig_name, variants) in &dup_map {
+                if dup_names_set.contains(orig_name) {
+                    continue;
+                }
+                dup_names_set.insert(orig_name.clone());
+                let mut matched_val = JsValue::Undefined;
+                for (internal_name, _) in variants {
+                    // Find the index of this internal name in caps.names
+                    for (i, name_opt) in caps.names.iter().enumerate() {
+                        if let Some(n) = name_opt
+                            && n == internal_name
+                            && let Some(m) = caps.get(i)
+                        {
+                            matched_val = JsValue::String(JsString::from_str(&m.text));
+                            break;
+                        }
+                    }
+                    if !matches!(matched_val, JsValue::Undefined) {
+                        break;
+                    }
+                }
+                groups_obj
+                    .borrow_mut()
+                    .insert_value(orig_name.to_string(), matched_val);
             }
         }
         let id = groups_obj.borrow().id.unwrap();

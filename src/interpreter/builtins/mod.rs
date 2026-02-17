@@ -6,7 +6,7 @@ mod disposable;
 mod iterators;
 mod number;
 mod promise;
-mod regexp;
+pub(crate) mod regexp;
 mod string;
 mod temporal;
 mod typedarray;
@@ -6366,7 +6366,8 @@ impl Interpreter {
                     }
                     _ => {
                         return Completion::Throw(
-                            interp.create_type_error("CreateListFromArrayLike called on non-object"),
+                            interp
+                                .create_type_error("CreateListFromArrayLike called on non-object"),
                         );
                     }
                 };
@@ -6540,9 +6541,9 @@ impl Interpreter {
                         drop(b);
                         // Only callable proxies return NativeFunction string
                         if interp.is_callable(this_val) {
-                            return Completion::Normal(JsValue::String(
-                                JsString::from_str("function () { [native code] }"),
-                            ));
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                "function () { [native code] }",
+                            )));
                         }
                         // Non-callable proxy falls through to TypeError
                     } else {

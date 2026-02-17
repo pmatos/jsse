@@ -966,17 +966,24 @@ impl Interpreter {
                     };
                     let len = ta.array_length as i64;
                     let target = {
-                        let v = to_integer(match interp.to_number_value(args.first().unwrap_or(&JsValue::Undefined)) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }) as i64;
+                        let v = to_integer(
+                            match interp
+                                .to_number_value(args.first().unwrap_or(&JsValue::Undefined))
+                            {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            },
+                        ) as i64;
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
                     let start = {
-                        let v = to_integer(match interp.to_number_value(args.get(1).unwrap_or(&JsValue::Undefined)) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }) as i64;
+                        let v = to_integer(
+                            match interp.to_number_value(args.get(1).unwrap_or(&JsValue::Undefined))
+                            {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            },
+                        ) as i64;
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
                     let end = {
@@ -1351,26 +1358,24 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[a.clone(), b.clone()],
                             ) {
-                                Completion::Normal(v) => {
-                                    match interp.to_number_value(&v) {
-                                        Ok(n) => {
-                                            if n.is_nan() {
-                                                return std::cmp::Ordering::Equal;
-                                            }
-                                            if n < 0.0 {
-                                                return std::cmp::Ordering::Less;
-                                            }
-                                            if n > 0.0 {
-                                                return std::cmp::Ordering::Greater;
-                                            }
+                                Completion::Normal(v) => match interp.to_number_value(&v) {
+                                    Ok(n) => {
+                                        if n.is_nan() {
                                             return std::cmp::Ordering::Equal;
                                         }
-                                        Err(e) => {
-                                            error = Some(e);
-                                            return std::cmp::Ordering::Equal;
+                                        if n < 0.0 {
+                                            return std::cmp::Ordering::Less;
                                         }
+                                        if n > 0.0 {
+                                            return std::cmp::Ordering::Greater;
+                                        }
+                                        return std::cmp::Ordering::Equal;
                                     }
-                                }
+                                    Err(e) => {
+                                        error = Some(e);
+                                        return std::cmp::Ordering::Equal;
+                                    }
+                                },
                                 Completion::Throw(e) => {
                                     error = Some(e);
                                     return std::cmp::Ordering::Equal;
@@ -1380,9 +1385,7 @@ impl Interpreter {
                         }
                         // Default sort: numeric for Number types, BigInt comparison for BigInt types
                         match (a, b) {
-                            (JsValue::BigInt(ba), JsValue::BigInt(bb)) => {
-                                ba.value.cmp(&bb.value)
-                            }
+                            (JsValue::BigInt(ba), JsValue::BigInt(bb)) => ba.value.cmp(&bb.value),
                             _ => {
                                 let na = to_number(a);
                                 let nb = to_number(b);
@@ -1698,26 +1701,24 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[a.clone(), b.clone()],
                             ) {
-                                Completion::Normal(v) => {
-                                    match interp.to_number_value(&v) {
-                                        Ok(n) => {
-                                            if n.is_nan() {
-                                                return std::cmp::Ordering::Equal;
-                                            }
-                                            if n < 0.0 {
-                                                return std::cmp::Ordering::Less;
-                                            }
-                                            if n > 0.0 {
-                                                return std::cmp::Ordering::Greater;
-                                            }
+                                Completion::Normal(v) => match interp.to_number_value(&v) {
+                                    Ok(n) => {
+                                        if n.is_nan() {
                                             return std::cmp::Ordering::Equal;
                                         }
-                                        Err(e) => {
-                                            error = Some(e);
-                                            return std::cmp::Ordering::Equal;
+                                        if n < 0.0 {
+                                            return std::cmp::Ordering::Less;
                                         }
+                                        if n > 0.0 {
+                                            return std::cmp::Ordering::Greater;
+                                        }
+                                        return std::cmp::Ordering::Equal;
                                     }
-                                }
+                                    Err(e) => {
+                                        error = Some(e);
+                                        return std::cmp::Ordering::Equal;
+                                    }
+                                },
                                 Completion::Throw(e) => {
                                     error = Some(e);
                                     return std::cmp::Ordering::Equal;
@@ -1727,9 +1728,7 @@ impl Interpreter {
                         }
                         // Default sort: numeric for Number types, BigInt comparison for BigInt types
                         match (a, b) {
-                            (JsValue::BigInt(ba), JsValue::BigInt(bb)) => {
-                                ba.value.cmp(&bb.value)
-                            }
+                            (JsValue::BigInt(ba), JsValue::BigInt(bb)) => ba.value.cmp(&bb.value),
                             _ => {
                                 let na = to_number(a);
                                 let nb = to_number(b);

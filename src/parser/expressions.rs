@@ -1,5 +1,33 @@
 use super::*;
 
+fn validate_regexp_literal(pattern: &str, flags: &str) -> Result<(), ParseError> {
+    let valid_flags = "dgimsuyv";
+    for c in flags.chars() {
+        if !valid_flags.contains(c) {
+            return Err(ParseError {
+                message: format!("Invalid regular expression flags '{}'", flags),
+            });
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for c in flags.chars() {
+        if !seen.insert(c) {
+            return Err(ParseError {
+                message: format!("Invalid regular expression flags '{}'", flags),
+            });
+        }
+    }
+    if flags.contains('u') && flags.contains('v') {
+        return Err(ParseError {
+            message: format!("Invalid regular expression flags '{}'", flags),
+        });
+    }
+    if let Err(msg) = crate::interpreter::validate_js_pattern(pattern, flags) {
+        return Err(ParseError { message: msg });
+    }
+    Ok(())
+}
+
 impl<'a> Parser<'a> {
     pub fn parse_expression(&mut self) -> Result<Expression, ParseError> {
         let expr = self.parse_assignment_expression()?;
@@ -795,6 +823,7 @@ impl<'a> Parser<'a> {
                 let p = pattern.clone();
                 let f = flags.clone();
                 self.advance()?;
+                validate_regexp_literal(&p, &f)?;
                 Ok(Expression::Literal(Literal::RegExp(p, f)))
             }
             Token::Slash | Token::SlashAssign => {
@@ -811,6 +840,7 @@ impl<'a> Parser<'a> {
                     while self.current == Token::LineTerminator {
                         self.current = self.lexer.next_token()?;
                     }
+                    validate_regexp_literal(&full_pattern, &flags)?;
                     Ok(Expression::Literal(Literal::RegExp(full_pattern, flags)))
                 } else {
                     Err(ParseError {

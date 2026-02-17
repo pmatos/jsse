@@ -103,7 +103,7 @@ Ordered roughly by dependency and importance.
   - [x] RequireObjectCoercible on `this` for all methods, UTF-16 code unit indexing, proper argument coercion via ToPrimitive
   - [ ] `String.prototype[@@iterator]`
   - [ ] String HTML methods (Annex B): `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup`
-- [x] **RegExp** (§22.2) — 3,240/3,892 (83.2%)
+- [x] **RegExp** (§22.2) — 3,367/3,756 (89.6%)
   - [x] `RegExp()` constructor
   - [x] `RegExp.prototype.exec()` (TypeError for non-object `this`)
   - [x] `RegExp.prototype.test()` (TypeError for non-object `this`)
