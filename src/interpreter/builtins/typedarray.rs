@@ -184,17 +184,24 @@ impl Interpreter {
                         }
                     };
                     let len = buf_len as f64;
-                    let start_arg = args
-                        .first()
-                        .map(|a| interp.to_number_coerce(a))
-                        .unwrap_or(0.0);
+                    let start_arg = if let Some(a) = args.first() {
+                        match interp.to_number_value(a) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        0.0
+                    };
                     let start = if start_arg < 0.0 {
                         ((len + start_arg) as isize).max(0) as usize
                     } else {
                         (start_arg as usize).min(buf_len)
                     };
                     let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        interp.to_number_coerce(&args[1])
+                        match interp.to_number_value(&args[1]) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }
                     } else {
                         len
                     };
@@ -596,7 +603,10 @@ impl Interpreter {
                             );
                         }
                         let idx_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let idx = interp.to_number_coerce(&idx_val) as i64;
+                        let idx = match interp.to_number_value(&idx_val) {
+                            Ok(n) => to_integer(n) as i64,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let len = ta.array_length as i64;
                         let actual = if idx < 0 { len + idx } else { idx };
                         if actual < 0 || actual >= len {
@@ -732,7 +742,10 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let src_len = interp.to_number_coerce(&len_val) as usize;
+                        let src_len = match interp.to_number_value(&len_val) {
+                            Ok(n) => to_integer(n) as usize,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         if offset + src_len > ta.array_length {
                             return Completion::Throw(
                                 interp.create_range_error("offset is out of bounds"),
@@ -779,18 +792,24 @@ impl Interpreter {
                         }
                     };
                     let len = ta.array_length as f64;
-                    let begin_arg = to_integer(
-                        args.first()
-                            .map(|a| interp.to_number_coerce(a))
-                            .unwrap_or(0.0),
-                    );
+                    let begin_arg = to_integer(if let Some(a) = args.first() {
+                        match interp.to_number_value(a) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        0.0
+                    });
                     let begin = if begin_arg < 0.0 {
                         ((len + begin_arg) as isize).max(0) as usize
                     } else {
                         (begin_arg as usize).min(ta.array_length)
                     };
                     let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        to_integer(interp.to_number_coerce(&args[1]))
+                        to_integer(match interp.to_number_value(&args[1]) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        })
                     } else {
                         len
                     };
@@ -854,18 +873,24 @@ impl Interpreter {
                         }
                     };
                     let len = ta.array_length as f64;
-                    let begin_arg = to_integer(
-                        args.first()
-                            .map(|a| interp.to_number_coerce(a))
-                            .unwrap_or(0.0),
-                    );
+                    let begin_arg = to_integer(if let Some(a) = args.first() {
+                        match interp.to_number_value(a) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        0.0
+                    });
                     let begin = if begin_arg < 0.0 {
                         ((len + begin_arg) as isize).max(0) as usize
                     } else {
                         (begin_arg as usize).min(ta.array_length)
                     };
                     let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        to_integer(interp.to_number_coerce(&args[1]))
+                        to_integer(match interp.to_number_value(&args[1]) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        })
                     } else {
                         len
                     };
@@ -941,34 +966,46 @@ impl Interpreter {
                     };
                     let len = ta.array_length as i64;
                     let target = {
-                        let v = to_integer(
-                            interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined)),
-                        ) as i64;
+                        let v = to_integer(match interp.to_number_value(args.first().unwrap_or(&JsValue::Undefined)) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }) as i64;
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
                     let start = {
-                        let v = to_integer(
-                            interp.to_number_coerce(args.get(1).unwrap_or(&JsValue::Undefined)),
-                        ) as i64;
+                        let v = to_integer(match interp.to_number_value(args.get(1).unwrap_or(&JsValue::Undefined)) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }) as i64;
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
                     let end = {
                         let v = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            to_integer(interp.to_number_coerce(&args[2])) as i64
+                            to_integer(match interp.to_number_value(&args[2]) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            }) as i64
                         } else {
                             len
                         };
                         (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
                     };
+                    // Re-check detach after coercion
+                    if ta.is_detached.get() {
+                        return Completion::Throw(
+                            interp.create_type_error("typed array is detached"),
+                        );
+                    }
                     let count = (end - start).min(len as usize - target).min(end - start);
-                    let bpe = ta.kind.bytes_per_element();
-                    let mut buf = ta.buffer.borrow_mut();
-                    let src_start = ta.byte_offset + start * bpe;
-                    let dst_start = ta.byte_offset + target * bpe;
-                    let byte_count = count * bpe;
-                    // Use memmove semantics
-                    let src: Vec<u8> = buf[src_start..src_start + byte_count].to_vec();
-                    buf[dst_start..dst_start + byte_count].copy_from_slice(&src);
+                    if count > 0 {
+                        let bpe = ta.kind.bytes_per_element();
+                        let mut buf = ta.buffer.borrow_mut();
+                        let src_start = ta.byte_offset + start * bpe;
+                        let dst_start = ta.byte_offset + target * bpe;
+                        let byte_count = count * bpe;
+                        let src: Vec<u8> = buf[src_start..src_start + byte_count].to_vec();
+                        buf[dst_start..dst_start + byte_count].copy_from_slice(&src);
+                    }
                     return Completion::Normal(this_val.clone());
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -1008,7 +1045,10 @@ impl Interpreter {
                     let len = ta.array_length as f64;
                     let start = {
                         let v = to_integer(if args.len() > 1 {
-                            interp.to_number_coerce(&args[1])
+                            match interp.to_number_value(&args[1]) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            }
                         } else {
                             0.0
                         });
@@ -1020,7 +1060,10 @@ impl Interpreter {
                     };
                     let end = {
                         let v = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            to_integer(interp.to_number_coerce(&args[2]))
+                            to_integer(match interp.to_number_value(&args[2]) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            })
                         } else {
                             len
                         };
@@ -1030,6 +1073,12 @@ impl Interpreter {
                             (v as usize).min(ta.array_length)
                         }
                     };
+                    // Re-check detach after coercion
+                    if ta.is_detached.get() {
+                        return Completion::Throw(
+                            interp.create_type_error("typed array is detached"),
+                        );
+                    }
                     for i in start..end {
                         typed_array_set_index(&ta, i, &coerced);
                     }
@@ -1063,9 +1112,15 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    if ta.array_length == 0 {
+                        return Completion::Normal(JsValue::Number(-1.0));
+                    }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(interp.to_number_coerce(&args[1])) as i64
+                        to_integer(match interp.to_number_value(&args[1]) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }) as i64
                     } else {
                         0
                     };
@@ -1110,9 +1165,15 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    if ta.array_length == 0 {
+                        return Completion::Normal(JsValue::Number(-1.0));
+                    }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(interp.to_number_coerce(&args[1])) as i64
+                        to_integer(match interp.to_number_value(&args[1]) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }) as i64
                     } else {
                         ta.array_length as i64 - 1
                     };
@@ -1159,9 +1220,15 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    if ta.array_length == 0 {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(interp.to_number_coerce(&args[1])) as i64
+                        to_integer(match interp.to_number_value(&args[1]) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }) as i64
                     } else {
                         0
                     };
@@ -1285,14 +1352,24 @@ impl Interpreter {
                                 &[a.clone(), b.clone()],
                             ) {
                                 Completion::Normal(v) => {
-                                    let n = interp.to_number_coerce(&v);
-                                    if n < 0.0 {
-                                        return std::cmp::Ordering::Less;
+                                    match interp.to_number_value(&v) {
+                                        Ok(n) => {
+                                            if n.is_nan() {
+                                                return std::cmp::Ordering::Equal;
+                                            }
+                                            if n < 0.0 {
+                                                return std::cmp::Ordering::Less;
+                                            }
+                                            if n > 0.0 {
+                                                return std::cmp::Ordering::Greater;
+                                            }
+                                            return std::cmp::Ordering::Equal;
+                                        }
+                                        Err(e) => {
+                                            error = Some(e);
+                                            return std::cmp::Ordering::Equal;
+                                        }
                                     }
-                                    if n > 0.0 {
-                                        return std::cmp::Ordering::Greater;
-                                    }
-                                    return std::cmp::Ordering::Equal;
                                 }
                                 Completion::Throw(e) => {
                                     error = Some(e);
@@ -1301,10 +1378,29 @@ impl Interpreter {
                                 _ => return std::cmp::Ordering::Equal,
                             }
                         }
-                        // Default numeric sort
-                        let na = interp.to_number_coerce(a);
-                        let nb = interp.to_number_coerce(b);
-                        na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+                        // Default sort: numeric for Number types, BigInt comparison for BigInt types
+                        match (a, b) {
+                            (JsValue::BigInt(ba), JsValue::BigInt(bb)) => {
+                                ba.value.cmp(&bb.value)
+                            }
+                            _ => {
+                                let na = to_number(a);
+                                let nb = to_number(b);
+                                // Per spec: -0 < +0 is false, +0 < -0 is false
+                                if na.is_nan() && nb.is_nan() {
+                                    std::cmp::Ordering::Equal
+                                } else if na.is_nan() {
+                                    std::cmp::Ordering::Greater
+                                } else if nb.is_nan() {
+                                    std::cmp::Ordering::Less
+                                } else if na == 0.0 && nb == 0.0 {
+                                    // -0 comes before +0
+                                    na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse()
+                                } else {
+                                    na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+                                }
+                            }
+                        }
                     });
                     if let Some(e) = error {
                         return Completion::Throw(e);
@@ -1350,9 +1446,15 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    let parts: Vec<String> = (0..ta.array_length)
-                        .map(|i| to_js_string(&typed_array_get_index(&ta, i)))
-                        .collect();
+                    let mut parts: Vec<String> = Vec::with_capacity(ta.array_length);
+                    for i in 0..ta.array_length {
+                        let elem = typed_array_get_index(&ta, i);
+                        let s = match interp.to_string_value(&elem) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        parts.push(s);
+                    }
                     Completion::Normal(JsValue::String(JsString::from_str(&parts.join(&sep))))
                 } else {
                     Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -1384,9 +1486,15 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let parts: Vec<String> = (0..ta.array_length)
-                        .map(|i| to_js_string(&typed_array_get_index(&ta, i)))
-                        .collect();
+                    let mut parts: Vec<String> = Vec::with_capacity(ta.array_length);
+                    for i in 0..ta.array_length {
+                        let elem = typed_array_get_index(&ta, i);
+                        let s = match interp.to_string_value(&elem) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        parts.push(s);
+                    }
                     Completion::Normal(JsValue::String(JsString::from_str(&parts.join(","))))
                 } else {
                     Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -1451,7 +1559,11 @@ impl Interpreter {
                                         &[],
                                     ) {
                                         Completion::Normal(v) => {
-                                            parts.push(to_js_string(&v));
+                                            let s = match interp.to_string_value(&v) {
+                                                Ok(s) => s,
+                                                Err(e) => return Completion::Throw(e),
+                                            };
+                                            parts.push(s);
                                         }
                                         other => return other,
                                     }
@@ -1587,14 +1699,24 @@ impl Interpreter {
                                 &[a.clone(), b.clone()],
                             ) {
                                 Completion::Normal(v) => {
-                                    let n = interp.to_number_coerce(&v);
-                                    if n < 0.0 {
-                                        return std::cmp::Ordering::Less;
+                                    match interp.to_number_value(&v) {
+                                        Ok(n) => {
+                                            if n.is_nan() {
+                                                return std::cmp::Ordering::Equal;
+                                            }
+                                            if n < 0.0 {
+                                                return std::cmp::Ordering::Less;
+                                            }
+                                            if n > 0.0 {
+                                                return std::cmp::Ordering::Greater;
+                                            }
+                                            return std::cmp::Ordering::Equal;
+                                        }
+                                        Err(e) => {
+                                            error = Some(e);
+                                            return std::cmp::Ordering::Equal;
+                                        }
                                     }
-                                    if n > 0.0 {
-                                        return std::cmp::Ordering::Greater;
-                                    }
-                                    return std::cmp::Ordering::Equal;
                                 }
                                 Completion::Throw(e) => {
                                     error = Some(e);
@@ -1603,9 +1725,27 @@ impl Interpreter {
                                 _ => return std::cmp::Ordering::Equal,
                             }
                         }
-                        let na = interp.to_number_coerce(a);
-                        let nb = interp.to_number_coerce(b);
-                        na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+                        // Default sort: numeric for Number types, BigInt comparison for BigInt types
+                        match (a, b) {
+                            (JsValue::BigInt(ba), JsValue::BigInt(bb)) => {
+                                ba.value.cmp(&bb.value)
+                            }
+                            _ => {
+                                let na = to_number(a);
+                                let nb = to_number(b);
+                                if na.is_nan() && nb.is_nan() {
+                                    std::cmp::Ordering::Equal
+                                } else if na.is_nan() {
+                                    std::cmp::Ordering::Greater
+                                } else if nb.is_nan() {
+                                    std::cmp::Ordering::Less
+                                } else if na == 0.0 && nb == 0.0 {
+                                    na.is_sign_negative().cmp(&nb.is_sign_negative()).reverse()
+                                } else {
+                                    na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+                                }
+                            }
+                        }
                     });
                     if let Some(e) = error {
                         return Completion::Throw(e);
@@ -1711,7 +1851,7 @@ impl Interpreter {
                             Err(interp
                                 .create_type_error("Cannot convert a BigInt value to a number"))
                         }
-                        _ => Ok(interp.to_number_coerce(val)),
+                        _ => Ok(to_number(val)),
                     }
                 }
 
@@ -2606,9 +2746,20 @@ impl Interpreter {
             let ctor = self.create_function(JsFunction::constructor(
                 name.clone(), 3,
                 move |interp, _this, args| {
+                    // §23.2.5.1 step 2: If NewTarget is undefined, throw TypeError
+                    if interp.new_target.is_none() {
+                        return Completion::Throw(
+                            interp.create_type_error(&format!("{} is not a constructor", kind.name())),
+                        );
+                    }
+                    // OrdinaryCreateFromConstructor: get prototype from NewTarget
+                    let proto = match interp.get_prototype_from_new_target(&Some(type_proto_clone.clone())) {
+                        Ok(p) => p.unwrap_or_else(|| type_proto_clone.clone()),
+                        Err(e) => return Completion::Throw(e),
+                    };
                     if args.is_empty() {
                         // new XArray() -> length 0
-                        return interp.create_typed_array_from_length(kind, 0, &type_proto_clone);
+                        return interp.create_typed_array_from_length(kind, 0, &proto);
                     }
                     let first = &args[0];
                     match first {
@@ -2676,7 +2827,7 @@ impl Interpreter {
                                         is_detached: detached,
                                     };
                                     let buf_val = first.clone();
-                                    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &type_proto_clone);
+                                    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
                                     let id = result.borrow().id.unwrap();
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
@@ -2721,7 +2872,7 @@ impl Interpreter {
                                     }
                                     let ab_id = ab_obj.borrow().id.unwrap();
                                     let buf_val = JsValue::Object(JsObject { id: ab_id });
-                                    let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &type_proto_clone);
+                                    let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &proto);
                                     let id = result.borrow().id.unwrap();
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
@@ -2761,7 +2912,7 @@ impl Interpreter {
                                 }
                                 let ab_id = ab_obj.borrow().id.unwrap();
                                 let buf_val = JsValue::Object(JsObject { id: ab_id });
-                                let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &type_proto_clone);
+                                let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &proto);
                                 let id = result.borrow().id.unwrap();
                                 return Completion::Normal(JsValue::Object(JsObject { id }));
                             }
@@ -2775,7 +2926,7 @@ impl Interpreter {
                                 _ => return Completion::Normal(JsValue::Undefined),
                             };
                             let len = if let JsValue::Number(n) = len_val { n as usize } else { 0 };
-                            interp.create_typed_array_from_length(kind, len, &type_proto_clone)
+                            interp.create_typed_array_from_length(kind, len, &proto)
                         }
                     }
                 },
@@ -3434,7 +3585,10 @@ impl Interpreter {
                 Completion::Normal(v) => v,
                 _ => return Ok(Vec::new()),
             };
-            let len = self.to_number_coerce(&len_val) as usize;
+            let len = match self.to_number_value(&len_val) {
+                Ok(n) => to_integer(n) as usize,
+                Err(e) => return Err(Completion::Throw(e)),
+            };
             let mut values = Vec::new();
             for i in 0..len {
                 let v = match self.get_object_property(o.id, &i.to_string(), val) {
