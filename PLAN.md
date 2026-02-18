@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,496 (48,257 files, dual strict/non-strict per spec)
-**Current pass rate:** 83,024 / 92,496 (89.76%)
+**Current pass rate:** 83,125 / 92,496 (89.87%)
 
 ---
 
@@ -51,7 +51,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Array | 91% | 5,567/6,111 |
 | DataView | 85% | 956/1,122 |
 | TypedArray | 83% | 2,380/2,860 |
-| RegExp | 90% | 3,367/3,756 |
+| RegExp | 93% | 3,481/3,756 |
 | Proxy | 79% | 478/607 |
 | TypedArrayConstructors | 77% | 1,116/1,442 |
 | Symbol | 77% | 142/184 |
@@ -206,7 +206,7 @@ These are tracked across all phases:
 | `built-ins/Temporal` | 8,964 | 8,964 (100%) |
 | `built-ins/Object` | 6,802 | 6,407 (94.2%) |
 | `built-ins/Array` | 6,111 | 5,567 (91.1%) |
-| `built-ins/RegExp` | 3,756 | 3,367 (89.6%) |
+| `built-ins/RegExp` | 3,756 | 3,481 (92.7%) |
 | `built-ins/TypedArray` | 2,860 | 2,380 (83.2%) |
 | `built-ins/TypedArrayConstructors` | 1,442 | 1,116 (77.4%) |
 | `built-ins/String` | 2,427 | 2,312 (95.3%) |
@@ -229,5 +229,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 83,024 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 83,125 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |

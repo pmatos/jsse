@@ -357,6 +357,564 @@ fn validate_unicode_property_escape(content: &str) -> Result<(), String> {
     }
 }
 
+/// A v-flag character class result: set of single codepoint ranges + multi-codepoint strings.
+#[derive(Clone)]
+struct VClassSet {
+    ranges: Vec<(u32, u32)>,
+    strings: Vec<String>,
+}
+
+impl VClassSet {
+    fn new() -> Self {
+        VClassSet {
+            ranges: Vec::new(),
+            strings: Vec::new(),
+        }
+    }
+
+    fn add_codepoint(&mut self, cp: u32) {
+        self.ranges.push((cp, cp));
+    }
+
+    fn add_range(&mut self, lo: u32, hi: u32) {
+        self.ranges.push((lo, hi));
+    }
+
+    fn add_string(&mut self, s: String) {
+        if s.chars().count() == 1 {
+            self.ranges.push((
+                s.chars().next().unwrap() as u32,
+                s.chars().next().unwrap() as u32,
+            ));
+        } else {
+            self.strings.push(s);
+        }
+    }
+
+    fn normalize_ranges(&mut self) {
+        if self.ranges.is_empty() {
+            return;
+        }
+        self.ranges.sort();
+        let mut merged = vec![self.ranges[0]];
+        for &(lo, hi) in &self.ranges[1..] {
+            let last = merged.last_mut().unwrap();
+            if lo <= last.1 + 1 {
+                last.1 = last.1.max(hi);
+            } else {
+                merged.push((lo, hi));
+            }
+        }
+        self.ranges = merged;
+    }
+
+    fn union(&self, other: &VClassSet) -> VClassSet {
+        let mut result = self.clone();
+        result.ranges.extend_from_slice(&other.ranges);
+        result.strings.extend(other.strings.iter().cloned());
+        result.normalize_ranges();
+        result.dedup_strings();
+        result
+    }
+
+    fn intersect(&self, other: &VClassSet) -> VClassSet {
+        let mut result = VClassSet::new();
+        let mut a = self.clone();
+        a.normalize_ranges();
+        let mut b = other.clone();
+        b.normalize_ranges();
+        // Intersect codepoint ranges
+        let (mut ai, mut bi) = (0, 0);
+        while ai < a.ranges.len() && bi < b.ranges.len() {
+            let (a_lo, a_hi) = a.ranges[ai];
+            let (b_lo, b_hi) = b.ranges[bi];
+            let lo = a_lo.max(b_lo);
+            let hi = a_hi.min(b_hi);
+            if lo <= hi {
+                result.ranges.push((lo, hi));
+            }
+            if a_hi < b_hi {
+                ai += 1;
+            } else {
+                bi += 1;
+            }
+        }
+        // Intersect strings: keep strings that appear in both
+        let b_strings: std::collections::HashSet<&str> =
+            b.strings.iter().map(|s| s.as_str()).collect();
+        for s in &a.strings {
+            if b_strings.contains(s.as_str()) {
+                result.strings.push(s.clone());
+            }
+        }
+        result
+    }
+
+    fn difference(&self, other: &VClassSet) -> VClassSet {
+        let mut a = self.clone();
+        a.normalize_ranges();
+        let mut b = other.clone();
+        b.normalize_ranges();
+        // Subtract b's ranges from a's ranges
+        let mut result_ranges: Vec<(u32, u32)> = Vec::new();
+        for &(a_lo, a_hi) in &a.ranges {
+            let mut lo = a_lo;
+            for &(b_lo, b_hi) in &b.ranges {
+                if b_hi < lo || b_lo > a_hi {
+                    continue;
+                }
+                if b_lo > lo {
+                    result_ranges.push((lo, b_lo - 1));
+                }
+                lo = b_hi + 1;
+            }
+            if lo <= a_hi {
+                result_ranges.push((lo, a_hi));
+            }
+        }
+        // Subtract b's strings from a's strings
+        let b_strings: std::collections::HashSet<&str> =
+            b.strings.iter().map(|s| s.as_str()).collect();
+        let result_strings: Vec<String> = a
+            .strings
+            .iter()
+            .filter(|s| !b_strings.contains(s.as_str()))
+            .cloned()
+            .collect();
+        VClassSet {
+            ranges: result_ranges,
+            strings: result_strings,
+        }
+    }
+
+    fn dedup_strings(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        self.strings.retain(|s| seen.insert(s.clone()));
+    }
+
+    fn complement(&self) -> VClassSet {
+        let mut s = self.clone();
+        s.normalize_ranges();
+        VClassSet {
+            ranges: complement_ranges(&s.ranges),
+            strings: Vec::new(), // complement doesn't apply to strings
+        }
+    }
+
+    fn to_regex_pattern(&self) -> String {
+        let mut s = self.clone();
+        s.normalize_ranges();
+        s.dedup_strings();
+        // Sort strings longest first for greedy matching
+        s.strings.sort_by(|a, b| b.len().cmp(&a.len()));
+
+        let has_ranges = !s.ranges.is_empty();
+        let has_strings = !s.strings.is_empty();
+
+        if !has_ranges && !has_strings {
+            // Empty set: match nothing
+            return "(?!)".to_string();
+        }
+
+        let mut char_class = String::new();
+        if has_ranges {
+            char_class.push('[');
+            for &(lo, hi) in &s.ranges {
+                append_unicode_range(&mut char_class, lo, hi);
+            }
+            char_class.push(']');
+        }
+
+        if has_strings && has_ranges {
+            let mut parts = vec![char_class];
+            for st in &s.strings {
+                let mut escaped = String::new();
+                for ch in st.chars() {
+                    push_literal_char(&mut escaped, ch, false);
+                }
+                parts.push(escaped);
+            }
+            format!("(?:{})", parts.join("|"))
+        } else if has_strings {
+            let parts: Vec<String> = s
+                .strings
+                .iter()
+                .map(|st| {
+                    let mut escaped = String::new();
+                    for ch in st.chars() {
+                        push_literal_char(&mut escaped, ch, false);
+                    }
+                    escaped
+                })
+                .collect();
+            if parts.len() == 1 {
+                parts[0].clone()
+            } else {
+                format!("(?:{})", parts.join("|"))
+            }
+        } else {
+            char_class
+        }
+    }
+}
+
+/// Parse a single class escape atom inside a v-flag character class, returning its codepoint value.
+fn parse_v_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
+    if *i >= chars.len() {
+        return None;
+    }
+    let next = chars[*i];
+    *i += 1;
+    match next {
+        'n' => Some('\n' as u32),
+        'r' => Some('\r' as u32),
+        't' => Some('\t' as u32),
+        'f' => Some(0x0C),
+        'v' => Some(0x0B),
+        '0' => Some(0),
+        'x' if *i + 1 < chars.len()
+            && chars[*i].is_ascii_hexdigit()
+            && chars[*i + 1].is_ascii_hexdigit() =>
+        {
+            let hex: String = chars[*i..*i + 2].iter().collect();
+            *i += 2;
+            u32::from_str_radix(&hex, 16).ok()
+        }
+        'u' => {
+            if *i < chars.len() && chars[*i] == '{' {
+                *i += 1;
+                let start = *i;
+                while *i < chars.len() && chars[*i] != '}' {
+                    *i += 1;
+                }
+                if *i < chars.len() {
+                    let hex: String = chars[start..*i].iter().collect();
+                    *i += 1;
+                    return u32::from_str_radix(&hex, 16).ok();
+                }
+                None
+            } else if *i + 3 < chars.len()
+                && chars[*i].is_ascii_hexdigit()
+                && chars[*i + 1].is_ascii_hexdigit()
+                && chars[*i + 2].is_ascii_hexdigit()
+                && chars[*i + 3].is_ascii_hexdigit()
+            {
+                let hex: String = chars[*i..*i + 4].iter().collect();
+                *i += 4;
+                u32::from_str_radix(&hex, 16).ok()
+            } else {
+                None
+            }
+        }
+        c if is_syntax_character(c) || c == '/' => Some(c as u32),
+        _ => Some(next as u32),
+    }
+}
+
+/// Parse a v-flag character class starting right after the opening `[`.
+/// Returns (VClassSet, new_index_after_closing_bracket).
+fn parse_v_flag_class(
+    chars: &[char],
+    start: usize,
+    flags: &str,
+) -> Result<(VClassSet, usize), String> {
+    let len = chars.len();
+    let mut i = start;
+    let negated = i < len && chars[i] == '^';
+    if negated {
+        i += 1;
+    }
+
+    // Parse the first operand
+    let mut result = parse_v_class_operand(chars, &mut i, flags)?;
+
+    // Check for set operations
+    while i < len && chars[i] != ']' {
+        if i + 1 < len && chars[i] == '-' && chars[i + 1] == '-' {
+            // Difference: --
+            i += 2;
+            let rhs = parse_v_class_operand(chars, &mut i, flags)?;
+            result = result.difference(&rhs);
+        } else if i + 1 < len && chars[i] == '&' && chars[i + 1] == '&' {
+            // Intersection: &&
+            i += 2;
+            let rhs = parse_v_class_operand(chars, &mut i, flags)?;
+            result = result.intersect(&rhs);
+        } else if i < len && chars[i] == '[' {
+            // Nested class in union position
+            i += 1;
+            let (set, new_i) = parse_v_flag_class(chars, i, flags)?;
+            i = new_i;
+            result = result.union(&set);
+        } else {
+            // Union: implicit (just more atoms)
+            let atom = parse_v_class_atom(chars, &mut i, flags)?;
+            result = result.union(&atom);
+        }
+    }
+
+    if i < len && chars[i] == ']' {
+        i += 1; // consume closing ]
+    }
+
+    if negated {
+        result = result.complement();
+    }
+
+    Ok((result, i))
+}
+
+/// Parse a class operand: either a nested [...] or a sequence of atoms (union).
+fn parse_v_class_operand(chars: &[char], i: &mut usize, flags: &str) -> Result<VClassSet, String> {
+    let len = chars.len();
+    if *i < len && chars[*i] == '[' {
+        // Nested character class
+        *i += 1;
+        let (set, new_i) = parse_v_flag_class(chars, *i, flags)?;
+        *i = new_i;
+        return Ok(set);
+    }
+
+    // Parse atoms until we hit ], --, or &&
+    let mut result = VClassSet::new();
+    while *i < len {
+        let c = chars[*i];
+        if c == ']' {
+            break;
+        }
+        // Check for -- or && (set operation boundary)
+        if *i + 1 < len {
+            if (c == '-' && chars[*i + 1] == '-') || (c == '&' && chars[*i + 1] == '&') {
+                break;
+            }
+        }
+        if c == '[' {
+            // Nested class in union position
+            *i += 1;
+            let (set, new_i) = parse_v_flag_class(chars, *i, flags)?;
+            *i = new_i;
+            result = result.union(&set);
+            continue;
+        }
+        let atom = parse_v_class_atom(chars, i, flags)?;
+        result = result.union(&atom);
+    }
+    Ok(result)
+}
+
+/// Parse a single atom in a v-flag character class. May return ranges or strings.
+fn parse_v_class_atom(chars: &[char], i: &mut usize, flags: &str) -> Result<VClassSet, String> {
+    let len = chars.len();
+    let mut result = VClassSet::new();
+
+    if *i >= len {
+        return Ok(result);
+    }
+
+    let c = chars[*i];
+
+    if c == '\\' && *i + 1 < len {
+        let next = chars[*i + 1];
+        match next {
+            // Character class escapes
+            'd' => {
+                *i += 2;
+                result.add_range('0' as u32, '9' as u32);
+                return check_range(chars, i, result, flags);
+            }
+            'D' => {
+                *i += 2;
+                result.add_range(0, '0' as u32 - 1);
+                result.add_range('9' as u32 + 1, 0xD7FF);
+                result.add_range(0xE000, 0x10FFFF);
+                return Ok(result);
+            }
+            'w' => {
+                *i += 2;
+                result.add_range('A' as u32, 'Z' as u32);
+                result.add_range('a' as u32, 'z' as u32);
+                result.add_range('0' as u32, '9' as u32);
+                result.add_codepoint('_' as u32);
+                return Ok(result);
+            }
+            'W' => {
+                *i += 2;
+                // Everything except [A-Za-z0-9_]
+                result.add_range(0, '0' as u32 - 1);
+                result.add_range('9' as u32 + 1, 'A' as u32 - 1);
+                result.add_range('Z' as u32 + 1, '_' as u32 - 1);
+                result.add_range('_' as u32 + 1, 'a' as u32 - 1);
+                result.add_range('z' as u32 + 1, 0xD7FF);
+                result.add_range(0xE000, 0x10FFFF);
+                return Ok(result);
+            }
+            's' => {
+                *i += 2;
+                for &cp in &[
+                    0x09u32, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680, 0x2028, 0x2029, 0x202F,
+                    0x205F, 0x3000, 0xFEFF,
+                ] {
+                    result.add_codepoint(cp);
+                }
+                result.add_range(0x2000, 0x200A);
+                return Ok(result);
+            }
+            'S' => {
+                *i += 2;
+                // Complement of \s — complex, approximate with full range minus whitespace
+                let mut ws_set = VClassSet::new();
+                for &cp in &[
+                    0x09u32, 0x0A, 0x0B, 0x0C, 0x0D, 0x20, 0xA0, 0x1680, 0x2028, 0x2029, 0x202F,
+                    0x205F, 0x3000, 0xFEFF,
+                ] {
+                    ws_set.add_codepoint(cp);
+                }
+                ws_set.add_range(0x2000, 0x200A);
+                let all = VClassSet {
+                    ranges: vec![(0, 0xD7FF), (0xE000, 0x10FFFF)],
+                    strings: Vec::new(),
+                };
+                return Ok(all.difference(&ws_set));
+            }
+            // Property escape
+            'p' | 'P' if *i + 2 < len && chars[*i + 2] == '{' => {
+                let negated = next == 'P';
+                let start = *i + 3;
+                if let Some(end) = chars[start..].iter().position(|&ch| ch == '}') {
+                    let content: String = chars[start..start + end].iter().collect();
+                    *i = start + end + 1;
+                    // Check if it's a property-of-strings
+                    if let Some((singles, multi_strs)) =
+                        crate::emoji_strings::lookup_string_property(&content)
+                    {
+                        if negated {
+                            return Err(format!(
+                                "Invalid property escape: \\P{{{}}} cannot negate a property of strings",
+                                content
+                            ));
+                        }
+                        for &cp in singles {
+                            result.add_codepoint(cp);
+                        }
+                        for s in multi_strs {
+                            result.add_string(s.to_string());
+                        }
+                        return Ok(result);
+                    }
+                    // Regular property
+                    if let Some(ranges) = crate::unicode_tables::lookup_property(&content) {
+                        let ranges_to_use = if negated {
+                            complement_ranges(ranges)
+                        } else {
+                            ranges.to_vec()
+                        };
+                        for &(lo, hi) in &ranges_to_use {
+                            result.add_range(lo, hi);
+                        }
+                    }
+                    return check_range(chars, i, result, flags);
+                }
+                return Err("Invalid property escape: unterminated".to_string());
+            }
+            // \q{str1|str2|...} string literal
+            'q' if *i + 2 < len && chars[*i + 2] == '{' => {
+                let start = *i + 3;
+                let mut j = start;
+                let mut depth = 1;
+                while j < len && depth > 0 {
+                    if chars[j] == '{' {
+                        depth += 1;
+                    } else if chars[j] == '}' {
+                        depth -= 1;
+                    } else if chars[j] == '\\' && j + 1 < len {
+                        j += 1;
+                    }
+                    if depth > 0 {
+                        j += 1;
+                    }
+                }
+                let content: String = chars[start..j].iter().collect();
+                *i = j + 1; // skip closing }
+                // Split on | and add each alternative
+                for alt in content.split('|') {
+                    let s = unescape_q_string(alt);
+                    result.add_string(s);
+                }
+                return Ok(result);
+            }
+            _ => {
+                // Regular escape
+                *i += 1; // skip backslash
+                if let Some(cp) = parse_v_class_escape(chars, i) {
+                    result.add_codepoint(cp);
+                    return check_range(chars, i, result, flags);
+                }
+                return Ok(result);
+            }
+        }
+    }
+
+    // Regular character
+    *i += 1;
+    let cp = c as u32;
+    result.add_codepoint(cp);
+    check_range(chars, i, result, flags)
+}
+
+/// After parsing a single codepoint atom, check if it's followed by `-` for a range.
+fn check_range(
+    chars: &[char],
+    i: &mut usize,
+    mut result: VClassSet,
+    _flags: &str,
+) -> Result<VClassSet, String> {
+    let len = chars.len();
+    // Check for range: cp-cp (but not --)
+    if *i < len && chars[*i] == '-' && *i + 1 < len && chars[*i + 1] != '-' && chars[*i + 1] != ']'
+    {
+        *i += 1; // skip -
+        // Parse the end of the range
+        let start_cp = result.ranges.last().map(|r| r.1);
+        let end_cp = if *i < len && chars[*i] == '\\' && *i + 1 < len {
+            *i += 1; // skip backslash
+            parse_v_class_escape(chars, i)
+        } else if *i < len {
+            let c = chars[*i];
+            *i += 1;
+            Some(c as u32)
+        } else {
+            None
+        };
+        if let (Some(lo), Some(hi)) = (start_cp, end_cp) {
+            // Replace last single-codepoint entry with the range
+            result.ranges.pop();
+            result.add_range(lo, hi);
+        }
+    }
+    Ok(result)
+}
+
+/// Unescape a \q{...} string content (handles \uHHHH, \u{HHHH}, \xHH, etc.)
+fn unescape_q_string(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut result = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\' && i + 1 < chars.len() {
+            i += 1;
+            if let Some(cp) = parse_v_class_escape(&chars, &mut i) {
+                if let Some(ch) = char::from_u32(cp) {
+                    result.push(ch);
+                }
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+    result
+}
+
 struct TranslationResult {
     pattern: String,
     dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>>,
@@ -479,6 +1037,15 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
             if i + 2 < len && chars[i + 1] == '^' && chars[i + 2] == ']' {
                 result.push_str("(?s:.)");
                 i += 3;
+                continue;
+            }
+            // v-flag: use specialized parser that handles nested classes,
+            // set operations (&&, --), property-of-strings, and \q{...}
+            if flags.contains('v') {
+                i += 1; // skip opening [
+                let (vclass, new_i) = parse_v_flag_class(&chars, i, flags)?;
+                i = new_i;
+                result.push_str(&vclass.to_regex_pattern());
                 continue;
             }
             in_char_class = true;
@@ -748,6 +1315,29 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
                         let content: String = chars[start..start + end].iter().collect();
                         validate_unicode_property_escape(&content)?;
                         let negated = next == 'P';
+                        // Check for property-of-strings (v-flag only, outside char class)
+                        if flags.contains('v') && !in_char_class {
+                            if let Some((singles, multi_strs)) =
+                                crate::emoji_strings::lookup_string_property(&content)
+                            {
+                                if negated {
+                                    return Err(format!(
+                                        "Invalid property escape: \\P{{{}}} cannot negate a property of strings",
+                                        content
+                                    ));
+                                }
+                                let mut vset = VClassSet::new();
+                                for &cp in singles {
+                                    vset.add_codepoint(cp);
+                                }
+                                for s in multi_strs {
+                                    vset.add_string(s.to_string());
+                                }
+                                result.push_str(&vset.to_regex_pattern());
+                                i = start + end + 1;
+                                continue;
+                            }
+                        }
                         if let Some(ranges) = crate::unicode_tables::lookup_property(&content) {
                             expand_property_to_char_class(
                                 &mut result,

@@ -1,4 +1,5 @@
 mod ast;
+pub(crate) mod emoji_strings;
 mod interpreter;
 mod lexer;
 mod parser;
