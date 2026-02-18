@@ -301,6 +301,107 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn collect_var_names_from_pattern(pat: &Pattern, out: &mut std::collections::HashSet<String>) {
+        match pat {
+            Pattern::Identifier(name) => { out.insert(name.clone()); }
+            Pattern::Array(elems) => {
+                for elem in elems.iter().flatten() {
+                    match elem {
+                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                            Self::collect_var_names_from_pattern(p, out);
+                        }
+                    }
+                }
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                            Self::collect_var_names_from_pattern(p, out);
+                        }
+                        ObjectPatternProperty::Shorthand(name) => { out.insert(name.clone()); }
+                    }
+                }
+            }
+            Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
+                Self::collect_var_names_from_pattern(inner, out);
+            }
+            Pattern::MemberExpression(_) => {}
+        }
+    }
+
+    pub(crate) fn collect_var_names_from_stmts(stmts: &[Statement], out: &mut std::collections::HashSet<String>) {
+        for stmt in stmts {
+            Self::collect_var_names_from_stmt(stmt, out);
+        }
+    }
+
+    fn collect_var_names_from_stmt(stmt: &Statement, out: &mut std::collections::HashSet<String>) {
+        match stmt {
+            Statement::Variable(decl) if decl.kind == VarKind::Var => {
+                for d in &decl.declarations {
+                    Self::collect_var_names_from_pattern(&d.pattern, out);
+                }
+            }
+            Statement::Block(stmts) => Self::collect_var_names_from_stmts(stmts, out),
+            Statement::If(i) => {
+                Self::collect_var_names_from_stmt(&i.consequent, out);
+                if let Some(alt) = &i.alternate {
+                    Self::collect_var_names_from_stmt(alt, out);
+                }
+            }
+            Statement::While(w) => Self::collect_var_names_from_stmt(&w.body, out),
+            Statement::DoWhile(d) => Self::collect_var_names_from_stmt(&d.body, out),
+            Statement::For(f) => {
+                if let Some(ForInit::Variable(decl)) = &f.init {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::collect_var_names_from_pattern(&d.pattern, out);
+                        }
+                    }
+                }
+                Self::collect_var_names_from_stmt(&f.body, out);
+            }
+            Statement::ForIn(fi) => {
+                if let ForInOfLeft::Variable(decl) = &fi.left {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::collect_var_names_from_pattern(&d.pattern, out);
+                        }
+                    }
+                }
+                Self::collect_var_names_from_stmt(&fi.body, out);
+            }
+            Statement::ForOf(fo) => {
+                if let ForInOfLeft::Variable(decl) = &fo.left {
+                    if decl.kind == VarKind::Var {
+                        for d in &decl.declarations {
+                            Self::collect_var_names_from_pattern(&d.pattern, out);
+                        }
+                    }
+                }
+                Self::collect_var_names_from_stmt(&fo.body, out);
+            }
+            Statement::Switch(sw) => {
+                for case in &sw.cases {
+                    Self::collect_var_names_from_stmts(&case.consequent, out);
+                }
+            }
+            Statement::Try(t) => {
+                Self::collect_var_names_from_stmts(&t.block, out);
+                if let Some(handler) = &t.handler {
+                    Self::collect_var_names_from_stmts(&handler.body, out);
+                }
+                if let Some(finalizer) = &t.finalizer {
+                    Self::collect_var_names_from_stmts(finalizer, out);
+                }
+            }
+            Statement::Labeled(_, inner) => Self::collect_var_names_from_stmt(inner, out),
+            Statement::With(_, inner) => Self::collect_var_names_from_stmt(inner, out),
+            _ => {}
+        }
+    }
+
     // Annex B.3.3: recursively find function declarations inside blocks
     // for var-scope hoisting at the function/global level.
     // `blocked` tracks lexical names from enclosing scopes that would
@@ -603,6 +704,7 @@ impl Interpreter {
                             global_object: None,
                             annexb_function_names: None,
                             class_private_names: None,
+                            is_field_initializer: false,
                         }));
                         self.exec_statement(body, &with_env)
                     } else {

@@ -90,6 +90,7 @@ impl Interpreter {
             },
         );
         init_env.borrow_mut().class_private_names = class_pn;
+        init_env.borrow_mut().is_field_initializer = true;
         for def in &private_field_defs {
             match def {
                 PrivateFieldDef::Field { name, initializer } => {
@@ -6577,7 +6578,7 @@ impl Interpreter {
                         }
                         let closure_strict = closure.borrow().strict;
                         let func_env = Environment::new_function_scope(Some(closure));
-                        // Bind `this` before parameters so default param exprs can access it
+                        let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
@@ -6617,8 +6618,6 @@ impl Interpreter {
                                     },
                                 );
                             }
-                            let is_simple =
-                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let env_strict = func_env.borrow().strict;
                             let use_mapped = is_simple && !is_strict && !env_strict;
                             let param_names: Vec<String> = if use_mapped {
@@ -6665,8 +6664,28 @@ impl Interpreter {
                                 return Completion::Throw(e);
                             }
                         }
-                        self.call_stack_envs.push(func_env.clone());
-                        let result = self.exec_statements(&body, &func_env);
+                        let exec_env = if !is_simple {
+                            let body_env = Environment::new_function_scope(Some(func_env.clone()));
+                            body_env.borrow_mut().strict = func_env.borrow().strict;
+                            let mut var_names = std::collections::HashSet::new();
+                            Self::collect_var_names_from_stmts(&body, &mut var_names);
+                            let mut param_names = std::collections::HashSet::new();
+                            for p in &params {
+                                Self::collect_var_names_from_pattern(p, &mut param_names);
+                            }
+                            for name in &var_names {
+                                body_env.borrow_mut().declare(name, BindingKind::Var);
+                                if param_names.contains(name) {
+                                    let val = func_env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                                    let _ = body_env.borrow_mut().set(name, val);
+                                }
+                            }
+                            body_env
+                        } else {
+                            func_env.clone()
+                        };
+                        self.call_stack_envs.push(exec_env.clone());
+                        let result = self.exec_statements(&body, &exec_env);
                         self.call_stack_envs.pop();
                         self.last_call_this_value = func_env.borrow().get("this");
                         match result {
@@ -6782,6 +6801,208 @@ impl Interpreter {
         false
     }
 
+    fn stmts_contain_arguments(stmts: &[Statement]) -> bool {
+        stmts.iter().any(|s| Self::stmt_contains_arguments(s))
+    }
+
+    fn stmt_contains_arguments(stmt: &Statement) -> bool {
+        use crate::ast::*;
+        match stmt {
+            Statement::Expression(e) => Self::expr_contains_arguments(e),
+            Statement::Variable(d) => d.declarations.iter().any(|decl| {
+                decl.init
+                    .as_ref()
+                    .is_some_and(Self::expr_contains_arguments)
+            }),
+            Statement::Block(stmts) => Self::stmts_contain_arguments(stmts),
+            Statement::If(if_stmt) => {
+                Self::expr_contains_arguments(&if_stmt.test)
+                    || Self::stmt_contains_arguments(&if_stmt.consequent)
+                    || if_stmt
+                        .alternate
+                        .as_ref()
+                        .is_some_and(|a| Self::stmt_contains_arguments(a))
+            }
+            Statement::Return(e) => e.as_ref().is_some_and(Self::expr_contains_arguments),
+            Statement::Throw(e) => Self::expr_contains_arguments(e),
+            Statement::Try(t) => {
+                Self::stmts_contain_arguments(&t.block)
+                    || t.handler
+                        .as_ref()
+                        .is_some_and(|h| Self::stmts_contain_arguments(&h.body))
+                    || t.finalizer
+                        .as_ref()
+                        .is_some_and(|f| Self::stmts_contain_arguments(f))
+            }
+            Statement::While(w) => {
+                Self::expr_contains_arguments(&w.test)
+                    || Self::stmt_contains_arguments(&w.body)
+            }
+            Statement::For(f) => {
+                f.init.as_ref().is_some_and(|i| match i {
+                    ForInit::Expression(e) => Self::expr_contains_arguments(e),
+                    ForInit::Variable(d) => d.declarations.iter().any(|decl| {
+                        decl.init
+                            .as_ref()
+                            .is_some_and(Self::expr_contains_arguments)
+                    }),
+                }) || f.test.as_ref().is_some_and(Self::expr_contains_arguments)
+                    || f.update.as_ref().is_some_and(Self::expr_contains_arguments)
+                    || Self::stmt_contains_arguments(&f.body)
+            }
+            Statement::ForIn(f) => {
+                Self::expr_contains_arguments(&f.right)
+                    || Self::stmt_contains_arguments(&f.body)
+            }
+            Statement::ForOf(f) => {
+                Self::expr_contains_arguments(&f.right)
+                    || Self::stmt_contains_arguments(&f.body)
+            }
+            Statement::Switch(s) => {
+                Self::expr_contains_arguments(&s.discriminant)
+                    || s.cases
+                        .iter()
+                        .any(|c| Self::stmts_contain_arguments(&c.consequent))
+            }
+            Statement::DoWhile(d) => {
+                Self::stmt_contains_arguments(&d.body)
+                    || Self::expr_contains_arguments(&d.test)
+            }
+            Statement::Labeled(_, s) => Self::stmt_contains_arguments(s),
+            Statement::With(e, s) => {
+                Self::expr_contains_arguments(e) || Self::stmt_contains_arguments(s)
+            }
+            // Function/class declarations create their own scope — don't recurse
+            Statement::FunctionDeclaration(_)
+            | Statement::ClassDeclaration(_) => false,
+            _ => false,
+        }
+    }
+
+    fn expr_contains_arguments(expr: &Expression) -> bool {
+        use crate::ast::*;
+        match expr {
+            Expression::Identifier(name) => name == "arguments",
+            Expression::Array(elems) => elems
+                .iter()
+                .any(|e| e.as_ref().is_some_and(Self::expr_contains_arguments)),
+            Expression::Object(props) => props.iter().any(|p| {
+                Self::expr_contains_arguments(&p.value)
+                    || matches!(&p.key, PropertyKey::Computed(e) if Self::expr_contains_arguments(e))
+            }),
+            Expression::Member(obj, prop) => {
+                Self::expr_contains_arguments(obj)
+                    || matches!(prop, MemberProperty::Computed(e) if Self::expr_contains_arguments(e))
+            }
+            Expression::Call(callee, args) | Expression::New(callee, args) => {
+                Self::expr_contains_arguments(callee)
+                    || args.iter().any(Self::expr_contains_arguments)
+            }
+            Expression::Binary(_, l, r)
+            | Expression::Logical(_, l, r)
+            | Expression::Assign(_, l, r) => {
+                Self::expr_contains_arguments(l) || Self::expr_contains_arguments(r)
+            }
+            Expression::Unary(_, e)
+            | Expression::Update(_, _, e)
+            | Expression::Spread(e)
+            | Expression::Await(e)
+            | Expression::Yield(Some(e), _) => Self::expr_contains_arguments(e),
+            Expression::Conditional(t, c, a) => {
+                Self::expr_contains_arguments(t)
+                    || Self::expr_contains_arguments(c)
+                    || Self::expr_contains_arguments(a)
+            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                exprs.iter().any(Self::expr_contains_arguments)
+            }
+            Expression::Template(tl) => tl.expressions.iter().any(Self::expr_contains_arguments),
+            Expression::TaggedTemplate(tag, tl) => {
+                Self::expr_contains_arguments(tag)
+                    || tl.expressions.iter().any(Self::expr_contains_arguments)
+            }
+            Expression::ArrowFunction(af) => match &af.body {
+                ArrowBody::Expression(e) => Self::expr_contains_arguments(e),
+                ArrowBody::Block(stmts) => Self::stmts_contain_arguments(stmts),
+            },
+            Expression::Function(_) | Expression::Class(_) => false,
+            _ => false,
+        }
+    }
+
+    fn stmts_contain_super_call(stmts: &[Statement]) -> bool {
+        stmts.iter().any(|s| Self::stmt_contains_super_call(s))
+    }
+
+    fn stmt_contains_super_call(stmt: &Statement) -> bool {
+        use crate::ast::*;
+        match stmt {
+            Statement::Expression(e) => Self::expr_contains_super_call(e),
+            Statement::Variable(d) => d.declarations.iter().any(|decl| {
+                decl.init
+                    .as_ref()
+                    .is_some_and(Self::expr_contains_super_call)
+            }),
+            Statement::Block(stmts) => Self::stmts_contain_super_call(stmts),
+            Statement::If(if_stmt) => {
+                Self::expr_contains_super_call(&if_stmt.test)
+                    || Self::stmt_contains_super_call(&if_stmt.consequent)
+                    || if_stmt
+                        .alternate
+                        .as_ref()
+                        .is_some_and(|a| Self::stmt_contains_super_call(a))
+            }
+            Statement::Return(e) => e.as_ref().is_some_and(Self::expr_contains_super_call),
+            Statement::Throw(e) => Self::expr_contains_super_call(e),
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+            _ => false,
+        }
+    }
+
+    fn expr_contains_super_call(expr: &Expression) -> bool {
+        use crate::ast::*;
+        match expr {
+            Expression::Call(callee, args) => {
+                matches!(**callee, Expression::Super)
+                    || Self::expr_contains_super_call(callee)
+                    || args.iter().any(Self::expr_contains_super_call)
+            }
+            Expression::Array(elems) => elems
+                .iter()
+                .any(|e| e.as_ref().is_some_and(Self::expr_contains_super_call)),
+            Expression::Binary(_, l, r)
+            | Expression::Logical(_, l, r)
+            | Expression::Assign(_, l, r) => {
+                Self::expr_contains_super_call(l) || Self::expr_contains_super_call(r)
+            }
+            Expression::Unary(_, e)
+            | Expression::Update(_, _, e)
+            | Expression::Spread(e) => Self::expr_contains_super_call(e),
+            Expression::Conditional(t, c, a) => {
+                Self::expr_contains_super_call(t)
+                    || Self::expr_contains_super_call(c)
+                    || Self::expr_contains_super_call(a)
+            }
+            Expression::ArrowFunction(af) => match &af.body {
+                ArrowBody::Expression(e) => Self::expr_contains_super_call(e),
+                ArrowBody::Block(stmts) => Self::stmts_contain_super_call(stmts),
+            },
+            Expression::New(callee, args) => {
+                Self::expr_contains_super_call(callee)
+                    || args.iter().any(Self::expr_contains_super_call)
+            }
+            Expression::Member(obj, prop) => {
+                Self::expr_contains_super_call(obj)
+                    || matches!(prop, MemberProperty::Computed(e) if Self::expr_contains_super_call(e))
+            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                exprs.iter().any(Self::expr_contains_super_call)
+            }
+            Expression::Function(_) | Expression::Class(_) => false,
+            _ => false,
+        }
+    }
+
     pub(crate) fn perform_eval(
         &mut self,
         args: &[JsValue],
@@ -6803,8 +7024,10 @@ impl Interpreter {
         if caller_strict {
             p.set_strict(true);
         }
+        let mut in_field_initializer = false;
         if direct {
             // Walk caller env chain to find enclosing class private names
+            // and detect field initializer context
             let mut env_walk = Some(caller_env.clone());
             loop {
                 let e = match env_walk {
@@ -6812,6 +7035,9 @@ impl Interpreter {
                     None => break,
                 };
                 let borrowed = e.borrow();
+                if borrowed.is_field_initializer {
+                    in_field_initializer = true;
+                }
                 if let Some(ref names) = borrowed.class_private_names {
                     p.set_eval_in_class_with_names(names.clone());
                     break;
@@ -6819,12 +7045,29 @@ impl Interpreter {
                 env_walk = borrowed.parent.clone();
             }
         }
+        if in_field_initializer {
+            p.set_eval_in_field_initializer();
+        }
         let program = match p.parse_program() {
             Ok(prog) => prog,
             Err(e) => {
                 return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
             }
         };
+        if in_field_initializer {
+            if Self::stmts_contain_arguments(&program.body) {
+                return Completion::Throw(self.create_error(
+                    "SyntaxError",
+                    "'arguments' is not allowed in class field initializer or static block",
+                ));
+            }
+            if Self::stmts_contain_super_call(&program.body) {
+                return Completion::Throw(self.create_error(
+                    "SyntaxError",
+                    "'super()' is not allowed in class field initializer",
+                ));
+            }
+        }
         let eval_code_strict = program.body.first().is_some_and(|s| {
             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
         });
@@ -7256,7 +7499,7 @@ impl Interpreter {
             let init_env = Environment::new(Some(env.clone()));
             init_env.borrow_mut().declare("this", BindingKind::Const);
             let _ = init_env.borrow_mut().set("this", this_val.clone());
-            // Set private name context from class env for eval() inside field initializers
+            init_env.borrow_mut().is_field_initializer = true;
             if let JsValue::Object(o) = &callee_val
                 && let Some(func_obj) = self.get_object(o.id)
             {
@@ -9095,7 +9338,6 @@ impl Interpreter {
         env: &EnvRef,
         class_source_text: Option<String>,
     ) -> Completion {
-        // Collect private names for eval() support
         let mut pn_set = std::collections::HashSet::new();
         for elem in body {
             match elem {
@@ -9278,6 +9520,21 @@ impl Interpreter {
             if let Some(ref proto) = proto_obj {
                 proto.borrow_mut().prototype = None;
             }
+        }
+
+        // Create environment for static field initializers with `this` = constructor
+        let static_field_env = Environment::new_function_scope(Some(env.clone()));
+        {
+            let mut sfe = static_field_env.borrow_mut();
+            sfe.bindings.insert(
+                "this".to_string(),
+                Binding {
+                    value: ctor_val.clone(),
+                    kind: BindingKind::Const,
+                    initialized: true,
+                },
+            );
+            sfe.is_field_initializer = true;
         }
 
         // Add methods and properties to prototype/constructor
@@ -9539,7 +9796,7 @@ impl Interpreter {
                         } else {
                             // Static private field - evaluate now and store on constructor
                             let val = if let Some(ref expr) = p.value {
-                                match self.eval_expr(expr, env) {
+                                match self.eval_expr(expr, &static_field_env) {
                                     Completion::Normal(v) => v,
                                     other => return other,
                                 }
@@ -9562,17 +9819,19 @@ impl Interpreter {
                         let key = match &p.key {
                             PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
                             PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
-                            PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                                Completion::Normal(v) => match self.to_property_key(&v) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                },
-                                other => return other,
-                            },
+                            PropertyKey::Computed(expr) => {
+                                match self.eval_expr(expr, &static_field_env) {
+                                    Completion::Normal(v) => match self.to_property_key(&v) {
+                                        Ok(s) => s,
+                                        Err(e) => return Completion::Throw(e),
+                                    },
+                                    other => return other,
+                                }
+                            }
                             PropertyKey::Private(_) => unreachable!(),
                         };
                         let val = if let Some(ref expr) = p.value {
-                            match self.eval_expr(expr, env) {
+                            match self.eval_expr(expr, &static_field_env) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             }

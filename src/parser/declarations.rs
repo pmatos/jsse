@@ -256,6 +256,14 @@ impl<'a> Parser<'a> {
                 n
             }
             None => {
+                // Check if token is an escaped reserved word
+                if let Token::IdentifierWithEscape(n) = &self.current {
+                    let n = n.clone();
+                    self.set_strict(prev_strict);
+                    return Err(
+                        self.error(format!("Unexpected strict mode reserved word '{n}'"))
+                    );
+                }
                 self.set_strict(prev_strict);
                 return Err(self.error("Expected class name"));
             }
@@ -283,6 +291,7 @@ impl<'a> Parser<'a> {
         self.set_strict(true); // class bodies are always strict
         self.push_private_scope();
         let mut elements = Vec::new();
+        let mut has_constructor = false;
         // Track private names: value is (has_getter, has_setter, has_other)
         let mut private_names: std::collections::HashMap<String, (bool, bool, bool)> =
             std::collections::HashMap::new();
@@ -292,6 +301,42 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let element = self.parse_class_element()?;
+
+            // Check for duplicate constructors
+            if let ClassElement::Method(m) = &element {
+                if m.kind == ClassMethodKind::Constructor {
+                    if has_constructor {
+                        return Err(self.error("A class may only have one constructor"));
+                    }
+                    has_constructor = true;
+                }
+                // Non-static, non-computed getter/setter named "constructor" is forbidden
+                if !m.is_static
+                    && !m.computed
+                    && matches!(m.kind, ClassMethodKind::Get | ClassMethodKind::Set)
+                    && Self::key_is_constructor(&m.key)
+                {
+                    return Err(self.error(
+                        "Class constructor may not be an accessor",
+                    ));
+                }
+            }
+
+            // Non-computed field named "constructor" is forbidden
+            if let ClassElement::Property(p) = &element {
+                if !p.computed && Self::key_is_constructor(&p.key) {
+                    return Err(self.error(
+                        "Classes may not have a field named 'constructor'",
+                    ));
+                }
+                // Static non-computed field named "prototype" is forbidden
+                if p.is_static && !p.computed && Self::key_is_prototype(&p.key) {
+                    return Err(self.error(
+                        "Classes may not have a static property named 'prototype'",
+                    ));
+                }
+            }
+
             // Check for duplicate private names and register declarations
             if let Some((name, kind)) = Self::get_private_name_info(&element) {
                 if name == "constructor" {
@@ -334,6 +379,14 @@ impl<'a> Parser<'a> {
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok(elements)
+    }
+
+    fn key_is_constructor(key: &PropertyKey) -> bool {
+        matches!(key, PropertyKey::Identifier(n) | PropertyKey::String(n) if n == "constructor")
+    }
+
+    fn key_is_prototype(key: &PropertyKey) -> bool {
+        matches!(key, PropertyKey::Identifier(n) | PropertyKey::String(n) if n == "prototype")
     }
 
     fn get_private_name_info(element: &ClassElement) -> Option<(String, PrivateNameKind)> {
@@ -421,16 +474,10 @@ impl<'a> Parser<'a> {
             // It's an async method: async [*] name() {}
             let is_generator = self.eat_star()?;
             let (key, computed) = self.parse_property_name()?;
-            if !is_static
-                && !computed
-                && matches!(&key, PropertyKey::Identifier(n) if n == "constructor")
-            {
+            if !is_static && !computed && Self::key_is_constructor(&key) {
                 return Err(self.error("Class constructor may not be an async method"));
             }
-            if is_static
-                && !computed
-                && matches!(&key, PropertyKey::Identifier(n) if n == "prototype")
-            {
+            if is_static && !computed && Self::key_is_prototype(&key) {
                 return Err(self.error("Classes may not have a static property named 'prototype'"));
             }
             if self.current == Token::LeftParen {
@@ -504,10 +551,10 @@ impl<'a> Parser<'a> {
         let (key, computed) = self.parse_property_name()?;
         let is_constructor = !is_static
             && kind == ClassMethodKind::Method
-            && matches!(&key, PropertyKey::Identifier(n) if n == "constructor");
+            && !computed
+            && Self::key_is_constructor(&key);
 
-        if is_static && !computed && matches!(&key, PropertyKey::Identifier(n) if n == "prototype")
-        {
+        if is_static && !computed && Self::key_is_prototype(&key) {
             return Err(self.error("Classes may not have a static property named 'prototype'"));
         }
 

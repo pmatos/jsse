@@ -538,7 +538,18 @@ fn transform_yielding_expression(
 
             let mut temp_args = Vec::new();
             for (i, arg) in args.iter().enumerate() {
-                if expr_contains_yield(arg) {
+                if let Expression::Spread(inner) = arg {
+                    if expr_contains_yield(inner) {
+                        let temp_var = ctx.new_temp_var(&format!("new_arg_{}", i));
+                        let arg_binding = SentValueBindingKind::Variable(temp_var.clone());
+                        transform_yielding_expression(inner, ctx, usize::MAX, Some(arg_binding));
+                        temp_args.push(Expression::Spread(Box::new(Expression::Identifier(
+                            temp_var,
+                        ))));
+                    } else {
+                        temp_args.push(arg.clone());
+                    }
+                } else if expr_contains_yield(arg) {
                     let temp_var = ctx.new_temp_var(&format!("new_arg_{}", i));
                     let arg_binding = SentValueBindingKind::Variable(temp_var.clone());
                     transform_yielding_expression(arg, ctx, usize::MAX, Some(arg_binding));
@@ -585,6 +596,14 @@ fn transform_yielding_expression(
             let mut new_elements = Vec::new();
             for (i, elem) in elements.iter().enumerate() {
                 match elem {
+                    Some(Expression::Spread(inner)) if expr_contains_yield(inner) => {
+                        let temp_var = ctx.new_temp_var(&format!("arr_elem_{}", i));
+                        let elem_binding = SentValueBindingKind::Variable(temp_var.clone());
+                        transform_yielding_expression(inner, ctx, usize::MAX, Some(elem_binding));
+                        new_elements.push(Some(Expression::Spread(Box::new(
+                            Expression::Identifier(temp_var),
+                        ))));
+                    }
                     Some(e) if expr_contains_yield(e) => {
                         let temp_var = ctx.new_temp_var(&format!("arr_elem_{}", i));
                         let elem_binding = SentValueBindingKind::Variable(temp_var.clone());
@@ -621,7 +640,16 @@ fn transform_yielding_expression(
                     prop.key.clone()
                 };
 
-                let new_value = if expr_contains_yield(&prop.value) {
+                let new_value = if let Expression::Spread(inner) = &prop.value {
+                    if expr_contains_yield(inner) {
+                        let temp_var = ctx.new_temp_var(&format!("obj_val_{}", i));
+                        let val_binding = SentValueBindingKind::Variable(temp_var.clone());
+                        transform_yielding_expression(inner, ctx, usize::MAX, Some(val_binding));
+                        Expression::Spread(Box::new(Expression::Identifier(temp_var)))
+                    } else {
+                        prop.value.clone()
+                    }
+                } else if expr_contains_yield(&prop.value) {
                     let temp_var = ctx.new_temp_var(&format!("obj_val_{}", i));
                     let val_binding = SentValueBindingKind::Variable(temp_var.clone());
                     transform_yielding_expression(&prop.value, ctx, usize::MAX, Some(val_binding));
@@ -664,7 +692,18 @@ fn transform_call_expression(
 
     let mut temp_args = Vec::new();
     for (i, arg) in args.iter().enumerate() {
-        if expr_contains_yield(arg) {
+        if let Expression::Spread(inner) = arg {
+            if expr_contains_yield(inner) {
+                let temp_var = ctx.new_temp_var(&format!("call_arg_{}", i));
+                let arg_binding = SentValueBindingKind::Variable(temp_var.clone());
+                transform_yielding_expression(inner, ctx, usize::MAX, Some(arg_binding));
+                temp_args.push(Expression::Spread(Box::new(Expression::Identifier(
+                    temp_var,
+                ))));
+            } else {
+                temp_args.push(arg.clone());
+            }
+        } else if expr_contains_yield(arg) {
             let temp_var = ctx.new_temp_var(&format!("call_arg_{}", i));
             let arg_binding = SentValueBindingKind::Variable(temp_var.clone());
             transform_yielding_expression(arg, ctx, usize::MAX, Some(arg_binding));

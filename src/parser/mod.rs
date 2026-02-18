@@ -56,6 +56,7 @@ pub struct Parser<'a> {
     no_in: bool,
     pub last_string_literal_has_escape: bool,
     private_name_scopes: Vec<(std::collections::HashSet<String>, Vec<(String, usize)>)>,
+    in_field_initializer_eval: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -97,6 +98,7 @@ impl<'a> Parser<'a> {
             no_in: false,
             last_string_literal_has_escape: false,
             private_name_scopes: Vec::new(),
+            in_field_initializer_eval: false,
         })
     }
 
@@ -179,6 +181,11 @@ impl<'a> Parser<'a> {
 
     pub fn set_eval_in_class_with_names(&mut self, names: std::collections::HashSet<String>) {
         self.private_name_scopes.push((names, Vec::new()));
+    }
+
+    pub fn set_eval_in_field_initializer(&mut self) {
+        self.in_field_initializer_eval = true;
+        self.allow_super_property = true;
     }
 
     fn push_private_scope(&mut self) {
@@ -292,7 +299,15 @@ impl<'a> Parser<'a> {
         ) || (strict
             && matches!(
                 name,
-                "implements" | "interface" | "package" | "private" | "protected" | "public"
+                "implements"
+                    | "interface"
+                    | "let"
+                    | "package"
+                    | "private"
+                    | "protected"
+                    | "public"
+                    | "static"
+                    | "yield"
             ))
     }
 

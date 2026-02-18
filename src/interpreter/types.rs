@@ -90,6 +90,7 @@ pub struct Environment {
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
     pub(crate) class_private_names: Option<std::collections::HashSet<String>>,
+    pub(crate) is_field_initializer: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -156,6 +157,7 @@ impl Environment {
             global_object: None,
             annexb_function_names: None,
             class_private_names: None,
+            is_field_initializer: false,
         }))
     }
 
@@ -171,6 +173,7 @@ impl Environment {
             global_object: None,
             annexb_function_names: None,
             class_private_names: None,
+            is_field_initializer: false,
         }))
     }
 
