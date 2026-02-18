@@ -9544,14 +9544,31 @@ impl Interpreter {
                     if m.kind == ClassMethodKind::Constructor {
                         continue;
                     }
-                    let key = match &m.key {
-                        PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                        PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                    let (key, fn_name_for_key) = match &m.key {
+                        PropertyKey::Identifier(s) | PropertyKey::String(s) => (s.clone(), s.clone()),
+                        PropertyKey::Number(n) => {
+                            let s = to_js_string(&JsValue::Number(*n));
+                            (s.clone(), s)
+                        }
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => match self.to_property_key(&v) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            },
+                            Completion::Normal(v) => {
+                                let is_symbol = matches!(&v, JsValue::Symbol(_));
+                                let fn_name = if let JsValue::Symbol(ref sym) = v {
+                                    match &sym.description {
+                                        Some(desc) => format!("[{}]", desc),
+                                        None => String::new(),
+                                    }
+                                } else {
+                                    String::new()
+                                };
+                                match self.to_property_key(&v) {
+                                    Ok(s) => {
+                                        let name = if is_symbol { fn_name } else { s.clone() };
+                                        (s, name)
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
                             other => return other,
                         },
                         PropertyKey::Private(name) => {
@@ -9693,8 +9710,13 @@ impl Interpreter {
                             continue;
                         }
                     };
+                    let method_display_name = match m.kind {
+                        ClassMethodKind::Get => format!("get {fn_name_for_key}"),
+                        ClassMethodKind::Set => format!("set {fn_name_for_key}"),
+                        _ => fn_name_for_key.clone(),
+                    };
                     let method_func = JsFunction::User {
-                        name: Some(key.clone()),
+                        name: Some(method_display_name),
                         params: m.value.params.clone(),
                         body: m.value.body.clone(),
                         closure: class_env.clone(),
@@ -9892,19 +9914,33 @@ impl Interpreter {
         let mut obj_data = JsObjectData::new();
         obj_data.prototype = self.object_prototype.clone();
         for prop in props {
-            let key = match &prop.key {
-                PropertyKey::Identifier(n) => n.clone(),
-                PropertyKey::String(s) => s.clone(),
-                PropertyKey::Number(n) => number_ops::to_string(*n),
+            let (key, fn_name_for_key) = match &prop.key {
+                PropertyKey::Identifier(n) => (n.clone(), n.clone()),
+                PropertyKey::String(s) => (s.clone(), s.clone()),
+                PropertyKey::Number(n) => {
+                    let s = number_ops::to_string(*n);
+                    (s.clone(), s)
+                }
                 PropertyKey::Computed(expr) => {
                     let v = match self.eval_expr(expr, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    match self.to_property_key(&v) {
+                    let is_symbol = matches!(&v, JsValue::Symbol(_));
+                    let fn_name = if let JsValue::Symbol(ref sym) = v {
+                        match &sym.description {
+                            Some(desc) => format!("[{}]", desc),
+                            None => String::new(),
+                        }
+                    } else {
+                        String::new()
+                    };
+                    let pk = match self.to_property_key(&v) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
-                    }
+                    };
+                    let name = if is_symbol { fn_name } else { pk.clone() };
+                    (pk, name)
                 }
                 PropertyKey::Private(_) => {
                     return Completion::Throw(
@@ -9936,7 +9972,7 @@ impl Interpreter {
             }
             match prop.kind {
                 PropertyKind::Get => {
-                    self.set_function_name(&value, &format!("get {key}"));
+                    self.set_function_name(&value, &format!("get {fn_name_for_key}"));
                     let mut desc =
                         obj_data
                             .properties
@@ -9956,7 +9992,7 @@ impl Interpreter {
                     obj_data.insert_property(key, desc);
                 }
                 PropertyKind::Set => {
-                    self.set_function_name(&value, &format!("set {key}"));
+                    self.set_function_name(&value, &format!("set {fn_name_for_key}"));
                     let mut desc =
                         obj_data
                             .properties
@@ -9991,7 +10027,7 @@ impl Interpreter {
                         }
                     } else {
                         if prop.value.is_anonymous_function_definition() {
-                            self.set_function_name(&value, &key);
+                            self.set_function_name(&value, &fn_name_for_key);
                         }
                         obj_data.insert_value(key, value);
                     }

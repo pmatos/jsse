@@ -395,7 +395,7 @@ impl<'a> Lexer<'a> {
                     self.last_string_has_escape = has_escape;
                     return Ok(s);
                 }
-                Some(ch) if Self::is_line_terminator(ch) => {
+                Some('\n' | '\r') => {
                     return Err(self.error("Unterminated string literal"));
                 }
                 Some('\\') => {

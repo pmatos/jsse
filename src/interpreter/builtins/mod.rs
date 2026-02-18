@@ -3442,13 +3442,17 @@ impl Interpreter {
                     "valueOf".to_string(),
                     0,
                     |interp, this_val, _args| {
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
-                            && let Some(pv) = obj.borrow().primitive_value.clone()
+                        let obj = match interp.to_object(this_val) {
+                            Completion::Normal(o) => o,
+                            other => return other,
+                        };
+                        if let JsValue::Object(o) = &obj
+                            && let Some(obj_data) = interp.get_object(o.id)
+                            && let Some(pv) = obj_data.borrow().primitive_value.clone()
                         {
                             return Completion::Normal(pv);
                         }
-                        Completion::Normal(this_val.clone())
+                        Completion::Normal(obj)
                     },
                 ));
                 proto_obj
@@ -3524,8 +3528,14 @@ impl Interpreter {
                     1,
                     |interp, this_val, args| {
                         let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if let (JsValue::Object(this_o), JsValue::Object(target_o)) =
-                            (this_val, &target)
+                        let JsValue::Object(target_o) = &target else {
+                            return Completion::Normal(JsValue::Boolean(false));
+                        };
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let JsValue::Object(this_o) = &o
                             && let (Some(this_data), Some(target_data)) =
                                 (interp.get_object(this_o.id), interp.get_object(target_o.id))
                         {
@@ -3557,8 +3567,12 @@ impl Interpreter {
                                 interp.create_type_error("Getter must be a function"),
                             );
                         }
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let JsValue::Object(ref obj_ref) = o
+                            && let Some(obj) = interp.get_object(obj_ref.id)
                         {
                             obj.borrow_mut().define_own_property(
                                 key,
@@ -3592,8 +3606,12 @@ impl Interpreter {
                                 interp.create_type_error("Setter must be a function"),
                             );
                         }
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let JsValue::Object(ref obj_ref) = o
+                            && let Some(obj) = interp.get_object(obj_ref.id)
                         {
                             obj.borrow_mut().define_own_property(
                                 key,
@@ -3620,7 +3638,10 @@ impl Interpreter {
                     1,
                     |interp, this_val, args| {
                         let key = args.first().map(to_property_key_string).unwrap_or_default();
-                        let mut current = this_val.clone();
+                        let mut current = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
                         loop {
                             if let JsValue::Object(ref o) = current
                                 && let Some(obj) = interp.get_object(o.id)
@@ -3652,7 +3673,10 @@ impl Interpreter {
                     1,
                     |interp, this_val, args| {
                         let key = args.first().map(to_property_key_string).unwrap_or_default();
-                        let mut current = this_val.clone();
+                        let mut current = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
                         loop {
                             if let JsValue::Object(ref o) = current
                                 && let Some(obj) = interp.get_object(o.id)
