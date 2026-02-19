@@ -187,12 +187,21 @@ impl Interpreter {
             "asIntN".to_string(),
             2,
             |interp, _this, args| {
-                let bits = to_number(args.first().unwrap_or(&JsValue::Undefined)) as u64;
+                // Step 1: Let bits be ? ToIndex(bits).
+                let bits_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let bits = match interp.to_index(&bits_val) {
+                    Completion::Normal(JsValue::Number(n)) => n as u64,
+                    Completion::Normal(_) => unreachable!(),
+                    other => return other,
+                };
+                // Step 2: Let bigint be ? ToBigInt(bigint).
                 let bigint_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let bigint_val = match interp.to_bigint_value(&bigint_val) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let JsValue::BigInt(ref b) = bigint_val else {
-                    return Completion::Throw(
-                        interp.create_type_error("Cannot convert value to a BigInt"),
-                    );
+                    unreachable!()
                 };
                 if bits == 0 {
                     return Completion::Normal(JsValue::BigInt(JsBigInt {
@@ -215,12 +224,21 @@ impl Interpreter {
             "asUintN".to_string(),
             2,
             |interp, _this, args| {
-                let bits = to_number(args.first().unwrap_or(&JsValue::Undefined)) as u64;
+                // Step 1: Let bits be ? ToIndex(bits).
+                let bits_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let bits = match interp.to_index(&bits_val) {
+                    Completion::Normal(JsValue::Number(n)) => n as u64,
+                    Completion::Normal(_) => unreachable!(),
+                    other => return other,
+                };
+                // Step 2: Let bigint be ? ToBigInt(bigint).
                 let bigint_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let bigint_val = match interp.to_bigint_value(&bigint_val) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let JsValue::BigInt(ref b) = bigint_val else {
-                    return Completion::Throw(
-                        interp.create_type_error("Cannot convert value to a BigInt"),
-                    );
+                    unreachable!()
                 };
                 if bits == 0 {
                     return Completion::Normal(JsValue::BigInt(JsBigInt {

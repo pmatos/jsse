@@ -671,11 +671,27 @@ impl<'a> Parser<'a> {
                         _ => Err(self.error("Expected 'meta' after 'import.'")),
                     }
                 } else if self.current == Token::LeftParen {
-                    // import(source) - dynamic import
+                    // import(source [, options] [,]) - dynamic import
                     self.advance()?;
                     let source = self.parse_assignment_expression()?;
+                    let options = if self.current == Token::Comma {
+                        self.advance()?;
+                        if self.current == Token::RightParen {
+                            // Trailing comma after first arg: import(source,)
+                            None
+                        } else {
+                            let opts = self.parse_assignment_expression()?;
+                            // Allow trailing comma after second arg
+                            if self.current == Token::Comma {
+                                self.advance()?;
+                            }
+                            Some(Box::new(opts))
+                        }
+                    } else {
+                        None
+                    };
                     self.eat(&Token::RightParen)?;
-                    Ok(Expression::Import(Box::new(source)))
+                    Ok(Expression::Import(Box::new(source), options))
                 } else {
                     Err(self.error("Unexpected 'import'"))
                 }

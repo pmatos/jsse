@@ -3866,6 +3866,22 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
+                        // Module namespace exotic: [[DefineOwnProperty]]
+                        if obj.borrow().module_namespace.is_some() {
+                            match interp.to_property_descriptor(&desc_val) {
+                                Ok(desc) => {
+                                    let success = obj.borrow_mut().define_own_property(key, desc);
+                                    if !success {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Cannot define property on a module namespace object",
+                                        ));
+                                    }
+                                    return Completion::Normal(target);
+                                }
+                                Err(Some(e)) => return Completion::Throw(e),
+                                Err(None) => return Completion::Normal(target),
+                            }
+                        }
                         match interp.to_property_descriptor(&desc_val) {
                             Ok(desc) => {
                                 // ArraySetLength: §10.4.2.4
@@ -5686,6 +5702,17 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
+                    // Module namespace exotic: [[Delete]] — only for string keys (not symbols)
+                    if !key.starts_with("Symbol(") {
+                        let is_ns = obj.borrow().module_namespace.is_some();
+                        if is_ns {
+                            let export_names = obj.borrow().module_namespace.as_ref().unwrap().export_names.clone();
+                            if export_names.contains(&key) {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
+                            return Completion::Normal(JsValue::Boolean(true));
+                        }
+                    }
                     let mut obj_mut = obj.borrow_mut();
                     if let Some(desc) = obj_mut.properties.get(&key)
                         && desc.configurable == Some(false)
@@ -6039,6 +6066,13 @@ impl Interpreter {
                         Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                         Err(e) => return Completion::Throw(e),
                     }
+                }
+                // Module namespace exotic: [[Set]] always returns false
+                if let JsValue::Object(ref o) = target
+                    && let Some(obj) = interp.get_object(o.id)
+                    && obj.borrow().module_namespace.is_some()
+                {
+                    return Completion::Normal(JsValue::Boolean(false));
                 }
                 // OrdinarySet: find ownDesc on target, walking prototype chain
                 let mut own_desc: Option<PropertyDescriptor> = None;

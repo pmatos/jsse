@@ -436,6 +436,22 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
+                        // Module namespace exotic: [[Delete]] — only for string keys (not symbols)
+                        if !key.starts_with("Symbol(") {
+                            let is_ns = obj.borrow().module_namespace.is_some();
+                            if is_ns {
+                                let export_names = obj.borrow().module_namespace.as_ref().unwrap().export_names.clone();
+                                if export_names.contains(&key) {
+                                    if env.borrow().strict {
+                                        return Completion::Throw(self.create_type_error(
+                                            &format!("Cannot delete property '{key}' of module namespace"),
+                                        ));
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                                return Completion::Normal(JsValue::Boolean(true));
+                            }
+                        }
                         // TypedArray: §10.4.5.4 [[Delete]]
                         {
                             let obj_ref = obj.borrow();
@@ -657,13 +673,25 @@ impl Interpreter {
                 let id = meta.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             }
-            Expression::Import(source_expr) => {
+            Expression::Import(source_expr, options_expr) => {
                 // Dynamic import() - returns a Promise
+                // §2.1.1.1 EvaluateImportCall: evaluate specifier and options synchronously
                 let source_val = match self.eval_expr(source_expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let source = to_js_string(&source_val);
+                // Evaluate options expression if present (abrupt completions propagate directly)
+                if let Some(opts_expr) = options_expr {
+                    match self.eval_expr(opts_expr, env) {
+                        Completion::Normal(_opts_val) => {}
+                        other => return other,
+                    }
+                }
+                // Per spec: ToString(specifier) errors produce a rejected promise
+                let source = match self.to_string_value(&source_val) {
+                    Ok(s) => s,
+                    Err(e) => return self.create_rejected_promise(e),
+                };
                 self.dynamic_import(&source)
             }
             Expression::Template(tmpl) => {
@@ -3008,6 +3036,15 @@ impl Interpreter {
                     }
                     Err(e) => return Err(e),
                 }
+            }
+            // Module namespace exotic: [[Set]] always returns false
+            if obj.borrow().module_namespace.is_some() {
+                if env.borrow().strict {
+                    return Err(self.create_type_error(&format!(
+                        "Cannot assign to read only property '{key}' of module namespace"
+                    )));
+                }
+                return Ok(());
             }
             // Check for setter
             let desc = obj.borrow().get_property_descriptor(&key);

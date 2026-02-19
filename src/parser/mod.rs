@@ -476,9 +476,12 @@ impl<'a> Parser<'a> {
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 exprs.iter().any(Self::contains_arguments)
             }
+            Expression::Import(inner, opts) => {
+                Self::contains_arguments(inner)
+                    || opts.as_ref().is_some_and(|e| Self::contains_arguments(e))
+            }
             Expression::Spread(inner)
-            | Expression::Await(inner)
-            | Expression::Import(inner) => Self::contains_arguments(inner),
+            | Expression::Await(inner) => Self::contains_arguments(inner),
             Expression::Yield(opt_e, _) => {
                 opt_e.as_ref().is_some_and(|e| Self::contains_arguments(e))
             }

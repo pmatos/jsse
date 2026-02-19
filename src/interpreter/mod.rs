@@ -957,6 +957,12 @@ impl Interpreter {
                     env.borrow_mut().declare(local, BindingKind::Const);
                     let _ = env.borrow_mut().set(local, ns);
                 }
+                ImportSpecifier::DeferredNamespace(local) => {
+                    // For now, treat deferred namespace as eager namespace
+                    let ns = self.create_module_namespace(&loaded);
+                    env.borrow_mut().declare(local, BindingKind::Const);
+                    let _ = env.borrow_mut().set(local, ns);
+                }
             }
         }
 

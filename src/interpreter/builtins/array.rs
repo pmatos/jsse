@@ -2940,6 +2940,365 @@ impl Interpreter {
                 .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
         }
 
+        // Array.fromAsync
+        let from_async_fn = self.create_function(JsFunction::native(
+            "fromAsync".to_string(),
+            1,
+            |interp, this, args| {
+                let async_items = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let map_fn = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+
+                let has_map = !matches!(map_fn, JsValue::Undefined);
+                if has_map && !interp.is_callable(&map_fn) {
+                    let err = interp.create_type_error("Array.fromAsync mapFn is not a function");
+                    return interp.create_rejected_promise(err);
+                }
+
+                // Check if this is a constructor (use Array if not)
+                let using_iterator;
+                // Step 4: Let usingAsyncIterator be ? GetMethod(asyncItems, @@asyncIterator).
+                let async_sym_key = interp.get_symbol_key("asyncIterator");
+                let mut has_async_iter = false;
+                if let Some(ref key) = async_sym_key {
+                    if let JsValue::Object(ref o) = async_items {
+                        let val = match interp.get_object_property(o.id, key, &async_items) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return interp.create_rejected_promise(e),
+                            _ => JsValue::Undefined,
+                        };
+                        if !matches!(val, JsValue::Undefined | JsValue::Null) {
+                            has_async_iter = true;
+                            using_iterator = Some(val);
+                        } else {
+                            using_iterator = None;
+                        }
+                    } else {
+                        using_iterator = None;
+                    }
+                } else {
+                    using_iterator = None;
+                }
+
+                // Step 5: If usingAsyncIterator is undefined, let usingSyncIterator = GetMethod(asyncItems, @@iterator).
+                let using_sync_iterator = if !has_async_iter {
+                    let sym_key = interp.get_symbol_iterator_key();
+                    if let Some(ref key) = sym_key {
+                        if let JsValue::Object(ref o) = async_items {
+                            match interp.get_object_property(o.id, key, &async_items) {
+                                Completion::Normal(v) if !matches!(v, JsValue::Undefined | JsValue::Null) => Some(v),
+                                Completion::Throw(e) => return interp.create_rejected_promise(e),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Create a promise for the result
+                let promise = interp.create_promise_object();
+                let promise_id = if let JsValue::Object(ref o) = promise { o.id } else { 0 };
+                let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
+
+                // Step 7: If usingAsyncIterator is not undefined OR usingSyncIterator is not undefined
+                if has_async_iter || using_sync_iterator.is_some() {
+                    // Get iterator
+                    let iterator = if has_async_iter {
+                        if let Some(ref iter_fn) = using_iterator {
+                            match interp.call_function(iter_fn, &async_items, &[]) {
+                                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => v,
+                                Completion::Normal(_) => {
+                                    let err = interp.create_type_error("Result of the Symbol.asyncIterator method is not an object");
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                                    return Completion::Normal(promise);
+                                }
+                                Completion::Throw(e) => {
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    return Completion::Normal(promise);
+                                }
+                                _ => {
+                                    let err = interp.create_type_error("is not async iterable");
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                                    return Completion::Normal(promise);
+                                }
+                            }
+                        } else {
+                            unreachable!()
+                        }
+                    } else {
+                        // Sync iterator → wrap in async-from-sync
+                        match using_sync_iterator {
+                            Some(ref iter_fn) => {
+                                match interp.call_function(iter_fn, &async_items, &[]) {
+                                    Completion::Normal(v) if matches!(v, JsValue::Object(_)) => {
+                                        interp.create_async_from_sync_iterator(v)
+                                    }
+                                    Completion::Normal(_) => {
+                                        let err = interp.create_type_error("Result of the Symbol.iterator method is not an object");
+                                        let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                                        return Completion::Normal(promise);
+                                    }
+                                    Completion::Throw(e) => {
+                                        let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                        return Completion::Normal(promise);
+                                    }
+                                    _ => {
+                                        let err = interp.create_type_error("is not iterable");
+                                        let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                                        return Completion::Normal(promise);
+                                    }
+                                }
+                            }
+                            None => unreachable!(),
+                        }
+                    };
+
+                    // Create the result array
+                    let is_constructor = interp.is_callable(this);
+                    let arr = if is_constructor && !matches!(this, JsValue::Undefined) {
+                        match interp.call_function(this, &JsValue::Undefined, &[JsValue::Number(0.0)]) {
+                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => v,
+                            _ => interp.create_array(vec![]),
+                        }
+                    } else {
+                        interp.create_array(vec![])
+                    };
+
+                    // Iterate
+                    let mut k: u64 = 0;
+                    loop {
+                        if k >= 0x1FFFFFFFFFFFFF {
+                            let err = interp.create_type_error("Array.fromAsync: too many elements");
+                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                            return Completion::Normal(promise);
+                        }
+                        // Call iterator.next()
+                        let next_fn = if let JsValue::Object(ref io) = iterator {
+                            match interp.get_object_property(io.id, "next", &iterator) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    return Completion::Normal(promise);
+                                }
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                return Completion::Normal(promise);
+                            }
+                            _ => JsValue::Undefined,
+                        };
+                        // Await the next result
+                        let next_result = match interp.await_value(&next_result) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                return Completion::Normal(promise);
+                            }
+                            _ => JsValue::Undefined,
+                        };
+                        // Check done
+                        let done = if let JsValue::Object(ref o) = next_result {
+                            match interp.get_object_property(o.id, "done", &next_result) {
+                                Completion::Normal(v) => to_boolean(&v),
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        };
+                        if done {
+                            // Set length and resolve
+                            if let JsValue::Object(ref o) = arr {
+                                if let Some(obj) = interp.get_object(o.id) {
+                                    obj.borrow_mut().insert_property(
+                                        "length".to_string(),
+                                        PropertyDescriptor::data(JsValue::Number(k as f64), true, false, false),
+                                    );
+                                }
+                            }
+                            let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
+                            return Completion::Normal(promise);
+                        }
+                        // Get value
+                        let mut value = if let JsValue::Object(ref o) = next_result {
+                            match interp.get_object_property(o.id, "value", &next_result) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    return Completion::Normal(promise);
+                                }
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        // Await the value
+                        value = match interp.await_value(&value) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                return Completion::Normal(promise);
+                            }
+                            _ => JsValue::Undefined,
+                        };
+                        // Apply mapFn if present
+                        if has_map {
+                            value = match interp.call_function(&map_fn, &this_arg, &[value, JsValue::Number(k as f64)]) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    return Completion::Normal(promise);
+                                }
+                                _ => JsValue::Undefined,
+                            };
+                            // Await mapped value
+                            value = match interp.await_value(&value) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    return Completion::Normal(promise);
+                                }
+                                _ => JsValue::Undefined,
+                            };
+                        }
+                        // Set element
+                        let key_str = k.to_string();
+                        if let JsValue::Object(ref o) = arr {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                obj.borrow_mut().insert_property(
+                                    key_str,
+                                    PropertyDescriptor::data(value, true, true, true),
+                                );
+                                if let Some(ref mut elems) = obj.borrow_mut().array_elements {
+                                    // Keep elements in sync
+                                    while elems.len() <= k as usize {
+                                        elems.push(JsValue::Undefined);
+                                    }
+                                }
+                            }
+                        }
+                        k += 1;
+                    }
+                } else {
+                    // Array-like path
+                    let array_like = match interp.to_object(&async_items) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            return Completion::Normal(promise);
+                        }
+                        _ => {
+                            let err = interp.create_type_error("Cannot convert to object");
+                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+                            return Completion::Normal(promise);
+                        }
+                    };
+                    let len = if let JsValue::Object(ref o) = array_like {
+                        match interp.get_object_property(o.id, "length", &array_like) {
+                            Completion::Normal(v) => {
+                                let n = to_number(&v);
+                                if n.is_nan() || n < 0.0 { 0u64 } else { n as u64 }
+                            }
+                            Completion::Throw(e) => {
+                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                return Completion::Normal(promise);
+                            }
+                            _ => 0u64,
+                        }
+                    } else {
+                        0u64
+                    };
+
+                    let is_constructor = interp.is_callable(this);
+                    let arr = if is_constructor && !matches!(this, JsValue::Undefined) {
+                        match interp.call_function(this, &JsValue::Undefined, &[JsValue::Number(len as f64)]) {
+                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => v,
+                            _ => interp.create_array(vec![]),
+                        }
+                    } else {
+                        interp.create_array(vec![])
+                    };
+
+                    for k in 0..len {
+                        let key_str = k.to_string();
+                        let mut value = if let JsValue::Object(ref o) = array_like {
+                            match interp.get_object_property(o.id, &key_str, &array_like) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    return Completion::Normal(promise);
+                                }
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        // Await the value
+                        value = match interp.await_value(&value) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                return Completion::Normal(promise);
+                            }
+                            _ => JsValue::Undefined,
+                        };
+                        if has_map {
+                            value = match interp.call_function(&map_fn, &this_arg, &[value, JsValue::Number(k as f64)]) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    return Completion::Normal(promise);
+                                }
+                                _ => JsValue::Undefined,
+                            };
+                            value = match interp.await_value(&value) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    return Completion::Normal(promise);
+                                }
+                                _ => JsValue::Undefined,
+                            };
+                        }
+                        if let JsValue::Object(ref o) = arr {
+                            if let Some(obj) = interp.get_object(o.id) {
+                                obj.borrow_mut().insert_property(
+                                    key_str,
+                                    PropertyDescriptor::data(value, true, true, true),
+                                );
+                                if let Some(ref mut elems) = obj.borrow_mut().array_elements {
+                                    while elems.len() <= k as usize {
+                                        elems.push(JsValue::Undefined);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Set length and resolve
+                    if let JsValue::Object(ref o) = arr {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            obj.borrow_mut().insert_property(
+                                "length".to_string(),
+                                PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
+                            );
+                        }
+                    }
+                    let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
+                    Completion::Normal(promise)
+                }
+            },
+        ));
+
         // Set Array statics on the Array constructor
         let array_val = self.global_env.borrow().get("Array");
         if let Some(array_val) = array_val
@@ -2951,6 +3310,8 @@ impl Interpreter {
             obj.borrow_mut()
                 .insert_builtin("from".to_string(), array_from);
             obj.borrow_mut().insert_builtin("of".to_string(), array_of);
+            obj.borrow_mut()
+                .insert_builtin("fromAsync".to_string(), from_async_fn);
             let proto_val = JsValue::Object(crate::types::JsObject {
                 id: proto.borrow().id.unwrap(),
             });

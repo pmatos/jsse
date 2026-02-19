@@ -17,6 +17,30 @@ impl<'a> Parser<'a> {
 
         let mut specifiers = Vec::new();
 
+        // import defer * as ns from "module"
+        if self.current_identifier_name().as_deref() == Some("defer") {
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?; // defer
+            if self.current == Token::Star {
+                self.advance()?; // *
+                self.eat_as()?;
+                let local = self
+                    .current_identifier_name()
+                    .ok_or_else(|| self.error("Expected identifier after 'as'"))?;
+                self.advance()?;
+                specifiers.push(ImportSpecifier::DeferredNamespace(local));
+
+                self.eat_from()?;
+                let source = self.parse_module_specifier()?;
+                self.eat_semicolon()?;
+                return Ok(ImportDeclaration { specifiers, source });
+            }
+            // Not `defer *`, restore and fall through to default import
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
+        }
+
         // import defaultExport from "module"
         if let Some(name) = self.current_identifier_name() {
             self.advance()?;

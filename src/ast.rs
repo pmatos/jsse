@@ -33,6 +33,7 @@ pub enum ImportSpecifier {
     Named { imported: String, local: String },
     Default(String),
     Namespace(String),
+    DeferredNamespace(String),
 }
 
 #[derive(Clone, Debug)]
@@ -158,7 +159,7 @@ pub enum Expression {
     Void(Box<Expression>),
     Delete(Box<Expression>),
     Sequence(Vec<Expression>),
-    Import(Box<Expression>), // dynamic import
+    Import(Box<Expression>, Option<Box<Expression>>), // dynamic import(specifier, options?)
     ImportMeta,
     NewTarget,
     PrivateIdentifier(String),

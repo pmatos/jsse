@@ -1038,6 +1038,29 @@ impl JsObjectData {
     }
 
     pub fn get_own_property(&self, key: &str) -> Option<PropertyDescriptor> {
+        // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
+        if let Some(ref ns_data) = self.module_namespace {
+            if !key.starts_with("Symbol(") {
+                if ns_data.export_names.contains(&key.to_string()) {
+                    let val = if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+                        ns_data.env.borrow().get(binding_name).unwrap_or(JsValue::Undefined)
+                    } else {
+                        JsValue::Undefined
+                    };
+                    return Some(PropertyDescriptor {
+                        value: Some(val),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(false),
+                        get: None,
+                        set: None,
+                    });
+                }
+                // Not an export and not a symbol - check properties (@@toStringTag etc.)
+                return self.properties.get(key).cloned();
+            }
+            // Symbol keys: fall through to ordinary
+        }
         if let Some(desc) = self.properties.get(key) {
             return Some(desc.clone());
         }
@@ -1087,6 +1110,12 @@ impl JsObjectData {
     }
 
     pub fn has_own_property(&self, key: &str) -> bool {
+        // Module namespace exotic: [[HasProperty]] checks export list
+        if let Some(ref ns_data) = self.module_namespace {
+            if !key.starts_with("Symbol(") {
+                return ns_data.export_names.contains(&key.to_string());
+            }
+        }
         if self.properties.contains_key(key) {
             return true;
         }
@@ -1179,6 +1208,49 @@ impl JsObjectData {
     }
 
     pub fn define_own_property(&mut self, key: String, desc: PropertyDescriptor) -> bool {
+        // Module namespace exotic: §10.4.6.5 [[DefineOwnProperty]]
+        if self.module_namespace.is_some() {
+            if let Some(current) = self.get_own_property(&key) {
+                // If every field is absent, return true
+                if desc.value.is_none()
+                    && desc.writable.is_none()
+                    && desc.get.is_none()
+                    && desc.set.is_none()
+                    && desc.enumerable.is_none()
+                    && desc.configurable.is_none()
+                {
+                    return true;
+                }
+                // Check each present field matches current
+                if let Some(ref v) = desc.value {
+                    if let Some(ref cv) = current.value {
+                        if !same_value(v, cv) {
+                            return false;
+                        }
+                    }
+                }
+                if let Some(w) = desc.writable {
+                    if current.writable != Some(w) {
+                        return false;
+                    }
+                }
+                if let Some(e) = desc.enumerable {
+                    if current.enumerable != Some(e) {
+                        return false;
+                    }
+                }
+                if let Some(c) = desc.configurable {
+                    if current.configurable != Some(c) {
+                        return false;
+                    }
+                }
+                if desc.get.is_some() || desc.set.is_some() {
+                    return false;
+                }
+                return true;
+            }
+            return false;
+        }
         // TypedArray: §10.4.5.3 [[DefineOwnProperty]]
         if self.typed_array_info.is_some() {
             if let Some(index) = canonical_numeric_index_string(&key) {

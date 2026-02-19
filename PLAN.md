@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,496 (48,257 files, dual strict/non-strict per spec)
-**Current pass rate:** 84,827 / 92,496 (91.71%)
+**Current pass rate:** 85,521 / 92,624 (92.33%)
 
 ---
 
@@ -166,6 +166,8 @@ These features block significant numbers of tests:
 
 62. ~~**Class element test262 improvements**~~ — ✅ Done (+410 new passes, 91.27% → 91.71%). Eight class-related fixes: (1) Private name branding per class evaluation — unique brands per class instantiation prevent cross-instance private member access. (2) eval + new.target in field initializers — `set_eval_in_field_initializer()` now increments `in_function` so `new.target` is valid syntax in eval within field initializers. (3) Field extensibility + proxy observation — `create_data_property_or_throw()` used for public field init, extensibility check for private fields. (4) Static block parsing restrictions — `return`/`yield`/`arguments` forbidden, `await` reserved, `new.target` allowed. (5) Static field "prototype" restriction — computed static field key evaluating to "prototype" throws TypeError. (6) Default parameter self-reference TDZ — `method(x = x)` throws ReferenceError. (7) Escaped keyword detection — `\u0061sync` no longer treated as `async`. (8) Async generator yield* delegation improvements — cached `next_method` in DelegatedIteratorInfo, getter-aware return/throw in async-from-sync wrapper, null `[Symbol.asyncIterator]` handling, absent-value semantics for wrapper next(). Class: 16,350/16,689 (97.97%).
 
+63. ~~**Tier 1: Closing the test262 gap**~~ — ✅ Done (+364 net new passes, 91.94% → 92.33%). Six implemented tasks: (1) BigInt.asIntN/asUintN parameter coercion — ToIndex for bits, ToBigInt for bigint (+32 passes). (2) Dynamic import toString rejection — ToString(specifier) errors produce rejected promise via IfAbruptRejectPromise (+32 passes). (3) Module namespace exotic object handlers — [[Set]] always false, [[Delete]] false for exports, [[DefineOwnProperty]] identical-descriptor check, getter-aware [[GetOwnProperty]] (+10 passes). (4) import() second argument — parser accepts optional options expression, abrupt completions propagate synchronously (+23 passes). (5) Array.fromAsync — full implementation with async/sync iterator and array-like paths (+141 passes). (6) Import-defer syntax — `import defer * as ns` parsing with `DeferredNamespace` AST variant, eager evaluation fallback (+3 passes). Two tasks skipped: RegExp named groups duplicate-names and lookBehind captures need `fancy-regex` engine changes.
+
 ---
 
 ## Cross-Cutting Concerns
@@ -235,5 +237,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 83,814 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 85,521 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |
