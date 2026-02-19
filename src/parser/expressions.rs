@@ -1219,6 +1219,10 @@ impl<'a> Parser<'a> {
             self.prev_line_terminator = saved_lt;
         }
 
+        let is_escaped_reserved = matches!(&self.current, Token::IdentifierWithEscape(name)
+            if Self::is_reserved_identifier(name, self.strict)
+                || name == "await" || name == "yield");
+
         let (key, computed) = self.parse_property_name()?;
 
         if matches!(&key, PropertyKey::Private(_)) {
@@ -1232,6 +1236,9 @@ impl<'a> Parser<'a> {
             && self.current != Token::LeftParen
             && self.current != Token::Assign
         {
+            if is_escaped_reserved {
+                return Err(self.error("Keyword must not contain escaped characters"));
+            }
             // Reserved words cannot be used as shorthand IdentifierReferences
             if matches!(name.as_str(), "true" | "false" | "null") {
                 return Err(self.error(format!("Unexpected token '{name}'")));
@@ -1268,6 +1275,9 @@ impl<'a> Parser<'a> {
             && let PropertyKey::Identifier(ref name) = key
             && self.current == Token::Assign
         {
+            if is_escaped_reserved {
+                return Err(self.error("Keyword must not contain escaped characters"));
+            }
             let ident = name.clone();
             if self.strict && (ident == "eval" || ident == "arguments") {
                 return Err(self.error("Invalid destructuring assignment target"));
