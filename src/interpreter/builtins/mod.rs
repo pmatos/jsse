@@ -5037,15 +5037,15 @@ impl Interpreter {
         let iter_fn = match obj {
             JsValue::Object(o) => {
                 if let Some(key) = &sym_key {
-                    if let Some(obj_data) = self.get_object(o.id) {
-                        let val = obj_data.borrow().get_property(key);
-                        if matches!(val, JsValue::Undefined) {
-                            return Err(self.create_type_error("is not iterable"));
-                        }
-                        val
-                    } else {
+                    let val = match self.get_object_property(o.id, key, obj) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => JsValue::Undefined,
+                    };
+                    if matches!(val, JsValue::Undefined) {
                         return Err(self.create_type_error("is not iterable"));
                     }
+                    val
                 } else {
                     return Err(self.create_type_error("is not iterable"));
                 }
@@ -5054,7 +5054,14 @@ impl Interpreter {
                 if let Some(key) = &sym_key {
                     let str_proto = self.string_prototype.clone();
                     if let Some(proto) = str_proto {
-                        let val = proto.borrow().get_property(key);
+                        let proto_id = proto.borrow().id.unwrap();
+                        let proto_val =
+                            JsValue::Object(crate::types::JsObject { id: proto_id });
+                        let val = match self.get_object_property(proto_id, key, &proto_val) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => JsValue::Undefined,
+                        };
                         if !matches!(val, JsValue::Undefined) {
                             val
                         } else {
