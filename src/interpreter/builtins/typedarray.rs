@@ -140,16 +140,9 @@ impl Interpreter {
                         {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
-                        let max = obj_ref
-                            .arraybuffer_max_byte_length
-                            .unwrap_or_else(|| {
-                                obj_ref
-                                    .arraybuffer_data
-                                    .as_ref()
-                                    .unwrap()
-                                    .borrow()
-                                    .len()
-                            });
+                        let max = obj_ref.arraybuffer_max_byte_length.unwrap_or_else(|| {
+                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                        });
                         return Completion::Normal(JsValue::Number(max as f64));
                     }
                 }
@@ -411,10 +404,12 @@ impl Interpreter {
                         _ => 0,
                     };
                     if new_len > max_byte_length.unwrap() {
-                        return Completion::Throw(interp.create_error(
-                            "RangeError",
-                            "new byte length exceeds maxByteLength",
-                        ));
+                        return Completion::Throw(
+                            interp.create_error(
+                                "RangeError",
+                                "new byte length exceeds maxByteLength",
+                            ),
+                        );
                     }
                     let obj_ref = obj.borrow();
                     let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
@@ -673,7 +668,7 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
                         return Completion::Normal(JsValue::Number(
-                            typed_array_byte_length(ta) as f64,
+                            typed_array_byte_length(ta) as f64
                         ));
                     }
                 }
@@ -704,9 +699,7 @@ impl Interpreter {
                         if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
-                        return Completion::Normal(JsValue::Number(
-                            typed_array_length(ta) as f64,
-                        ));
+                        return Completion::Normal(JsValue::Number(typed_array_length(ta) as f64));
                     }
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -1015,11 +1008,7 @@ impl Interpreter {
                     };
                     let result = interp.construct_with_new_target(
                         &ctor,
-                        &[
-                            buf_val,
-                            JsValue::Number(new_offset as f64),
-                            length_arg,
-                        ],
+                        &[buf_val, JsValue::Number(new_offset as f64), length_arg],
                         ctor.clone(),
                     );
                     return result;
@@ -2265,8 +2254,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     }
-                    let iter =
-                        interp.create_typed_array_iterator(o.id, IteratorKind::Value);
+                    let iter = interp.create_typed_array_iterator(o.id, IteratorKind::Value);
                     return Completion::Normal(iter);
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -2300,8 +2288,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     }
-                    let iter =
-                        interp.create_typed_array_iterator(o.id, IteratorKind::KeyValue);
+                    let iter = interp.create_typed_array_iterator(o.id, IteratorKind::KeyValue);
                     return Completion::Normal(iter);
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -2330,8 +2317,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     }
-                    let iter =
-                        interp.create_typed_array_iterator(o.id, IteratorKind::Key);
+                    let iter = interp.create_typed_array_iterator(o.id, IteratorKind::Key);
                     return Completion::Normal(iter);
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -3845,14 +3831,14 @@ impl Interpreter {
                         let buf_len = dv.buffer.borrow().len();
                         if dv.is_length_tracking {
                             if dv.byte_offset > buf_len {
-                                return Completion::Throw(interp.create_type_error(
-                                    "DataView is out of bounds",
-                                ));
+                                return Completion::Throw(
+                                    interp.create_type_error("DataView is out of bounds"),
+                                );
                             }
                         } else if dv.byte_offset + dv.byte_length > buf_len {
-                            return Completion::Throw(interp.create_type_error(
-                                "DataView is out of bounds",
-                            ));
+                            return Completion::Throw(
+                                interp.create_type_error("DataView is out of bounds"),
+                            );
                         }
                         return Completion::Normal(JsValue::Number(dv.byte_offset as f64));
                     }
@@ -3889,18 +3875,18 @@ impl Interpreter {
                         let buf_len = dv.buffer.borrow().len();
                         if dv.is_length_tracking {
                             if dv.byte_offset > buf_len {
-                                return Completion::Throw(interp.create_type_error(
-                                    "DataView is out of bounds",
-                                ));
+                                return Completion::Throw(
+                                    interp.create_type_error("DataView is out of bounds"),
+                                );
                             }
                             return Completion::Normal(JsValue::Number(
                                 (buf_len - dv.byte_offset) as f64,
                             ));
                         } else {
                             if dv.byte_offset + dv.byte_length > buf_len {
-                                return Completion::Throw(interp.create_type_error(
-                                    "DataView is out of bounds",
-                                ));
+                                return Completion::Throw(
+                                    interp.create_type_error("DataView is out of bounds"),
+                                );
                             }
                             return Completion::Normal(JsValue::Number(dv.byte_length as f64));
                         }
@@ -3969,16 +3955,16 @@ impl Interpreter {
                             let buf_len = dv.buffer.borrow().len();
                             let effective_byte_length = if dv.is_length_tracking {
                                 if dv.byte_offset > buf_len {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "DataView is out of bounds",
-                                    ));
+                                    return Completion::Throw(
+                                        interp.create_type_error("DataView is out of bounds"),
+                                    );
                                 }
                                 buf_len - dv.byte_offset
                             } else {
                                 if dv.byte_offset + dv.byte_length > buf_len {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "DataView is out of bounds",
-                                    ));
+                                    return Completion::Throw(
+                                        interp.create_type_error("DataView is out of bounds"),
+                                    );
                                 }
                                 dv.byte_length
                             };

@@ -151,7 +151,7 @@ fn create_data_property(interp: &mut Interpreter, o: &JsValue, key: &str, value:
     let _ = create_data_property_or_throw(interp, o, key, value);
 }
 
-fn create_data_property_or_throw(
+pub(crate) fn create_data_property_or_throw(
     interp: &mut Interpreter,
     o: &JsValue,
     key: &str,

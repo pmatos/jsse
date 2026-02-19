@@ -563,7 +563,7 @@ impl<'a> Parser<'a> {
                 _ => false,
             };
             if is_target {
-                if self.in_function == 0 {
+                if self.in_function == 0 && !self.in_static_block {
                     return Err(self.error("new.target expression is not allowed here"));
                 }
                 self.advance()?; // target
@@ -647,7 +647,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Identifier("yield".to_string()))
             }
-            Token::Keyword(Keyword::Await) if !self.in_async => {
+            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => {
                 self.advance()?;
                 Ok(Expression::Identifier("await".to_string()))
             }
@@ -1093,13 +1093,16 @@ impl<'a> Parser<'a> {
                     }
                     let prev_async = self.in_async;
                     let prev_generator = self.in_generator;
+                    let prev_static_block = self.in_static_block;
                     self.in_async = true;
                     if is_generator {
                         self.in_generator = true;
                     }
+                    self.in_static_block = false;
                     let params = self.parse_formal_parameters()?;
                     self.in_async = prev_async;
                     self.in_generator = prev_generator;
+                    self.in_static_block = prev_static_block;
                     let (body, _) =
                         self.parse_function_body_inner(is_generator, true, true, false)?;
                     self.check_duplicate_params_strict(&params)?;
@@ -1134,9 +1137,12 @@ impl<'a> Parser<'a> {
                 return Err(self.error("Private fields are not allowed in object literals"));
             }
             let prev_generator = self.in_generator;
+            let prev_static_block = self.in_static_block;
             self.in_generator = true;
+            self.in_static_block = false;
             let params = self.parse_formal_parameters()?;
             self.in_generator = prev_generator;
+            self.in_static_block = prev_static_block;
             let (body, _) = self.parse_function_body_inner(true, false, true, false)?;
             self.check_duplicate_params_strict(&params)?;
             let source_text = Some(self.source_since(method_source_start));
@@ -1187,7 +1193,10 @@ impl<'a> Parser<'a> {
                 if matches!(&key, PropertyKey::Private(_)) {
                     return Err(self.error("Private fields are not allowed in object literals"));
                 }
+                let prev_static_block = self.in_static_block;
+                self.in_static_block = false;
                 let params = self.parse_formal_parameters()?;
+                self.in_static_block = prev_static_block;
                 let (body, body_strict) =
                     self.parse_function_body_inner(false, false, true, false)?;
                 if body_strict && !Self::is_simple_parameter_list(&params) {
@@ -1299,7 +1308,10 @@ impl<'a> Parser<'a> {
 
         // Method: { foo() {} }
         if self.current == Token::LeftParen {
+            let prev_static_block = self.in_static_block;
+            self.in_static_block = false;
             let params = self.parse_formal_parameters()?;
+            self.in_static_block = prev_static_block;
             let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
             if body_strict && !Self::is_simple_parameter_list(&params) {
                 return Err(self.error(
@@ -1352,11 +1364,14 @@ impl<'a> Parser<'a> {
             None
         };
         let prev_generator = self.in_generator;
+        let prev_static_block = self.in_static_block;
         if is_generator {
             self.in_generator = true;
         }
+        self.in_static_block = false;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
+        self.in_static_block = prev_static_block;
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, false)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
             return Err(self.error(

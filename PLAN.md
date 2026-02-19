@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,496 (48,257 files, dual strict/non-strict per spec)
-**Current pass rate:** 83,946 / 92,496 (90.76%)
+**Current pass rate:** 84,827 / 92,496 (91.71%)
 
 ---
 
@@ -161,6 +161,10 @@ These features block significant numbers of tests:
 59. ~~**Conformance batch 25: AllPrivateNamesValid, assignment order, logical assignment write-back**~~ — ✅ Done (+276 new passes, 86.95% → 87.52%). Three orthogonal fixes: (1) AllPrivateNamesValid parser early error (§15.7.1): `this.#x` in a class body where `#x` is never declared is now SyntaxError at parse time. Added `private_name_scopes` to parser with push/pop/declare/use helpers, nested class scope validation, `#constructor` prohibition, `super.#x` prohibition, eval private name context propagation via Environment chain (+99 passes). (2) Assignment evaluation order for member expressions: `eval_assign()` restructured so member expressions evaluate base → key → RHS per spec instead of RHS-first. Null/undefined base now throws TypeError. Compound assignment does ToPropertyKey+GetValue before RHS (+28 passes). (3) Logical assignment (`&&=`/`||=`/`??=`) member expression write-back: new `eval_logical_assign()` handles Identifier, dot/computed member, and private member targets with full property write logic including Proxy/setter/prototype chain support (+27 passes). Additional passes from interaction effects (+122).
 
 60. ~~**Iterator protocol getter-awareness**~~ — ✅ Done (+134 new passes, 2 regressions, 90.61% → 90.76%). Fixed 7 iterator protocol methods to use getter-aware `get_object_property()` instead of raw `get_property()`: get_iterator, get_async_iterator, iterator_next, iterator_next_with_value, iterator_return, iterator_throw, iterator_close. Fixed yield* eval path to use iterator_complete/iterator_value. 2 regressions are IsHTMLDDA tests that were passing vacuously (engine doesn't implement $262.IsHTMLDDA).
+
+61. ~~**Resizable ArrayBuffer support**~~ — ✅ Done (+471 new passes, 90.76% → 91.27%). Full implementation of resizable ArrayBuffers (§25.1.2) and growable SharedArrayBuffers per ES2024 spec. ArrayBuffer constructor accepts `maxByteLength` option, `resize()` method, `transfer()`/`transferToFixedLength()` methods. TypedArray/DataView updated with auto-length tracking, bounds checking against buffer byte length, and `byteLength`/`length` getter changes for out-of-bounds detection. ArrayBuffer: 52→100/136 (74%), TypedArray: 1,119→1,347/1,438 (94%), DataView: 454→614/561→622 (varies).
+
+62. ~~**Class element test262 improvements**~~ — ✅ Done (+410 new passes, 91.27% → 91.71%). Eight class-related fixes: (1) Private name branding per class evaluation — unique brands per class instantiation prevent cross-instance private member access. (2) eval + new.target in field initializers — `set_eval_in_field_initializer()` now increments `in_function` so `new.target` is valid syntax in eval within field initializers. (3) Field extensibility + proxy observation — `create_data_property_or_throw()` used for public field init, extensibility check for private fields. (4) Static block parsing restrictions — `return`/`yield`/`arguments` forbidden, `await` reserved, `new.target` allowed. (5) Static field "prototype" restriction — computed static field key evaluating to "prototype" throws TypeError. (6) Default parameter self-reference TDZ — `method(x = x)` throws ReferenceError. (7) Escaped keyword detection — `\u0061sync` no longer treated as `async`. (8) Async generator yield* delegation improvements — cached `next_method` in DelegatedIteratorInfo, getter-aware return/throw in async-from-sync wrapper, null `[Symbol.asyncIterator]` handling, absent-value semantics for wrapper next(). Class: 16,350/16,689 (97.97%).
 
 ---
 

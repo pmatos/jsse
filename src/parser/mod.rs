@@ -57,6 +57,7 @@ pub struct Parser<'a> {
     pub last_string_literal_has_escape: bool,
     private_name_scopes: Vec<(std::collections::HashSet<String>, Vec<(String, usize)>)>,
     in_field_initializer_eval: bool,
+    in_static_block: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -99,6 +100,7 @@ impl<'a> Parser<'a> {
             last_string_literal_has_escape: false,
             private_name_scopes: Vec::new(),
             in_field_initializer_eval: false,
+            in_static_block: false,
         })
     }
 
@@ -186,6 +188,7 @@ impl<'a> Parser<'a> {
     pub fn set_eval_in_field_initializer(&mut self) {
         self.in_field_initializer_eval = true;
         self.allow_super_property = true;
+        self.in_function += 1;
     }
 
     fn push_private_scope(&mut self) {

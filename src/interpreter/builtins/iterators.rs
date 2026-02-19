@@ -706,9 +706,7 @@ impl Interpreter {
                                     });
                                 Completion::Normal(interp.create_iter_result_object(v, false))
                             } else {
-                                Completion::Throw(
-                                    interp.create_type_error("not a TypedArray"),
-                                )
+                                Completion::Throw(interp.create_type_error("not a TypedArray"))
                             }
                         } else {
                             let err = interp.create_type_error("next called on non-array iterator");

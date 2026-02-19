@@ -420,12 +420,36 @@ impl<'a> Parser<'a> {
             if self.current == Token::LeftBrace {
                 self.eat(&Token::LeftBrace)?;
                 let prev_super_property = self.allow_super_property;
+                let prev_in_function = self.in_function;
+                let prev_in_generator = self.in_generator;
+                let prev_in_async = self.in_async;
+                let prev_in_iteration = self.in_iteration;
+                let prev_in_switch = self.in_switch;
+                let prev_in_static_block = self.in_static_block;
+                let prev_allow_super_call = self.allow_super_call;
                 self.allow_super_property = true;
+                self.allow_super_call = false;
+                self.in_function = 0;
+                self.in_generator = false;
+                self.in_async = false;
+                self.in_iteration = 0;
+                self.in_switch = 0;
+                self.in_static_block = true;
                 let mut stmts = Vec::new();
                 while self.current != Token::RightBrace {
                     stmts.push(self.parse_statement_or_declaration()?);
                 }
                 self.allow_super_property = prev_super_property;
+                self.allow_super_call = prev_allow_super_call;
+                self.in_function = prev_in_function;
+                self.in_generator = prev_in_generator;
+                self.in_async = prev_in_async;
+                self.in_iteration = prev_in_iteration;
+                self.in_switch = prev_in_switch;
+                self.in_static_block = prev_in_static_block;
+                if Self::stmts_contain_arguments(&stmts) {
+                    return Err(self.error("'arguments' is not allowed in class static blocks"));
+                }
                 self.eat(&Token::RightBrace)?;
                 return Ok(ClassElement::StaticBlock(stmts));
             }
@@ -433,8 +457,8 @@ impl<'a> Parser<'a> {
 
         let method_source_start = self.current_token_start;
 
-        // Check for async method
-        let is_async_method = matches!(&self.current, Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "async")
+        // Check for async method (escaped identifiers like \u0061sync don't count as async keyword)
+        let is_async_method = matches!(&self.current, Token::Identifier(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
         if is_async_method {
             self.advance()?;
@@ -510,7 +534,7 @@ impl<'a> Parser<'a> {
         }
 
         let kind = match &self.current {
-            Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "get" => {
+            Token::Identifier(n) if n == "get" => {
                 self.advance()?;
                 if self.current == Token::LeftParen {
                     let key = PropertyKey::Identifier("get".to_string());
@@ -526,7 +550,7 @@ impl<'a> Parser<'a> {
                 }
                 ClassMethodKind::Get
             }
-            Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "set" => {
+            Token::Identifier(n) if n == "set" => {
                 self.advance()?;
                 if self.current == Token::LeftParen {
                     let key = PropertyKey::Identifier("set".to_string());
@@ -657,15 +681,18 @@ impl<'a> Parser<'a> {
     ) -> Result<FunctionExpr, ParseError> {
         let prev_generator = self.in_generator;
         let prev_async = self.in_async;
+        let prev_static_block = self.in_static_block;
         if is_generator {
             self.in_generator = true;
         }
         if is_async {
             self.in_async = true;
         }
+        self.in_static_block = false;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
+        self.in_static_block = prev_static_block;
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
@@ -758,8 +785,10 @@ impl<'a> Parser<'a> {
         self.allow_super_call = super_call;
         let prev_block = self.in_block_or_function;
         let prev_sc = self.in_switch_case;
+        let prev_static_block = self.in_static_block;
         self.in_block_or_function = true;
         self.in_switch_case = false;
+        self.in_static_block = false;
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
         let mut has_use_strict_directive = false;
@@ -792,6 +821,7 @@ impl<'a> Parser<'a> {
         self.allow_super_call = prev_super_call;
         self.in_block_or_function = prev_block;
         self.in_switch_case = prev_sc;
+        self.in_static_block = prev_static_block;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))

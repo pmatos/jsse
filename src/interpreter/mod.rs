@@ -93,7 +93,8 @@ pub struct Interpreter {
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) gc_temp_roots: Vec<u64>,
     pub(crate) microtask_roots: Vec<JsValue>,
-    pub(crate) class_private_names: Vec<std::collections::HashSet<String>>,
+    pub(crate) class_private_names: Vec<std::collections::HashMap<String, String>>,
+    next_class_brand_id: u64,
 }
 
 pub struct LoadedModule {
@@ -199,6 +200,7 @@ impl Interpreter {
             gc_temp_roots: Vec::new(),
             microtask_roots: Vec::new(),
             class_private_names: Vec::new(),
+            next_class_brand_id: 0,
         };
         interp.setup_globals();
         interp

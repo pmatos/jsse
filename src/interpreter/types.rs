@@ -73,6 +73,7 @@ pub struct TryContextInfo {
 #[derive(Debug, Clone)]
 pub struct DelegatedIteratorInfo {
     pub iterator: JsValue,
+    pub next_method: JsValue,
     pub resume_state: usize,
     pub sent_value_binding: Option<SentValueBinding>,
 }
@@ -89,7 +90,7 @@ pub struct Environment {
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
-    pub(crate) class_private_names: Option<std::collections::HashSet<String>>,
+    pub(crate) class_private_names: Option<std::collections::HashMap<String, String>>,
     pub(crate) is_field_initializer: bool,
 }
 

@@ -844,6 +844,24 @@ impl Interpreter {
             }
             Pattern::Assign(inner, default) => {
                 let v = if val.is_undefined() {
+                    // Pre-declare as TDZ before evaluating default so self-references throw
+                    if let Pattern::Identifier(ref name) = **inner {
+                        let target = if kind == BindingKind::Var {
+                            Environment::find_var_scope(env)
+                        } else {
+                            env.clone()
+                        };
+                        if !target.borrow().bindings.contains_key(name) {
+                            target.borrow_mut().bindings.insert(
+                                name.to_string(),
+                                Binding {
+                                    value: JsValue::Undefined,
+                                    kind,
+                                    initialized: false,
+                                },
+                            );
+                        }
+                    }
                     match self.eval_expr(default, env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Err(e),

@@ -1,4 +1,4 @@
-mod array;
+pub(crate) mod array;
 mod bigint;
 mod collections;
 mod date;
@@ -5099,7 +5099,7 @@ impl Interpreter {
                         Completion::Throw(e) => return Err(e),
                         _ => JsValue::Undefined,
                     };
-                    if !matches!(val, JsValue::Undefined) {
+                    if !matches!(val, JsValue::Undefined | JsValue::Null) {
                         Some(val)
                     } else {
                         None
@@ -5130,14 +5130,39 @@ impl Interpreter {
 
     fn create_async_from_sync_iterator(&mut self, sync_iter: JsValue) -> JsValue {
         let wrapper = self.create_object();
+        // Cache the sync iterator's next method per spec (Iterator Record [[NextMethod]])
+        let cached_next = if let JsValue::Object(io) = &sync_iter {
+            match self.get_object_property(io.id, "next", &sync_iter) {
+                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => v,
+                _ => JsValue::Undefined,
+            }
+        } else {
+            JsValue::Undefined
+        };
         let sync_for_next = sync_iter.clone();
         let next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
             1,
-            move |interp, _this, _args| {
-                let result = match interp.iterator_next(&sync_for_next) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
+            move |interp, _this, args| {
+                let call_args: &[JsValue] = if args.is_empty() {
+                    &[]
+                } else {
+                    std::slice::from_ref(&args[0])
+                };
+                let result = match interp.call_function(&cached_next, &sync_for_next, call_args) {
+                    Completion::Normal(v) => {
+                        if matches!(v, JsValue::Object(_)) {
+                            v
+                        } else {
+                            return Completion::Throw(
+                                interp.create_type_error("Iterator result is not an object"),
+                            );
+                        }
+                    }
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => {
+                        return Completion::Throw(interp.create_type_error("Iterator next failed"));
+                    }
                 };
                 Completion::Normal(interp.promise_resolve_value(&result))
             },
@@ -5152,17 +5177,21 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 if let JsValue::Object(io) = &sync_for_return {
-                    let ret_fn = interp.get_object(io.id).and_then(|obj| {
-                        let val = obj.borrow().get_property("return");
-                        if matches!(val, JsValue::Object(_)) {
-                            Some(val)
-                        } else {
-                            None
-                        }
-                    });
+                    let ret_fn = match interp.get_object_property(io.id, "return", &sync_for_return)
+                    {
+                        Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => None,
+                    };
                     if let Some(ret_fn) = ret_fn {
                         match interp.call_function(&ret_fn, &sync_for_return, args) {
                             Completion::Normal(v) => {
+                                if !matches!(v, JsValue::Object(_)) {
+                                    return Completion::Throw(
+                                        interp
+                                            .create_type_error("Iterator result is not an object"),
+                                    );
+                                }
                                 Completion::Normal(interp.promise_resolve_value(&v))
                             }
                             Completion::Throw(e) => Completion::Throw(e),
@@ -5195,17 +5224,21 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 if let JsValue::Object(io) = &sync_for_throw {
-                    let throw_method = interp.get_object(io.id).and_then(|obj| {
-                        let val = obj.borrow().get_property("throw");
-                        if matches!(val, JsValue::Object(_)) {
-                            Some(val)
-                        } else {
-                            None
-                        }
-                    });
+                    let throw_method =
+                        match interp.get_object_property(io.id, "throw", &sync_for_throw) {
+                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => None,
+                        };
                     if let Some(throw_method) = throw_method {
                         match interp.call_function(&throw_method, &sync_for_throw, args) {
                             Completion::Normal(v) => {
+                                if !matches!(v, JsValue::Object(_)) {
+                                    return Completion::Throw(
+                                        interp
+                                            .create_type_error("Iterator result is not an object"),
+                                    );
+                                }
                                 Completion::Normal(interp.promise_resolve_value(&v))
                             }
                             Completion::Throw(e) => Completion::Throw(e),
