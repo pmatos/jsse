@@ -10636,6 +10636,41 @@ impl Interpreter {
         Completion::Normal(promise)
     }
 
+    /// Spec [[Get]] — reads a property from an object, invoking getters.
+    pub(crate) fn obj_get(&mut self, obj_val: &JsValue, key: &str) -> Result<JsValue, JsValue> {
+        if let JsValue::Object(o) = obj_val {
+            let mut current_id = Some(o.id);
+            while let Some(id) = current_id {
+                if let Some(obj) = self.get_object(id) {
+                    let b = obj.borrow();
+                    if let Some(desc) = b.properties.get(key) {
+                        if let Some(ref getter) = desc.get {
+                            if self.is_callable(getter) {
+                                let getter = getter.clone();
+                                let obj_val = obj_val.clone();
+                                drop(b);
+                                return match self.call_function(&getter, &obj_val, &[]) {
+                                    Completion::Normal(v) => Ok(v),
+                                    Completion::Throw(e) => Err(e),
+                                    _ => Ok(JsValue::Undefined),
+                                };
+                            }
+                            return Ok(JsValue::Undefined);
+                        }
+                        if let Some(ref val) = desc.value {
+                            return Ok(val.clone());
+                        }
+                        return Ok(JsValue::Undefined);
+                    }
+                    current_id = b.prototype.as_ref().map(|p| p.borrow().id.unwrap());
+                } else {
+                    break;
+                }
+            }
+        }
+        Ok(JsValue::Undefined)
+    }
+
     pub(crate) fn await_value(&mut self, val: &JsValue) -> Completion {
         if self.is_promise(val) {
             let promise_id = if let JsValue::Object(o) = val {
@@ -10663,14 +10698,22 @@ impl Interpreter {
                 }
                 None => Completion::Normal(val.clone()),
             }
-        } else if let JsValue::Object(o) = val {
-            // Check for thenable
-            if let Some(obj) = self.get_object(o.id) {
-                let then_val = obj.borrow().get_property("then");
-                if self.is_callable(&then_val) {
-                    let p = self.promise_resolve_value(val);
-                    return self.await_value(&p);
-                }
+        } else if matches!(val, JsValue::Object(_)) {
+            // Check for thenable using [[Get]] which triggers getters
+            let then_val = match self.obj_get(val, "then") {
+                Ok(v) => v,
+                Err(e) => return Completion::Throw(e),
+            };
+            if self.is_callable(&then_val) {
+                // Resolve thenable: create promise, call then(resolve, reject), await
+                let promise = self.create_promise_object();
+                let promise_id = if let JsValue::Object(ref o) = promise {
+                    o.id
+                } else {
+                    0
+                };
+                self.promise_resolve_thenable(promise_id, val.clone(), then_val);
+                return self.await_value(&promise);
             }
             Completion::Normal(val.clone())
         } else {

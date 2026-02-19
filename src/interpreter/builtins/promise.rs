@@ -856,7 +856,12 @@ impl Interpreter {
         }
     }
 
-    fn promise_resolve_thenable(&mut self, promise_id: u64, thenable: JsValue, then_fn: JsValue) {
+    pub(crate) fn promise_resolve_thenable(
+        &mut self,
+        promise_id: u64,
+        thenable: JsValue,
+        then_fn: JsValue,
+    ) {
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
         self.microtask_queue.push(Box::new(move |interp| {
             let result =
@@ -992,11 +997,15 @@ impl Interpreter {
         } else {
             0
         };
-        // Check if value is a thenable
-        if let JsValue::Object(o) = value
-            && let Some(obj) = self.get_object(o.id)
-        {
-            let then_val = obj.borrow().get_property("then");
+        // Check if value is a thenable using [[Get]] to trigger getters
+        if matches!(value, JsValue::Object(_)) {
+            let then_val = match self.obj_get(value, "then") {
+                Ok(v) => v,
+                Err(e) => {
+                    self.reject_promise(promise_id, e);
+                    return promise;
+                }
+            };
             if self.is_callable(&then_val) {
                 self.promise_resolve_thenable(promise_id, value.clone(), then_val);
                 return promise;
