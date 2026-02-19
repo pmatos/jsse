@@ -127,6 +127,9 @@ impl<'a> Parser<'a> {
                 if self.strict && self.current == Token::Keyword(Keyword::Function) {
                     return Err(self.error("In strict mode code, functions can only be declared at top level or inside a block"));
                 }
+                if self.labels.iter().any(|(n, _)| n == &name) {
+                    return Err(self.error(format!("Label '{name}' has already been declared")));
+                }
                 self.labels.push((name.clone(), is_iteration));
                 let stmt = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
                     // Annex B: labeled function declaration in sloppy mode
@@ -180,7 +183,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::Block(stmts))
     }
 
-    fn collect_lexical_names(
+    pub(super) fn collect_lexical_names(
         stmt: &Statement,
         names: &mut Vec<String>,
         _strict: bool,
@@ -252,7 +255,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn collect_var_declared_names(stmt: &Statement, names: &mut Vec<String>) {
+    pub(super) fn collect_var_declared_names(stmt: &Statement, names: &mut Vec<String>) {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {

@@ -279,6 +279,9 @@ impl<'a> Parser<'a> {
         };
         self.set_strict(prev_strict);
         let body = self.parse_class_body()?;
+        if super_class.is_none() {
+            Self::check_no_direct_super_in_constructor(&body)?;
+        }
         let source_text = Some(self.source_since(source_start));
         Ok(Statement::ClassDeclaration(ClassDecl {
             name,
@@ -291,13 +294,18 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_class_body(&mut self) -> Result<Vec<ClassElement>, ParseError> {
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
+        let prev_super_property = self.allow_super_property;
         self.set_strict(true); // class bodies are always strict
+        self.allow_super_property = true;
         self.push_private_scope();
         let mut elements = Vec::new();
         let mut has_constructor = false;
-        // Track private names: value is (has_getter, has_setter, has_other)
-        let mut private_names: std::collections::HashMap<String, (bool, bool, bool)> =
-            std::collections::HashMap::new();
+        // Track private names: value is (getter_static, setter_static, has_other)
+        // Option<bool> = None means no getter/setter, Some(is_static) means present with staticness
+        let mut private_names: std::collections::HashMap<
+            String,
+            (Option<bool>, Option<bool>, bool),
+        > = std::collections::HashMap::new();
         while self.current != Token::RightBrace {
             if self.current == Token::Semicolon {
                 self.advance()?;
@@ -337,7 +345,7 @@ impl<'a> Parser<'a> {
             }
 
             // Check for duplicate private names and register declarations
-            if let Some((name, kind)) = Self::get_private_name_info(&element) {
+            if let Some((name, kind, is_static)) = Self::get_private_name_info(&element) {
                 if name == "constructor" {
                     return Err(
                         self.error("Class fields and methods cannot be named '#constructor'")
@@ -345,25 +353,41 @@ impl<'a> Parser<'a> {
                 }
                 let entry = private_names
                     .entry(name.clone())
-                    .or_insert((false, false, false));
-                let (has_getter, has_setter, has_other) = *entry;
+                    .or_insert((None, None, false));
+                let (getter_static, setter_static, has_other) = *entry;
                 match kind {
                     PrivateNameKind::Getter => {
-                        if has_getter || has_other {
+                        if getter_static.is_some() || has_other {
                             return Err(self
                                 .error(format!("Identifier '#{name}' has already been declared")));
                         }
-                        entry.0 = true;
+                        // If there's a setter, staticness must match
+                        if let Some(setter_is_static) = setter_static {
+                            if setter_is_static != is_static {
+                                return Err(self.error(format!(
+                                    "Identifier '#{name}' has already been declared"
+                                )));
+                            }
+                        }
+                        entry.0 = Some(is_static);
                     }
                     PrivateNameKind::Setter => {
-                        if has_setter || has_other {
+                        if setter_static.is_some() || has_other {
                             return Err(self
                                 .error(format!("Identifier '#{name}' has already been declared")));
                         }
-                        entry.1 = true;
+                        // If there's a getter, staticness must match
+                        if let Some(getter_is_static) = getter_static {
+                            if getter_is_static != is_static {
+                                return Err(self.error(format!(
+                                    "Identifier '#{name}' has already been declared"
+                                )));
+                            }
+                        }
+                        entry.1 = Some(is_static);
                     }
                     PrivateNameKind::Other => {
-                        if has_getter || has_setter || has_other {
+                        if getter_static.is_some() || setter_static.is_some() || has_other {
                             return Err(self
                                 .error(format!("Identifier '#{name}' has already been declared")));
                         }
@@ -377,6 +401,7 @@ impl<'a> Parser<'a> {
         self.pop_private_scope()?;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
+        self.allow_super_property = prev_super_property;
         Ok(elements)
     }
 
@@ -388,7 +413,155 @@ impl<'a> Parser<'a> {
         matches!(key, PropertyKey::Identifier(n) | PropertyKey::String(n) if n == "prototype")
     }
 
-    fn get_private_name_info(element: &ClassElement) -> Option<(String, PrivateNameKind)> {
+    pub(super) fn check_no_direct_super_in_constructor(
+        body: &[ClassElement],
+    ) -> Result<(), ParseError> {
+        for elem in body {
+            if let ClassElement::Method(m) = elem {
+                if m.kind == ClassMethodKind::Constructor {
+                    if Self::stmts_has_direct_super(&m.value.body) {
+                        return Err(ParseError {
+                            message: "'super' keyword unexpected here".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn stmts_has_direct_super(stmts: &[Statement]) -> bool {
+        stmts.iter().any(Self::stmt_has_direct_super)
+    }
+
+    fn stmt_has_direct_super(stmt: &Statement) -> bool {
+        use crate::ast::Statement;
+        match stmt {
+            Statement::Expression(e) | Statement::Throw(e) => Self::expr_has_direct_super(e),
+            Statement::Return(Some(e)) => Self::expr_has_direct_super(e),
+            Statement::Return(None) | Statement::Empty | Statement::Debugger => false,
+            Statement::Block(stmts) => Self::stmts_has_direct_super(stmts),
+            Statement::Variable(decl) => decl
+                .declarations
+                .iter()
+                .any(|d| d.init.as_ref().is_some_and(Self::expr_has_direct_super)),
+            Statement::If(i) => {
+                Self::expr_has_direct_super(&i.test)
+                    || Self::stmt_has_direct_super(&i.consequent)
+                    || i.alternate
+                        .as_ref()
+                        .is_some_and(|a| Self::stmt_has_direct_super(a))
+            }
+            Statement::While(w) => {
+                Self::expr_has_direct_super(&w.test) || Self::stmt_has_direct_super(&w.body)
+            }
+            Statement::DoWhile(d) => {
+                Self::expr_has_direct_super(&d.test) || Self::stmt_has_direct_super(&d.body)
+            }
+            Statement::For(f) => {
+                f.init.as_ref().is_some_and(|i| match i {
+                    crate::ast::ForInit::Expression(e) => Self::expr_has_direct_super(e),
+                    crate::ast::ForInit::Variable(d) => d
+                        .declarations
+                        .iter()
+                        .any(|dd| dd.init.as_ref().is_some_and(Self::expr_has_direct_super)),
+                }) || f.test.as_ref().is_some_and(Self::expr_has_direct_super)
+                    || f.update.as_ref().is_some_and(Self::expr_has_direct_super)
+                    || Self::stmt_has_direct_super(&f.body)
+            }
+            Statement::ForIn(f) => {
+                Self::expr_has_direct_super(&f.right) || Self::stmt_has_direct_super(&f.body)
+            }
+            Statement::ForOf(f) => {
+                Self::expr_has_direct_super(&f.right) || Self::stmt_has_direct_super(&f.body)
+            }
+            Statement::Try(t) => {
+                Self::stmts_has_direct_super(&t.block)
+                    || t.handler
+                        .as_ref()
+                        .is_some_and(|h| Self::stmts_has_direct_super(&h.body))
+                    || t.finalizer
+                        .as_ref()
+                        .is_some_and(|f| Self::stmts_has_direct_super(f))
+            }
+            Statement::Switch(s) => {
+                Self::expr_has_direct_super(&s.discriminant)
+                    || s.cases.iter().any(|c| {
+                        c.test.as_ref().is_some_and(Self::expr_has_direct_super)
+                            || Self::stmts_has_direct_super(&c.consequent)
+                    })
+            }
+            Statement::Labeled(_, s) => Self::stmt_has_direct_super(s),
+            Statement::With(e, s) => {
+                Self::expr_has_direct_super(e) || Self::stmt_has_direct_super(s)
+            }
+            Statement::Break(_) | Statement::Continue(_) => false,
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+        }
+    }
+
+    fn expr_has_direct_super(expr: &Expression) -> bool {
+        use crate::ast::Expression;
+        match expr {
+            Expression::Call(callee, args) => {
+                matches!(callee.as_ref(), Expression::Super)
+                    || Self::expr_has_direct_super(callee)
+                    || args.iter().any(Self::expr_has_direct_super)
+            }
+            Expression::New(callee, args) => {
+                Self::expr_has_direct_super(callee)
+                    || args.iter().any(Self::expr_has_direct_super)
+            }
+            Expression::Array(elems) => elems
+                .iter()
+                .any(|e| e.as_ref().is_some_and(Self::expr_has_direct_super)),
+            Expression::Object(props) => props.iter().any(|p| {
+                Self::expr_has_direct_super(&p.value)
+                    || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_has_direct_super(e))
+            }),
+            Expression::Member(object, property) => {
+                Self::expr_has_direct_super(object)
+                    || matches!(property, crate::ast::MemberProperty::Computed(e) if Self::expr_has_direct_super(e))
+            }
+            Expression::Binary(_, left, right)
+            | Expression::Logical(_, left, right)
+            | Expression::Assign(_, left, right) => {
+                Self::expr_has_direct_super(left) || Self::expr_has_direct_super(right)
+            }
+            Expression::Unary(_, operand) | Expression::Update(_, _, operand) => {
+                Self::expr_has_direct_super(operand)
+            }
+            Expression::Conditional(test, consequent, alternate) => {
+                Self::expr_has_direct_super(test)
+                    || Self::expr_has_direct_super(consequent)
+                    || Self::expr_has_direct_super(alternate)
+            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                exprs.iter().any(Self::expr_has_direct_super)
+            }
+            Expression::Spread(inner)
+            | Expression::Await(inner)
+            | Expression::Import(inner)
+            | Expression::Typeof(inner)
+            | Expression::Void(inner)
+            | Expression::Delete(inner) => Self::expr_has_direct_super(inner),
+            Expression::Yield(opt_e, _) => {
+                opt_e.as_ref().is_some_and(|e| Self::expr_has_direct_super(e))
+            }
+            Expression::Template(tl) => tl.expressions.iter().any(Self::expr_has_direct_super),
+            Expression::TaggedTemplate(tag, tl) => {
+                Self::expr_has_direct_super(tag)
+                    || tl.expressions.iter().any(Self::expr_has_direct_super)
+            }
+            Expression::OptionalChain(object, chain) => {
+                Self::expr_has_direct_super(object) || Self::expr_has_direct_super(chain)
+            }
+            // Don't cross function/class boundaries
+            _ => false,
+        }
+    }
+
+    fn get_private_name_info(element: &ClassElement) -> Option<(String, PrivateNameKind, bool)> {
         match element {
             ClassElement::Method(m) => {
                 if let PropertyKey::Private(name) = &m.key {
@@ -397,14 +570,14 @@ impl<'a> Parser<'a> {
                         ClassMethodKind::Set => PrivateNameKind::Setter,
                         _ => PrivateNameKind::Other,
                     };
-                    Some((name.clone(), kind))
+                    Some((name.clone(), kind, m.is_static))
                 } else {
                     None
                 }
             }
             ClassElement::Property(p) => {
                 if let PropertyKey::Private(name) = &p.key {
-                    Some((name.clone(), PrivateNameKind::Other))
+                    Some((name.clone(), PrivateNameKind::Other, p.is_static))
                 } else {
                     None
                 }
@@ -417,6 +590,27 @@ impl<'a> Parser<'a> {
         let is_static = self.current == Token::Keyword(Keyword::Static);
         if is_static {
             self.advance()?;
+
+            // `static` followed by `=`, `;`, or `}` means it's a field named "static"
+            if self.current == Token::Assign
+                || self.current == Token::Semicolon
+                || self.current == Token::RightBrace
+            {
+                let value = if self.current == Token::Assign {
+                    self.advance()?;
+                    Some(self.parse_assignment_expression()?)
+                } else {
+                    None
+                };
+                self.eat_semicolon()?;
+                return Ok(ClassElement::Property(ClassProperty {
+                    key: PropertyKey::Identifier("static".to_string()),
+                    value,
+                    is_static: false,
+                    computed: false,
+                }));
+            }
+
             if self.current == Token::LeftBrace {
                 self.eat(&Token::LeftBrace)?;
                 let prev_super_property = self.allow_super_property;
@@ -435,10 +629,28 @@ impl<'a> Parser<'a> {
                 self.in_iteration = 0;
                 self.in_switch = 0;
                 self.in_static_block = true;
+                let prev_labels = std::mem::take(&mut self.labels);
                 let mut stmts = Vec::new();
+                let mut lexical_names: Vec<String> = Vec::new();
                 while self.current != Token::RightBrace {
-                    stmts.push(self.parse_statement_or_declaration()?);
+                    let stmt = self.parse_statement_or_declaration()?;
+                    Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
+                    stmts.push(stmt);
                 }
+                // VarDeclaredNames must not overlap LexicallyDeclaredNames
+                if !lexical_names.is_empty() {
+                    let mut var_names = Vec::new();
+                    for stmt in &stmts {
+                        Self::collect_var_declared_names(stmt, &mut var_names);
+                    }
+                    for name in &var_names {
+                        if lexical_names.contains(name) {
+                            return Err(self
+                                .error(format!("Identifier '{name}' has already been declared")));
+                        }
+                    }
+                }
+                self.labels = prev_labels;
                 self.allow_super_property = prev_super_property;
                 self.allow_super_call = prev_allow_super_call;
                 self.in_function = prev_in_function;

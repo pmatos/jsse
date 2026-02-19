@@ -108,6 +108,23 @@ impl Interpreter {
         );
         init_env.borrow_mut().class_private_names = class_pn;
         init_env.borrow_mut().is_field_initializer = true;
+        // Set __home_object__ for super property access in field initializers.
+        // Instance field HomeObject = class prototype.
+        if let JsValue::Object(ref o) = new_target_val
+            && let Some(ctor_obj) = self.get_object(o.id)
+        {
+            let proto_val = ctor_obj.borrow().get_property("prototype");
+            if let JsValue::Object(_) = &proto_val {
+                init_env.borrow_mut().bindings.insert(
+                    "__home_object__".to_string(),
+                    crate::interpreter::types::Binding {
+                        value: proto_val,
+                        kind: crate::interpreter::types::BindingKind::Const,
+                        initialized: true,
+                    },
+                );
+            }
+        }
         for def in &private_field_defs {
             match def {
                 PrivateFieldDef::Field { name, initializer } => {
@@ -126,6 +143,11 @@ impl Interpreter {
                                 "Cannot define private field on non-extensible object",
                             ));
                         }
+                        if obj.borrow().private_fields.contains_key(name) {
+                            return Err(self.create_type_error(
+                                "Cannot initialize private field twice on the same object",
+                            ));
+                        }
                         obj.borrow_mut()
                             .private_fields
                             .insert(name.clone(), PrivateElement::Field(val));
@@ -138,6 +160,11 @@ impl Interpreter {
                                 "Cannot define private method on non-extensible object",
                             ));
                         }
+                        if obj.borrow().private_fields.contains_key(name) {
+                            return Err(
+                                self.create_type_error("Cannot add private method to object twice")
+                            );
+                        }
                         obj.borrow_mut()
                             .private_fields
                             .insert(name.clone(), PrivateElement::Method(value.clone()));
@@ -149,6 +176,10 @@ impl Interpreter {
                             return Err(self.create_type_error(
                                 "Cannot define private accessor on non-extensible object",
                             ));
+                        }
+                        if obj.borrow().private_fields.contains_key(name) {
+                            return Err(self
+                                .create_type_error("Cannot add private accessor to object twice"));
                         }
                         obj.borrow_mut().private_fields.insert(
                             name.clone(),
@@ -2326,6 +2357,65 @@ impl Interpreter {
                 } else {
                     key
                 };
+                // super.x = val: check that the super reference base is valid,
+                // then set the property on `this` (the receiver)
+                if matches!(obj_expr.as_ref(), Expression::Super) {
+                    // Check HomeObject's prototype exists (the reference base)
+                    let home = env.borrow().get("__home_object__");
+                    let has_valid_base = if let Some(JsValue::Object(ref ho)) = home
+                        && let Some(home_obj) = self.get_object(ho.id)
+                    {
+                        home_obj.borrow().prototype.is_some()
+                    } else {
+                        // Fallback: check __super__.prototype
+                        if let JsValue::Object(ref o) = obj_val
+                            && let Some(sup_obj) = self.get_object(o.id)
+                        {
+                            matches!(
+                                sup_obj.borrow().get_property("prototype"),
+                                JsValue::Object(_)
+                            )
+                        } else {
+                            false
+                        }
+                    };
+                    if !has_valid_base {
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot set properties of null (setting '{}')",
+                            key
+                        )));
+                    }
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(ref o) = this_val
+                        && let Some(obj) = self.get_object(o.id)
+                    {
+                        let final_val = if op == AssignOp::Assign {
+                            rval
+                        } else {
+                            match self.apply_compound_assign(op, &lval_for_compound.unwrap(), &rval)
+                            {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        };
+                        let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
+                        if !success && env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}'"
+                            )));
+                        }
+                        return Completion::Normal(final_val);
+                    }
+                    return Completion::Throw(self.create_type_error(&format!(
+                        "Cannot set properties of {} (setting '{}')",
+                        if this_val.is_null() {
+                            "null"
+                        } else {
+                            "undefined"
+                        },
+                        key
+                    )));
+                }
                 // Throw for null/undefined base
                 if obj_val.is_null() || obj_val.is_undefined() {
                     return Completion::Throw(self.create_type_error(&format!(
@@ -3451,22 +3541,19 @@ impl Interpreter {
                 }
                 return result;
             } else {
-                // Base constructor super() call (shouldn't normally happen, but handle gracefully)
-                let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
-                let result = self.call_function(&super_ctor, &this_val, &arg_vals);
-                if let Completion::Normal(ref v) = result {
-                    if matches!(v, JsValue::Object(_)) {
-                        env.borrow_mut().bindings.insert(
-                            "this".to_string(),
-                            crate::interpreter::types::Binding {
-                                value: v.clone(),
-                                kind: crate::interpreter::types::BindingKind::Const,
-                                initialized: true,
-                            },
-                        );
-                    }
+                // this is already bound — second super() call in derived constructor
+                // Per spec: Construct runs first, then BindThisValue throws
+                let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
+                let saved_new_target = self.new_target.clone();
+                let result =
+                    self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
+                self.new_target = saved_new_target;
+                if let Completion::Throw(_) = result {
+                    return result;
                 }
-                return result;
+                return Completion::Throw(self.create_reference_error(
+                    "'super()' has already been called in this derived constructor",
+                ));
             }
         }
 
@@ -7781,6 +7868,18 @@ impl Interpreter {
                         init_env.borrow_mut().class_private_names = Some(names.clone());
                     }
                 }
+                // Set __home_object__ for super property access in field initializers.
+                let proto_val = func_obj.borrow().get_property("prototype");
+                if matches!(&proto_val, JsValue::Object(_)) {
+                    init_env.borrow_mut().bindings.insert(
+                        "__home_object__".to_string(),
+                        Binding {
+                            value: proto_val,
+                            kind: BindingKind::Const,
+                            initialized: true,
+                        },
+                    );
+                }
             }
             for def in &private_field_defs {
                 match def {
@@ -9815,6 +9914,16 @@ impl Interpreter {
             );
             sfe.is_field_initializer = true;
             sfe.class_private_names = self.class_private_names.last().cloned();
+            // Set __home_object__ for super property access in static field initializers.
+            // Static field HomeObject = constructor.
+            sfe.bindings.insert(
+                "__home_object__".to_string(),
+                Binding {
+                    value: ctor_val.clone(),
+                    kind: BindingKind::Const,
+                    initialized: true,
+                },
+            );
         }
 
         // Add methods and properties to prototype/constructor
@@ -10185,16 +10294,26 @@ impl Interpreter {
                 }
                 ClassElement::StaticBlock(body) => {
                     let block_env = Environment::new_function_scope(Some(class_env.clone()));
-                    block_env.borrow_mut().bindings.insert(
-                        "this".to_string(),
-                        Binding {
-                            value: ctor_val.clone(),
-                            kind: BindingKind::Const,
-                            initialized: true,
-                        },
-                    );
-                    block_env.borrow_mut().class_private_names =
-                        self.class_private_names.last().cloned();
+                    {
+                        let mut be = block_env.borrow_mut();
+                        be.bindings.insert(
+                            "this".to_string(),
+                            Binding {
+                                value: ctor_val.clone(),
+                                kind: BindingKind::Const,
+                                initialized: true,
+                            },
+                        );
+                        be.bindings.insert(
+                            "__home_object__".to_string(),
+                            Binding {
+                                value: ctor_val.clone(),
+                                kind: BindingKind::Const,
+                                initialized: true,
+                            },
+                        );
+                        be.class_private_names = self.class_private_names.last().cloned();
+                    }
                     match self.exec_statements(body, &block_env) {
                         Completion::Normal(_) => {}
                         Completion::Throw(e) => return Completion::Throw(e),

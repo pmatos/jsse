@@ -526,7 +526,7 @@ impl Interpreter {
                 is_generator,
                 is_method,
                 ..
-            }) => !is_arrow && !is_method && (!*is_async || *is_generator),
+            }) => !is_arrow && !is_method && !*is_generator && !*is_async,
             Some(JsFunction::Native(_, _, _, is_ctor)) => *is_ctor,
             None => false,
         };

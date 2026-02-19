@@ -1356,6 +1356,8 @@ impl<'a> Parser<'a> {
         let source_start = self.current_token_start;
         self.advance()?;
         let is_generator = self.eat_star()?;
+        let prev_static_block = self.in_static_block;
+        self.in_static_block = false;
         let name = if let Some(n) = self.current_identifier_name() {
             self.check_strict_binding_identifier(&n)?;
             self.advance()?;
@@ -1364,11 +1366,9 @@ impl<'a> Parser<'a> {
             None
         };
         let prev_generator = self.in_generator;
-        let prev_static_block = self.in_static_block;
         if is_generator {
             self.in_generator = true;
         }
-        self.in_static_block = false;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_static_block = prev_static_block;
@@ -1575,6 +1575,9 @@ impl<'a> Parser<'a> {
         };
         self.set_strict(prev_strict);
         let body = self.parse_class_body()?;
+        if super_class.is_none() {
+            Self::check_no_direct_super_in_constructor(&body)?;
+        }
         let source_text = Some(self.source_since(source_start));
         Ok(Expression::Class(ClassExpr {
             name,

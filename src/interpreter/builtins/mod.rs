@@ -6500,18 +6500,7 @@ impl Interpreter {
                 };
                 let bound_name = format!("bound {}", target_name);
 
-                // Check if target is a constructor
-                let is_ctor = if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    match &obj.borrow().callable {
-                        Some(JsFunction::User { is_arrow, .. }) => !is_arrow,
-                        Some(JsFunction::Native(_, _, _, ctor)) => *ctor,
-                        None => false,
-                    }
-                } else {
-                    false
-                };
+                let is_ctor = interp.is_constructor(this_val);
 
                 let _bound_args_len = bound_args.len();
                 let bound = if is_ctor {

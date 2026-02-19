@@ -303,6 +303,9 @@ impl<'a> Parser<'a> {
 
         // parse_class_body handles { ... }
         let body = self.parse_class_body()?;
+        if super_class.is_none() {
+            Self::check_no_direct_super_in_constructor(&body)?;
+        }
 
         let source_text = Some(self.source_since(start));
 
