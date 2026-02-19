@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,496 (48,257 files, dual strict/non-strict per spec)
-**Current pass rate:** 83,814 / 92,496 (90.61%)
+**Current pass rate:** 83,946 / 92,496 (90.76%)
 
 ---
 
@@ -159,6 +159,8 @@ These features block significant numbers of tests:
 58. ~~**Conformance batch 24: TypedArray species, BigInt coercion, set() rewrite**~~ — ✅ Done (+189 new passes, 86.56% → 86.95%). TypedArray method completion: (1) TypedArraySpeciesCreate (§23.2.4.1): helper method using SpeciesConstructor + ContentType validation. Updated slice/map/filter to use species create, subarray to use SpeciesConstructor with buffer args. TypedArrayCreateSameType helper for toReversed/toSorted/with. (2) BigInt coercion: typed_array_coerce_value() delegates to to_number_value/to_bigint_value based on kind. Fixed fill(), set(), from(), of(), and constructor iterable/array-like/TypedArray-copy paths. ContentType compatibility check in constructor TypedArray-copy path. (3) set() rewrite: offset coercion via to_number_value() BEFORE detach check, array-like source uses per-element typed_array_coerce_value(), TypedArray-arg same-buffer overlap handling via Rc::ptr_eq + data cloning. TypedArray: 962→1,119/1,438 (77.8%), TypedArrayConstructors: 512→543/736 (73.8%).
 
 59. ~~**Conformance batch 25: AllPrivateNamesValid, assignment order, logical assignment write-back**~~ — ✅ Done (+276 new passes, 86.95% → 87.52%). Three orthogonal fixes: (1) AllPrivateNamesValid parser early error (§15.7.1): `this.#x` in a class body where `#x` is never declared is now SyntaxError at parse time. Added `private_name_scopes` to parser with push/pop/declare/use helpers, nested class scope validation, `#constructor` prohibition, `super.#x` prohibition, eval private name context propagation via Environment chain (+99 passes). (2) Assignment evaluation order for member expressions: `eval_assign()` restructured so member expressions evaluate base → key → RHS per spec instead of RHS-first. Null/undefined base now throws TypeError. Compound assignment does ToPropertyKey+GetValue before RHS (+28 passes). (3) Logical assignment (`&&=`/`||=`/`??=`) member expression write-back: new `eval_logical_assign()` handles Identifier, dot/computed member, and private member targets with full property write logic including Proxy/setter/prototype chain support (+27 passes). Additional passes from interaction effects (+122).
+
+60. ~~**Iterator protocol getter-awareness**~~ — ✅ Done (+134 new passes, 2 regressions, 90.61% → 90.76%). Fixed 7 iterator protocol methods to use getter-aware `get_object_property()` instead of raw `get_property()`: get_iterator, get_async_iterator, iterator_next, iterator_next_with_value, iterator_return, iterator_throw, iterator_close. Fixed yield* eval path to use iterator_complete/iterator_value. 2 regressions are IsHTMLDDA tests that were passing vacuously (engine doesn't implement $262.IsHTMLDDA).
 
 ---
 
