@@ -618,6 +618,98 @@ impl Interpreter {
                                     )
                                 }
                             }
+                        } else if let Some(IteratorState::TypedArrayIterator {
+                            typed_array_id,
+                            index,
+                            kind,
+                            done,
+                        }) = state
+                        {
+                            if done {
+                                return Completion::Normal(
+                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                );
+                            }
+                            let ta_obj = interp.get_object(typed_array_id);
+                            if ta_obj.is_none() {
+                                obj.borrow_mut().iterator_state =
+                                    Some(IteratorState::TypedArrayIterator {
+                                        typed_array_id,
+                                        index,
+                                        kind,
+                                        done: true,
+                                    });
+                                return Completion::Normal(
+                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                );
+                            }
+                            let ta_obj = ta_obj.unwrap();
+                            let ta_info = ta_obj.borrow().typed_array_info.clone();
+                            if let Some(ref ta) = ta_info {
+                                if ta.is_detached.get() {
+                                    return Completion::Throw(
+                                        interp.create_type_error("typed array is detached"),
+                                    );
+                                }
+                                if is_typed_array_out_of_bounds(ta) {
+                                    obj.borrow_mut().iterator_state =
+                                        Some(IteratorState::TypedArrayIterator {
+                                            typed_array_id,
+                                            index,
+                                            kind,
+                                            done: true,
+                                        });
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                    );
+                                }
+                                let len = typed_array_length(ta);
+                                if index >= len {
+                                    obj.borrow_mut().iterator_state =
+                                        Some(IteratorState::TypedArrayIterator {
+                                            typed_array_id,
+                                            index,
+                                            kind,
+                                            done: true,
+                                        });
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                    );
+                                }
+                                let v = match kind {
+                                    IteratorKind::Key => JsValue::Number(index as f64),
+                                    IteratorKind::Value => typed_array_get_index(ta, index),
+                                    IteratorKind::KeyValue => {
+                                        let elem = typed_array_get_index(ta, index);
+                                        let pair = interp.create_array(vec![
+                                            JsValue::Number(index as f64),
+                                            elem,
+                                        ]);
+                                        obj.borrow_mut().iterator_state =
+                                            Some(IteratorState::TypedArrayIterator {
+                                                typed_array_id,
+                                                index: index + 1,
+                                                kind,
+                                                done: false,
+                                            });
+                                        return Completion::Normal(
+                                            interp.create_iter_result_object(pair, false),
+                                        );
+                                    }
+                                };
+                                obj.borrow_mut().iterator_state =
+                                    Some(IteratorState::TypedArrayIterator {
+                                        typed_array_id,
+                                        index: index + 1,
+                                        kind,
+                                        done: false,
+                                    });
+                                Completion::Normal(interp.create_iter_result_object(v, false))
+                            } else {
+                                Completion::Throw(
+                                    interp.create_type_error("not a TypedArray"),
+                                )
+                            }
                         } else {
                             let err = interp.create_type_error("next called on non-array iterator");
                             Completion::Throw(err)
@@ -2968,6 +3060,29 @@ impl Interpreter {
         obj_data.class_name = "Array Iterator".to_string();
         obj_data.iterator_state = Some(IteratorState::ArrayIterator {
             array_id,
+            index: 0,
+            kind,
+            done: false,
+        });
+        let obj = Rc::new(RefCell::new(obj_data));
+        let id = self.allocate_object_slot(obj);
+        JsValue::Object(crate::types::JsObject { id })
+    }
+
+    pub(crate) fn create_typed_array_iterator(
+        &mut self,
+        typed_array_id: u64,
+        kind: IteratorKind,
+    ) -> JsValue {
+        let mut obj_data = JsObjectData::new();
+        obj_data.prototype = self
+            .array_iterator_prototype
+            .clone()
+            .or(self.iterator_prototype.clone())
+            .or(self.object_prototype.clone());
+        obj_data.class_name = "Array Iterator".to_string();
+        obj_data.iterator_state = Some(IteratorState::TypedArrayIterator {
+            typed_array_id,
             index: 0,
             kind,
             done: false,

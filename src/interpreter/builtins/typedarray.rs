@@ -106,7 +106,8 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.arraybuffer_data.is_some() {
-                        return Completion::Normal(JsValue::Boolean(false));
+                        let is_resizable = obj_ref.arraybuffer_max_byte_length.is_some();
+                        return Completion::Normal(JsValue::Boolean(is_resizable));
                     }
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
@@ -133,13 +134,23 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref buf) = obj_ref.arraybuffer_data {
+                    if obj_ref.arraybuffer_data.is_some() {
                         if let Some(ref det) = obj_ref.arraybuffer_detached
                             && det.get()
                         {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
-                        return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
+                        let max = obj_ref
+                            .arraybuffer_max_byte_length
+                            .unwrap_or_else(|| {
+                                obj_ref
+                                    .arraybuffer_data
+                                    .as_ref()
+                                    .unwrap()
+                                    .borrow()
+                                    .len()
+                            });
+                        return Completion::Normal(JsValue::Number(max as f64));
                     }
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
@@ -231,7 +242,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let (is_ab, is_detached, old_len) = {
+                    let (is_ab, is_detached, old_len, max_byte_length) = {
                         let obj_ref = obj.borrow();
                         let is_ab = obj_ref.arraybuffer_data.is_some();
                         let is_detached = obj_ref
@@ -243,7 +254,8 @@ impl Interpreter {
                             .as_ref()
                             .map(|b| b.borrow().len())
                             .unwrap_or(0);
-                        (is_ab, is_detached, old_len)
+                        let max = obj_ref.arraybuffer_max_byte_length;
+                        (is_ab, is_detached, old_len, max)
                     };
                     if !is_ab {
                         return Completion::Throw(interp.create_type_error("not an ArrayBuffer"));
@@ -263,7 +275,14 @@ impl Interpreter {
                             _ => 0,
                         }
                     };
-                    // Copy data
+                    if let Some(max) = max_byte_length {
+                        if new_len > max {
+                            return Completion::Throw(interp.create_error(
+                                "RangeError",
+                                "new byte length exceeds maxByteLength",
+                            ));
+                        }
+                    }
                     let old_data = {
                         let obj_ref = obj.borrow();
                         obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
@@ -271,7 +290,6 @@ impl Interpreter {
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
-                    // Detach old buffer
                     {
                         let mut obj_ref = obj.borrow_mut();
                         if let Some(ref det) = obj_ref.arraybuffer_detached {
@@ -279,7 +297,7 @@ impl Interpreter {
                         }
                         obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
                     }
-                    let new_ab = interp.create_arraybuffer(new_data);
+                    let new_ab = interp.create_arraybuffer_resizable(new_data, max_byte_length);
                     let id = new_ab.borrow().id.unwrap();
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
@@ -355,6 +373,61 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("transferToFixedLength".to_string(), transfer_fixed_fn);
 
+        // resize
+        let resize_fn = self.create_function(JsFunction::native(
+            "resize".to_string(),
+            1,
+            |interp, this_val, args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let (is_ab, is_detached, max_byte_length) = {
+                        let obj_ref = obj.borrow();
+                        let is_ab = obj_ref.arraybuffer_data.is_some();
+                        let is_detached = obj_ref
+                            .arraybuffer_detached
+                            .as_ref()
+                            .is_some_and(|d| d.get());
+                        let max = obj_ref.arraybuffer_max_byte_length;
+                        (is_ab, is_detached, max)
+                    };
+                    if !is_ab {
+                        return Completion::Throw(interp.create_type_error("not an ArrayBuffer"));
+                    }
+                    if max_byte_length.is_none() {
+                        return Completion::Throw(
+                            interp.create_type_error("ArrayBuffer is not resizable"),
+                        );
+                    }
+                    if is_detached {
+                        return Completion::Throw(
+                            interp.create_type_error("ArrayBuffer is detached"),
+                        );
+                    }
+                    let new_len_val = args.first().unwrap_or(&JsValue::Undefined);
+                    let new_len = match interp.to_index(new_len_val) {
+                        Completion::Normal(JsValue::Number(n)) => n as usize,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => 0,
+                    };
+                    if new_len > max_byte_length.unwrap() {
+                        return Completion::Throw(interp.create_error(
+                            "RangeError",
+                            "new byte length exceeds maxByteLength",
+                        ));
+                    }
+                    let obj_ref = obj.borrow();
+                    let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
+                    buf.borrow_mut().resize(new_len, 0u8);
+                    return Completion::Normal(JsValue::Undefined);
+                }
+                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            },
+        ));
+        ab_proto
+            .borrow_mut()
+            .insert_builtin("resize".to_string(), resize_fn);
+
         // @@toStringTag
         let tag = JsValue::String(JsString::from_str("ArrayBuffer"));
         let sym_key = "Symbol(Symbol.toStringTag)".to_string();
@@ -379,7 +452,42 @@ impl Interpreter {
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => 0,
                 };
-                let buf = vec![0u8; len];
+                let max_byte_length = if args.len() > 1 {
+                    if let JsValue::Object(opts_o) = &args[1] {
+                        if let Some(opts_obj) = interp.get_object(opts_o.id) {
+                            let max_val = opts_obj.borrow().get_property("maxByteLength");
+                            if !matches!(max_val, JsValue::Undefined) {
+                                let max = match interp.to_index(&max_val) {
+                                    Completion::Normal(JsValue::Number(n)) => n as usize,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => 0,
+                                };
+                                if max < len {
+                                    return Completion::Throw(interp.create_error(
+                                        "RangeError",
+                                        "maxByteLength must be at least as large as byteLength",
+                                    ));
+                                }
+                                Some(max)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let buf = if max_byte_length.is_some() {
+                    let mut v = Vec::with_capacity(max_byte_length.unwrap());
+                    v.resize(len, 0u8);
+                    v
+                } else {
+                    vec![0u8; len]
+                };
                 let buf_rc = Rc::new(RefCell::new(buf));
                 let detached = Rc::new(Cell::new(false));
                 let proto = if let Some(ref nt) = interp.new_target {
@@ -409,6 +517,7 @@ impl Interpreter {
                     o.prototype = proto;
                     o.arraybuffer_data = Some(buf_rc);
                     o.arraybuffer_detached = Some(detached);
+                    o.arraybuffer_max_byte_length = max_byte_length;
                 }
                 let id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(JsObject { id }))
@@ -477,6 +586,14 @@ impl Interpreter {
     }
 
     pub(crate) fn create_arraybuffer(&mut self, data: Vec<u8>) -> Rc<RefCell<JsObjectData>> {
+        self.create_arraybuffer_resizable(data, None)
+    }
+
+    pub(crate) fn create_arraybuffer_resizable(
+        &mut self,
+        data: Vec<u8>,
+        max_byte_length: Option<usize>,
+    ) -> Rc<RefCell<JsObjectData>> {
         let buf_rc = Rc::new(RefCell::new(data));
         let detached = Rc::new(Cell::new(false));
         let obj = self.create_object();
@@ -486,6 +603,7 @@ impl Interpreter {
             o.prototype = self.arraybuffer_prototype.clone();
             o.arraybuffer_data = Some(buf_rc);
             o.arraybuffer_detached = Some(detached);
+            o.arraybuffer_max_byte_length = max_byte_length;
         }
         obj
     }
@@ -511,43 +629,100 @@ impl Interpreter {
         proto.borrow_mut().class_name = "TypedArray".to_string();
         self.typed_array_prototype = Some(proto.clone());
 
-        // Getters: buffer, byteOffset, byteLength, length
-        macro_rules! ta_getter {
-            ($name:expr, $field:ident) => {{
-                let getter = self.create_function(JsFunction::native(
-                    format!("get {}", $name),
-                    0,
-                    |interp, this_val, _args| {
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
-                        {
-                            let obj_ref = obj.borrow();
-                            if let Some(ref ta) = obj_ref.typed_array_info {
-                                if ta.is_detached.get() {
-                                    return Completion::Normal(JsValue::Number(0.0));
-                                }
-                                return Completion::Normal(JsValue::Number(ta.$field as f64));
-                            }
+        // byteOffset getter
+        let byte_offset_getter = self.create_function(JsFunction::native(
+            "get byteOffset".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if let Some(ref ta) = obj_ref.typed_array_info {
+                        if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+                            return Completion::Normal(JsValue::Number(0.0));
                         }
-                        Completion::Throw(interp.create_type_error("not a TypedArray"))
-                    },
-                ));
-                proto.borrow_mut().insert_property(
-                    $name.to_string(),
-                    PropertyDescriptor {
-                        value: None,
-                        writable: None,
-                        get: Some(getter),
-                        set: None,
-                        enumerable: Some(false),
-                        configurable: Some(true),
-                    },
-                );
-            }};
-        }
-        ta_getter!("byteOffset", byte_offset);
-        ta_getter!("byteLength", byte_length);
-        ta_getter!("length", array_length);
+                        return Completion::Normal(JsValue::Number(ta.byte_offset as f64));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not a TypedArray"))
+            },
+        ));
+        proto.borrow_mut().insert_property(
+            "byteOffset".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(byte_offset_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+        // byteLength getter
+        let byte_length_getter = self.create_function(JsFunction::native(
+            "get byteLength".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if let Some(ref ta) = obj_ref.typed_array_info {
+                        if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+                            return Completion::Normal(JsValue::Number(0.0));
+                        }
+                        return Completion::Normal(JsValue::Number(
+                            typed_array_byte_length(ta) as f64,
+                        ));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not a TypedArray"))
+            },
+        ));
+        proto.borrow_mut().insert_property(
+            "byteLength".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(byte_length_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+        // length getter
+        let length_getter = self.create_function(JsFunction::native(
+            "get length".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if let Some(ref ta) = obj_ref.typed_array_info {
+                        if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+                            return Completion::Normal(JsValue::Number(0.0));
+                        }
+                        return Completion::Normal(JsValue::Number(
+                            typed_array_length(ta) as f64,
+                        ));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not a TypedArray"))
+            },
+        ));
+        proto.borrow_mut().insert_property(
+            "length".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(length_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
 
         // buffer getter (returns the ArrayBuffer object - we need to find it)
         let buffer_getter = self.create_function(JsFunction::native(
@@ -607,7 +782,7 @@ impl Interpreter {
                             Ok(n) => to_integer(n) as i64,
                             Err(e) => return Completion::Throw(e),
                         };
-                        let len = ta.array_length as i64;
+                        let len = typed_array_length(&ta) as i64;
                         let actual = if idx < 0 { len + idx } else { idx };
                         if actual < 0 || actual >= len {
                             return Completion::Normal(JsValue::Undefined);
@@ -682,8 +857,8 @@ impl Interpreter {
                                     "cannot mix BigInt and non-BigInt typed arrays",
                                 ));
                             }
-                            let src_len = src_ta.array_length;
-                            if offset + src_len > ta.array_length {
+                            let src_len = typed_array_length(&src_ta);
+                            if offset + src_len > typed_array_length(&ta) {
                                 return Completion::Throw(
                                     interp.create_range_error("offset is out of bounds"),
                                 );
@@ -746,7 +921,7 @@ impl Interpreter {
                             Ok(n) => to_integer(n) as usize,
                             Err(e) => return Completion::Throw(e),
                         };
-                        if offset + src_len > ta.array_length {
+                        if offset + src_len > typed_array_length(&ta) {
                             return Completion::Throw(
                                 interp.create_range_error("offset is out of bounds"),
                             );
@@ -791,7 +966,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let len = ta.array_length as f64;
+                    let len = typed_array_length(&ta) as f64;
                     let begin_arg = to_integer(if let Some(a) = args.first() {
                         match interp.to_number_value(a) {
                             Ok(n) => n,
@@ -803,7 +978,7 @@ impl Interpreter {
                     let begin = if begin_arg < 0.0 {
                         ((len + begin_arg) as isize).max(0) as usize
                     } else {
-                        (begin_arg as usize).min(ta.array_length)
+                        (begin_arg as usize).min(typed_array_length(&ta))
                     };
                     let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
                         to_integer(match interp.to_number_value(&args[1]) {
@@ -816,13 +991,13 @@ impl Interpreter {
                     let end = if end_arg < 0.0 {
                         ((len + end_arg) as isize).max(0) as usize
                     } else {
-                        (end_arg as usize).min(ta.array_length)
+                        (end_arg as usize).min(typed_array_length(&ta))
                     };
+                    let end_is_undefined = args.len() <= 1 || matches!(args[1], JsValue::Undefined);
                     let new_len = end.saturating_sub(begin);
                     let bpe = ta.kind.bytes_per_element();
                     let new_offset = ta.byte_offset + begin * bpe;
 
-                    // Per spec: use SpeciesConstructor, then Construct(ctor, buffer, byteOffset, newLength)
                     let default_ctor_name = ta.kind.name();
                     let default_ctor = interp
                         .global_env
@@ -833,12 +1008,17 @@ impl Interpreter {
                         Ok(c) => c,
                         Err(e) => return Completion::Throw(e),
                     };
+                    let length_arg = if end_is_undefined && ta.is_length_tracking {
+                        JsValue::Undefined
+                    } else {
+                        JsValue::Number(new_len as f64)
+                    };
                     let result = interp.construct_with_new_target(
                         &ctor,
                         &[
                             buf_val,
                             JsValue::Number(new_offset as f64),
-                            JsValue::Number(new_len as f64),
+                            length_arg,
                         ],
                         ctor.clone(),
                     );
@@ -872,7 +1052,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let len = ta.array_length as f64;
+                    let len = typed_array_length(&ta) as f64;
                     let begin_arg = to_integer(if let Some(a) = args.first() {
                         match interp.to_number_value(a) {
                             Ok(n) => n,
@@ -884,7 +1064,7 @@ impl Interpreter {
                     let begin = if begin_arg < 0.0 {
                         ((len + begin_arg) as isize).max(0) as usize
                     } else {
-                        (begin_arg as usize).min(ta.array_length)
+                        (begin_arg as usize).min(typed_array_length(&ta))
                     };
                     let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
                         to_integer(match interp.to_number_value(&args[1]) {
@@ -897,7 +1077,7 @@ impl Interpreter {
                     let end = if end_arg < 0.0 {
                         ((len + end_arg) as isize).max(0) as usize
                     } else {
-                        (end_arg as usize).min(ta.array_length)
+                        (end_arg as usize).min(typed_array_length(&ta))
                     };
                     let count = end.saturating_sub(begin);
 
@@ -964,7 +1144,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let len = ta.array_length as i64;
+                    let len = typed_array_length(&ta) as i64;
                     let target = {
                         let v = to_integer(
                             match interp
@@ -1043,13 +1223,15 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    // Step 3: compute len BEFORE coercion
+                    let len = typed_array_length(&ta);
                     // Per spec: coerce value BEFORE start/end
                     let raw_value = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let coerced = match interp.typed_array_coerce_value(ta.kind, &raw_value) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let len = ta.array_length as f64;
+                    let len_f = len as f64;
                     let start = {
                         let v = to_integer(if args.len() > 1 {
                             match interp.to_number_value(&args[1]) {
@@ -1060,9 +1242,9 @@ impl Interpreter {
                             0.0
                         });
                         if v < 0.0 {
-                            ((len + v) as isize).max(0) as usize
+                            ((len_f + v) as isize).max(0) as usize
                         } else {
-                            (v as usize).min(ta.array_length)
+                            (v as usize).min(len)
                         }
                     };
                     let end = {
@@ -1072,20 +1254,27 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             })
                         } else {
-                            len
+                            len_f
                         };
                         if v < 0.0 {
-                            ((len + v) as isize).max(0) as usize
+                            ((len_f + v) as isize).max(0) as usize
                         } else {
-                            (v as usize).min(ta.array_length)
+                            (v as usize).min(len)
                         }
                     };
-                    // Re-check detach after coercion
+                    // Re-check detach and OOB after coercion (buffer may have been resized)
                     if ta.is_detached.get() {
                         return Completion::Throw(
                             interp.create_type_error("typed array is detached"),
                         );
                     }
+                    if is_typed_array_out_of_bounds(&ta) {
+                        return Completion::Throw(
+                            interp.create_type_error("typed array is out of bounds"),
+                        );
+                    }
+                    let new_len = typed_array_length(&ta);
+                    let end = end.min(new_len);
                     for i in start..end {
                         typed_array_set_index(&ta, i, &coerced);
                     }
@@ -1119,7 +1308,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    if ta.array_length == 0 {
+                    if typed_array_length(&ta) == 0 {
                         return Completion::Normal(JsValue::Number(-1.0));
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1132,11 +1321,11 @@ impl Interpreter {
                         0
                     };
                     let start = if from < 0 {
-                        (ta.array_length as i64 + from).max(0) as usize
+                        (typed_array_length(&ta) as i64 + from).max(0) as usize
                     } else {
                         from as usize
                     };
-                    for i in start..ta.array_length {
+                    for i in start..typed_array_length(&ta) {
                         let elem = typed_array_get_index(&ta, i);
                         if strict_eq(&elem, &search) {
                             return Completion::Normal(JsValue::Number(i as f64));
@@ -1172,7 +1361,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    if ta.array_length == 0 {
+                    if typed_array_length(&ta) == 0 {
                         return Completion::Normal(JsValue::Number(-1.0));
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1182,12 +1371,12 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }) as i64
                     } else {
-                        ta.array_length as i64 - 1
+                        typed_array_length(&ta) as i64 - 1
                     };
                     let start = if from < 0 {
-                        (ta.array_length as i64 + from).max(-1)
+                        (typed_array_length(&ta) as i64 + from).max(-1)
                     } else {
-                        from.min(ta.array_length as i64 - 1)
+                        from.min(typed_array_length(&ta) as i64 - 1)
                     };
                     let mut i = start;
                     while i >= 0 {
@@ -1227,7 +1416,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    if ta.array_length == 0 {
+                    if typed_array_length(&ta) == 0 {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1240,11 +1429,11 @@ impl Interpreter {
                         0
                     };
                     let start = if from < 0 {
-                        (ta.array_length as i64 + from).max(0) as usize
+                        (typed_array_length(&ta) as i64 + from).max(0) as usize
                     } else {
                         from as usize
                     };
-                    for i in start..ta.array_length {
+                    for i in start..typed_array_length(&ta) {
                         let elem = typed_array_get_index(&ta, i);
                         if same_value_zero(&elem, &search) {
                             return Completion::Normal(JsValue::Boolean(true));
@@ -1285,7 +1474,7 @@ impl Interpreter {
                         }
                     };
                     let mut lo = 0usize;
-                    let mut hi = ta.array_length;
+                    let mut hi = typed_array_length(&ta);
                     while lo < hi {
                         hi -= 1;
                         let a = typed_array_get_index(&ta, lo);
@@ -1341,7 +1530,7 @@ impl Interpreter {
                             );
                         }
                     }
-                    let mut elems: Vec<JsValue> = (0..ta.array_length)
+                    let mut elems: Vec<JsValue> = (0..typed_array_length(&ta))
                         .map(|i| typed_array_get_index(&ta, i))
                         .collect();
                     // Sort with comparison
@@ -1449,8 +1638,8 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    let mut parts: Vec<String> = Vec::with_capacity(ta.array_length);
-                    for i in 0..ta.array_length {
+                    let mut parts: Vec<String> = Vec::with_capacity(typed_array_length(&ta));
+                    for i in 0..typed_array_length(&ta) {
                         let elem = typed_array_get_index(&ta, i);
                         let s = match interp.to_string_value(&elem) {
                             Ok(s) => s,
@@ -1489,8 +1678,8 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let mut parts: Vec<String> = Vec::with_capacity(ta.array_length);
-                    for i in 0..ta.array_length {
+                    let mut parts: Vec<String> = Vec::with_capacity(typed_array_length(&ta));
+                    for i in 0..typed_array_length(&ta) {
                         let elem = typed_array_get_index(&ta, i);
                         let s = match interp.to_string_value(&elem) {
                             Ok(s) => s,
@@ -1535,8 +1724,8 @@ impl Interpreter {
                         }
                     };
                     let separator = ",";
-                    let mut parts: Vec<String> = Vec::with_capacity(ta.array_length);
-                    for k in 0..ta.array_length {
+                    let mut parts: Vec<String> = Vec::with_capacity(typed_array_length(&ta));
+                    for k in 0..typed_array_length(&ta) {
                         let next_element = typed_array_get_index(&ta, k);
                         if matches!(next_element, JsValue::Undefined | JsValue::Null) {
                             parts.push(String::new());
@@ -1609,7 +1798,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let len = ta.array_length;
+                    let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
                     let new_buf = vec![0u8; len * bpe];
                     let new_buf_rc = Rc::new(RefCell::new(new_buf));
@@ -1621,6 +1810,7 @@ impl Interpreter {
                         byte_length: len * bpe,
                         array_length: len,
                         is_detached: new_detached.clone(),
+                        is_length_tracking: false,
                     };
                     for i in 0..len {
                         let val = typed_array_get_index(&ta, len - 1 - i);
@@ -1685,7 +1875,7 @@ impl Interpreter {
                             );
                         }
                     }
-                    let mut elems: Vec<JsValue> = (0..ta.array_length)
+                    let mut elems: Vec<JsValue> = (0..typed_array_length(&ta))
                         .map(|i| typed_array_get_index(&ta, i))
                         .collect();
                     let mut error: Option<JsValue> = None;
@@ -1749,7 +1939,7 @@ impl Interpreter {
                     if let Some(e) = error {
                         return Completion::Throw(e);
                     }
-                    let len = ta.array_length;
+                    let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
                     let new_buf = vec![0u8; len * bpe];
                     let new_buf_rc = Rc::new(RefCell::new(new_buf));
@@ -1761,6 +1951,7 @@ impl Interpreter {
                         byte_length: len * bpe,
                         array_length: len,
                         is_detached: new_detached.clone(),
+                        is_length_tracking: false,
                     };
                     for (i, val) in elems.iter().enumerate() {
                         typed_array_set_index(&new_ta, i, val);
@@ -1945,7 +2136,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let len = ta.array_length as i64;
+                    let len = typed_array_length(&ta) as i64;
 
                     // Step 4: ToIntegerOrInfinity(index) - must call valueOf on objects
                     let index_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1992,6 +2183,7 @@ impl Interpreter {
                         byte_length: len as usize * bpe,
                         array_length: len as usize,
                         is_detached: new_detached.clone(),
+                        is_length_tracking: false,
                     };
                     for k in 0..len as usize {
                         let elem = if k == actual_index as usize {
@@ -2061,7 +2253,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let ta = {
+                    {
                         let obj_ref = obj.borrow();
                         if let Some(ref ta) = obj_ref.typed_array_info {
                             if ta.is_detached.get() {
@@ -2069,15 +2261,12 @@ impl Interpreter {
                                     interp.create_type_error("typed array is detached"),
                                 );
                             }
-                            ta.clone()
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
-                    };
-                    // Create an array from the typed array and return array iterator
-                    let arr = interp.create_array_from_ta(&ta);
-                    let arr_id = arr.borrow().id.unwrap();
-                    let iter = interp.create_array_iterator(arr_id, IteratorKind::Value);
+                    }
+                    let iter =
+                        interp.create_typed_array_iterator(o.id, IteratorKind::Value);
                     return Completion::Normal(iter);
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -2099,7 +2288,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let ta = {
+                    {
                         let obj_ref = obj.borrow();
                         if let Some(ref ta) = obj_ref.typed_array_info {
                             if ta.is_detached.get() {
@@ -2107,14 +2296,12 @@ impl Interpreter {
                                     interp.create_type_error("typed array is detached"),
                                 );
                             }
-                            ta.clone()
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
-                    };
-                    let arr = interp.create_array_from_ta(&ta);
-                    let arr_id = arr.borrow().id.unwrap();
-                    let iter = interp.create_array_iterator(arr_id, IteratorKind::KeyValue);
+                    }
+                    let iter =
+                        interp.create_typed_array_iterator(o.id, IteratorKind::KeyValue);
                     return Completion::Normal(iter);
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -2131,7 +2318,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let ta = {
+                    {
                         let obj_ref = obj.borrow();
                         if let Some(ref ta) = obj_ref.typed_array_info {
                             if ta.is_detached.get() {
@@ -2139,14 +2326,12 @@ impl Interpreter {
                                     interp.create_type_error("typed array is detached"),
                                 );
                             }
-                            ta.clone()
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
-                    };
-                    let arr = interp.create_array_from_ta(&ta);
-                    let arr_id = arr.borrow().id.unwrap();
-                    let iter = interp.create_array_iterator(arr_id, IteratorKind::Key);
+                    }
+                    let iter =
+                        interp.create_typed_array_iterator(o.id, IteratorKind::Key);
                     return Completion::Normal(iter);
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -2158,7 +2343,7 @@ impl Interpreter {
     }
 
     fn create_array_from_ta(&mut self, ta: &TypedArrayInfo) -> Rc<RefCell<JsObjectData>> {
-        let elems: Vec<JsValue> = (0..ta.array_length)
+        let elems: Vec<JsValue> = (0..typed_array_length(ta))
             .map(|i| typed_array_get_index(ta, i))
             .collect();
         let len = elems.len();
@@ -2184,7 +2369,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for i in 0..ta.array_length {
+                for i in 0..typed_array_length(&ta) {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
@@ -2216,7 +2401,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for i in 0..ta.array_length {
+                for i in 0..typed_array_length(&ta) {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
@@ -2248,7 +2433,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let mut i = ta.array_length as i64 - 1;
+                let mut i = typed_array_length(&ta) as i64 - 1;
                 while i >= 0 {
                     let val = typed_array_get_index(&ta, i as usize);
                     match interp.call_function(
@@ -2282,7 +2467,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let mut i = ta.array_length as i64 - 1;
+                let mut i = typed_array_length(&ta) as i64 - 1;
                 while i >= 0 {
                     let val = typed_array_get_index(&ta, i as usize);
                     match interp.call_function(
@@ -2316,7 +2501,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for i in 0..ta.array_length {
+                for i in 0..typed_array_length(&ta) {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
@@ -2344,7 +2529,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let len = ta.array_length;
+                let len = typed_array_length(&ta);
 
                 // Use TypedArraySpeciesCreate
                 let new_ta_val = match interp
@@ -2391,7 +2576,7 @@ impl Interpreter {
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let mut kept: Vec<JsValue> = Vec::new();
-                for i in 0..ta.array_length {
+                for i in 0..typed_array_length(&ta) {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
@@ -2441,7 +2626,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for i in 0..ta.array_length {
+                for i in 0..typed_array_length(&ta) {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
@@ -2473,7 +2658,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for i in 0..ta.array_length {
+                for i in 0..typed_array_length(&ta) {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
@@ -2510,7 +2695,7 @@ impl Interpreter {
                     acc = args[1].clone();
                     start = 0;
                 } else {
-                    if ta.array_length == 0 {
+                    if typed_array_length(&ta) == 0 {
                         return Completion::Throw(
                             interp.create_type_error("Reduce of empty array with no initial value"),
                         );
@@ -2518,7 +2703,7 @@ impl Interpreter {
                     acc = typed_array_get_index(&ta, 0);
                     start = 1;
                 }
-                for i in start..ta.array_length {
+                for i in start..typed_array_length(&ta) {
                     let val = typed_array_get_index(&ta, i);
                     match interp.call_function(
                         &callback,
@@ -2549,15 +2734,15 @@ impl Interpreter {
                 let start: i64;
                 if args.len() > 1 {
                     acc = args[1].clone();
-                    start = ta.array_length as i64 - 1;
+                    start = typed_array_length(&ta) as i64 - 1;
                 } else {
-                    if ta.array_length == 0 {
+                    if typed_array_length(&ta) == 0 {
                         return Completion::Throw(
                             interp.create_type_error("Reduce of empty array with no initial value"),
                         );
                     }
-                    acc = typed_array_get_index(&ta, ta.array_length - 1);
-                    start = ta.array_length as i64 - 2;
+                    acc = typed_array_get_index(&ta, typed_array_length(&ta) - 1);
+                    start = typed_array_length(&ta) as i64 - 2;
                 }
                 let mut i = start;
                 while i >= 0 {
@@ -2776,9 +2961,9 @@ impl Interpreter {
                                     let buf_rc = src_ref.arraybuffer_data.as_ref().unwrap().clone();
                                     let detached = src_ref.arraybuffer_detached.clone()
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
+                                    let is_resizable = src_ref.arraybuffer_max_byte_length.is_some();
                                     let buf_len = buf_rc.borrow().len();
                                     drop(src_ref);
-                                    // §22.2.5.1.3 step 7: ToIndex(byteOffset)
                                     let byte_offset = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
                                         let offset_val = match interp.to_index(&args[1]) {
                                             Completion::Normal(v) => v,
@@ -2787,13 +2972,14 @@ impl Interpreter {
                                         };
                                         if let JsValue::Number(n) = offset_val { n as usize } else { 0 }
                                     } else { 0 };
-                                    // step 9: offset modulo elementSize
                                     if byte_offset % bpe != 0 {
                                         return Completion::Throw(interp.create_error("RangeError",
                                             "start offset of typed array should be a multiple of BYTES_PER_ELEMENT"
                                         ));
                                     }
-                                    let array_length = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
+                                    let has_length_arg = args.len() > 2 && !matches!(args[2], JsValue::Undefined);
+                                    let is_length_tracking = is_resizable && !has_length_arg;
+                                    let array_length = if has_length_arg {
                                         let len_val = match interp.to_index(&args[2]) {
                                             Completion::Normal(v) => v,
                                             Completion::Throw(e) => return Completion::Throw(e),
@@ -2806,7 +2992,7 @@ impl Interpreter {
                                                 "start offset is outside the bounds of the buffer"
                                             ));
                                         }
-                                        if (buf_len - byte_offset) % bpe != 0 {
+                                        if !is_resizable && (buf_len - byte_offset) % bpe != 0 {
                                             return Completion::Throw(interp.create_error("RangeError",
                                                 "byte length of typed array should be a multiple of BYTES_PER_ELEMENT"
                                             ));
@@ -2824,6 +3010,7 @@ impl Interpreter {
                                         byte_length,
                                         array_length,
                                         is_detached: detached,
+                                        is_length_tracking,
                                     };
                                     let buf_val = first.clone();
                                     let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
@@ -2845,7 +3032,7 @@ impl Interpreter {
                                             "source typed array is detached",
                                         ));
                                     }
-                                    let len = src_ta.array_length;
+                                    let len = typed_array_length(&src_ta);
                                     let new_buf = vec![0u8; len * bpe];
                                     let new_buf_rc = Rc::new(RefCell::new(new_buf));
                                     let new_detached = Rc::new(Cell::new(false));
@@ -2856,6 +3043,7 @@ impl Interpreter {
                                         byte_length: len * bpe,
                                         array_length: len,
                                         is_detached: new_detached.clone(),
+                                        is_length_tracking: false,
                                     };
                                     for i in 0..len {
                                         let val = typed_array_get_index(&src_ta, i);
@@ -2893,6 +3081,7 @@ impl Interpreter {
                                     byte_length: len * bpe,
                                     array_length: len,
                                     is_detached: new_detached.clone(),
+                                    is_length_tracking: false,
                                 };
                                 for (i, val) in values.iter().enumerate() {
                                     let coerced = match interp.typed_array_coerce_value(kind, val) {
@@ -3130,7 +3319,7 @@ impl Interpreter {
                 }
                 let input_str = to_js_string(&input);
 
-                let max_bytes = ta.array_length;
+                let max_bytes = typed_array_length(&ta);
                 let result = decode_hex(&input_str, Some(max_bytes));
                 let written = result.bytes.len();
                 {
@@ -3178,7 +3367,7 @@ impl Interpreter {
                     return c;
                 }
 
-                let max_bytes = ta.array_length;
+                let max_bytes = typed_array_length(&ta);
                 let result = decode_base64(&input_str, &alphabet, &last_chunk, Some(max_bytes));
                 let written = result.bytes.len();
                 {
@@ -3271,7 +3460,7 @@ impl Interpreter {
             {
                 let obj_ref = obj.borrow();
                 if let Some(ref ta) = obj_ref.typed_array_info {
-                    if ta.array_length < requested {
+                    if typed_array_length(&ta) < requested {
                         return Err(self.create_type_error(
                             "species constructor returned a TypedArray that is too small",
                         ));
@@ -3302,6 +3491,7 @@ impl Interpreter {
             byte_length: len * bpe,
             array_length: len,
             is_detached: detached.clone(),
+            is_length_tracking: false,
         };
         let ab_obj = self.create_object();
         {
@@ -3360,6 +3550,7 @@ impl Interpreter {
             byte_length: len * bpe,
             array_length: len,
             is_detached: detached.clone(),
+            is_length_tracking: false,
         };
         let ab_obj = self.create_object();
         {
@@ -3481,6 +3672,7 @@ impl Interpreter {
                         byte_length: len * bpe,
                         array_length: len,
                         is_detached: new_detached.clone(),
+                        is_length_tracking: false,
                     };
                     for (i, val) in values.iter().enumerate() {
                         let coerced = match self.typed_array_coerce_value(kind, val) {
@@ -3635,43 +3827,99 @@ impl Interpreter {
             },
         );
 
-        macro_rules! dv_getter {
-            ($name:expr, $field:ident) => {{
-                let getter = self.create_function(JsFunction::native(
-                    format!("get {}", $name),
-                    0,
-                    |interp, this_val, _args| {
-                        if let JsValue::Object(o) = this_val
-                            && let Some(obj) = interp.get_object(o.id)
-                        {
-                            let obj_ref = obj.borrow();
-                            if let Some(ref dv) = obj_ref.data_view_info {
-                                if dv.is_detached.get() {
-                                    return Completion::Throw(
-                                        interp.create_type_error("DataView buffer is detached"),
-                                    );
-                                }
-                                return Completion::Normal(JsValue::Number(dv.$field as f64));
-                            }
+        // byteOffset getter
+        let dv_byte_offset_getter = self.create_function(JsFunction::native(
+            "get byteOffset".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if let Some(ref dv) = obj_ref.data_view_info {
+                        if dv.is_detached.get() {
+                            return Completion::Throw(
+                                interp.create_type_error("DataView buffer is detached"),
+                            );
                         }
-                        Completion::Throw(interp.create_type_error("not a DataView"))
-                    },
-                ));
-                dv_proto.borrow_mut().insert_property(
-                    $name.to_string(),
-                    PropertyDescriptor {
-                        value: None,
-                        writable: None,
-                        get: Some(getter),
-                        set: None,
-                        enumerable: Some(false),
-                        configurable: Some(true),
-                    },
-                );
-            }};
-        }
-        dv_getter!("byteOffset", byte_offset);
-        dv_getter!("byteLength", byte_length);
+                        let buf_len = dv.buffer.borrow().len();
+                        if dv.is_length_tracking {
+                            if dv.byte_offset > buf_len {
+                                return Completion::Throw(interp.create_type_error(
+                                    "DataView is out of bounds",
+                                ));
+                            }
+                        } else if dv.byte_offset + dv.byte_length > buf_len {
+                            return Completion::Throw(interp.create_type_error(
+                                "DataView is out of bounds",
+                            ));
+                        }
+                        return Completion::Normal(JsValue::Number(dv.byte_offset as f64));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not a DataView"))
+            },
+        ));
+        dv_proto.borrow_mut().insert_property(
+            "byteOffset".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(dv_byte_offset_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+        // byteLength getter
+        let dv_byte_length_getter = self.create_function(JsFunction::native(
+            "get byteLength".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if let Some(ref dv) = obj_ref.data_view_info {
+                        if dv.is_detached.get() {
+                            return Completion::Throw(
+                                interp.create_type_error("DataView buffer is detached"),
+                            );
+                        }
+                        let buf_len = dv.buffer.borrow().len();
+                        if dv.is_length_tracking {
+                            if dv.byte_offset > buf_len {
+                                return Completion::Throw(interp.create_type_error(
+                                    "DataView is out of bounds",
+                                ));
+                            }
+                            return Completion::Normal(JsValue::Number(
+                                (buf_len - dv.byte_offset) as f64,
+                            ));
+                        } else {
+                            if dv.byte_offset + dv.byte_length > buf_len {
+                                return Completion::Throw(interp.create_type_error(
+                                    "DataView is out of bounds",
+                                ));
+                            }
+                            return Completion::Normal(JsValue::Number(dv.byte_length as f64));
+                        }
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not a DataView"))
+            },
+        ));
+        dv_proto.borrow_mut().insert_property(
+            "byteLength".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(dv_byte_length_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
 
         // DataView get/set methods
         // Spec ordering for GetViewValue:
@@ -3686,7 +3934,6 @@ impl Interpreter {
                     $method_name.to_string(),
                     1,
                     |interp, this_val, args| {
-                        // Step 1: Require this to be a DataView (no detach check)
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id)
                         {
@@ -3698,7 +3945,6 @@ impl Interpreter {
                                     );
                                 }
                             }
-                            // Step 2: ToIndex(byteOffset) — before detach check
                             let byte_offset = match interp
                                 .to_index(args.first().unwrap_or(&JsValue::Undefined))
                             {
@@ -3711,24 +3957,38 @@ impl Interpreter {
                             } else {
                                 false
                             };
-                            // Step 3-5: Re-borrow, check detach, check bounds, read
                             let dv = {
                                 let obj_ref = obj.borrow();
-                                let dv = obj_ref.data_view_info.as_ref().unwrap().clone();
-                                dv
+                                obj_ref.data_view_info.as_ref().unwrap().clone()
                             };
                             if dv.is_detached.get() {
                                 return Completion::Throw(
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let idx = dv.byte_offset + byte_offset;
-                            if idx + $size > dv.byte_offset + dv.byte_length {
+                            let buf_len = dv.buffer.borrow().len();
+                            let effective_byte_length = if dv.is_length_tracking {
+                                if dv.byte_offset > buf_len {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "DataView is out of bounds",
+                                    ));
+                                }
+                                buf_len - dv.byte_offset
+                            } else {
+                                if dv.byte_offset + dv.byte_length > buf_len {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "DataView is out of bounds",
+                                    ));
+                                }
+                                dv.byte_length
+                            };
+                            if byte_offset + $size > effective_byte_length {
                                 return Completion::Throw(interp.create_error(
                                     "RangeError",
                                     "offset is outside the bounds of the DataView",
                                 ));
                             }
+                            let idx = dv.byte_offset + byte_offset;
                             let buf = dv.buffer.borrow();
                             let result = $read_fn(&buf[idx..idx + $size], little_endian);
                             return Completion::Normal(result);
@@ -3887,13 +4147,29 @@ impl Interpreter {
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let idx = dv.byte_offset + byte_offset;
-                            if idx + $size > dv.byte_offset + dv.byte_length {
+                            let buf_len = dv.buffer.borrow().len();
+                            let effective_byte_length = if dv.is_length_tracking {
+                                if dv.byte_offset > buf_len {
+                                    return Completion::Throw(
+                                        interp.create_type_error("DataView is out of bounds"),
+                                    );
+                                }
+                                buf_len - dv.byte_offset
+                            } else {
+                                if dv.byte_offset + dv.byte_length > buf_len {
+                                    return Completion::Throw(
+                                        interp.create_type_error("DataView is out of bounds"),
+                                    );
+                                }
+                                dv.byte_length
+                            };
+                            if byte_offset + $size > effective_byte_length {
                                 return Completion::Throw(interp.create_error(
                                     "RangeError",
                                     "offset is outside the bounds of the DataView",
                                 ));
                             }
+                            let idx = dv.byte_offset + byte_offset;
                             let mut buf = dv.buffer.borrow_mut();
                             $write_fn(&mut buf[idx..idx + $size], num_value, little_endian);
                             return Completion::Normal(JsValue::Undefined);
@@ -3952,13 +4228,29 @@ impl Interpreter {
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let idx = dv.byte_offset + byte_offset;
-                            if idx + $size > dv.byte_offset + dv.byte_length {
+                            let buf_len = dv.buffer.borrow().len();
+                            let effective_byte_length = if dv.is_length_tracking {
+                                if dv.byte_offset > buf_len {
+                                    return Completion::Throw(
+                                        interp.create_type_error("DataView is out of bounds"),
+                                    );
+                                }
+                                buf_len - dv.byte_offset
+                            } else {
+                                if dv.byte_offset + dv.byte_length > buf_len {
+                                    return Completion::Throw(
+                                        interp.create_type_error("DataView is out of bounds"),
+                                    );
+                                }
+                                dv.byte_length
+                            };
+                            if byte_offset + $size > effective_byte_length {
                                 return Completion::Throw(interp.create_error(
                                     "RangeError",
                                     "offset is outside the bounds of the DataView",
                                 ));
                             }
+                            let idx = dv.byte_offset + byte_offset;
                             let mut buf = dv.buffer.borrow_mut();
                             $write_fn(&mut buf[idx..idx + $size], &bigint_value, little_endian);
                             return Completion::Normal(JsValue::Undefined);
@@ -4111,8 +4403,7 @@ impl Interpreter {
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => 0,
                         };
-                    // Now check detach + get buffer info
-                    let (buf_rc, detached_flag, buf_len) = {
+                    let (buf_rc, detached_flag, buf_len, is_resizable) = {
                         let obj_ref = obj.borrow();
                         if let Some(ref det) = obj_ref.arraybuffer_detached
                             && det.get()
@@ -4127,7 +4418,8 @@ impl Interpreter {
                             .clone()
                             .unwrap_or_else(|| Rc::new(Cell::new(false)));
                         let len = buf.borrow().len();
-                        (buf, det, len)
+                        let resizable = obj_ref.arraybuffer_max_byte_length.is_some();
+                        (buf, det, len, resizable)
                     };
                     if byte_offset > buf_len {
                         return Completion::Throw(interp.create_error(
@@ -4136,7 +4428,9 @@ impl Interpreter {
                         ));
                     }
                     let byte_length_arg = args.get(2).unwrap_or(&JsValue::Undefined);
-                    let byte_length = if matches!(byte_length_arg, JsValue::Undefined) {
+                    let has_byte_length = !matches!(byte_length_arg, JsValue::Undefined);
+                    let is_length_tracking = is_resizable && !has_byte_length;
+                    let byte_length = if !has_byte_length {
                         buf_len - byte_offset
                     } else {
                         match interp.to_index(byte_length_arg) {
@@ -4159,6 +4453,7 @@ impl Interpreter {
                         byte_offset,
                         byte_length,
                         is_detached: detached_flag,
+                        is_length_tracking,
                     };
                     let result = interp.create_object();
                     {
@@ -5001,6 +5296,7 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
         byte_length: len,
         array_length: len,
         is_detached: detached.clone(),
+        is_length_tracking: false,
     };
     let ab_obj = interp.create_object();
     {

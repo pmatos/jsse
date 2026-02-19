@@ -595,6 +595,12 @@ pub enum IteratorState {
         last_index: usize,
         done: bool,
     },
+    TypedArrayIterator {
+        typed_array_id: u64,
+        index: usize,
+        kind: IteratorKind,
+        done: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -651,6 +657,7 @@ pub struct TypedArrayInfo {
     pub byte_length: usize,
     pub array_length: usize,
     pub is_detached: Rc<Cell<bool>>,
+    pub is_length_tracking: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -659,6 +666,7 @@ pub struct DataViewInfo {
     pub byte_offset: usize,
     pub byte_length: usize,
     pub is_detached: Rc<Cell<bool>>,
+    pub is_length_tracking: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -745,6 +753,7 @@ pub struct JsObjectData {
     pub proxy_revoked: bool,
     pub arraybuffer_data: Option<Rc<RefCell<Vec<u8>>>>,
     pub arraybuffer_detached: Option<Rc<Cell<bool>>>,
+    pub arraybuffer_max_byte_length: Option<usize>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
     pub promise_data: Option<PromiseData>,
@@ -796,6 +805,7 @@ impl JsObjectData {
             proxy_revoked: false,
             arraybuffer_data: None,
             arraybuffer_detached: None,
+            arraybuffer_max_byte_length: None,
             typed_array_info: None,
             data_view_info: None,
             promise_data: None,
@@ -1583,9 +1593,46 @@ pub(crate) fn canonical_numeric_index_string(key: &str) -> Option<f64> {
     }
 }
 
+pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
+    if ta.is_detached.get() {
+        return 0;
+    }
+    if ta.is_length_tracking {
+        let buf_len = ta.buffer.borrow().len();
+        let remaining = buf_len.saturating_sub(ta.byte_offset);
+        remaining / ta.kind.bytes_per_element()
+    } else {
+        let buf_len = ta.buffer.borrow().len();
+        if ta.byte_offset + ta.byte_length > buf_len {
+            0
+        } else {
+            ta.array_length
+        }
+    }
+}
+
+pub(crate) fn is_typed_array_out_of_bounds(ta: &TypedArrayInfo) -> bool {
+    if ta.is_detached.get() {
+        return true;
+    }
+    let buf_len = ta.buffer.borrow().len();
+    if ta.is_length_tracking {
+        ta.byte_offset > buf_len
+    } else {
+        ta.byte_offset + ta.byte_length > buf_len
+    }
+}
+
+pub(crate) fn typed_array_byte_length(ta: &TypedArrayInfo) -> usize {
+    typed_array_length(ta) * ta.kind.bytes_per_element()
+}
+
 // §10.4.5.14 IsValidIntegerIndex
 pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
     if ta.is_detached.get() {
+        return false;
+    }
+    if is_typed_array_out_of_bounds(ta) {
         return false;
     }
     if index.is_nan() || index.is_infinite() {
@@ -1597,7 +1644,8 @@ pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
     if index.is_sign_negative() && index == 0.0 {
         return false; // -0
     }
-    if index < 0.0 || index >= ta.array_length as f64 {
+    let len = typed_array_length(ta) as f64;
+    if index < 0.0 || index >= len {
         return false;
     }
     true
@@ -1606,6 +1654,9 @@ pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
 pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {
     let buf = ta.buffer.borrow();
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
+    if offset + ta.kind.bytes_per_element() > buf.len() {
+        return JsValue::Undefined;
+    }
     match ta.kind {
         TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
         TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => JsValue::Number(buf[offset] as f64),
@@ -1667,11 +1718,11 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
 }
 
 pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsValue) -> bool {
-    if idx >= ta.array_length {
-        return false;
-    }
     let mut buf = ta.buffer.borrow_mut();
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
+    if offset + ta.kind.bytes_per_element() > buf.len() {
+        return false;
+    }
     match ta.kind {
         TypedArrayKind::Int8 => {
             let v = to_int8(value);

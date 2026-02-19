@@ -49,11 +49,11 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Object | 94% | 6,407/6,802 |
 | Function | 94% | 839/893 |
 | Array | 91% | 5,567/6,111 |
-| DataView | 85% | 956/1,122 |
-| TypedArray | 83% | 2,380/2,860 |
+| DataView | 91% | 1,016/1,122 |
+| TypedArray | 89% | 2,558/2,860 |
 | RegExp | 93% | 3,481/3,756 |
 | Proxy | 79% | 478/607 |
-| TypedArrayConstructors | 77% | 1,116/1,442 |
+| TypedArrayConstructors | 78% | 1,122/1,442 |
 | Symbol | 77% | 142/184 |
 | annexB | 75% | 1,038/1,377 |
 
@@ -209,8 +209,8 @@ These are tracked across all phases:
 | `built-ins/Object` | 6,802 | 6,407 (94.2%) |
 | `built-ins/Array` | 6,111 | 5,567 (91.1%) |
 | `built-ins/RegExp` | 3,756 | 3,481 (92.7%) |
-| `built-ins/TypedArray` | 2,860 | 2,380 (83.2%) |
-| `built-ins/TypedArrayConstructors` | 1,442 | 1,116 (77.4%) |
+| `built-ins/TypedArray` | 2,860 | 2,558 (89.4%) |
+| `built-ins/TypedArrayConstructors` | 1,442 | 1,122 (77.8%) |
 | `built-ins/String` | 2,427 | 2,312 (95.3%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
 | `annexB` | 1,377 | 1,038 (75.4%) |
