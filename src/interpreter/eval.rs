@@ -9926,7 +9926,17 @@ impl Interpreter {
             );
         }
 
-        // Add methods and properties to prototype/constructor
+        // Per spec §15.7.14 step 28-34: Process all elements in two phases.
+        // Phase 1: Evaluate ALL computed keys in declaration order, install methods,
+        //          collect instance field defs, and defer static fields/blocks.
+        // Phase 2: Execute static field initializers and static blocks in order.
+        enum DeferredStatic {
+            PublicField(String, Option<Expression>),
+            PrivateField(String, Option<Expression>),
+            Block(Vec<Statement>),
+        }
+        let mut deferred_static: Vec<DeferredStatic> = Vec::new();
+
         for elem in body {
             match elem {
                 ClassElement::Method(m) => {
@@ -10215,40 +10225,24 @@ impl Interpreter {
                                 );
                             }
                         } else {
-                            // Static private field - evaluate now and store on constructor
-                            let val = if let Some(ref expr) = p.value {
-                                match self.eval_expr(expr, &static_field_env) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                }
-                            } else {
-                                JsValue::Undefined
-                            };
-                            if let JsValue::Object(ref o) = ctor_val
-                                && let Some(func_obj) = self.get_object(o.id)
-                            {
-                                func_obj
-                                    .borrow_mut()
-                                    .private_fields
-                                    .insert(branded, PrivateElement::Field(val));
-                            }
+                            // Defer static private field initializer to phase 2
+                            deferred_static
+                                .push(DeferredStatic::PrivateField(branded, p.value.clone()));
                         }
                         continue;
                     }
-                    // Static properties are set on the constructor
                     if p.is_static {
+                        // Evaluate computed key NOW in phase 1, defer initializer to phase 2
                         let key = match &p.key {
                             PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
                             PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
-                            PropertyKey::Computed(expr) => {
-                                match self.eval_expr(expr, &static_field_env) {
-                                    Completion::Normal(v) => match self.to_property_key(&v) {
-                                        Ok(s) => s,
-                                        Err(e) => return Completion::Throw(e),
-                                    },
-                                    other => return other,
-                                }
-                            }
+                            PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => match self.to_property_key(&v) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                },
+                                other => return other,
+                            },
                             PropertyKey::Private(_) => unreachable!(),
                         };
                         if key == "prototype" {
@@ -10256,20 +10250,9 @@ impl Interpreter {
                                 "Classes may not have a static property named 'prototype'",
                             ));
                         }
-                        let val = if let Some(ref expr) = p.value {
-                            match self.eval_expr(expr, &static_field_env) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-                        if let JsValue::Object(ref o) = ctor_val
-                            && let Some(func_obj) = self.get_object(o.id)
-                        {
-                            func_obj.borrow_mut().insert_value(key, val);
-                        }
+                        deferred_static.push(DeferredStatic::PublicField(key, p.value.clone()));
                     } else {
+                        // Instance field: evaluate computed key, store field def
                         let key = match &p.key {
                             PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
                             PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
@@ -10292,7 +10275,50 @@ impl Interpreter {
                         }
                     }
                 }
-                ClassElement::StaticBlock(body) => {
+                ClassElement::StaticBlock(stmts) => {
+                    // Defer static block execution to phase 2
+                    deferred_static.push(DeferredStatic::Block(stmts.clone()));
+                }
+            }
+        }
+
+        // Phase 2: Execute deferred static field initializers and static blocks
+        for deferred in deferred_static {
+            match deferred {
+                DeferredStatic::PublicField(key, initializer) => {
+                    let val = if let Some(ref expr) = initializer {
+                        match self.eval_expr(expr, &static_field_env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if let JsValue::Object(ref o) = ctor_val
+                        && let Some(func_obj) = self.get_object(o.id)
+                    {
+                        func_obj.borrow_mut().insert_value(key, val);
+                    }
+                }
+                DeferredStatic::PrivateField(branded, initializer) => {
+                    let val = if let Some(ref expr) = initializer {
+                        match self.eval_expr(expr, &static_field_env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if let JsValue::Object(ref o) = ctor_val
+                        && let Some(func_obj) = self.get_object(o.id)
+                    {
+                        func_obj
+                            .borrow_mut()
+                            .private_fields
+                            .insert(branded, PrivateElement::Field(val));
+                    }
+                }
+                DeferredStatic::Block(stmts) => {
                     let block_env = Environment::new_function_scope(Some(class_env.clone()));
                     {
                         let mut be = block_env.borrow_mut();
@@ -10314,7 +10340,7 @@ impl Interpreter {
                         );
                         be.class_private_names = self.class_private_names.last().cloned();
                     }
-                    match self.exec_statements(body, &block_env) {
+                    match self.exec_statements(&stmts, &block_env) {
                         Completion::Normal(_) => {}
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => {}

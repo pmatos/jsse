@@ -327,8 +327,11 @@ impl<'a> Parser<'a> {
                 // Escaped identifiers can still be reserved words - reject them
                 if Self::is_reserved_identifier(name, self.strict) {
                     None
-                } else if name == "await" || name == "yield" {
-                    // "await" and "yield" written with escapes are always errors as identifiers
+                } else if name == "yield" && (self.in_generator || self.strict) {
+                    None
+                } else if name == "await"
+                    && (self.in_async || self.in_static_block || self.is_module)
+                {
                     None
                 } else {
                     Some(name.clone())
@@ -337,7 +340,9 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => {
                 Some("yield".to_string())
             }
-            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => {
+            Token::Keyword(Keyword::Await)
+                if !self.in_async && !self.in_static_block && !self.is_module =>
+            {
                 Some("await".to_string())
             }
             Token::Keyword(Keyword::Let) if !self.strict => Some("let".to_string()),
