@@ -5327,14 +5327,12 @@ impl Interpreter {
         value: &JsValue,
     ) -> Result<Option<JsValue>, JsValue> {
         if let JsValue::Object(io) = iterator {
-            let return_fn = self.get_object(io.id).and_then(|obj| {
-                let val = obj.borrow().get_property("return");
-                if matches!(val, JsValue::Object(_)) {
-                    Some(val)
-                } else {
-                    None
-                }
-            });
+            let return_fn = match self.get_object_property(io.id, "return", iterator) {
+                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
+                Completion::Normal(_) => None,
+                Completion::Throw(e) => return Err(e),
+                _ => None,
+            };
             if let Some(return_fn) = return_fn {
                 match self.call_function(&return_fn, iterator, std::slice::from_ref(value)) {
                     Completion::Normal(v) => {
@@ -5361,14 +5359,12 @@ impl Interpreter {
         exception: &JsValue,
     ) -> Result<Option<JsValue>, JsValue> {
         if let JsValue::Object(io) = iterator {
-            let throw_fn = self.get_object(io.id).and_then(|obj| {
-                let val = obj.borrow().get_property("throw");
-                if matches!(val, JsValue::Object(_)) {
-                    Some(val)
-                } else {
-                    None
-                }
-            });
+            let throw_fn = match self.get_object_property(io.id, "throw", iterator) {
+                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
+                Completion::Normal(_) => None,
+                Completion::Throw(e) => return Err(e),
+                _ => None,
+            };
             if let Some(throw_fn) = throw_fn {
                 match self.call_function(&throw_fn, iterator, std::slice::from_ref(exception)) {
                     Completion::Normal(v) => {
@@ -5391,14 +5387,10 @@ impl Interpreter {
 
     pub(crate) fn iterator_close(&mut self, iterator: &JsValue, _completion: JsValue) -> JsValue {
         if let JsValue::Object(io) = iterator {
-            let return_fn = self.get_object(io.id).and_then(|obj| {
-                let val = obj.borrow().get_property("return");
-                if matches!(val, JsValue::Object(_)) {
-                    Some(val)
-                } else {
-                    None
-                }
-            });
+            let return_fn = match self.get_object_property(io.id, "return", iterator) {
+                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
+                _ => None,
+            };
             if let Some(return_fn) = return_fn {
                 let _ = self.call_function(&return_fn, iterator, &[]);
             }
@@ -5408,14 +5400,12 @@ impl Interpreter {
 
     pub(crate) fn iterator_close_result(&mut self, iterator: &JsValue) -> Result<(), JsValue> {
         if let JsValue::Object(io) = iterator {
-            let return_fn = self.get_object(io.id).and_then(|obj| {
-                let val = obj.borrow().get_property("return");
-                if matches!(val, JsValue::Object(_)) {
-                    Some(val)
-                } else {
-                    None
-                }
-            });
+            let return_fn = match self.get_object_property(io.id, "return", iterator) {
+                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
+                Completion::Normal(_) => None,
+                Completion::Throw(e) => return Err(e),
+                _ => None,
+            };
             if let Some(return_fn) = return_fn {
                 match self.call_function(&return_fn, iterator, &[]) {
                     Completion::Normal(inner_result) => {
