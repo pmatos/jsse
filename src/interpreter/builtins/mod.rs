@@ -5095,13 +5095,13 @@ impl Interpreter {
         if let Some(key) = &async_sym_key {
             let iter_fn = match obj {
                 JsValue::Object(o) => {
-                    if let Some(obj_data) = self.get_object(o.id) {
-                        let val = obj_data.borrow().get_property(key);
-                        if !matches!(val, JsValue::Undefined) {
-                            Some(val)
-                        } else {
-                            None
-                        }
+                    let val = match self.get_object_property(o.id, key, obj) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => JsValue::Undefined,
+                    };
+                    if !matches!(val, JsValue::Undefined) {
+                        Some(val)
                     } else {
                         None
                     }
