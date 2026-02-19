@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,496 (48,257 files, dual strict/non-strict per spec)
-**Current pass rate:** 83,513 / 92,496 (90.29%)
+**Current pass rate:** 83,814 / 92,496 (90.61%)
 
 ---
 
@@ -55,7 +55,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Proxy | 79% | 478/607 |
 | TypedArrayConstructors | 77% | 1,116/1,442 |
 | Symbol | 77% | 142/184 |
-| annexB | 64% | 884/1,377 |
+| annexB | 75% | 1,038/1,377 |
 
 ---
 
@@ -175,7 +175,7 @@ These are tracked across all phases:
 - [ ] **Spec compliance annotations** — link code to spec section IDs
 - [x] **Garbage collection** — mark-and-sweep GC with ephemeron support for WeakMap/WeakSet
 - [ ] **Performance** — profile and optimize hot paths after correctness
-- [x] **Annex B (partial)** — String HTML methods, substr, escape/unescape, Date getYear/setYear/toGMTString (+117 passes), block-level function declarations B.3.3/B.3.4 (+275 passes)
+- [x] **Annex B (partial)** — String HTML methods, substr, escape/unescape, Date getYear/setYear/toGMTString (+117 passes), block-level function declarations B.3.3/B.3.4 (+275 passes), eval block-level function hoisting B.3.3.3 (+163 passes)
 
 ---
 
@@ -211,7 +211,7 @@ These are tracked across all phases:
 | `built-ins/TypedArrayConstructors` | 1,442 | 1,116 (77.4%) |
 | `built-ins/String` | 2,427 | 2,312 (95.3%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
-| `annexB` | 1,377 | 884 (64.2%) |
+| `annexB` | 1,377 | 1,038 (75.4%) |
 | `intl402` | varies | Internationalization — optional |
 
 ---
@@ -229,5 +229,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 83,513 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | 🟡 83,814 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |
