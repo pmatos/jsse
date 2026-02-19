@@ -5232,11 +5232,11 @@ impl Interpreter {
 
     pub(crate) fn iterator_next(&mut self, iterator: &JsValue) -> Result<JsValue, JsValue> {
         if let JsValue::Object(io) = iterator {
-            let next_fn = self.get_object(io.id).and_then(|obj| {
-                obj.borrow()
-                    .get_property_descriptor("next")
-                    .and_then(|d| d.value)
-            });
+            let next_fn = match self.get_object_property(io.id, "next", iterator) {
+                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => Some(v),
+                Completion::Throw(e) => return Err(e),
+                _ => None,
+            };
             if let Some(next_fn) = next_fn {
                 match self.call_function(&next_fn, iterator, &[]) {
                     Completion::Normal(v) => {
@@ -5263,11 +5263,11 @@ impl Interpreter {
         value: &JsValue,
     ) -> Result<JsValue, JsValue> {
         if let JsValue::Object(io) = iterator {
-            let next_fn = self.get_object(io.id).and_then(|obj| {
-                obj.borrow()
-                    .get_property_descriptor("next")
-                    .and_then(|d| d.value)
-            });
+            let next_fn = match self.get_object_property(io.id, "next", iterator) {
+                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => Some(v),
+                Completion::Throw(e) => return Err(e),
+                _ => None,
+            };
             if let Some(next_fn) = next_fn {
                 match self.call_function(&next_fn, iterator, std::slice::from_ref(value)) {
                     Completion::Normal(v) => {
