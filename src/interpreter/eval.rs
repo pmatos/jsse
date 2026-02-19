@@ -513,18 +513,21 @@ impl Interpreter {
                         } else {
                             next_result
                         };
-                        let (done_val, value) = if let JsValue::Object(ref ro) = next_result {
-                            if let Some(robj) = self.get_object(ro.id) {
-                                let d = robj.borrow().get_property("done");
-                                let v = robj.borrow().get_property("value");
-                                (d, v)
-                            } else {
-                                (JsValue::Undefined, JsValue::Undefined)
+                        let done = match self.iterator_complete(&next_result) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                self.gc_unroot_value(&iterator);
+                                return Completion::Throw(e);
                             }
-                        } else {
-                            (JsValue::Undefined, JsValue::Undefined)
                         };
-                        if to_boolean(&done_val) {
+                        let value = match self.iterator_value(&next_result) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                self.gc_unroot_value(&iterator);
+                                return Completion::Throw(e);
+                            }
+                        };
+                        if done {
                             break Completion::Normal(value);
                         }
                         if let Some(ref mut ctx) = self.generator_context {
