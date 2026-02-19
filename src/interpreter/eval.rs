@@ -6679,7 +6679,8 @@ impl Interpreter {
                             for name in &var_names {
                                 body_env.borrow_mut().declare(name, BindingKind::Var);
                                 if param_names.contains(name) {
-                                    let val = func_env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                                    let val =
+                                        func_env.borrow().get(name).unwrap_or(JsValue::Undefined);
                                     let _ = body_env.borrow_mut().set(name, val);
                                 }
                             }
@@ -6838,8 +6839,7 @@ impl Interpreter {
                         .is_some_and(|f| Self::stmts_contain_arguments(f))
             }
             Statement::While(w) => {
-                Self::expr_contains_arguments(&w.test)
-                    || Self::stmt_contains_arguments(&w.body)
+                Self::expr_contains_arguments(&w.test) || Self::stmt_contains_arguments(&w.body)
             }
             Statement::For(f) => {
                 f.init.as_ref().is_some_and(|i| match i {
@@ -6854,12 +6854,10 @@ impl Interpreter {
                     || Self::stmt_contains_arguments(&f.body)
             }
             Statement::ForIn(f) => {
-                Self::expr_contains_arguments(&f.right)
-                    || Self::stmt_contains_arguments(&f.body)
+                Self::expr_contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
             }
             Statement::ForOf(f) => {
-                Self::expr_contains_arguments(&f.right)
-                    || Self::stmt_contains_arguments(&f.body)
+                Self::expr_contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
             }
             Statement::Switch(s) => {
                 Self::expr_contains_arguments(&s.discriminant)
@@ -6868,16 +6866,14 @@ impl Interpreter {
                         .any(|c| Self::stmts_contain_arguments(&c.consequent))
             }
             Statement::DoWhile(d) => {
-                Self::stmt_contains_arguments(&d.body)
-                    || Self::expr_contains_arguments(&d.test)
+                Self::stmt_contains_arguments(&d.body) || Self::expr_contains_arguments(&d.test)
             }
             Statement::Labeled(_, s) => Self::stmt_contains_arguments(s),
             Statement::With(e, s) => {
                 Self::expr_contains_arguments(e) || Self::stmt_contains_arguments(s)
             }
             // Function/class declarations create their own scope — don't recurse
-            Statement::FunctionDeclaration(_)
-            | Statement::ClassDeclaration(_) => false,
+            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
             _ => false,
         }
     }
@@ -6978,9 +6974,9 @@ impl Interpreter {
             | Expression::Assign(_, l, r) => {
                 Self::expr_contains_super_call(l) || Self::expr_contains_super_call(r)
             }
-            Expression::Unary(_, e)
-            | Expression::Update(_, _, e)
-            | Expression::Spread(e) => Self::expr_contains_super_call(e),
+            Expression::Unary(_, e) | Expression::Update(_, _, e) | Expression::Spread(e) => {
+                Self::expr_contains_super_call(e)
+            }
             Expression::Conditional(t, c, a) => {
                 Self::expr_contains_super_call(t)
                     || Self::expr_contains_super_call(c)
@@ -9634,7 +9630,9 @@ impl Interpreter {
                         continue;
                     }
                     let (key, fn_name_for_key) = match &m.key {
-                        PropertyKey::Identifier(s) | PropertyKey::String(s) => (s.clone(), s.clone()),
+                        PropertyKey::Identifier(s) | PropertyKey::String(s) => {
+                            (s.clone(), s.clone())
+                        }
                         PropertyKey::Number(n) => {
                             let s = to_js_string(&JsValue::Number(*n));
                             (s.clone(), s)

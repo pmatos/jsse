@@ -5055,8 +5055,7 @@ impl Interpreter {
                     let str_proto = self.string_prototype.clone();
                     if let Some(proto) = str_proto {
                         let proto_id = proto.borrow().id.unwrap();
-                        let proto_val =
-                            JsValue::Object(crate::types::JsObject { id: proto_id });
+                        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
                         let val = match self.get_object_property(proto_id, key, &proto_val) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Err(e),

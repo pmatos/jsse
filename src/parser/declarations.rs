@@ -265,9 +265,7 @@ impl<'a> Parser<'a> {
                 if let Token::IdentifierWithEscape(n) = &self.current {
                     let n = n.clone();
                     self.set_strict(prev_strict);
-                    return Err(
-                        self.error(format!("Unexpected strict mode reserved word '{n}'"))
-                    );
+                    return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
                 }
                 self.set_strict(prev_strict);
                 return Err(self.error("Expected class name"));
@@ -321,24 +319,20 @@ impl<'a> Parser<'a> {
                     && matches!(m.kind, ClassMethodKind::Get | ClassMethodKind::Set)
                     && Self::key_is_constructor(&m.key)
                 {
-                    return Err(self.error(
-                        "Class constructor may not be an accessor",
-                    ));
+                    return Err(self.error("Class constructor may not be an accessor"));
                 }
             }
 
             // Non-computed field named "constructor" is forbidden
             if let ClassElement::Property(p) = &element {
                 if !p.computed && Self::key_is_constructor(&p.key) {
-                    return Err(self.error(
-                        "Classes may not have a field named 'constructor'",
-                    ));
+                    return Err(self.error("Classes may not have a field named 'constructor'"));
                 }
                 // Static non-computed field named "prototype" is forbidden
                 if p.is_static && !p.computed && Self::key_is_prototype(&p.key) {
-                    return Err(self.error(
-                        "Classes may not have a static property named 'prototype'",
-                    ));
+                    return Err(
+                        self.error("Classes may not have a static property named 'prototype'")
+                    );
                 }
             }
 

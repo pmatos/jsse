@@ -301,9 +301,14 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn collect_var_names_from_pattern(pat: &Pattern, out: &mut std::collections::HashSet<String>) {
+    pub(crate) fn collect_var_names_from_pattern(
+        pat: &Pattern,
+        out: &mut std::collections::HashSet<String>,
+    ) {
         match pat {
-            Pattern::Identifier(name) => { out.insert(name.clone()); }
+            Pattern::Identifier(name) => {
+                out.insert(name.clone());
+            }
             Pattern::Array(elems) => {
                 for elem in elems.iter().flatten() {
                     match elem {
@@ -319,7 +324,9 @@ impl Interpreter {
                         ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
                             Self::collect_var_names_from_pattern(p, out);
                         }
-                        ObjectPatternProperty::Shorthand(name) => { out.insert(name.clone()); }
+                        ObjectPatternProperty::Shorthand(name) => {
+                            out.insert(name.clone());
+                        }
                     }
                 }
             }
@@ -330,7 +337,10 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn collect_var_names_from_stmts(stmts: &[Statement], out: &mut std::collections::HashSet<String>) {
+    pub(crate) fn collect_var_names_from_stmts(
+        stmts: &[Statement],
+        out: &mut std::collections::HashSet<String>,
+    ) {
         for stmt in stmts {
             Self::collect_var_names_from_stmt(stmt, out);
         }
