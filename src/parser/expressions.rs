@@ -1084,9 +1084,13 @@ impl<'a> Parser<'a> {
                         | Token::LegacyOctalLiteral(_)
                         | Token::LeftBracket
                         | Token::Keyword(_)
+                        | Token::PrivateName(_)
                 );
                 if is_method || is_generator {
                     let (key, computed) = self.parse_property_name()?;
+                    if matches!(&key, PropertyKey::Private(_)) {
+                        return Err(self.error("Private fields are not allowed in object literals"));
+                    }
                     let prev_async = self.in_async;
                     let prev_generator = self.in_generator;
                     self.in_async = true;
@@ -1126,6 +1130,9 @@ impl<'a> Parser<'a> {
         if self.current == Token::Star {
             self.advance()?; // consume *
             let (key, computed) = self.parse_property_name()?;
+            if matches!(&key, PropertyKey::Private(_)) {
+                return Err(self.error("Private fields are not allowed in object literals"));
+            }
             let prev_generator = self.in_generator;
             self.in_generator = true;
             let params = self.parse_formal_parameters()?;
@@ -1173,9 +1180,13 @@ impl<'a> Parser<'a> {
                     | Token::LegacyOctalLiteral(_)
                     | Token::LeftBracket
                     | Token::Keyword(_)
+                    | Token::PrivateName(_)
             );
             if is_accessor {
                 let (key, computed) = self.parse_property_name()?;
+                if matches!(&key, PropertyKey::Private(_)) {
+                    return Err(self.error("Private fields are not allowed in object literals"));
+                }
                 let params = self.parse_formal_parameters()?;
                 let (body, body_strict) =
                     self.parse_function_body_inner(false, false, true, false)?;
@@ -1209,6 +1220,10 @@ impl<'a> Parser<'a> {
         }
 
         let (key, computed) = self.parse_property_name()?;
+
+        if matches!(&key, PropertyKey::Private(_)) {
+            return Err(self.error("Private fields are not allowed in object literals"));
+        }
 
         // Shorthand: { x }
         if !computed

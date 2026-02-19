@@ -185,6 +185,11 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(PropertyKey::Identifier("null".to_string()))
             }
+            Token::BigIntLiteral(s) => {
+                let name = s.clone();
+                self.advance()?;
+                Ok(PropertyKey::String(name))
+            }
             _ => Err(self.error("Expected property name in object pattern")),
         }
     }
@@ -628,6 +633,10 @@ impl<'a> Parser<'a> {
             let n = *n;
             self.advance()?;
             Ok((PropertyKey::Number(n), false))
+        } else if let Token::BigIntLiteral(ref s) = self.current {
+            let name = s.clone();
+            self.advance()?;
+            Ok((PropertyKey::String(name), false))
         } else if let Token::Keyword(kw) = &self.current {
             // Keywords can be property names
             let name = kw.to_string();
