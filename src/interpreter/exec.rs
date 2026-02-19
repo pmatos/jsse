@@ -406,7 +406,7 @@ impl Interpreter {
     // for var-scope hoisting at the function/global level.
     // `blocked` tracks lexical names from enclosing scopes that would
     // cause an early error if a var with the same name were declared.
-    fn collect_annexb_function_names(
+    pub(crate) fn collect_annexb_function_names(
         stmts: &[Statement],
         names: &mut Vec<String>,
         blocked: &mut Vec<String>,

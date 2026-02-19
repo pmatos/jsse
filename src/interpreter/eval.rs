@@ -7350,6 +7350,92 @@ impl Interpreter {
             }
         }
 
+        // B.3.3.3: Annex B block-level function hoisting for eval
+        if !strict {
+            let mut annexb_names = Vec::new();
+            let mut annexb_blocked = Vec::new();
+            Self::collect_annexb_function_names(body, &mut annexb_names, &mut annexb_blocked);
+
+            if !annexb_names.is_empty() {
+                let mut eval_lexical_names = Vec::new();
+                for stmt in body {
+                    match stmt {
+                        Statement::Variable(decl)
+                            if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
+                        {
+                            for d in &decl.declarations {
+                                Self::collect_pattern_names(&d.pattern, &mut eval_lexical_names);
+                            }
+                        }
+                        Statement::ClassDeclaration(cls) => {
+                            eval_lexical_names.push(cls.name.clone());
+                        }
+                        _ => {}
+                    }
+                }
+
+                let declared_func_or_var: Vec<String> = declared_func_names
+                    .iter()
+                    .chain(declared_var_names.iter())
+                    .cloned()
+                    .collect();
+
+                let mut registered = Vec::new();
+                for name in annexb_names {
+                    if eval_lexical_names.contains(&name) {
+                        continue;
+                    }
+
+                    if !declared_func_or_var.contains(&name) {
+                        if direct && !is_global {
+                            let mut conflict = false;
+                            let mut check_env: Option<EnvRef> = Some(caller_env.clone());
+                            while let Some(env) = check_env {
+                                if Rc::ptr_eq(&env, var_env) {
+                                    break;
+                                }
+                                if env.borrow().bindings.contains_key(&name) {
+                                    conflict = true;
+                                    break;
+                                }
+                                let next = env.borrow().parent.clone();
+                                check_env = next;
+                            }
+                            if conflict {
+                                continue;
+                            }
+                        }
+
+                        if is_global {
+                            if !var_env.borrow().bindings.contains_key(&name) {
+                                var_env.borrow_mut().declare_global_var(&name);
+                            }
+                        } else if !var_env.borrow().bindings.contains_key(&name) {
+                            var_env.borrow_mut().declare(&name, BindingKind::Var);
+                        }
+                    }
+
+                    if !registered.contains(&name) {
+                        registered.push(name);
+                    }
+                }
+
+                if !registered.is_empty() {
+                    let mut existing = var_env
+                        .borrow_mut()
+                        .annexb_function_names
+                        .take()
+                        .unwrap_or_default();
+                    for name in registered {
+                        if !existing.contains(&name) {
+                            existing.push(name);
+                        }
+                    }
+                    var_env.borrow_mut().annexb_function_names = Some(existing);
+                }
+            }
+        }
+
         Ok(())
     }
 
