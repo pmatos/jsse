@@ -43,7 +43,8 @@ cd "$ACORN_DIR"
 npx esbuild test/run.js \
     --bundle \
     --format=iife \
-    --platform=node \
+    --platform=neutral \
+    --main-fields=main,module \
     --outfile="$BUNDLE"
 cd "$PROJECT_DIR"
 

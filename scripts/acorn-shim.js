@@ -12,6 +12,6 @@ if (typeof process === "undefined") {
     exit: function(code) {
       if (code !== 0) throw new Error("Process exit with code " + code);
     },
-    stdout: { write: function(s) {} }
+    stdout: { write: function(s, cb) { if (typeof cb === "function") cb(); } }
   };
 }
