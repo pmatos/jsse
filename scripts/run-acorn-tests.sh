@@ -36,6 +36,8 @@ if [ ! -d "$ACORN_DIR" ]; then
     git clone --depth 1 https://github.com/acornjs/acorn.git "$ACORN_DIR"
     echo "Installing acorn dependencies..."
     cd "$ACORN_DIR"
+    # Remove test262 git dep (huge, causes integrity errors) — we only need rollup for build
+    node -e "const p=require('./package.json'); delete p.devDependencies['test262']; delete p.devDependencies['test262-parser-runner']; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n')"
     npm install
     echo "Building acorn..."
     npm run build
