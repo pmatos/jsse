@@ -2,7 +2,7 @@
 # Run acorn's test suite on jsse.
 #
 # Usage:
-#   ./scripts/run-acorn-tests.sh [--clean]
+#   ./scripts/run-acorn-tests.sh [--clean] [--node]
 #
 # Clones acorn (cached in /tmp/acorn), bundles the test suite into a single
 # IIFE file, prepends runtime shims, builds jsse, and runs the bundle.
@@ -17,11 +17,18 @@ BUNDLE="/tmp/acorn-tests-bundle.js"
 FINAL="/tmp/acorn-tests-final.js"
 JSSE="$PROJECT_DIR/target/release/jsse"
 
-# Handle --clean flag
-if [[ "${1:-}" == "--clean" ]]; then
-    echo "Cleaning cached acorn..."
-    rm -rf "$ACORN_DIR" "$BUNDLE" "$FINAL"
-fi
+ENGINE="$JSSE"
+for arg in "$@"; do
+    case "$arg" in
+        --clean)
+            echo "Cleaning cached acorn..."
+            rm -rf "$ACORN_DIR" "$BUNDLE" "$FINAL"
+            ;;
+        --node)
+            ENGINE="node"
+            ;;
+    esac
+done
 
 # Step 1: Clone and build acorn (cached)
 if [ ! -d "$ACORN_DIR" ]; then
@@ -62,25 +69,27 @@ FINAL_SIZE=$(wc -c < "$FINAL")
 echo "Final bundle: $FINAL ($FINAL_SIZE bytes)"
 
 # Step 4: Build jsse
-echo "Building jsse (release)..."
-cd "$PROJECT_DIR"
-cargo build --release
+if [ "$ENGINE" = "$JSSE" ]; then
+    echo "Building jsse (release)..."
+    cd "$PROJECT_DIR"
+    cargo build --release
+fi
 
 # Step 5: Run on jsse
 echo ""
 echo "========================================"
-echo "  Running acorn test suite on jsse"
+echo "  Running acorn test suite on $(basename $ENGINE)"
 echo "========================================"
 echo ""
 
 EXIT_CODE=0
-"$JSSE" "$FINAL" 2>&1 || EXIT_CODE=$?
+"$ENGINE" "$FINAL" 2>&1 || EXIT_CODE=$?
 
 echo ""
 echo "========================================"
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "  jsse exited successfully (code 0)"
+    echo "  $(basename $ENGINE) exited successfully (code 0)"
 else
-    echo "  jsse exited with code $EXIT_CODE"
+    echo "  $(basename $ENGINE) exited with code $EXIT_CODE"
 fi
 echo "========================================"
