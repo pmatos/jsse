@@ -12,7 +12,7 @@ pub enum Token {
     NumericLiteral(f64),
     LegacyOctalLiteral(f64),
     BigIntLiteral(String),
-    StringLiteral(String),
+    StringLiteral(Vec<u16>),
     BooleanLiteral(bool),
     NullLiteral,
     RegExpLiteral { pattern: String, flags: String },
@@ -385,26 +385,127 @@ impl<'a> Lexer<'a> {
         self.column = 0;
     }
 
-    fn read_string(&mut self, quote: char) -> Result<String, LexError> {
-        let mut s = String::new();
+    fn read_string(&mut self, quote: char) -> Result<Vec<u16>, LexError> {
+        let mut code_units: Vec<u16> = Vec::new();
         let mut has_escape = false;
         loop {
             match self.advance() {
                 None => return Err(self.error("Unterminated string literal")),
                 Some(ch) if ch == quote => {
                     self.last_string_has_escape = has_escape;
-                    return Ok(s);
+                    return Ok(code_units);
                 }
                 Some('\n' | '\r') => {
                     return Err(self.error("Unterminated string literal"));
                 }
                 Some('\\') => {
                     has_escape = true;
-                    let esc = self.read_escape_sequence()?;
-                    s.push_str(&esc);
+                    self.read_string_escape_into(&mut code_units)?;
                 }
-                Some(ch) => s.push(ch),
+                Some(ch) => {
+                    let mut buf = [0u16; 2];
+                    for cu in ch.encode_utf16(&mut buf).iter() {
+                        code_units.push(*cu);
+                    }
+                }
             }
+        }
+    }
+
+    fn read_string_escape_into(&mut self, out: &mut Vec<u16>) -> Result<(), LexError> {
+        match self.advance() {
+            None => Err(self.error("Unterminated escape sequence")),
+            Some('n') => { out.push(0x000A); Ok(()) }
+            Some('r') => { out.push(0x000D); Ok(()) }
+            Some('t') => { out.push(0x0009); Ok(()) }
+            Some('b') => { out.push(0x0008); Ok(()) }
+            Some('f') => { out.push(0x000C); Ok(()) }
+            Some('v') => { out.push(0x000B); Ok(()) }
+            Some(ch @ '0'..='7') => {
+                if ch == '0' && !self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                    out.push(0x0000);
+                    return Ok(());
+                }
+                if self.strict {
+                    return Err(self.error("Octal escape sequences are not allowed in strict mode"));
+                }
+                let mut val = (ch as u32) - ('0' as u32);
+                if self.peek().is_some_and(|c| ('0'..='7').contains(&c)) {
+                    val = val * 8 + (self.advance().unwrap() as u32 - '0' as u32);
+                    if ch <= '3' && self.peek().is_some_and(|c| ('0'..='7').contains(&c)) {
+                        val = val * 8 + (self.advance().unwrap() as u32 - '0' as u32);
+                    }
+                }
+                if let Some(c) = char::from_u32(val) {
+                    let mut buf = [0u16; 2];
+                    for cu in c.encode_utf16(&mut buf).iter() {
+                        out.push(*cu);
+                    }
+                }
+                Ok(())
+            }
+            Some('x') => {
+                let h1 = self.advance().ok_or_else(|| self.error("Invalid hex escape"))?;
+                let h2 = self.advance().ok_or_else(|| self.error("Invalid hex escape"))?;
+                let val = hex_val(h1)
+                    .and_then(|a| hex_val(h2).map(|b| a * 16 + b))
+                    .ok_or_else(|| self.error("Invalid hex escape"))?;
+                out.push(val as u16);
+                Ok(())
+            }
+            Some('u') => self.read_string_unicode_escape_into(out),
+            Some(ch) if Self::is_line_terminator(ch) => {
+                self.handle_newline(ch);
+                Ok(())
+            }
+            Some(ch) => {
+                let mut buf = [0u16; 2];
+                for cu in ch.encode_utf16(&mut buf).iter() {
+                    out.push(*cu);
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn read_string_unicode_escape_into(&mut self, out: &mut Vec<u16>) -> Result<(), LexError> {
+        if self.peek() == Some('{') {
+            self.advance(); // skip {
+            let mut val: u32 = 0;
+            let mut digits = 0;
+            while let Some(ch) = self.peek() {
+                if ch == '}' {
+                    self.advance();
+                    if digits == 0 {
+                        return Err(self.error("Invalid Unicode escape"));
+                    }
+                    let c = char::from_u32(val)
+                        .ok_or_else(|| self.error("Invalid Unicode code point"))?;
+                    let mut buf = [0u16; 2];
+                    for cu in c.encode_utf16(&mut buf).iter() {
+                        out.push(*cu);
+                    }
+                    return Ok(());
+                }
+                let d = hex_val(ch).ok_or_else(|| self.error("Invalid Unicode escape"))?;
+                val = val * 16 + d;
+                if val > 0x10FFFF {
+                    return Err(self.error("Unicode code point out of range"));
+                }
+                digits += 1;
+                self.advance();
+            }
+            Err(self.error("Unterminated Unicode escape"))
+        } else {
+            let mut val: u32 = 0;
+            for _ in 0..4 {
+                let ch = self.advance()
+                    .ok_or_else(|| self.error("Invalid Unicode escape"))?;
+                let d = hex_val(ch).ok_or_else(|| self.error("Invalid Unicode escape"))?;
+                val = val * 16 + d;
+            }
+            out.push(val as u16);
+            Ok(())
         }
     }
 
@@ -1315,15 +1416,19 @@ mod tests {
         );
     }
 
+    fn utf16(s: &str) -> Vec<u16> {
+        s.encode_utf16().collect()
+    }
+
     #[test]
     fn string_literals() {
         assert_eq!(
             lex_no_lt(r#""hello""#),
-            vec![Token::StringLiteral("hello".into()), Token::Eof]
+            vec![Token::StringLiteral(utf16("hello")), Token::Eof]
         );
         assert_eq!(
             lex_no_lt(r"'he\nllo'"),
-            vec![Token::StringLiteral("he\nllo".into()), Token::Eof]
+            vec![Token::StringLiteral(utf16("he\nllo")), Token::Eof]
         );
     }
 
@@ -1415,11 +1520,11 @@ mod tests {
     fn unicode_escape_in_string() {
         assert_eq!(
             lex_no_lt(r#""\u0041""#),
-            vec![Token::StringLiteral("A".into()), Token::Eof]
+            vec![Token::StringLiteral(utf16("A")), Token::Eof]
         );
         assert_eq!(
             lex_no_lt(r#""\u{1F600}""#),
-            vec![Token::StringLiteral("😀".into()), Token::Eof]
+            vec![Token::StringLiteral(utf16("\u{1F600}")), Token::Eof]
         );
     }
 }

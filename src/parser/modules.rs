@@ -6,7 +6,7 @@ impl<'a> Parser<'a> {
 
         // import "module" (side effect import)
         if let Token::StringLiteral(source) = &self.current {
-            let source = source.clone();
+            let source = String::from_utf16_lossy(source);
             self.advance()?;
             self.eat_semicolon()?;
             return Ok(ImportDeclaration {
@@ -317,7 +317,7 @@ impl<'a> Parser<'a> {
     fn parse_module_specifier(&mut self) -> Result<String, ParseError> {
         match &self.current {
             Token::StringLiteral(s) => {
-                let s = s.clone();
+                let s = String::from_utf16_lossy(s);
                 self.advance()?;
                 Ok(s)
             }
@@ -328,7 +328,7 @@ impl<'a> Parser<'a> {
     fn parse_module_export_name(&mut self) -> Result<String, ParseError> {
         // ModuleExportName: IdentifierName | StringLiteral
         if let Token::StringLiteral(s) = &self.current {
-            let s = s.clone();
+            let s = String::from_utf16_lossy(s);
             self.advance()?;
             return Ok(s);
         }

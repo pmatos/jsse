@@ -2200,7 +2200,7 @@ impl Interpreter {
                     program.body.first()
                 {
                     let is_strict = fe.body.first().is_some_and(|s| {
-                        matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                        matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                     });
                     let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                     dynamic_fn_env.borrow_mut().strict = false;
@@ -2594,7 +2594,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
@@ -2697,7 +2697,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
@@ -2800,7 +2800,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;

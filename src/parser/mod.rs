@@ -574,13 +574,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn is_directive_prologue<'b>(&self, stmt: &'b Statement) -> Option<&'b str> {
+    fn is_directive_prologue(&self, stmt: &Statement) -> Option<String> {
         match stmt {
             Statement::Expression(Expression::Literal(Literal::String(s))) => {
                 if self.last_string_literal_has_escape {
                     None
                 } else {
-                    Some(s.as_str())
+                    Some(String::from_utf16_lossy(s))
                 }
             }
             _ => None,

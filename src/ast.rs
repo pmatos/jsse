@@ -176,7 +176,7 @@ pub enum Literal {
     Null,
     Boolean(bool),
     Number(f64),
-    String(String),
+    String(Vec<u16>),
     BigInt(String),
     RegExp(String, String),
 }
@@ -447,6 +447,11 @@ impl Expression {
             _ => false,
         }
     }
+}
+
+pub fn utf16_eq(code_units: &[u16], s: &str) -> bool {
+    let expected: Vec<u16> = s.encode_utf16().collect();
+    code_units == expected.as_slice()
 }
 
 #[derive(Clone, Debug)]

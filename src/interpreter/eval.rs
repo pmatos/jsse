@@ -1029,7 +1029,7 @@ impl Interpreter {
             Literal::Null => JsValue::Null,
             Literal::Boolean(b) => JsValue::Boolean(*b),
             Literal::Number(n) => JsValue::Number(*n),
-            Literal::String(s) => JsValue::String(JsString::from_str(s)),
+            Literal::String(s) => JsValue::String(JsString { code_units: s.clone() }),
             Literal::BigInt(s) => {
                 use num_bigint::BigInt;
                 let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
@@ -7069,7 +7069,7 @@ impl Interpreter {
             }
         }
         let eval_code_strict = program.body.first().is_some_and(|s| {
-            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
         });
         let is_strict = caller_strict || eval_code_strict;
 
