@@ -1,3 +1,5 @@
+mod locale;
+
 use super::super::*;
 use icu::locale::Locale as IcuLocale;
 
@@ -247,6 +249,9 @@ impl Interpreter {
         intl_obj
             .borrow_mut()
             .insert_builtin("supportedValuesOf".to_string(), svo_fn);
+
+        // Intl.Locale
+        self.setup_intl_locale(&intl_obj);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.global_env

@@ -673,9 +673,11 @@ pub struct DataViewInfo {
 #[derive(Clone)]
 pub(crate) enum IntlData {
     Locale {
+        tag: String,
         language: String,
         script: Option<String>,
         region: Option<String>,
+        variants: Option<String>,
         calendar: Option<String>,
         case_first: Option<String>,
         collation: Option<String>,
