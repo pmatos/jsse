@@ -98,6 +98,14 @@ pub(crate) fn to_js_string(val: &JsValue) -> String {
     format!("{val}")
 }
 
+/// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.
+pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
+    match val {
+        JsValue::String(s) => s.code_units.clone(),
+        _ => to_js_string(val).encode_utf16().collect(),
+    }
+}
+
 /// Convert a JsValue to a property key string. For symbols, uses the id-based
 /// format to ensure uniqueness. For other types, same as to_js_string.
 pub(crate) fn to_property_key_string(val: &JsValue) -> String {

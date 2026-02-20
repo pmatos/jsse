@@ -449,11 +449,11 @@ impl Interpreter {
                 "slice",
                 2,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
+                    let js_str = match this_js_string(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let len = units.len() as f64;
                     let int_start = match args.first() {
                         Some(v) => match to_num(interp, v) {
@@ -479,8 +479,14 @@ impl Interpreter {
                     } else {
                         int_end.min(len) as usize
                     };
-                    let result = utf16_substring(&units, from, to);
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    let from = from.min(units.len());
+                    let to = to.min(units.len());
+                    if from >= to {
+                        return Completion::Normal(JsValue::String(JsString::from_str("")));
+                    }
+                    Completion::Normal(JsValue::String(JsString {
+                        code_units: units[from..to].to_vec(),
+                    }))
                 }),
             ),
             (
