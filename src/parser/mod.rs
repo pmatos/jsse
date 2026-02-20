@@ -58,6 +58,7 @@ pub struct Parser<'a> {
     private_name_scopes: Vec<(std::collections::HashSet<String>, Vec<(String, usize)>)>,
     in_field_initializer_eval: bool,
     in_static_block: bool,
+    function_param_names: Option<std::collections::HashSet<String>>,
 }
 
 impl<'a> Parser<'a> {
@@ -101,6 +102,7 @@ impl<'a> Parser<'a> {
             private_name_scopes: Vec::new(),
             in_field_initializer_eval: false,
             in_static_block: false,
+            function_param_names: None,
         })
     }
 

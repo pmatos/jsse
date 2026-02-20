@@ -463,6 +463,11 @@ examples:
     return parser.parse_args()
 
 
+def _is_fixture(p: Path) -> bool:
+    name = p.name
+    return name.endswith("_FIXTURE.js") or name.endswith("_FIXTURE.mjs")
+
+
 def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     if paths:
         tests = []
@@ -471,7 +476,7 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
             if path.is_file() and path.suffix == ".js":
                 tests.append(path)
             elif path.is_dir():
-                tests.extend(sorted(path.rglob("*.js")))
+                tests.extend(f for f in sorted(path.rglob("*.js")) if not _is_fixture(f))
         return sorted(tests)
 
     test_dir = test262_dir / "test"
@@ -479,7 +484,7 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     for subdir in ("language", "built-ins", "annexB"):
         d = test_dir / subdir
         if d.is_dir():
-            tests.extend(d.rglob("*.js"))
+            tests.extend(f for f in d.rglob("*.js") if not _is_fixture(f))
     return sorted(tests)
 
 

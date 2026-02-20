@@ -2,8 +2,8 @@
 
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
-**Total test262 scenarios:** 92,496 (48,257 files, dual strict/non-strict per spec)
-**Current pass rate:** 85,521 / 92,624 (92.33%)
+**Total test262 scenarios:** 92,242 (48,130 files, dual strict/non-strict per spec)
+**Current pass rate:** 85,749 / 92,242 (92.96%)
 
 ---
 
@@ -198,7 +198,7 @@ These are tracked across all phases:
 
 | Area | Tests | Notes |
 |------|-------|-------|
-| `language/expressions` | 11,093 | Largest language category |
+| `language/expressions` | 21,161 (19,987 pass) | Largest language category |
 | `language/statements` | 9,337 | Second largest |
 | `language/module-code` | 737 | |
 | `language/literals` | 534 | |

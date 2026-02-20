@@ -716,8 +716,7 @@ pub fn expr_contains_yield(expr: &Expression) -> bool {
         | Expression::Await(e)
         | Expression::Update(_, _, e) => expr_contains_yield(e),
         Expression::Import(e, opts) => {
-            expr_contains_yield(e)
-                || opts.as_ref().is_some_and(|o| expr_contains_yield(o))
+            expr_contains_yield(e) || opts.as_ref().is_some_and(|o| expr_contains_yield(o))
         }
         Expression::Binary(_, l, r)
         | Expression::Logical(_, l, r)

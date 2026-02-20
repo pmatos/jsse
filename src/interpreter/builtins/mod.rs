@@ -5706,7 +5706,13 @@ impl Interpreter {
                     if !key.starts_with("Symbol(") {
                         let is_ns = obj.borrow().module_namespace.is_some();
                         if is_ns {
-                            let export_names = obj.borrow().module_namespace.as_ref().unwrap().export_names.clone();
+                            let export_names = obj
+                                .borrow()
+                                .module_namespace
+                                .as_ref()
+                                .unwrap()
+                                .export_names
+                                .clone();
                             if export_names.contains(&key) {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }

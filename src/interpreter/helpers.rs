@@ -222,6 +222,86 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
     }
 }
 
+fn string_to_bigint(s: &str) -> Option<num_bigint::BigInt> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Some(num_bigint::BigInt::from(0));
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16);
+    }
+    if let Some(oct) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
+        return num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8);
+    }
+    if let Some(bin) = trimmed
+        .strip_prefix("0b")
+        .or_else(|| trimmed.strip_prefix("0B"))
+    {
+        return num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2);
+    }
+    trimmed.parse::<num_bigint::BigInt>().ok()
+}
+
+fn bigint_equal_number(b: &num_bigint::BigInt, n: f64) -> bool {
+    if n.is_nan() || n.is_infinite() {
+        return false;
+    }
+    if n.fract() != 0.0 {
+        return false;
+    }
+    let n_i128 = n as i128;
+    if n_i128 as f64 != n {
+        return false;
+    }
+    let n_bigint = num_bigint::BigInt::from(n_i128);
+    b == &n_bigint
+}
+
+fn bigint_to_f64(b: &num_bigint::BigInt) -> Option<f64> {
+    let s = b.to_str_radix(10);
+    s.parse::<f64>().ok()
+}
+
+fn bigint_less_than_number(b: &num_bigint::BigInt, n: f64) -> Option<bool> {
+    if n.is_nan() {
+        return None;
+    }
+    if n == f64::INFINITY {
+        return Some(true);
+    }
+    if n == f64::NEG_INFINITY {
+        return Some(false);
+    }
+    if let Some(bf) = bigint_to_f64(b) {
+        Some(bf < n)
+    } else {
+        Some(b.sign() == num_bigint::Sign::Minus)
+    }
+}
+
+fn number_less_than_bigint(n: f64, b: &num_bigint::BigInt) -> Option<bool> {
+    if n.is_nan() {
+        return None;
+    }
+    if n == f64::INFINITY {
+        return Some(false);
+    }
+    if n == f64::NEG_INFINITY {
+        return Some(true);
+    }
+    if let Some(bf) = bigint_to_f64(b) {
+        Some(n < bf)
+    } else {
+        Some(b.sign() != num_bigint::Sign::Minus)
+    }
+}
+
 #[allow(dead_code)]
 pub(crate) fn abstract_equality(left: &JsValue, right: &JsValue) -> bool {
     // Same type
@@ -239,6 +319,28 @@ pub(crate) fn abstract_equality(left: &JsValue, right: &JsValue) -> bool {
     if left.is_string() && right.is_number() {
         return abstract_equality(&JsValue::Number(to_number(left)), right);
     }
+    // BigInt vs String
+    if let JsValue::BigInt(b) = left
+        && let JsValue::String(s) = right
+    {
+        return string_to_bigint(&s.to_rust_string()).map_or(false, |parsed| parsed == b.value);
+    }
+    if let JsValue::String(s) = left
+        && let JsValue::BigInt(b) = right
+    {
+        return string_to_bigint(&s.to_rust_string()).map_or(false, |parsed| parsed == b.value);
+    }
+    // BigInt vs Number
+    if let JsValue::BigInt(b) = left
+        && let JsValue::Number(n) = right
+    {
+        return bigint_equal_number(&b.value, *n);
+    }
+    if let JsValue::Number(n) = left
+        && let JsValue::BigInt(b) = right
+    {
+        return bigint_equal_number(&b.value, *n);
+    }
     // Boolean coercion
     if left.is_boolean() {
         return abstract_equality(&JsValue::Number(to_number(left)), right);
@@ -255,6 +357,42 @@ pub(crate) fn abstract_relational(left: &JsValue, right: &JsValue) -> Option<boo
         let ls = to_js_string(left);
         let rs = to_js_string(right);
         return Some(ls < rs);
+    }
+    // BigInt vs BigInt
+    if let JsValue::BigInt(a) = left
+        && let JsValue::BigInt(b) = right
+    {
+        return bigint_ops::less_than(&a.value, &b.value);
+    }
+    // BigInt vs Number
+    if let JsValue::BigInt(b) = left
+        && let JsValue::Number(n) = right
+    {
+        return bigint_less_than_number(&b.value, *n);
+    }
+    // Number vs BigInt
+    if let JsValue::Number(n) = left
+        && let JsValue::BigInt(b) = right
+    {
+        return number_less_than_bigint(*n, &b.value);
+    }
+    // BigInt vs String
+    if let JsValue::BigInt(b) = left
+        && let JsValue::String(s) = right
+    {
+        if let Some(parsed) = string_to_bigint(&s.to_rust_string()) {
+            return bigint_ops::less_than(&b.value, &parsed);
+        }
+        return None;
+    }
+    // String vs BigInt
+    if let JsValue::String(s) = left
+        && let JsValue::BigInt(b) = right
+    {
+        if let Some(parsed) = string_to_bigint(&s.to_rust_string()) {
+            return bigint_ops::less_than(&parsed, &b.value);
+        }
+        return None;
     }
     let ln = to_number(left);
     let rn = to_number(right);

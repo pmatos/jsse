@@ -135,12 +135,14 @@ pub(crate) enum BindingKind {
     Var,
     Let,
     Const,
+    FunctionName,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SetBindingCheck {
     Ok,
     ConstAssign,
+    FunctionNameAssign,
     TdzError,
     Unresolvable,
 }
@@ -232,6 +234,14 @@ impl Environment {
                 return Err(JsValue::String(JsString::from_str(
                     "Assignment to constant variable.",
                 )));
+            }
+            if binding.kind == BindingKind::FunctionName && binding.initialized {
+                if self.strict {
+                    return Err(JsValue::String(JsString::from_str(
+                        "Assignment to constant variable.",
+                    )));
+                }
+                return Ok(());
             }
             if binding.kind == BindingKind::Var {
                 if let Some(ref global_obj) = self.global_object {
@@ -327,6 +337,9 @@ impl Environment {
             }
             if binding.kind == BindingKind::Const && binding.initialized {
                 return SetBindingCheck::ConstAssign;
+            }
+            if binding.kind == BindingKind::FunctionName && binding.initialized {
+                return SetBindingCheck::FunctionNameAssign;
             }
             return SetBindingCheck::Ok;
         }
@@ -1043,7 +1056,11 @@ impl JsObjectData {
             if !key.starts_with("Symbol(") {
                 if ns_data.export_names.contains(&key.to_string()) {
                     let val = if let Some(binding_name) = ns_data.export_to_binding.get(key) {
-                        ns_data.env.borrow().get(binding_name).unwrap_or(JsValue::Undefined)
+                        ns_data
+                            .env
+                            .borrow()
+                            .get(binding_name)
+                            .unwrap_or(JsValue::Undefined)
                     } else {
                         JsValue::Undefined
                     };

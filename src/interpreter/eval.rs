@@ -313,11 +313,31 @@ impl Interpreter {
             Expression::Array(elements) => self.eval_array_literal(elements, env),
             Expression::Object(props) => self.eval_object_literal(props, env),
             Expression::Function(f) => {
+                let closure_env = if f.name.is_some() {
+                    let func_env = Rc::new(RefCell::new(Environment {
+                        bindings: HashMap::new(),
+                        parent: Some(env.clone()),
+                        strict: env.borrow().strict,
+                        is_function_scope: false,
+                        with_object: None,
+                        dispose_stack: None,
+                        global_object: env.borrow().global_object.clone(),
+                        annexb_function_names: None,
+                        class_private_names: None,
+                        is_field_initializer: false,
+                    }));
+                    func_env
+                        .borrow_mut()
+                        .declare(f.name.as_ref().unwrap(), BindingKind::FunctionName);
+                    func_env
+                } else {
+                    env.clone()
+                };
                 let func = JsFunction::User {
                     name: f.name.clone(),
                     params: f.params.clone(),
                     body: f.body.clone(),
-                    closure: env.clone(),
+                    closure: closure_env.clone(),
                     is_arrow: false,
                     is_strict: Self::is_strict_mode_body(&f.body) || env.borrow().strict,
                     is_generator: f.is_generator,
@@ -325,7 +345,11 @@ impl Interpreter {
                     is_method: false,
                     source_text: f.source_text.clone(),
                 };
-                Completion::Normal(self.create_function(func))
+                let func_val = self.create_function(func);
+                if let Some(name) = &f.name {
+                    let _ = closure_env.borrow_mut().set(name, func_val.clone());
+                }
+                Completion::Normal(func_val)
             }
             Expression::ArrowFunction(af) => {
                 let body_stmts = match &af.body {
@@ -426,12 +450,32 @@ impl Interpreter {
                             );
                         }
                     };
-                    if let JsValue::Object(o) = &obj_val
-                        && let Some(obj) = self.get_object(o.id)
-                    {
+                    // TypeError for null/undefined base
+                    if obj_val.is_null() || obj_val.is_undefined() {
+                        return Completion::Throw(self.create_type_error(&format!(
+                            "Cannot delete property '{}' of {}",
+                            key,
+                            if obj_val.is_null() {
+                                "null"
+                            } else {
+                                "undefined"
+                            }
+                        )));
+                    }
+                    // Auto-box primitives via to_object
+                    let obj_ref = if let JsValue::Object(o) = &obj_val {
+                        o.clone()
+                    } else {
+                        match self.to_object(&obj_val) {
+                            Completion::Normal(JsValue::Object(o)) => o,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => return Completion::Normal(JsValue::Boolean(true)),
+                        }
+                    };
+                    if let Some(obj) = self.get_object(obj_ref.id) {
                         // Proxy deleteProperty trap
                         if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
-                            match self.proxy_delete_property(o.id, &key) {
+                            match self.proxy_delete_property(obj_ref.id, &key) {
                                 Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                                 Err(e) => return Completion::Throw(e),
                             }
@@ -440,11 +484,19 @@ impl Interpreter {
                         if !key.starts_with("Symbol(") {
                             let is_ns = obj.borrow().module_namespace.is_some();
                             if is_ns {
-                                let export_names = obj.borrow().module_namespace.as_ref().unwrap().export_names.clone();
+                                let export_names = obj
+                                    .borrow()
+                                    .module_namespace
+                                    .as_ref()
+                                    .unwrap()
+                                    .export_names
+                                    .clone();
                                 if export_names.contains(&key) {
                                     if env.borrow().strict {
                                         return Completion::Throw(self.create_type_error(
-                                            &format!("Cannot delete property '{key}' of module namespace"),
+                                            &format!(
+                                                "Cannot delete property '{key}' of module namespace"
+                                            ),
                                         ));
                                     }
                                     return Completion::Normal(JsValue::Boolean(false));
@@ -454,8 +506,8 @@ impl Interpreter {
                         }
                         // TypedArray: §10.4.5.4 [[Delete]]
                         {
-                            let obj_ref = obj.borrow();
-                            if let Some(ref ta) = obj_ref.typed_array_info {
+                            let obj_borrow = obj.borrow();
+                            if let Some(ref ta) = obj_borrow.typed_array_info {
                                 if let Some(index) = canonical_numeric_index_string(&key) {
                                     if is_valid_integer_index(ta, index) {
                                         return Completion::Normal(JsValue::Boolean(false));
@@ -464,10 +516,17 @@ impl Interpreter {
                                 }
                             }
                         }
+                        let is_strict = env.borrow().strict;
                         let mut obj_mut = obj.borrow_mut();
                         if let Some(desc) = obj_mut.properties.get(&key)
                             && desc.configurable == Some(false)
                         {
+                            if is_strict {
+                                drop(obj_mut);
+                                return Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot delete property '{key}' of object"
+                                )));
+                            }
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                         obj_mut.properties.remove(&key);
@@ -878,6 +937,14 @@ impl Interpreter {
             JsValue::String(s) => {
                 if name == "length" {
                     Completion::Normal(JsValue::Number(s.len() as f64))
+                } else if let Ok(idx) = name.parse::<usize>() {
+                    if idx < s.code_units.len() {
+                        Completion::Normal(JsValue::String(JsString {
+                            code_units: vec![s.code_units[idx]],
+                        }))
+                    } else {
+                        Completion::Normal(JsValue::Undefined)
+                    }
                 } else if let Some(ref sp) = self.string_prototype {
                     Completion::Normal(sp.borrow().get_property(name))
                 } else {
@@ -2219,6 +2286,14 @@ impl Interpreter {
                                     self.create_type_error("Assignment to constant variable."),
                                 );
                             }
+                            SetBindingCheck::FunctionNameAssign => {
+                                if env.borrow().strict {
+                                    return Completion::Throw(
+                                        self.create_type_error("Assignment to constant variable."),
+                                    );
+                                }
+                                // Sloppy mode: silently ignore, return the assigned value
+                            }
                             SetBindingCheck::Unresolvable => {
                                 if env.borrow().strict {
                                     return Completion::Throw(self.create_reference_error(
@@ -3214,6 +3289,13 @@ impl Interpreter {
                     ))),
                     SetBindingCheck::ConstAssign => {
                         Err(self.create_type_error("Assignment to constant variable."))
+                    }
+                    SetBindingCheck::FunctionNameAssign => {
+                        if env.borrow().strict {
+                            Err(self.create_type_error("Assignment to constant variable."))
+                        } else {
+                            Ok(())
+                        }
                     }
                     SetBindingCheck::Unresolvable => {
                         if env.borrow().strict {
@@ -8385,16 +8467,24 @@ impl Interpreter {
         if !self.is_callable(ctor) {
             return Completion::Normal(JsValue::Boolean(false));
         }
+        // Step 3: If Type(O) is not Object, return false
+        let JsValue::Object(lhs) = obj else {
+            return Completion::Normal(JsValue::Boolean(false));
+        };
+        let Some(inst_obj) = self.get_object(lhs.id) else {
+            return Completion::Normal(JsValue::Boolean(false));
+        };
         let ctor_obj_ref = match ctor {
             JsValue::Object(o) => o.clone(),
             _ => return Completion::Normal(JsValue::Boolean(false)),
         };
-        // Use getter-aware access for prototype
+        // Step 4: Let P be Get(C, "prototype")
         let proto_val = match self.get_object_property(ctor_obj_ref.id, "prototype", ctor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Completion::Throw(e),
             _ => JsValue::Undefined,
         };
+        // Step 5: If P is not Object, throw TypeError
         let JsValue::Object(proto_ref) = &proto_val else {
             return Completion::Throw(
                 self.create_type_error("Function has non-object prototype in instanceof check"),
@@ -8404,12 +8494,6 @@ impl Interpreter {
             return Completion::Throw(
                 self.create_type_error("Function has non-object prototype in instanceof check"),
             );
-        };
-        let JsValue::Object(lhs) = obj else {
-            return Completion::Normal(JsValue::Boolean(false));
-        };
-        let Some(inst_obj) = self.get_object(lhs.id) else {
-            return Completion::Normal(JsValue::Boolean(false));
         };
         let mut current = inst_obj.borrow().prototype.clone();
         while let Some(p) = current {
@@ -10431,7 +10515,7 @@ impl Interpreter {
                 Completion::Normal(v) => v,
                 other => return other,
             };
-            // Handle spread
+            // Handle spread — CopyDataProperties (§7.3.26)
             if let Expression::Spread(inner) = &prop.value {
                 let spread_val = match self.eval_expr(inner, env) {
                     Completion::Normal(v) => v,
@@ -10440,11 +10524,30 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = spread_val
                     && let Some(src) = self.get_object(o.id)
                 {
-                    let src_ref = src.borrow();
-                    for k in &src_ref.property_order {
-                        if let Some(v) = src_ref.properties.get(k) {
-                            obj_data.insert_property(k.clone(), v.clone());
+                    let keys_and_enumerable: Vec<(String, bool)> = {
+                        let src_ref = src.borrow();
+                        src_ref
+                            .property_order
+                            .iter()
+                            .filter_map(|k| {
+                                src_ref
+                                    .properties
+                                    .get(k)
+                                    .map(|desc| (k.clone(), desc.enumerable != Some(false)))
+                            })
+                            .collect()
+                    };
+                    let src_id = o.id;
+                    for (k, enumerable) in keys_and_enumerable {
+                        if !enumerable {
+                            continue;
                         }
+                        let val = match self.get_object_property(src_id, &k, &spread_val) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+                        obj_data.insert_value(k, val);
                     }
                 }
                 continue;

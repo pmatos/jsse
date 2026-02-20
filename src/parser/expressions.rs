@@ -160,35 +160,51 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_nullish_coalescing(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_logical_or()?;
-        while self.current == Token::NullishCoalescing {
-            self.advance()?;
-            let right = self.parse_logical_or()?;
-            left = Expression::Logical(
-                LogicalOp::NullishCoalescing,
-                Box::new(left),
-                Box::new(right),
-            );
-        }
-        Ok(left)
-    }
-
-    fn parse_logical_or(&mut self) -> Result<Expression, ParseError> {
-        let mut left = self.parse_logical_and()?;
-        while self.current == Token::LogicalOr {
-            self.advance()?;
-            let right = self.parse_logical_and()?;
-            left = Expression::Logical(LogicalOp::Or, Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-
-    fn parse_logical_and(&mut self) -> Result<Expression, ParseError> {
         let mut left = self.parse_bitwise_or()?;
-        while self.current == Token::LogicalAnd {
-            self.advance()?;
-            let right = self.parse_bitwise_or()?;
-            left = Expression::Logical(LogicalOp::And, Box::new(left), Box::new(right));
+        match self.current {
+            Token::NullishCoalescing => {
+                while self.current == Token::NullishCoalescing {
+                    self.advance()?;
+                    let right = self.parse_bitwise_or()?;
+                    left = Expression::Logical(
+                        LogicalOp::NullishCoalescing,
+                        Box::new(left),
+                        Box::new(right),
+                    );
+                }
+                if matches!(self.current, Token::LogicalOr | Token::LogicalAnd) {
+                    return Err(self.error(
+                        "Logical expressions and coalesce expressions cannot be mixed without parentheses",
+                    ));
+                }
+            }
+            Token::LogicalAnd | Token::LogicalOr => {
+                while self.current == Token::LogicalAnd {
+                    self.advance()?;
+                    let right = self.parse_bitwise_or()?;
+                    left = Expression::Logical(LogicalOp::And, Box::new(left), Box::new(right));
+                }
+                while self.current == Token::LogicalOr {
+                    self.advance()?;
+                    let mut right = self.parse_bitwise_or()?;
+                    while self.current == Token::LogicalAnd {
+                        self.advance()?;
+                        let and_right = self.parse_bitwise_or()?;
+                        right = Expression::Logical(
+                            LogicalOp::And,
+                            Box::new(right),
+                            Box::new(and_right),
+                        );
+                    }
+                    left = Expression::Logical(LogicalOp::Or, Box::new(left), Box::new(right));
+                }
+                if self.current == Token::NullishCoalescing {
+                    return Err(self.error(
+                        "Logical expressions and coalesce expressions cannot be mixed without parentheses",
+                    ));
+                }
+            }
+            _ => {}
         }
         Ok(left)
     }
@@ -322,6 +338,18 @@ impl<'a> Parser<'a> {
     fn parse_exponentiation(&mut self) -> Result<Expression, ParseError> {
         let base = self.parse_unary()?;
         if self.current == Token::Exponent {
+            let is_unary = matches!(
+                &base,
+                Expression::Unary(_, _)
+                    | Expression::Typeof(_)
+                    | Expression::Void(_)
+                    | Expression::Delete(_)
+            );
+            if is_unary {
+                return Err(self.error(
+                    "Unary operator used immediately before exponentiation expression. Parenthesization is required",
+                ));
+            }
             self.advance()?;
             let exp = self.parse_exponentiation()?; // right-associative
             Ok(Expression::Binary(
@@ -899,7 +927,7 @@ impl<'a> Parser<'a> {
                     self.eat(&Token::RightParen)?;
                     self.eat(&Token::Arrow)?;
                     let body = if self.current == Token::LeftBrace {
-                        ArrowBody::Block(self.parse_arrow_function_body(false)?.0)
+                        ArrowBody::Block(self.parse_arrow_body_checked(false, &params)?)
                     } else {
                         ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                     };
@@ -940,7 +968,7 @@ impl<'a> Parser<'a> {
                         }
                         self.check_duplicate_params_strict(&params)?;
                         let body = if self.current == Token::LeftBrace {
-                            ArrowBody::Block(self.parse_arrow_function_body(false)?.0)
+                            ArrowBody::Block(self.parse_arrow_body_checked(false, &params)?)
                         } else {
                             ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                         };
@@ -1119,6 +1147,7 @@ impl<'a> Parser<'a> {
                     self.in_async = prev_async;
                     self.in_generator = prev_generator;
                     self.in_static_block = prev_static_block;
+                    self.set_function_param_names(&params);
                     let (body, _) =
                         self.parse_function_body_inner(is_generator, true, true, false)?;
                     self.check_duplicate_params_strict(&params)?;
@@ -1159,6 +1188,7 @@ impl<'a> Parser<'a> {
             let params = self.parse_formal_parameters()?;
             self.in_generator = prev_generator;
             self.in_static_block = prev_static_block;
+            self.set_function_param_names(&params);
             let (body, _) = self.parse_function_body_inner(true, false, true, false)?;
             self.check_duplicate_params_strict(&params)?;
             let source_text = Some(self.source_since(method_source_start));
@@ -1213,6 +1243,13 @@ impl<'a> Parser<'a> {
                 self.in_static_block = false;
                 let params = self.parse_formal_parameters()?;
                 self.in_static_block = prev_static_block;
+                if saved_kind == PropertyKind::Get && !params.is_empty() {
+                    return Err(self.error("Getter must not have any formal parameters"));
+                }
+                if saved_kind == PropertyKind::Set && params.len() != 1 {
+                    return Err(self.error("Setter must have exactly one formal parameter"));
+                }
+                self.set_function_param_names(&params);
                 let (body, body_strict) =
                     self.parse_function_body_inner(false, false, true, false)?;
                 if body_strict && !Self::is_simple_parameter_list(&params) {
@@ -1328,6 +1365,7 @@ impl<'a> Parser<'a> {
             self.in_static_block = false;
             let params = self.parse_formal_parameters()?;
             self.in_static_block = prev_static_block;
+            self.set_function_param_names(&params);
             let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
             if body_strict && !Self::is_simple_parameter_list(&params) {
                 return Err(self.error(
@@ -1388,6 +1426,7 @@ impl<'a> Parser<'a> {
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_static_block = prev_static_block;
+        self.set_function_param_names(&params);
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, false)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
             return Err(self.error(
@@ -1435,6 +1474,7 @@ impl<'a> Parser<'a> {
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
+        self.set_function_param_names(&params);
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, true)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
             return Err(self.error(
@@ -1495,7 +1535,7 @@ impl<'a> Parser<'a> {
             let prev_async = self.in_async;
             self.in_async = true;
             let body = if self.current == Token::LeftBrace {
-                ArrowBody::Block(self.parse_arrow_function_body(true)?.0)
+                ArrowBody::Block(self.parse_arrow_body_checked(true, &params)?)
             } else {
                 ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
             };
@@ -1538,7 +1578,7 @@ impl<'a> Parser<'a> {
                 let prev_async = self.in_async;
                 self.in_async = true;
                 let body = if self.current == Token::LeftBrace {
-                    ArrowBody::Block(self.parse_arrow_function_body(true)?.0)
+                    ArrowBody::Block(self.parse_arrow_body_checked(true, &params)?)
                 } else {
                     ArrowBody::Expression(Box::new(self.parse_assignment_expression()?))
                 };

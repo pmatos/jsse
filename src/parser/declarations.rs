@@ -221,6 +221,7 @@ impl<'a> Parser<'a> {
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
+        self.set_function_param_names(&params);
         let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
             return Err(self.error(
@@ -807,6 +808,12 @@ impl<'a> Parser<'a> {
                 is_constructor,
                 method_source_start,
             )?;
+            if kind == ClassMethodKind::Get && !func.params.is_empty() {
+                return Err(self.error("Getter must not have any formal parameters"));
+            }
+            if kind == ClassMethodKind::Set && func.params.len() != 1 {
+                return Err(self.error("Setter must have exactly one formal parameter"));
+            }
             let method_kind = if is_constructor {
                 ClassMethodKind::Constructor
             } else {
@@ -908,6 +915,7 @@ impl<'a> Parser<'a> {
         self.in_generator = prev_generator;
         self.in_async = prev_async;
         self.in_static_block = prev_static_block;
+        self.set_function_param_names(&params);
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
         if body_strict && !Self::is_simple_parameter_list(&params) {
@@ -975,6 +983,16 @@ impl<'a> Parser<'a> {
         self.parse_function_body_inner(is_generator, is_async, false, false)
     }
 
+    pub(super) fn set_function_param_names(&mut self, params: &[Pattern]) {
+        let mut names = std::collections::HashSet::new();
+        for p in params {
+            let mut bound = Vec::new();
+            Self::collect_bound_names(p, &mut bound);
+            names.extend(bound);
+        }
+        self.function_param_names = Some(names);
+    }
+
     pub(super) fn parse_function_body_inner(
         &mut self,
         is_generator: bool,
@@ -982,6 +1000,7 @@ impl<'a> Parser<'a> {
         super_property: bool,
         super_call: bool,
     ) -> Result<(Vec<Statement>, bool), ParseError> {
+        let saved_param_names = self.function_param_names.take();
         self.eat(&Token::LeftBrace)?;
         let prev_strict = self.strict;
         let prev_generator = self.in_generator;
@@ -1025,6 +1044,36 @@ impl<'a> Parser<'a> {
             stmts.push(stmt);
         }
 
+        // §15.2.1: It is a SyntaxError if any BoundName of FormalParameters
+        // also occurs in the LexicallyDeclaredNames of FunctionBody.
+        if let Some(ref param_names) = saved_param_names {
+            for stmt in &stmts {
+                match stmt {
+                    Statement::Variable(vd)
+                        if matches!(
+                            vd.kind,
+                            crate::ast::VarKind::Let | crate::ast::VarKind::Const
+                        ) =>
+                    {
+                        let mut names = Vec::new();
+                        for decl in &vd.declarations {
+                            Self::collect_bound_names(&decl.pattern, &mut names);
+                        }
+                        for name in &names {
+                            if param_names.contains(name) {
+                                return Err(ParseError {
+                                    message: format!(
+                                        "Identifier '{name}' has already been declared"
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let was_strict = has_use_strict_directive;
         self.in_function -= 1;
         self.in_generator = prev_generator;
@@ -1037,6 +1086,7 @@ impl<'a> Parser<'a> {
         self.in_block_or_function = prev_block;
         self.in_switch_case = prev_sc;
         self.in_static_block = prev_static_block;
+        self.function_param_names = saved_param_names;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))
@@ -1057,5 +1107,20 @@ impl<'a> Parser<'a> {
             self.allow_super_property,
             self.allow_super_call,
         )
+    }
+
+    pub(super) fn parse_arrow_body_checked(
+        &mut self,
+        is_async: bool,
+        params: &[Pattern],
+    ) -> Result<Vec<Statement>, ParseError> {
+        self.set_function_param_names(params);
+        let (stmts, body_strict) = self.parse_arrow_function_body(is_async)?;
+        if body_strict && !Self::is_simple_parameter_list(params) {
+            return Err(self.error(
+                "Illegal 'use strict' directive in function with non-simple parameter list",
+            ));
+        }
+        Ok(stmts)
     }
 }
