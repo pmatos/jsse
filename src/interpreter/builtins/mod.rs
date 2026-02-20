@@ -10,6 +10,7 @@ pub(crate) mod regexp;
 mod string;
 mod temporal;
 mod typedarray;
+mod intl;
 
 use super::*;
 
@@ -3120,6 +3121,9 @@ impl Interpreter {
 
         // Temporal built-in
         self.setup_temporal();
+
+        // Intl built-in
+        self.setup_intl();
 
         // globalThis - create a global object
         let global_obj = self.create_object();
