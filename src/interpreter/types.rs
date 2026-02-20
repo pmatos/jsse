@@ -686,6 +686,15 @@ pub(crate) enum IntlData {
         numeric: Option<bool>,
         first_day_of_week: Option<String>,
     },
+    Collator {
+        locale: String,
+        usage: String,
+        sensitivity: String,
+        ignore_punctuation: bool,
+        collation: String,
+        numeric: bool,
+        case_first: String,
+    },
 }
 
 #[derive(Clone, Debug)]

@@ -1,3 +1,4 @@
+mod collator;
 mod locale;
 
 use super::super::*;
@@ -253,6 +254,9 @@ impl Interpreter {
         // Intl.Locale
         self.setup_intl_locale(&intl_obj);
 
+        // Intl.Collator
+        self.setup_intl_collator(&intl_obj);
+
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.global_env
             .borrow_mut()
@@ -367,6 +371,7 @@ impl Interpreter {
     ) -> Result<JsValue, JsValue> {
         if matches!(options, JsValue::Undefined) {
             let obj = self.create_object();
+            obj.borrow_mut().prototype = None; // ObjectCreate(null)
             let id = obj.borrow().id.unwrap();
             return Ok(JsValue::Object(crate::types::JsObject { id }));
         }
@@ -458,12 +463,55 @@ impl Interpreter {
         let supported: Vec<JsValue> = requested
             .iter()
             .filter_map(|tag| {
-                tag.parse::<IcuLocale>().ok().map(|locale| {
-                    JsValue::String(JsString::from_str(&locale.to_string()))
-                })
+                let locale: IcuLocale = tag.parse().ok()?;
+                let canonical = locale.to_string();
+                if Self::intl_best_available_locale(&canonical) {
+                    Some(JsValue::String(JsString::from_str(&canonical)))
+                } else {
+                    None
+                }
             })
             .collect();
         Ok(self.create_array(supported))
+    }
+
+    fn intl_best_available_locale(locale_str: &str) -> bool {
+        let mut candidate = locale_str.to_string();
+        // Strip unicode extensions for matching
+        if let Some(idx) = candidate.find("-u-") {
+            candidate = candidate[..idx].to_string();
+        }
+        loop {
+            // Try to create a collator with this locale to see if ICU4X has data for it
+            if let Ok(loc) = candidate.parse::<IcuLocale>() {
+                let lang = loc.id.language.to_string();
+                // Reject locales with no real language subtag (e.g., "zxx", "und")
+                if !lang.is_empty() && lang != "und" {
+                    let known_languages = [
+                        "af", "am", "ar", "as", "az", "be", "bg", "bn", "bo", "br",
+                        "bs", "ca", "cs", "cy", "da", "de", "el", "en", "eo", "es",
+                        "et", "eu", "fa", "fi", "fil", "fo", "fr", "ga", "gl", "gu",
+                        "ha", "he", "hi", "hr", "hu", "hy", "id", "ig", "is", "it",
+                        "ja", "ka", "kk", "km", "kn", "ko", "kok", "ku", "ky", "lb",
+                        "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms", "mt", "my",
+                        "nb", "ne", "nl", "nn", "no", "or", "pa", "pl", "ps", "pt",
+                        "ro", "ru", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta",
+                        "te", "th", "tk", "tr", "uk", "ur", "uz", "vi", "wo", "yo",
+                        "zh", "zu",
+                    ];
+                    if known_languages.contains(&lang.as_str()) {
+                        return true;
+                    }
+                }
+            }
+            // Remove the last subtag and try again
+            if let Some(idx) = candidate.rfind('-') {
+                candidate = candidate[..idx].to_string();
+            } else {
+                break;
+            }
+        }
+        false
     }
 
     // §9.2.8 ResolveLocale simplified
