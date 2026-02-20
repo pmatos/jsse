@@ -670,6 +670,21 @@ pub struct DataViewInfo {
     pub is_length_tracking: bool,
 }
 
+#[derive(Clone)]
+pub(crate) enum IntlData {
+    Locale {
+        language: String,
+        script: Option<String>,
+        region: Option<String>,
+        calendar: Option<String>,
+        case_first: Option<String>,
+        collation: Option<String>,
+        hour_cycle: Option<String>,
+        numbering_system: Option<String>,
+        numeric: Option<bool>,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum TemporalData {
     Duration {
@@ -766,6 +781,7 @@ pub struct JsObjectData {
     pub(crate) disposable_stack: Option<DisposableStackData>,
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
     pub(crate) temporal_data: Option<TemporalData>,
+    pub(crate) intl_data: Option<IntlData>,
 }
 
 #[derive(Clone)]
@@ -818,6 +834,7 @@ impl JsObjectData {
             disposable_stack: None,
             module_namespace: None,
             temporal_data: None,
+            intl_data: None,
         }
     }
 
