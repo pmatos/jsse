@@ -1059,6 +1059,13 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
             i += 1;
             continue;
         }
+        // JS treats '[' as a literal inside a character class (without v-flag),
+        // but fancy_regex interprets it as a nested class. Escape it.
+        if c == '[' && in_char_class {
+            result.push_str("\\[");
+            i += 1;
+            continue;
+        }
 
         if c == '\\' && i + 1 < len {
             let next = chars[i + 1];
