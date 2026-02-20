@@ -684,6 +684,7 @@ pub(crate) enum IntlData {
         hour_cycle: Option<String>,
         numbering_system: Option<String>,
         numeric: Option<bool>,
+        first_day_of_week: Option<String>,
     },
 }
 

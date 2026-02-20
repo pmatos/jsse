@@ -271,6 +271,7 @@ impl Interpreter {
 
         let mut seen = Vec::new();
 
+        // Step 3: If Type(locales) is String or locales has [[InitializedLocale]]
         if let JsValue::String(s) = locales {
             let tag = s.to_rust_string();
             let locale: IcuLocale = tag.parse().map_err(|_| {
@@ -278,6 +279,19 @@ impl Interpreter {
             })?;
             seen.push(locale.to_string());
             return Ok(seen);
+        }
+
+        // Check if locales is an Intl.Locale object itself (treat as single-element list)
+        if let JsValue::Object(o) = locales {
+            if let Some(obj) = self.get_object(o.id) {
+                let b = obj.borrow();
+                if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
+                    let tag_clone = tag.clone();
+                    drop(b);
+                    seen.push(tag_clone);
+                    return Ok(seen);
+                }
+            }
         }
 
         let obj = match self.to_object(locales) {
@@ -314,12 +328,23 @@ impl Interpreter {
                 continue;
             }
 
-            let tag = match &k_value {
-                JsValue::String(s) => s.to_rust_string(),
-                JsValue::Object(_) => self.to_string_value(&k_value)?,
-                _ => {
-                    return Err(self.create_type_error("Language tag must be a string or object"));
+            // Step c.iii: If kValue has [[InitializedLocale]], use [[Locale]] directly
+            let tag = if let JsValue::Object(o) = &k_value {
+                if let Some(obj_data) = self.get_object(o.id) {
+                    let b = obj_data.borrow();
+                    if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
+                        tag.clone()
+                    } else {
+                        drop(b);
+                        self.to_string_value(&k_value)?
+                    }
+                } else {
+                    self.to_string_value(&k_value)?
                 }
+            } else if let JsValue::String(s) = &k_value {
+                s.to_rust_string()
+            } else {
+                return Err(self.create_type_error("Language tag must be a string or object"));
             };
 
             let locale: IcuLocale = tag.parse().map_err(|_| {
