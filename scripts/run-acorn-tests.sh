@@ -37,19 +37,22 @@ else
     echo "Using cached acorn at $ACORN_DIR"
 fi
 
-# Step 2: Bundle test suite with esbuild
-echo "Bundling acorn test suite..."
-cd "$ACORN_DIR"
-npx esbuild test/run.js \
-    --bundle \
-    --format=iife \
-    --platform=neutral \
-    --main-fields=main,module \
-    --outfile="$BUNDLE"
-cd "$PROJECT_DIR"
-
-BUNDLE_SIZE=$(wc -c < "$BUNDLE")
-echo "Bundle created: $BUNDLE ($BUNDLE_SIZE bytes)"
+# Step 2: Bundle test suite with esbuild (cached)
+if [ ! -f "$BUNDLE" ]; then
+    echo "Bundling acorn test suite..."
+    cd "$ACORN_DIR"
+    npx esbuild test/run.js \
+        --bundle \
+        --format=iife \
+        --platform=neutral \
+        --main-fields=main,module \
+        --outfile="$BUNDLE"
+    cd "$PROJECT_DIR"
+    BUNDLE_SIZE=$(wc -c < "$BUNDLE")
+    echo "Bundle created: $BUNDLE ($BUNDLE_SIZE bytes)"
+else
+    echo "Using cached bundle at $BUNDLE"
+fi
 
 # Step 3: Prepend runtime shims
 echo "Prepending runtime shims..."

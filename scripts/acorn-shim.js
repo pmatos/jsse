@@ -10,6 +10,8 @@ if (typeof console.groupEnd === "undefined") {
 if (typeof process === "undefined") {
   globalThis.process = {
     exit: function(code) {
+      // exit(0) is a no-op — acorn's runner calls it at the end, so execution
+      // simply falls through. Non-zero throws to signal failure.
       if (code !== 0) throw new Error("Process exit with code " + code);
     },
     stdout: { write: function(s, cb) { if (typeof cb === "function") cb(); } }
