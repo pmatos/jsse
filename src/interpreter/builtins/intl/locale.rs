@@ -563,22 +563,20 @@ impl Interpreter {
                         }
                     };
 
-                    let mut locale: IcuLocale = match tag.parse() {
-                        Ok(l) => l,
+                    match tag.parse::<IcuLocale>() {
+                        Ok(mut locale) => {
+                            let expander = LocaleExpander::new_extended();
+                            expander.maximize(&mut locale.id);
+                            return Completion::Normal(create_locale_object_from_icu(interp, &locale));
+                        }
                         Err(_) => {
-                            return Completion::Throw(
-                                interp.create_range_error(&format!(
-                                    "Invalid language tag: {}",
-                                    tag
-                                )),
+                            // For tags ICU4X can't parse (like "posix"),
+                            // maximize returns the same tag
+                            return Completion::Normal(
+                                JsValue::Object(crate::types::JsObject { id: o.id })
                             );
                         }
-                    };
-
-                    let expander = LocaleExpander::new_extended();
-                    expander.maximize(&mut locale.id);
-
-                    return Completion::Normal(create_locale_object_from_icu(interp, &locale));
+                    }
                 }
                 Completion::Throw(
                     interp.create_type_error(
@@ -610,22 +608,18 @@ impl Interpreter {
                         }
                     };
 
-                    let mut locale: IcuLocale = match tag.parse() {
-                        Ok(l) => l,
+                    match tag.parse::<IcuLocale>() {
+                        Ok(mut locale) => {
+                            let expander = LocaleExpander::new_extended();
+                            expander.minimize(&mut locale.id);
+                            return Completion::Normal(create_locale_object_from_icu(interp, &locale));
+                        }
                         Err(_) => {
-                            return Completion::Throw(
-                                interp.create_range_error(&format!(
-                                    "Invalid language tag: {}",
-                                    tag
-                                )),
+                            return Completion::Normal(
+                                JsValue::Object(crate::types::JsObject { id: o.id })
                             );
                         }
-                    };
-
-                    let expander = LocaleExpander::new_extended();
-                    expander.minimize(&mut locale.id);
-
-                    return Completion::Normal(create_locale_object_from_icu(interp, &locale));
+                    }
                 }
                 Completion::Throw(
                     interp.create_type_error(
@@ -1070,21 +1064,30 @@ impl Interpreter {
                     }
                 };
 
-                let mut locale: IcuLocale = match tag_string.parse() {
-                    Ok(l) => l,
+                let (mut locale, is_fallback_tag) = match tag_string.parse::<IcuLocale>() {
+                    Ok(l) => (l, false),
                     Err(_) => {
-                        return Completion::Throw(interp.create_range_error(&format!(
-                            "Invalid language tag: {}",
-                            tag_string
-                        )));
+                        if Interpreter::is_structurally_valid_language_tag(&tag_string) {
+                            // Tags like "posix" are structurally valid BCP47 but not in ICU4X data.
+                            // Create a minimal locale and store the original tag.
+                            let fallback: IcuLocale = "und".parse().unwrap();
+                            (fallback, true)
+                        } else {
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "Invalid language tag: {}",
+                                tag_string
+                            )));
+                        }
                     }
                 };
 
                 // Canonicalize the parsed tag first (before applying options).
                 // This handles aliases like "mo" -> "ro", "aar" -> "aa", etc.
-                let canonicalizer = LocaleCanonicalizer::new_extended();
-                canonicalizer.canonicalize(&mut locale);
-                canonicalize_unicode_keyword_values(&mut locale);
+                if !is_fallback_tag {
+                    let canonicalizer = LocaleCanonicalizer::new_extended();
+                    canonicalizer.canonicalize(&mut locale);
+                    canonicalize_unicode_keyword_values(&mut locale);
+                }
 
                 // Apply options if provided
                 let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -1365,17 +1368,40 @@ impl Interpreter {
                     }
                 }
 
-                // Canonicalize again after applying options
-                let canonicalizer = LocaleCanonicalizer::new_extended();
-                canonicalizer.canonicalize(&mut locale);
-                canonicalize_unicode_keyword_values(&mut locale);
+                if is_fallback_tag {
+                    let obj = interp.create_object();
+                    obj.borrow_mut().prototype = Some(proto_clone.clone());
+                    obj.borrow_mut().class_name = "Intl.Locale".to_string();
+                    let lower_tag = tag_string.to_ascii_lowercase();
+                    obj.borrow_mut().intl_data = Some(IntlData::Locale {
+                        tag: lower_tag.clone(),
+                        language: lower_tag,
+                        script: None,
+                        region: None,
+                        variants: None,
+                        calendar: None,
+                        collation: None,
+                        hour_cycle: None,
+                        case_first: None,
+                        numeric: None,
+                        numbering_system: None,
+                        first_day_of_week: None,
+                    });
+                    let obj_id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                } else {
+                    // Canonicalize again after applying options
+                    let canonicalizer = LocaleCanonicalizer::new_extended();
+                    canonicalizer.canonicalize(&mut locale);
+                    canonicalize_unicode_keyword_values(&mut locale);
 
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
-                obj.borrow_mut().class_name = "Intl.Locale".to_string();
-                obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(&locale));
-                let obj_id = obj.borrow().id.unwrap();
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                    let obj = interp.create_object();
+                    obj.borrow_mut().prototype = Some(proto_clone.clone());
+                    obj.borrow_mut().class_name = "Intl.Locale".to_string();
+                    obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(&locale));
+                    let obj_id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                }
             },
         ));
 

@@ -35,13 +35,13 @@ fn currency_digits(currency: &str) -> u32 {
     }
 }
 
-fn is_known_numbering_system(ns: &str) -> bool {
+pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
     matches!(
         ns,
         "adlm" | "ahom" | "arab" | "arabext" | "bali" | "beng" | "bhks" | "brah"
             | "cakm" | "cham" | "deva" | "diak" | "fullwide" | "gong" | "gonm"
             | "gujr" | "guru" | "hanidec" | "hmng" | "hmnp" | "java" | "kali"
-            | "khmr" | "knda" | "lana" | "lanatham" | "laoo" | "latn" | "lepc"
+            | "kawi" | "khmr" | "knda" | "lana" | "lanatham" | "laoo" | "latn" | "lepc"
             | "limb" | "mathbold" | "mathdbl" | "mathmono" | "mathsanb" | "mathsans"
             | "mlym" | "modi" | "mong" | "mroo" | "mtei" | "mymr" | "mymrshan"
             | "mymrtlng" | "nagm" | "newa" | "nkoo" | "olck" | "orya" | "osma"
@@ -298,7 +298,7 @@ fn singular_unit_name(unit: &str) -> &str {
 }
 
 fn unit_symbol(unit: &str, display: &str) -> String {
-    let (prefix, suffix) = locale_unit_pattern(unit, display, "en");
+    let (prefix, suffix) = locale_unit_pattern(unit, display, "en", 2.0);
     if prefix.is_empty() {
         suffix
     } else {
@@ -309,7 +309,7 @@ fn unit_symbol(unit: &str, display: &str) -> String {
 // Returns (prefix, suffix) for locale-aware unit formatting.
 // prefix is empty for suffix-only patterns (most cases).
 // For circumfix patterns (ja long, ko long, zh-TW long), prefix is non-empty.
-fn locale_unit_pattern(unit: &str, display: &str, locale: &str) -> (String, String) {
+fn locale_unit_pattern(unit: &str, display: &str, locale: &str, value: f64) -> (String, String) {
     let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
 
     if unit.contains("-per-") {
@@ -321,60 +321,58 @@ fn locale_unit_pattern(unit: &str, display: &str, locale: &str) -> (String, Stri
             return locale_kph_pattern(lang, display, locale);
         }
 
-        // Default: English-style compound unit
         if display == "long" {
-            let num = single_unit_symbol(numerator, display);
+            let num = single_unit_symbol(numerator, display, value);
             let den_singular = singular_unit_name(denominator);
             return ("".to_string(), format!("{} per {}", num, den_singular));
         }
-        let num = single_unit_symbol(numerator, "narrow");
-        let den = single_unit_symbol(denominator, "narrow");
+        let num = single_unit_symbol(numerator, "narrow", value);
+        let den = single_unit_symbol(denominator, "narrow", value);
         return ("".to_string(), format!("{}/{}", num, den.trim_start()));
     }
 
-    // Simple unit
-    let sym = locale_single_unit_symbol(unit, display, lang);
+    let sym = locale_single_unit_symbol(unit, display, lang, value);
     ("".to_string(), sym)
 }
 
-fn locale_single_unit_symbol(unit: &str, display: &str, lang: &str) -> String {
+fn locale_single_unit_symbol(unit: &str, display: &str, lang: &str, value: f64) -> String {
     match lang {
         "de" => match display {
             "long" => match unit {
                 "kilometer" => " Kilometer".to_string(),
                 "meter" => " Meter".to_string(),
                 "centimeter" => " Zentimeter".to_string(),
-                "hour" => " Stunden".to_string(),
-                _ => single_unit_symbol(unit, display),
+                "hour" => if is_plural_en(value) { " Stunden".to_string() } else { " Stunde".to_string() },
+                _ => single_unit_symbol(unit, display, value),
             },
-            _ => single_unit_symbol(unit, display),
+            _ => single_unit_symbol(unit, display, value),
         },
         "ja" => match display {
             "long" => match unit {
-                "kilometer" => " \u{30AD}\u{30ED}\u{30E1}\u{30FC}\u{30C8}\u{30EB}".to_string(), // キロメートル
-                _ => single_unit_symbol(unit, display),
+                "kilometer" => " \u{30AD}\u{30ED}\u{30E1}\u{30FC}\u{30C8}\u{30EB}".to_string(),
+                _ => single_unit_symbol(unit, display, value),
             },
-            _ => single_unit_symbol(unit, display),
+            _ => single_unit_symbol(unit, display, value),
         },
         "ko" => match display {
             "long" => match unit {
-                "kilometer" => "\u{D0AC}\u{B85C}\u{BBF8}\u{D130}".to_string(), // 킬로미터 (no space before)
-                _ => single_unit_symbol(unit, display),
+                "kilometer" => "\u{D0AC}\u{B85C}\u{BBF8}\u{D130}".to_string(),
+                _ => single_unit_symbol(unit, display, value),
             },
-            _ => single_unit_symbol(unit, display),
+            _ => single_unit_symbol(unit, display, value),
         },
         "zh" => match display {
             "long" => match unit {
-                "kilometer" => " \u{516C}\u{91CC}".to_string(), // 公里
-                _ => single_unit_symbol(unit, display),
+                "kilometer" => " \u{516C}\u{91CC}".to_string(),
+                _ => single_unit_symbol(unit, display, value),
             },
             "short" => match unit {
-                "kilometer" => " \u{516C}\u{91CC}".to_string(), // 公里
-                _ => single_unit_symbol(unit, display),
+                "kilometer" => " \u{516C}\u{91CC}".to_string(),
+                _ => single_unit_symbol(unit, display, value),
             },
-            _ => single_unit_symbol(unit, display),
+            _ => single_unit_symbol(unit, display, value),
         },
-        _ => single_unit_symbol(unit, display),
+        _ => single_unit_symbol(unit, display, value),
     }
 }
 
@@ -437,56 +435,74 @@ fn locale_kph_pattern(lang: &str, display: &str, locale: &str) -> (String, Strin
     }
 }
 
-fn single_unit_symbol(unit: &str, display: &str) -> String {
+fn is_plural_en(value: f64) -> bool {
+    !(value.abs() == 1.0 && value.fract() == 0.0)
+}
+
+fn single_unit_symbol(unit: &str, display: &str, value: f64) -> String {
     match display {
-        "long" => match unit {
-            "celsius" => " degrees Celsius".to_string(),
-            "fahrenheit" => " degrees Fahrenheit".to_string(),
-            "kilometer" => " kilometers".to_string(),
-            "meter" => " meters".to_string(),
-            "centimeter" => " centimeters".to_string(),
-            "millimeter" => " millimeters".to_string(),
-            "mile" => " miles".to_string(),
-            "foot" => " feet".to_string(),
-            "inch" => " inches".to_string(),
-            "yard" => " yards".to_string(),
-            "kilogram" => " kilograms".to_string(),
-            "gram" => " grams".to_string(),
-            "pound" => " pounds".to_string(),
-            "ounce" => " ounces".to_string(),
-            "liter" => " liters".to_string(),
-            "milliliter" => " milliliters".to_string(),
-            "gallon" => " gallons".to_string(),
-            "hour" => " hours".to_string(),
-            "minute" => " minutes".to_string(),
-            "second" => " seconds".to_string(),
-            "millisecond" => " milliseconds".to_string(),
-            "microsecond" => " microseconds".to_string(),
-            "nanosecond" => " nanoseconds".to_string(),
-            "day" => " days".to_string(),
-            "week" => " weeks".to_string(),
-            "month" => " months".to_string(),
-            "year" => " years".to_string(),
-            "byte" => " bytes".to_string(),
-            "kilobyte" => " kilobytes".to_string(),
-            "megabyte" => " megabytes".to_string(),
-            "gigabyte" => " gigabytes".to_string(),
-            "terabyte" => " terabytes".to_string(),
-            "petabyte" => " petabytes".to_string(),
-            "bit" => " bits".to_string(),
-            "kilobit" => " kilobits".to_string(),
-            "megabit" => " megabits".to_string(),
-            "gigabit" => " gigabits".to_string(),
-            "terabit" => " terabits".to_string(),
-            "acre" => " acres".to_string(),
-            "hectare" => " hectares".to_string(),
-            "percent" => " percent".to_string(),
-            "degree" => " degrees".to_string(),
-            "stone" => " stone".to_string(),
-            "fluid-ounce" => " fluid ounces".to_string(),
-            "mile-scandinavian" => " Scandinavian miles".to_string(),
-            other => format!(" {}", other),
-        },
+        "long" => {
+            if is_plural_en(value) {
+                match unit {
+                    "celsius" => " degrees Celsius".to_string(),
+                    "fahrenheit" => " degrees Fahrenheit".to_string(),
+                    "kilometer" => " kilometers".to_string(),
+                    "meter" => " meters".to_string(),
+                    "centimeter" => " centimeters".to_string(),
+                    "millimeter" => " millimeters".to_string(),
+                    "mile" => " miles".to_string(),
+                    "foot" => " feet".to_string(),
+                    "inch" => " inches".to_string(),
+                    "yard" => " yards".to_string(),
+                    "kilogram" => " kilograms".to_string(),
+                    "gram" => " grams".to_string(),
+                    "pound" => " pounds".to_string(),
+                    "ounce" => " ounces".to_string(),
+                    "liter" => " liters".to_string(),
+                    "milliliter" => " milliliters".to_string(),
+                    "gallon" => " gallons".to_string(),
+                    "hour" => " hours".to_string(),
+                    "minute" => " minutes".to_string(),
+                    "second" => " seconds".to_string(),
+                    "millisecond" => " milliseconds".to_string(),
+                    "microsecond" => " microseconds".to_string(),
+                    "nanosecond" => " nanoseconds".to_string(),
+                    "day" => " days".to_string(),
+                    "week" => " weeks".to_string(),
+                    "month" => " months".to_string(),
+                    "year" => " years".to_string(),
+                    "byte" => " bytes".to_string(),
+                    "kilobyte" => " kilobytes".to_string(),
+                    "megabyte" => " megabytes".to_string(),
+                    "gigabyte" => " gigabytes".to_string(),
+                    "terabyte" => " terabytes".to_string(),
+                    "petabyte" => " petabytes".to_string(),
+                    "bit" => " bits".to_string(),
+                    "kilobit" => " kilobits".to_string(),
+                    "megabit" => " megabits".to_string(),
+                    "gigabit" => " gigabits".to_string(),
+                    "terabit" => " terabits".to_string(),
+                    "acre" => " acres".to_string(),
+                    "hectare" => " hectares".to_string(),
+                    "percent" => " percent".to_string(),
+                    "degree" => " degrees".to_string(),
+                    "stone" => " stone".to_string(),
+                    "fluid-ounce" => " fluid ounces".to_string(),
+                    "mile-scandinavian" => " Scandinavian miles".to_string(),
+                    other => format!(" {}", other),
+                }
+            } else {
+                match unit {
+                    "celsius" => " degree Celsius".to_string(),
+                    "fahrenheit" => " degree Fahrenheit".to_string(),
+                    "foot" => " foot".to_string(),
+                    "inch" => " inch".to_string(),
+                    "fluid-ounce" => " fluid ounce".to_string(),
+                    "mile-scandinavian" => " Scandinavian mile".to_string(),
+                    other => format!(" {}", singular_unit_name(other)),
+                }
+            }
+        }
         "narrow" => match unit {
             "celsius" => "\u{00B0}C".to_string(),
             "fahrenheit" => "\u{00B0}F".to_string(),
@@ -536,54 +552,105 @@ fn single_unit_symbol(unit: &str, display: &str) -> String {
             other => other.to_string(),
         },
         _ => {
-            // "short" (default)
-            match unit {
-                "celsius" => " \u{00B0}C".to_string(),
-                "fahrenheit" => " \u{00B0}F".to_string(),
-                "kilometer" => " km".to_string(),
-                "meter" => " m".to_string(),
-                "centimeter" => " cm".to_string(),
-                "millimeter" => " mm".to_string(),
-                "mile" => " mi".to_string(),
-                "foot" => " ft".to_string(),
-                "inch" => " in".to_string(),
-                "yard" => " yd".to_string(),
-                "kilogram" => " kg".to_string(),
-                "gram" => " g".to_string(),
-                "pound" => " lb".to_string(),
-                "ounce" => " oz".to_string(),
-                "liter" => " L".to_string(),
-                "milliliter" => " mL".to_string(),
-                "gallon" => " gal".to_string(),
-                "hour" => " hr".to_string(),
-                "minute" => " min".to_string(),
-                "second" => " sec".to_string(),
-                "millisecond" => " ms".to_string(),
-                "microsecond" => " \u{03BC}s".to_string(),
-                "nanosecond" => " ns".to_string(),
-                "day" => " days".to_string(),
-                "week" => " wks".to_string(),
-                "month" => " mths".to_string(),
-                "year" => " yrs".to_string(),
-                "byte" => " byte".to_string(),
-                "kilobyte" => " kB".to_string(),
-                "megabyte" => " MB".to_string(),
-                "gigabyte" => " GB".to_string(),
-                "terabyte" => " TB".to_string(),
-                "petabyte" => " PB".to_string(),
-                "bit" => " bit".to_string(),
-                "kilobit" => " kbit".to_string(),
-                "megabit" => " Mbit".to_string(),
-                "gigabit" => " Gbit".to_string(),
-                "terabit" => " Tbit".to_string(),
-                "acre" => " ac".to_string(),
-                "hectare" => " ha".to_string(),
-                "percent" => "%".to_string(),
-                "degree" => "\u{00B0}".to_string(),
-                "stone" => " st".to_string(),
-                "fluid-ounce" => " fl oz".to_string(),
-                "mile-scandinavian" => " smi".to_string(),
-                other => format!(" {}", other),
+            // "short" (default) - some units need singular/plural
+            if is_plural_en(value) {
+                match unit {
+                    "celsius" => " \u{00B0}C".to_string(),
+                    "fahrenheit" => " \u{00B0}F".to_string(),
+                    "kilometer" => " km".to_string(),
+                    "meter" => " m".to_string(),
+                    "centimeter" => " cm".to_string(),
+                    "millimeter" => " mm".to_string(),
+                    "mile" => " mi".to_string(),
+                    "foot" => " ft".to_string(),
+                    "inch" => " in".to_string(),
+                    "yard" => " yd".to_string(),
+                    "kilogram" => " kg".to_string(),
+                    "gram" => " g".to_string(),
+                    "pound" => " lb".to_string(),
+                    "ounce" => " oz".to_string(),
+                    "liter" => " L".to_string(),
+                    "milliliter" => " mL".to_string(),
+                    "gallon" => " gal".to_string(),
+                    "hour" => " hr".to_string(),
+                    "minute" => " min".to_string(),
+                    "second" => " sec".to_string(),
+                    "millisecond" => " ms".to_string(),
+                    "microsecond" => " \u{03BC}s".to_string(),
+                    "nanosecond" => " ns".to_string(),
+                    "day" => " days".to_string(),
+                    "week" => " wks".to_string(),
+                    "month" => " mths".to_string(),
+                    "year" => " yrs".to_string(),
+                    "byte" => " byte".to_string(),
+                    "kilobyte" => " kB".to_string(),
+                    "megabyte" => " MB".to_string(),
+                    "gigabyte" => " GB".to_string(),
+                    "terabyte" => " TB".to_string(),
+                    "petabyte" => " PB".to_string(),
+                    "bit" => " bit".to_string(),
+                    "kilobit" => " kbit".to_string(),
+                    "megabit" => " Mbit".to_string(),
+                    "gigabit" => " Gbit".to_string(),
+                    "terabit" => " Tbit".to_string(),
+                    "acre" => " ac".to_string(),
+                    "hectare" => " ha".to_string(),
+                    "percent" => "%".to_string(),
+                    "degree" => "\u{00B0}".to_string(),
+                    "stone" => " st".to_string(),
+                    "fluid-ounce" => " fl oz".to_string(),
+                    "mile-scandinavian" => " smi".to_string(),
+                    other => format!(" {}", other),
+                }
+            } else {
+                match unit {
+                    "celsius" => " \u{00B0}C".to_string(),
+                    "fahrenheit" => " \u{00B0}F".to_string(),
+                    "kilometer" => " km".to_string(),
+                    "meter" => " m".to_string(),
+                    "centimeter" => " cm".to_string(),
+                    "millimeter" => " mm".to_string(),
+                    "mile" => " mi".to_string(),
+                    "foot" => " ft".to_string(),
+                    "inch" => " in".to_string(),
+                    "yard" => " yd".to_string(),
+                    "kilogram" => " kg".to_string(),
+                    "gram" => " g".to_string(),
+                    "pound" => " lb".to_string(),
+                    "ounce" => " oz".to_string(),
+                    "liter" => " L".to_string(),
+                    "milliliter" => " mL".to_string(),
+                    "gallon" => " gal".to_string(),
+                    "hour" => " hr".to_string(),
+                    "minute" => " min".to_string(),
+                    "second" => " sec".to_string(),
+                    "millisecond" => " ms".to_string(),
+                    "microsecond" => " \u{03BC}s".to_string(),
+                    "nanosecond" => " ns".to_string(),
+                    "day" => " day".to_string(),
+                    "week" => " wk".to_string(),
+                    "month" => " mth".to_string(),
+                    "year" => " yr".to_string(),
+                    "byte" => " byte".to_string(),
+                    "kilobyte" => " kB".to_string(),
+                    "megabyte" => " MB".to_string(),
+                    "gigabyte" => " GB".to_string(),
+                    "terabyte" => " TB".to_string(),
+                    "petabyte" => " PB".to_string(),
+                    "bit" => " bit".to_string(),
+                    "kilobit" => " kbit".to_string(),
+                    "megabit" => " Mbit".to_string(),
+                    "gigabit" => " Gbit".to_string(),
+                    "terabit" => " Tbit".to_string(),
+                    "acre" => " ac".to_string(),
+                    "hectare" => " ha".to_string(),
+                    "percent" => "%".to_string(),
+                    "degree" => "\u{00B0}".to_string(),
+                    "stone" => " st".to_string(),
+                    "fluid-ounce" => " fl oz".to_string(),
+                    "mile-scandinavian" => " smi".to_string(),
+                    other => format!(" {}", other),
+                }
             }
         }
     }
@@ -625,6 +692,54 @@ pub(crate) fn numbering_system_zero(ns: &str) -> Option<char> {
         "telu" => Some('\u{0C66}'),
         "thai" => Some('\u{0E50}'),
         "tibt" => Some('\u{0F20}'),
+        "bali" => Some('\u{1B50}'),
+        "brah" => Some('\u{11066}'),
+        "cakm" => Some('\u{11136}'),
+        "cham" => Some('\u{AA50}'),
+        "java" => Some('\u{A9D0}'),
+        "kawi" => Some('\u{11F50}'),
+        "lana" => Some('\u{1A80}'),
+        "lepc" => Some('\u{1C40}'),
+        "mathbold" => Some('\u{1D7CE}'),
+        "mathdbl" => Some('\u{1D7D8}'),
+        "mathmono" => Some('\u{1D7F6}'),
+        "mathsanb" => Some('\u{1D7EC}'),
+        "mathsans" => Some('\u{1D7E2}'),
+        "mroo" => Some('\u{16A60}'),
+        "mtei" => Some('\u{ABF0}'),
+        "nagm" => Some('\u{1E4F0}'),
+        "nkoo" => Some('\u{07C0}'),
+        "olck" => Some('\u{1C50}'),
+        "osma" => Some('\u{104A0}'),
+        "rohg" => Some('\u{10D30}'),
+        "saur" => Some('\u{A8D0}'),
+        "segment" => Some('\u{1FBF0}'),
+        "shrd" => Some('\u{111D0}'),
+        "sora" => Some('\u{110F0}'),
+        "sund" => Some('\u{1BB0}'),
+        "takr" => Some('\u{116C0}'),
+        "talu" => Some('\u{19D0}'),
+        "tnsa" => Some('\u{16AC0}'),
+        "vaii" => Some('\u{A620}'),
+        "wara" => Some('\u{118E0}'),
+        "adlm" => Some('\u{1E950}'),
+        "ahom" => Some('\u{11730}'),
+        "bhks" => Some('\u{11C50}'),
+        "diak" => Some('\u{11950}'),
+        "gong" => Some('\u{11DA0}'),
+        "gonm" => Some('\u{11D50}'),
+        "hmng" => Some('\u{16B50}'),
+        "hmnp" => Some('\u{1E140}'),
+        "kali" => Some('\u{A900}'),
+        "lanatham" => Some('\u{1A90}'),
+        "modi" => Some('\u{11650}'),
+        "mymrshan" => Some('\u{1090}'),
+        "mymrtlng" => Some('\u{A9F0}'),
+        "newa" => Some('\u{11450}'),
+        "sind" => Some('\u{112F0}'),
+        "sinh" => Some('\u{0DE6}'),
+        "tirh" => Some('\u{114D0}'),
+        "wcho" => Some('\u{1E2F0}'),
         "latn" | "" => None,
         _ => None,
     }
@@ -801,7 +916,7 @@ fn wrap_style(
         "unit" => {
             let u = unit.as_deref().unwrap_or("degree");
             let u_disp = unit_display.as_deref().unwrap_or("short");
-            let (prefix, suffix) = locale_unit_pattern(u, u_disp, locale);
+            let (prefix, suffix) = locale_unit_pattern(u, u_disp, locale, value);
             if prefix.is_empty() {
                 format!("{}{}", num_str, suffix)
             } else {
@@ -1090,36 +1205,34 @@ pub(crate) fn format_number_internal(
     // Post-process to ensure minimum integer digits
     // pad_start doesn't always work correctly for zero values, so handle manually
     if minimum_integer_digits > 1 {
-        let is_negative = num_str.starts_with('-') || num_str.starts_with('\u{2212}');
-        let has_plus = num_str.starts_with('+');
-        let sign_prefix = if is_negative {
-            let c = num_str.chars().next().unwrap();
-            num_str = num_str[c.len_utf8()..].to_string();
-            c.to_string()
-        } else if has_plus {
-            num_str = num_str[1..].to_string();
-            "+".to_string()
-        } else {
-            String::new()
-        };
+        // Find the position of the first digit character (any script)
+        let first_digit_pos = num_str.char_indices()
+            .find(|(_, c)| c.is_numeric())
+            .map(|(i, _)| i);
 
-        // Count integer digits (before decimal point or group separators)
-        let decimal_pos = num_str.find('.').or_else(|| num_str.find(',').filter(|_| {
-            // Only treat comma as decimal if it's the locale decimal separator
-            // For now, only treat '.' as decimal separator
-            false
-        }));
-        let int_part = match decimal_pos {
-            Some(pos) => &num_str[..pos],
-            None => &num_str,
-        };
-        // Count only digits in int_part (exclude group separators)
-        let digit_count = int_part.chars().filter(|c| c.is_ascii_digit() || c.is_numeric()).count();
-        if digit_count < minimum_integer_digits as usize {
-            let zeros_needed = minimum_integer_digits as usize - digit_count;
-            num_str = format!("{}{}", "0".repeat(zeros_needed), num_str);
+        if let Some(fdp) = first_digit_pos {
+            let sign_prefix = num_str[..fdp].to_string();
+            let digits_part = &num_str[fdp..];
+
+            // Find decimal separator in the digits-only part
+            let dec_sep = locale_decimal_separator(locale_str);
+            // Also handle Arabic decimal separator U+066B
+            let decimal_pos = digits_part.find(dec_sep)
+                .or_else(|| digits_part.find('\u{066b}'))
+                .or_else(|| if dec_sep != "." { digits_part.find('.') } else { None });
+
+            let int_part = match decimal_pos {
+                Some(pos) => &digits_part[..pos],
+                None => digits_part,
+            };
+            // Count only digit characters
+            let digit_count = int_part.chars().filter(|c| c.is_numeric()).count();
+            if digit_count < minimum_integer_digits as usize {
+                let zeros_needed = minimum_integer_digits as usize - digit_count;
+                // Insert zeros in the correct position (after sign prefix, before digits)
+                num_str = format!("{}{}{}", sign_prefix, "0".repeat(zeros_needed), digits_part);
+            }
         }
-        num_str = format!("{}{}", sign_prefix, num_str);
     }
 
     transliterate_digits(&wrap_style(&num_str, style, currency, currency_display, currency_sign, unit, unit_display, work_value, locale_str), numbering_system)
@@ -1877,7 +1990,7 @@ pub(crate) fn format_to_parts_internal(
     if style == "unit" {
         let u = unit.as_deref().unwrap_or("degree");
         let u_disp = unit_display.as_deref().unwrap_or("short");
-        let (prefix, suffix) = locale_unit_pattern(u, u_disp, locale_str);
+        let (prefix, suffix) = locale_unit_pattern(u, u_disp, locale_str, value);
         if !prefix.is_empty() {
             // Circumfix pattern: strip prefix from formatted string
             if work_str.starts_with(&prefix) {

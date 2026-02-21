@@ -751,15 +751,15 @@ impl Interpreter {
                 let mut locale = interp.intl_resolve_locale(&requested);
 
                 let known_numbering_systems = [
-                    "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "cakm",
-                    "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr", "guru",
-                    "hanidec", "hmng", "hmnp", "java", "kali", "khmr", "knda", "lana",
-                    "lanatham", "laoo", "latn", "lepc", "limb", "mathbold", "mathdbl",
-                    "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong", "mroo",
-                    "mtei", "mymr", "mymrshan", "mymrtlng", "newa", "nkoo", "olck", "orya",
-                    "osma", "rohg", "saur", "segment", "shrd", "sind", "sinh", "sora",
-                    "sund", "takr", "talu", "tamldec", "telu", "thai", "tibt", "tirh",
-                    "tnsa", "vaii", "wara", "wcho",
+                    "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "brah",
+                    "cakm", "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr",
+                    "guru", "hanidec", "hmng", "hmnp", "java", "kali", "kawi", "khmr",
+                    "knda", "lana", "lanatham", "laoo", "latn", "lepc", "limb", "mathbold",
+                    "mathdbl", "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong",
+                    "mroo", "mtei", "mymr", "mymrshan", "mymrtlng", "nagm", "newa", "nkoo",
+                    "olck", "orya", "osma", "rohg", "saur", "segment", "shrd", "sind",
+                    "sinh", "sora", "sund", "takr", "talu", "tamldec", "telu", "thai",
+                    "tibt", "tirh", "tnsa", "vaii", "wara", "wcho",
                 ];
 
                 // Extract nu extension from locale if present

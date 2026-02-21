@@ -603,7 +603,7 @@ pub enum IteratorState {
         done: bool,
     },
     SegmentIterator {
-        segments: Vec<(String, usize, String, bool)>, // (segment, index, input, isWordLike)
+        segments: Vec<(Vec<u16>, usize, Vec<u16>, bool)>, // (segment, index, input, isWordLike)
         position: usize,
         done: bool,
     },
@@ -784,6 +784,27 @@ pub(crate) enum IntlData {
         nanoseconds: String,
         nanoseconds_display: String,
         fractional_digits: Option<u32>,
+    },
+    DateTimeFormat {
+        locale: String,
+        calendar: String,
+        numbering_system: String,
+        time_zone: String,
+        hour_cycle: Option<String>,
+        hour12: Option<bool>,
+        weekday: Option<String>,
+        era: Option<String>,
+        year: Option<String>,
+        month: Option<String>,
+        day: Option<String>,
+        day_period: Option<String>,
+        hour: Option<String>,
+        minute: Option<String>,
+        second: Option<String>,
+        fractional_second_digits: Option<u32>,
+        time_zone_name: Option<String>,
+        date_style: Option<String>,
+        time_style: Option<String>,
     },
 }
 

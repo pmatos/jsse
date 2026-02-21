@@ -177,7 +177,7 @@ pub enum Literal {
     Null,
     Boolean(bool),
     Number(f64),
-    String(String),
+    String(Vec<u16>),
     BigInt(String),
     RegExp(String, String),
 }

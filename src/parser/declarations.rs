@@ -156,7 +156,7 @@ impl<'a> Parser<'a> {
                 Ok(PropertyKey::Identifier(name))
             }
             Token::StringLiteral(s) => {
-                let s = s.clone();
+                let s = String::from_utf16_lossy(s);
                 self.advance()?;
                 Ok(PropertyKey::String(s))
             }
@@ -856,7 +856,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok((PropertyKey::Identifier(name), false))
         } else if let Token::StringLiteral(s) = &self.current {
-            let s = s.clone();
+            let s = String::from_utf16_lossy(s);
             self.advance()?;
             Ok((PropertyKey::String(s), false))
         } else if let Token::NumericLiteral(n) | Token::LegacyOctalLiteral(n) = &self.current {

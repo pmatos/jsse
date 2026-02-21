@@ -549,23 +549,45 @@ impl Interpreter {
             (
                 "toLocaleLowerCase",
                 0,
-                Rc::new(|interp, this_val, _args| {
+                Rc::new(|interp, this_val, args| {
                     let s = match this_string_value(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&s.to_lowercase())))
+                    let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let locale_list = match interp.intl_canonicalize_locale_list(&locales_arg) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let resolved = interp.intl_resolve_locale(&locale_list);
+                    let langid: icu::locale::LanguageIdentifier = resolved
+                        .parse()
+                        .unwrap_or_else(|_| "und".parse().unwrap());
+                    let cm = icu::casemap::CaseMapper::new();
+                    let result = cm.lowercase_to_string(&s, &langid);
+                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
                 }),
             ),
             (
                 "toLocaleUpperCase",
                 0,
-                Rc::new(|interp, this_val, _args| {
+                Rc::new(|interp, this_val, args| {
                     let s = match this_string_value(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&s.to_uppercase())))
+                    let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let locale_list = match interp.intl_canonicalize_locale_list(&locales_arg) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let resolved = interp.intl_resolve_locale(&locale_list);
+                    let langid: icu::locale::LanguageIdentifier = resolved
+                        .parse()
+                        .unwrap_or_else(|_| "und".parse().unwrap());
+                    let cm = icu::casemap::CaseMapper::new();
+                    let result = cm.uppercase_to_string(&s, &langid);
+                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
                 }),
             ),
             (
@@ -1434,12 +1456,12 @@ impl Interpreter {
                         },
                         None => "undefined".to_string(),
                     };
-                    let result = s.cmp(&that);
-                    Completion::Normal(JsValue::Number(match result {
-                        std::cmp::Ordering::Less => -1.0,
-                        std::cmp::Ordering::Equal => 0.0,
-                        std::cmp::Ordering::Greater => 1.0,
-                    }))
+                    let locales = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                    match interp.intl_locale_compare(&s, &that, &locales, &options) {
+                        Ok(result) => Completion::Normal(JsValue::Number(result)),
+                        Err(e) => Completion::Throw(e),
+                    }
                 }),
             ),
             (

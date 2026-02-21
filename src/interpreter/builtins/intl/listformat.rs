@@ -3,7 +3,7 @@ use icu::list::options::{ListFormatterOptions, ListLength};
 use icu::list::ListFormatter;
 use icu::locale::Locale as IcuLocale;
 
-fn create_list_formatter(locale_str: &str, list_type: &str, style: &str) -> ListFormatter {
+pub(crate) fn create_list_formatter(locale_str: &str, list_type: &str, style: &str) -> ListFormatter {
     let locale: IcuLocale = locale_str.parse().unwrap_or_else(|_| "en".parse().unwrap());
     let length = match style {
         "short" => ListLength::Short,

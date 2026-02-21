@@ -2,6 +2,7 @@ use super::super::super::*;
 use super::listformat::create_list_formatter;
 use super::numberformat::format_number_internal;
 use super::numberformat::format_to_parts_internal;
+use super::numberformat::is_known_numbering_system;
 
 struct DurationFormatData {
     locale: String,
@@ -194,7 +195,6 @@ fn duration_to_fractional(dur: &DurationRecord, exponent: u32) -> String {
 }
 
 fn is_valid_numbering_system(ns: &str) -> bool {
-    // Unicode locale identifier "type" nonterminal: 3-8 alphanum (possibly multiple segments joined by '-')
     if ns.is_empty() {
         return false;
     }
@@ -207,6 +207,61 @@ fn is_valid_numbering_system(ns: &str) -> bool {
         }
     }
     true
+}
+
+fn extract_unicode_extension(locale_str: &str, key: &str) -> Option<String> {
+    let lower = locale_str.to_lowercase();
+    let search_str = if let Some(x_idx) = lower.find("-x-") {
+        &lower[..x_idx]
+    } else {
+        &lower[..]
+    };
+    let u_idx = search_str.find("-u-")?;
+    let ext_part = &search_str[u_idx + 3..];
+    let tokens: Vec<&str> = ext_part.split('-').collect();
+    for i in 0..tokens.len() {
+        if tokens[i] == key {
+            if i + 1 < tokens.len() && tokens[i + 1].len() > 2 {
+                return Some(tokens[i + 1].to_string());
+            }
+            if i + 1 < tokens.len() && tokens[i + 1].len() == 2 {
+                return Some("true".to_string());
+            }
+            if i + 1 < tokens.len() {
+                return Some(tokens[i + 1].to_string());
+            }
+            return Some("true".to_string());
+        }
+    }
+    None
+}
+
+fn strip_unicode_extensions(locale_str: &str) -> String {
+    let search_end = locale_str.find("-x-").unwrap_or(locale_str.len());
+    let search_part = &locale_str[..search_end];
+    if let Some(idx) = search_part.find("-u-") {
+        let before = &locale_str[..idx];
+        let after_u = &locale_str[idx + 3..];
+        let tokens: Vec<&str> = after_u.split('-').collect();
+        let mut end_of_u = tokens.len();
+        for i in 0..tokens.len() {
+            if tokens[i].len() == 1 && tokens[i] != "u" {
+                end_of_u = i;
+                break;
+            }
+        }
+        if end_of_u < tokens.len() {
+            format!("{}-{}", before, tokens[end_of_u..].join("-"))
+        } else {
+            before.to_string()
+        }
+    } else {
+        locale_str.to_string()
+    }
+}
+
+fn base_locale(locale_str: &str) -> String {
+    strip_unicode_extensions(locale_str)
 }
 
 fn normalize_zero(v: f64) -> f64 {
@@ -1516,9 +1571,30 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let locale = interp.intl_resolve_locale(&requested);
+                let raw_locale = interp.intl_resolve_locale(&requested);
 
-                let numbering_system = numbering_system_opt.unwrap_or_else(|| "latn".to_string());
+                let valid_opt_nu = numbering_system_opt.filter(|nu| is_known_numbering_system(nu));
+
+                let ext_nu = extract_unicode_extension(&raw_locale, "nu");
+                let valid_ext_nu = ext_nu.filter(|nu| is_known_numbering_system(nu));
+                let nu_from_option = valid_opt_nu.is_some();
+                let numbering_system = valid_opt_nu
+                    .or(valid_ext_nu.clone())
+                    .unwrap_or_else(|| "latn".to_string());
+
+                let base = base_locale(&raw_locale);
+                let ext_nu_raw = extract_unicode_extension(&raw_locale, "nu");
+                let locale = if nu_from_option {
+                    if ext_nu_raw.as_deref() == Some(&*numbering_system) {
+                        format!("{}-u-nu-{}", base, numbering_system)
+                    } else {
+                        base.clone()
+                    }
+                } else if valid_ext_nu.is_some() {
+                    format!("{}-u-nu-{}", base, numbering_system)
+                } else {
+                    base.clone()
+                };
 
                 let obj = interp.create_object();
                 obj.borrow_mut().prototype = Some(proto_clone.clone());

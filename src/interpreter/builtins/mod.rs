@@ -2201,7 +2201,7 @@ impl Interpreter {
                     program.body.first()
                 {
                     let is_strict = fe.body.first().is_some_and(|s| {
-                        matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                        matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if *s == "use strict".encode_utf16().collect::<Vec<u16>>())
                     });
                     let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                     dynamic_fn_env.borrow_mut().strict = false;
@@ -2595,7 +2595,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if *s == "use strict".encode_utf16().collect::<Vec<u16>>())
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
@@ -2698,7 +2698,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if *s == "use strict".encode_utf16().collect::<Vec<u16>>())
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
@@ -2801,7 +2801,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if *s == "use strict".encode_utf16().collect::<Vec<u16>>())
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
@@ -3204,6 +3204,7 @@ impl Interpreter {
             "BigInt",
             "AggregateError",
             "Temporal",
+            "Intl",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.global_env.borrow();

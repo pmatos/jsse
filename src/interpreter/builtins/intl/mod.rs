@@ -1,4 +1,5 @@
 mod collator;
+mod datetimeformat;
 mod displaynames;
 mod durationformat;
 mod listformat;
@@ -10,6 +11,7 @@ mod segmenter;
 
 use super::super::*;
 use icu::locale::Locale as IcuLocale;
+use icu::locale::LocaleCanonicalizer;
 
 impl Interpreter {
     pub(crate) fn setup_intl(&mut self) {
@@ -93,8 +95,7 @@ impl Interpreter {
                     ],
                     "collation" => vec![
                         "big5han", "compat", "dict", "emoji", "eor", "phonebk", "phonetic",
-                        "pinyin", "search", "searchjl", "standard", "stroke", "trad", "unihan",
-                        "zhuyin",
+                        "pinyin", "searchjl", "stroke", "trad", "unihan", "zhuyin",
                     ],
                     "currency" => vec![
                         "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN",
@@ -115,15 +116,15 @@ impl Interpreter {
                         "WST", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL",
                     ],
                     "numberingSystem" => vec![
-                        "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "cakm",
-                        "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr", "guru",
-                        "hanidec", "hmng", "hmnp", "java", "kali", "khmr", "knda", "lana",
-                        "lanatham", "laoo", "latn", "lepc", "limb", "mathbold", "mathdbl",
-                        "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong", "mroo",
-                        "mtei", "mymr", "mymrshan", "mymrtlng", "newa", "nkoo", "olck", "orya",
-                        "osma", "rohg", "saur", "segment", "shrd", "sind", "sinh", "sora",
-                        "sund", "takr", "talu", "tamldec", "telu", "thai", "tibt", "tirh",
-                        "tnsa", "vaii", "wara", "wcho",
+                        "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "brah",
+                        "cakm", "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr",
+                        "guru", "hanidec", "hmng", "hmnp", "java", "kali", "kawi", "khmr",
+                        "knda", "lana", "lanatham", "laoo", "latn", "lepc", "limb", "mathbold",
+                        "mathdbl", "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong",
+                        "mroo", "mtei", "mymr", "mymrshan", "mymrtlng", "nagm", "newa", "nkoo",
+                        "olck", "orya", "osma", "rohg", "saur", "segment", "shrd", "sind",
+                        "sinh", "sora", "sund", "takr", "talu", "tamldec", "telu", "thai",
+                        "tibt", "tirh", "tnsa", "vaii", "wara", "wcho",
                     ],
                     "timeZone" => vec![
                         "Africa/Abidjan",
@@ -167,6 +168,32 @@ impl Interpreter {
                         "Atlantic/Reykjavik",
                         "Australia/Melbourne",
                         "Australia/Sydney",
+                        "Etc/GMT+1",
+                        "Etc/GMT+10",
+                        "Etc/GMT+11",
+                        "Etc/GMT+12",
+                        "Etc/GMT+2",
+                        "Etc/GMT+3",
+                        "Etc/GMT+4",
+                        "Etc/GMT+5",
+                        "Etc/GMT+6",
+                        "Etc/GMT+7",
+                        "Etc/GMT+8",
+                        "Etc/GMT+9",
+                        "Etc/GMT-1",
+                        "Etc/GMT-10",
+                        "Etc/GMT-11",
+                        "Etc/GMT-12",
+                        "Etc/GMT-13",
+                        "Etc/GMT-14",
+                        "Etc/GMT-2",
+                        "Etc/GMT-3",
+                        "Etc/GMT-4",
+                        "Etc/GMT-5",
+                        "Etc/GMT-6",
+                        "Etc/GMT-7",
+                        "Etc/GMT-8",
+                        "Etc/GMT-9",
                         "Europe/Amsterdam",
                         "Europe/Athens",
                         "Europe/Berlin",
@@ -282,6 +309,9 @@ impl Interpreter {
         // Intl.DisplayNames
         self.setup_intl_display_names(&intl_obj);
 
+        // Intl.DateTimeFormat
+        self.setup_intl_date_time_format(&intl_obj);
+
         // Intl.DurationFormat
         self.setup_intl_duration_format(&intl_obj);
 
@@ -290,6 +320,106 @@ impl Interpreter {
             .borrow_mut()
             .declare("Intl", BindingKind::Var);
         let _ = self.global_env.borrow_mut().set("Intl", intl_val);
+    }
+
+    pub(crate) fn is_structurally_valid_language_tag(tag: &str) -> bool {
+        // Only handle specific tags that ICU4X rejects but are valid per BCP47.
+        // A language subtag of 5-8 alpha chars is grammatically valid.
+        let lower = tag.to_ascii_lowercase();
+        let parts: Vec<&str> = lower.split('-').collect();
+        if parts.is_empty() {
+            return false;
+        }
+        let lang = parts[0];
+        if !lang.chars().all(|c| c.is_ascii_alphabetic()) {
+            return false;
+        }
+        if !((2..=3).contains(&lang.len()) || (5..=8).contains(&lang.len())) {
+            return false;
+        }
+        // For 5-8 char language subtags (like "posix"), only allow if there are
+        // no further subtags or all subtags look sane (x-private, simple variants)
+        if (5..=8).contains(&lang.len()) {
+            for part in &parts[1..] {
+                if part.is_empty() || part.len() > 8 {
+                    return false;
+                }
+                if !part.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        // For 2-3 char language subtags that ICU4X rejects, we don't second-guess ICU4X
+        false
+    }
+
+    fn post_canonicalize_locale(tag: &str) -> String {
+        let mut result = tag.to_string();
+
+        // Unicode extension type aliases not handled by ICU4X
+        // Calendar aliases
+        result = result.replace("-ca-islamicc", "-ca-islamic-civil");
+        result = result.replace("-ca-ethiopic-amete-alem", "-ca-ethioaa");
+
+        // For keys kb, kc, kh, kk, kn: "yes" is alias for "true", and "true" values are removed
+        let boolean_keys = ["kb", "kc", "kh", "kk", "kn"];
+        for key in &boolean_keys {
+            let yes_pattern = format!("-{}-yes", key);
+            let true_pattern = format!("-{}-true", key);
+            let key_only = format!("-{}", key);
+            if result.contains(&yes_pattern) {
+                let idx = result.find(&yes_pattern).unwrap();
+                let after = &result[idx + yes_pattern.len()..];
+                if after.is_empty() || after.starts_with('-') {
+                    result = result.replace(&yes_pattern, &key_only);
+                }
+            } else if result.contains(&true_pattern) {
+                let idx = result.find(&true_pattern).unwrap();
+                let after = &result[idx + true_pattern.len()..];
+                if after.is_empty() || after.starts_with('-') {
+                    result = result.replace(&true_pattern, &key_only);
+                }
+            }
+        }
+
+        // Collation strength (ks) aliases
+        result = result.replace("-ks-primary", "-ks-level1");
+        result = result.replace("-ks-tertiary", "-ks-level3");
+
+        // Collation type aliases
+        result = result.replace("-co-dictionary", "-co-dict");
+        result = result.replace("-co-phonebook", "-co-phonebk");
+        result = result.replace("-co-traditional", "-co-trad");
+
+        // Measurement system aliases
+        result = result.replace("-ms-imperial", "-ms-uksystem");
+
+        // Timezone aliases (deprecated/alias -> canonical)
+        // Must match whole subtag values to avoid false matches
+        let tz_aliases: &[(&str, &str)] = &[
+            ("cnckg", "cnsha"), ("eire", "iedub"), ("est", "papty"),
+            ("gmt0", "gmt"), ("uct", "utc"), ("zulu", "utc"),
+        ];
+        for (alias, canonical) in tz_aliases {
+            let from = format!("-tz-{}", alias);
+            if result.contains(&from) {
+                let start = result.find(&from).unwrap();
+                let end = start + from.len();
+                if end == result.len() || result[end..].starts_with('-') {
+                    let to = format!("-tz-{}", canonical);
+                    result = format!("{}{}{}", &result[..start], to, &result[end..]);
+                }
+            }
+        }
+
+        // Transformed extension aliases
+        result = result.replace("-m0-names", "-m0-prprname");
+
+        // Numbering system aliases
+        result = result.replace("-nu-traditional", "-nu-traditio");
+
+        result
     }
 
     // §9.2.1 CanonicalizeLocaleList(locales)
@@ -306,10 +436,23 @@ impl Interpreter {
         // Step 3: If Type(locales) is String or locales has [[InitializedLocale]]
         if let JsValue::String(s) = locales {
             let tag = s.to_rust_string();
-            let locale: IcuLocale = tag.parse().map_err(|_| {
-                self.create_range_error(&format!("Invalid language tag: {}", tag))
-            })?;
-            seen.push(locale.to_string());
+            match tag.parse::<IcuLocale>() {
+                Ok(mut locale) => {
+                    let canonicalizer = LocaleCanonicalizer::new_extended();
+                    canonicalizer.canonicalize(&mut locale);
+                    seen.push(Self::post_canonicalize_locale(&locale.to_string()));
+                }
+                Err(_) => {
+                    if Self::is_structurally_valid_language_tag(&tag) {
+                        seen.push(tag.to_ascii_lowercase());
+                    } else {
+                        return Err(self.create_range_error(&format!(
+                            "Invalid language tag: {}",
+                            tag
+                        )));
+                    }
+                }
+            }
             return Ok(seen);
         }
 
@@ -342,10 +485,40 @@ impl Interpreter {
             JsValue::Undefined
         };
 
-        let len = self.to_number_value(&len_val).unwrap_or(0.0) as u32;
+        // Step 5: Let len be ? ToLength(? Get(O, "length")).
+        let len_num = match self.to_number_value(&len_val) {
+            Ok(n) => n,
+            Err(e) => return Err(e),
+        };
+        let len = if len_num.is_nan() || len_num <= 0.0 {
+            0u64
+        } else if len_num.is_infinite() {
+            if len_num > 0.0 {
+                (1u64 << 53) - 1
+            } else {
+                0
+            }
+        } else {
+            let n = len_num.floor() as u64;
+            n.min((1u64 << 53) - 1)
+        };
 
         for i in 0..len {
             let key = i.to_string();
+
+            // Step 7b: Let kPresent be ? HasProperty(O, Pk).
+            let k_present = if let JsValue::Object(o) = &obj {
+                self.proxy_has_property(o.id, &key)?
+            } else {
+                false
+            };
+
+            // Step 7c: If kPresent is true, then
+            if !k_present {
+                continue;
+            }
+
+            // Step 7c.i: Let kValue be ? Get(O, Pk).
             let k_value = if let JsValue::Object(o) = &obj {
                 match self.get_object_property(o.id, &key, &obj) {
                     Completion::Normal(v) => v,
@@ -356,11 +529,17 @@ impl Interpreter {
                 JsValue::Undefined
             };
 
-            if matches!(k_value, JsValue::Undefined) {
-                continue;
+            // Step 7c.ii: If Type(kValue) is not String or Object, throw TypeError.
+            match &k_value {
+                JsValue::String(_) | JsValue::Object(_) => {}
+                _ => {
+                    return Err(
+                        self.create_type_error("Language tag must be a string or object"),
+                    );
+                }
             }
 
-            // Step c.iii: If kValue has [[InitializedLocale]], use [[Locale]] directly
+            // Step 7c.iii-iv: If kValue has [[InitializedLocale]], use [[Locale]] directly
             let tag = if let JsValue::Object(o) = &k_value {
                 if let Some(obj_data) = self.get_object(o.id) {
                     let b = obj_data.borrow();
@@ -376,13 +555,26 @@ impl Interpreter {
             } else if let JsValue::String(s) = &k_value {
                 s.to_rust_string()
             } else {
-                return Err(self.create_type_error("Language tag must be a string or object"));
+                unreachable!()
             };
 
-            let locale: IcuLocale = tag.parse().map_err(|_| {
-                self.create_range_error(&format!("Invalid language tag: {}", tag))
-            })?;
-            let canonical = locale.to_string();
+            let canonical = match tag.parse::<IcuLocale>() {
+                Ok(mut locale) => {
+                    let canonicalizer = LocaleCanonicalizer::new_extended();
+                    canonicalizer.canonicalize(&mut locale);
+                    Self::post_canonicalize_locale(&locale.to_string())
+                }
+                Err(_) => {
+                    if Self::is_structurally_valid_language_tag(&tag) {
+                        tag.to_ascii_lowercase()
+                    } else {
+                        return Err(self.create_range_error(&format!(
+                            "Invalid language tag: {}",
+                            tag
+                        )));
+                    }
+                }
+            };
 
             if !seen.contains(&canonical) {
                 seen.push(canonical);
@@ -557,7 +749,7 @@ impl Interpreter {
                         "et", "eu", "fa", "fi", "fil", "fo", "fr", "ga", "gl", "gu",
                         "ha", "he", "hi", "hr", "hu", "hy", "id", "ig", "is", "it",
                         "ja", "ka", "kk", "km", "kn", "ko", "kok", "ku", "ky", "lb",
-                        "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms", "mt", "my",
+                        "ln", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms", "mt", "my",
                         "nb", "ne", "nl", "nn", "no", "or", "pa", "pl", "ps", "pt",
                         "ro", "ru", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta",
                         "te", "th", "tk", "tr", "uk", "ur", "uz", "vi", "wo", "yo",
@@ -581,10 +773,57 @@ impl Interpreter {
     // §9.2.8 ResolveLocale simplified
     pub(crate) fn intl_resolve_locale(&mut self, requested: &[String]) -> String {
         for tag in requested {
-            if tag.parse::<IcuLocale>().is_ok() {
+            if tag.parse::<IcuLocale>().is_ok() && Self::intl_best_available_locale(tag) {
                 return tag.clone();
             }
         }
         "en".to_string()
+    }
+
+    pub(crate) fn intl_construct_number_format(
+        &mut self,
+        locales: &JsValue,
+        options: &JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let intl_val = self.global_env.borrow().get("Intl").unwrap_or(JsValue::Undefined);
+        if let JsValue::Object(intl_obj) = &intl_val {
+            let nf_ctor = match self.get_object_property(intl_obj.id, "NumberFormat", &intl_val) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Err(self.create_type_error("Intl.NumberFormat is not available")),
+            };
+            let old_new_target = self.new_target.take();
+            self.new_target = Some(nf_ctor.clone());
+            let result = self.call_function(
+                &nf_ctor,
+                &JsValue::Undefined,
+                &[locales.clone(), options.clone()],
+            );
+            self.new_target = old_new_target;
+            match result {
+                Completion::Normal(v) => Ok(v),
+                Completion::Throw(e) => Err(e),
+                _ => Err(self.create_type_error("NumberFormat construction failed")),
+            }
+        } else {
+            Err(self.create_type_error("Intl object not found"))
+        }
+    }
+
+    pub(crate) fn intl_number_format_format(
+        &mut self,
+        nf: &JsValue,
+        value: &JsValue,
+    ) -> Completion {
+        if let JsValue::Object(nf_obj) = nf {
+            let format_fn = match self.get_object_property(nf_obj.id, "format", nf) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Completion::Throw(e),
+                _ => return Completion::Throw(self.create_type_error("format not found")),
+            };
+            self.call_function(&format_fn, &JsValue::Undefined, &[value.clone()])
+        } else {
+            Completion::Throw(self.create_type_error("NumberFormat is not an object"))
+        }
     }
 }

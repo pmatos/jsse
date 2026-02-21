@@ -520,15 +520,20 @@ impl Interpreter {
             (
                 "toLocaleString",
                 0,
-                Rc::new(|interp, this, _args| {
+                Rc::new(|interp, this, args| {
                     let Some(n) = this_number_value(interp, this) else {
                         let err = interp
                             .create_type_error("Number.prototype.toLocaleString requires a Number");
                         return Completion::Throw(err);
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&to_js_string(
-                        &JsValue::Number(n),
-                    ))))
+                    let locales = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let nf = match interp.intl_construct_number_format(&locales, &options) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let num_val = JsValue::Number(n);
+                    interp.intl_number_format_format(&nf, &num_val)
                 }),
             ),
         ];

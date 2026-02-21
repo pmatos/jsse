@@ -1126,7 +1126,7 @@ impl Interpreter {
             Literal::Null => JsValue::Null,
             Literal::Boolean(b) => JsValue::Boolean(*b),
             Literal::Number(n) => JsValue::Number(*n),
-            Literal::String(s) => JsValue::String(JsString::from_str(s)),
+            Literal::String(s) => JsValue::String(JsString { code_units: s.clone() }),
             Literal::BigInt(s) => {
                 use num_bigint::BigInt;
                 let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
@@ -1379,11 +1379,13 @@ impl Interpreter {
         match val {
             JsValue::Object(o) => {
                 // §7.1.1 Step 2-3: Check @@toPrimitive
-                let exotic_to_prim = if let Some(obj) = self.get_object(o.id) {
+                let exotic_to_prim = {
                     let key = "Symbol(Symbol.toPrimitive)";
-                    obj.borrow().get_property(key)
-                } else {
-                    JsValue::Undefined
+                    match self.get_object_property(o.id, key, val) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => JsValue::Undefined,
+                    }
                 };
                 if !matches!(exotic_to_prim, JsValue::Undefined | JsValue::Null) {
                     if let JsValue::Object(fo) = &exotic_to_prim
@@ -1473,6 +1475,16 @@ impl Interpreter {
             JsValue::Object(_) => {
                 let prim = self.to_primitive(val, "string")?;
                 self.to_string_value(&prim)
+            }
+        }
+    }
+
+    pub(crate) fn to_js_string(&mut self, val: &JsValue) -> Result<JsString, JsValue> {
+        match val {
+            JsValue::String(s) => Ok(s.clone()),
+            other => {
+                let s = self.to_string_value(other)?;
+                Ok(JsString::from_str(&s))
             }
         }
     }
@@ -2564,6 +2576,27 @@ impl Interpreter {
                             }
                         }
                     }
+                    // ArraySetLength validation
+                    if key == "length" && obj.borrow().class_name == "Array" {
+                        let num = match self.to_number_value(&final_val) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let uint32 = num as u32;
+                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite() {
+                            return Completion::Throw(
+                                self.create_error("RangeError", "Invalid array length"),
+                            );
+                        }
+                        let length_val = JsValue::Number(uint32 as f64);
+                        let success = obj.borrow_mut().set_property_value(&key, length_val.clone());
+                        if !success && env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}'"
+                            )));
+                        }
+                        return Completion::Normal(length_val);
+                    }
                     let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
                     if !success && env.borrow().strict {
                         return Completion::Throw(self.create_type_error(&format!(
@@ -2882,6 +2915,27 @@ impl Interpreter {
                                 }
                             }
                         }
+                    }
+                    // ArraySetLength validation: reject non-integral/negative length values
+                    if key == "length" && obj.borrow().class_name == "Array" {
+                        let num = match self.to_number_value(&rval) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let uint32 = num as u32;
+                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite() {
+                            return Completion::Throw(
+                                self.create_error("RangeError", "Invalid array length"),
+                            );
+                        }
+                        let rval = JsValue::Number(uint32 as f64);
+                        let success = obj.borrow_mut().set_property_value(&key, rval.clone());
+                        if !success && env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}'"
+                            )));
+                        }
+                        return Completion::Normal(rval);
                     }
                     let success = obj.borrow_mut().set_property_value(&key, rval.clone());
                     if !success && env.borrow().strict {
@@ -7378,8 +7432,9 @@ impl Interpreter {
                 ));
             }
         }
+        let use_strict_u16: Vec<u16> = "use strict".encode_utf16().collect();
         let eval_code_strict = program.body.first().is_some_and(|s| {
-            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if *s == use_strict_u16)
         });
         let is_strict = caller_strict || eval_code_strict;
 

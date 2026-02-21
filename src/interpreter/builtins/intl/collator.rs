@@ -73,7 +73,7 @@ fn base_locale(locale_str: &str) -> String {
     }
 }
 
-fn do_compare(
+pub(crate) fn do_compare(
     locale_str: &str,
     usage: &str,
     collation: &str,
@@ -202,6 +202,7 @@ fn is_collation_supported_for_locale(locale_str: &str, collation_name: &str) -> 
         "hi" => false,
         "ja" => matches!(collation_name, "unihan"),
         "ko" => matches!(collation_name, "searchjl" | "unihan"),
+        "ln" => matches!(collation_name, "phonetic"),
         "si" => matches!(collation_name, "dict"),
         "th" => false,
         "tr" => false,
@@ -710,5 +711,144 @@ impl Interpreter {
             "Collator".to_string(),
             PropertyDescriptor::data(collator_ctor, true, false, true),
         );
+    }
+
+    pub(crate) fn intl_locale_compare(
+        &mut self,
+        x: &str,
+        y: &str,
+        locales: &JsValue,
+        options: &JsValue,
+    ) -> Result<f64, JsValue> {
+        let requested = self.intl_canonicalize_locale_list(locales)?;
+
+        let opts = self.intl_coerce_options_to_object(options)?;
+
+        let usage = self.intl_get_option(
+            &opts, "usage", &["sort", "search"], Some("sort"),
+        )?.unwrap_or_else(|| "sort".to_string());
+
+        let _locale_matcher = self.intl_get_option(
+            &opts, "localeMatcher", &["lookup", "best fit"], Some("best fit"),
+        )?;
+
+        let opt_collation = self.intl_get_option(
+            &opts, "collation", &[], None,
+        )?;
+
+        let opt_numeric = {
+            let num_val = if let JsValue::Object(o) = &opts {
+                match self.get_object_property(o.id, "numeric", &opts) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
+                }
+            } else {
+                JsValue::Undefined
+            };
+            if matches!(num_val, JsValue::Undefined) {
+                None
+            } else {
+                Some(to_boolean(&num_val))
+            }
+        };
+
+        let opt_case_first = self.intl_get_option(
+            &opts, "caseFirst", &["upper", "lower", "false"], None,
+        )?;
+
+        let raw_locale = self.intl_resolve_locale(&requested);
+
+        let ext_kn = extract_unicode_extension(&raw_locale, "kn");
+        let ext_co = extract_unicode_extension(&raw_locale, "co");
+
+        let numeric = if let Some(n) = opt_numeric {
+            n
+        } else if let Some(ref kn) = ext_kn {
+            kn != "false"
+        } else {
+            false
+        };
+
+        let case_first = if let Some(ref cf) = opt_case_first {
+            cf.clone()
+        } else {
+            let ext_kf = extract_unicode_extension(&raw_locale, "kf");
+            if let Some(ref kf) = ext_kf {
+                match kf.as_str() {
+                    "upper" | "lower" | "false" => kf.clone(),
+                    _ => "false".to_string(),
+                }
+            } else {
+                "false".to_string()
+            }
+        };
+
+        let valid_collations = [
+            "big5han", "compat", "dict", "emoji", "eor", "phonebk",
+            "phonetic", "pinyin", "searchjl", "stroke", "trad",
+            "unihan", "zhuyin",
+        ];
+
+        let collation = {
+            let base_loc = base_locale(&raw_locale);
+            let mut resolved_co = "default".to_string();
+
+            if let Some(ref co) = opt_collation {
+                if valid_collations.contains(&co.as_str())
+                    && is_collation_supported_for_locale(&base_loc, co)
+                {
+                    resolved_co = co.clone();
+                }
+            }
+
+            if resolved_co == "default" {
+                if let Some(ref co) = ext_co {
+                    if co != "search" && co != "standard"
+                        && valid_collations.contains(&co.as_str())
+                        && is_collation_supported_for_locale(&base_loc, co)
+                    {
+                        resolved_co = co.clone();
+                    }
+                }
+            }
+
+            resolved_co
+        };
+
+        let sensitivity = self.intl_get_option(
+            &opts, "sensitivity", &["base", "accent", "case", "variant"], None,
+        )?.unwrap_or_else(|| "variant".to_string());
+
+        let locale = base_locale(&raw_locale);
+
+        let ignore_punctuation = {
+            let ip_val = if let JsValue::Object(o) = &opts {
+                match self.get_object_property(o.id, "ignorePunctuation", &opts) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
+                }
+            } else {
+                JsValue::Undefined
+            };
+            if matches!(ip_val, JsValue::Undefined) {
+                is_thai_locale(&locale)
+            } else {
+                to_boolean(&ip_val)
+            }
+        };
+
+        Ok(do_compare(
+            &locale,
+            &usage,
+            &collation,
+            &sensitivity,
+            numeric,
+            &case_first,
+            ignore_punctuation,
+            x,
+            y,
+        ))
     }
 }

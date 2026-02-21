@@ -87,6 +87,7 @@ impl Interpreter {
             &self.intl_relative_time_format_prototype,
             &self.intl_display_names_prototype,
             &self.intl_duration_format_prototype,
+            &self.intl_date_time_format_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id

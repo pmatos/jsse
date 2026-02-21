@@ -2,24 +2,19 @@ use super::super::super::*;
 use icu::segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter};
 
 struct SegmentInfo {
-    segment: String,
+    segment: Vec<u16>,
     index: usize, // UTF-16 code unit index
-    input: String,
+    input: Vec<u16>,
     is_word_like: Option<bool>,
 }
 
-fn utf16_slice_to_string(utf16: &[u16]) -> String {
-    String::from_utf16_lossy(utf16)
-}
-
-fn compute_segments(input: &str, granularity: &str) -> Vec<SegmentInfo> {
-    let utf16: Vec<u16> = input.encode_utf16().collect();
+fn compute_segments(input: &[u16], granularity: &str) -> Vec<SegmentInfo> {
     let mut segments = Vec::new();
 
     match granularity {
         "word" => {
             let ws = WordSegmenter::new_auto(Default::default());
-            let mut iter = ws.segment_utf16(&utf16);
+            let mut iter = ws.segment_utf16(input);
             let mut prev = match iter.next() {
                 Some(p) => p,
                 None => return segments,
@@ -30,11 +25,10 @@ fn compute_segments(input: &str, granularity: &str) -> Vec<SegmentInfo> {
                     None => break,
                 };
                 let is_word_like = iter.is_word_like();
-                let seg_text = utf16_slice_to_string(&utf16[prev..pos]);
                 segments.push(SegmentInfo {
-                    segment: seg_text,
+                    segment: input[prev..pos].to_vec(),
                     index: prev,
-                    input: input.to_string(),
+                    input: input.to_vec(),
                     is_word_like: Some(is_word_like),
                 });
                 prev = pos;
@@ -42,26 +36,24 @@ fn compute_segments(input: &str, granularity: &str) -> Vec<SegmentInfo> {
         }
         "sentence" => {
             let ss = SentenceSegmenter::new(Default::default());
-            let breaks: Vec<usize> = ss.segment_utf16(&utf16).collect();
+            let breaks: Vec<usize> = ss.segment_utf16(input).collect();
             for w in breaks.windows(2) {
-                let seg_text = utf16_slice_to_string(&utf16[w[0]..w[1]]);
                 segments.push(SegmentInfo {
-                    segment: seg_text,
+                    segment: input[w[0]..w[1]].to_vec(),
                     index: w[0],
-                    input: input.to_string(),
+                    input: input.to_vec(),
                     is_word_like: None,
                 });
             }
         }
         _ => {
             let gs = GraphemeClusterSegmenter::new();
-            let breaks: Vec<usize> = gs.segment_utf16(&utf16).collect();
+            let breaks: Vec<usize> = gs.segment_utf16(input).collect();
             for w in breaks.windows(2) {
-                let seg_text = utf16_slice_to_string(&utf16[w[0]..w[1]]);
                 segments.push(SegmentInfo {
-                    segment: seg_text,
+                    segment: input[w[0]..w[1]].to_vec(),
                     index: w[0],
-                    input: input.to_string(),
+                    input: input.to_vec(),
                     is_word_like: None,
                 });
             }
@@ -71,28 +63,26 @@ fn compute_segments(input: &str, granularity: &str) -> Vec<SegmentInfo> {
     segments
 }
 
-fn compute_break_points_utf16(input: &str, granularity: &str) -> Vec<usize> {
-    let utf16: Vec<u16> = input.encode_utf16().collect();
+fn compute_break_points_utf16(input: &[u16], granularity: &str) -> Vec<usize> {
     match granularity {
         "word" => {
             let ws = WordSegmenter::new_auto(Default::default());
-            ws.segment_utf16(&utf16).collect()
+            ws.segment_utf16(input).collect()
         }
         "sentence" => {
             let ss = SentenceSegmenter::new(Default::default());
-            ss.segment_utf16(&utf16).collect()
+            ss.segment_utf16(input).collect()
         }
         _ => {
             let gs = GraphemeClusterSegmenter::new();
-            gs.segment_utf16(&utf16).collect()
+            gs.segment_utf16(input).collect()
         }
     }
 }
 
-fn compute_word_like_at_break_utf16(input: &str, break_end_utf16: usize) -> bool {
-    let utf16: Vec<u16> = input.encode_utf16().collect();
+fn compute_word_like_at_break_utf16(input: &[u16], break_end_utf16: usize) -> bool {
     let ws = WordSegmenter::new_auto(Default::default());
-    let mut iter = ws.segment_utf16(&utf16);
+    let mut iter = ws.segment_utf16(input);
     loop {
         match iter.next() {
             Some(p) if p == break_end_utf16 => return iter.is_word_like(),
@@ -102,24 +92,11 @@ fn compute_word_like_at_break_utf16(input: &str, break_end_utf16: usize) -> bool
     }
 }
 
-fn utf16_len(s: &str) -> usize {
-    s.encode_utf16().count()
-}
-
-fn utf16_slice(input: &str, start: usize, end: usize) -> String {
-    let utf16: Vec<u16> = input.encode_utf16().collect();
-    if start >= utf16.len() || start >= end {
-        return String::new();
-    }
-    let end = end.min(utf16.len());
-    utf16_slice_to_string(&utf16[start..end])
-}
-
 fn create_segment_object(
     interp: &mut Interpreter,
-    segment: &str,
+    segment: &[u16],
     index: usize,
-    input: &str,
+    input: &[u16],
     is_word_like: Option<bool>,
 ) -> JsValue {
     let obj = interp.create_object();
@@ -129,7 +106,7 @@ fn create_segment_object(
     obj.borrow_mut().insert_property(
         "segment".to_string(),
         PropertyDescriptor::data(
-            JsValue::String(JsString::from_str(segment)),
+            JsValue::String(JsString { code_units: segment.to_vec() }),
             true,
             true,
             true,
@@ -142,7 +119,7 @@ fn create_segment_object(
     obj.borrow_mut().insert_property(
         "input".to_string(),
         PropertyDescriptor::data(
-            JsValue::String(JsString::from_str(input)),
+            JsValue::String(JsString { code_units: input.to_vec() }),
             true,
             true,
             true,
@@ -209,12 +186,13 @@ impl Interpreter {
                 };
 
                 let str_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let input = match interp.to_string_value(&str_arg) {
+                let input_js = match interp.to_js_string(&str_arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
+                let input_u16 = input_js.code_units.clone();
 
-                let breaks = compute_break_points_utf16(&input, &granularity);
+                let breaks = compute_break_points_utf16(&input_u16, &granularity);
 
                 let segments_obj = interp.create_object();
                 if let Some(ref op) = interp.object_prototype {
@@ -225,7 +203,7 @@ impl Interpreter {
                 segments_obj.borrow_mut().insert_property(
                     "[[SegmenterInput]]".to_string(),
                     PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&input)),
+                        JsValue::String(input_js),
                         false,
                         false,
                         false,
@@ -305,16 +283,16 @@ impl Interpreter {
                         }
                         let idx = idx as usize;
 
-                        let (input, granularity, breaks) = if let JsValue::Object(o) = this {
+                        let (input_u16, granularity, breaks) = if let JsValue::Object(o) = this {
                             if let Some(obj) = interp.get_object(o.id) {
                                 let b = obj.borrow();
-                                let input = b
+                                let input_u16 = b
                                     .properties
                                     .get("[[SegmenterInput]]")
                                     .and_then(|pd| pd.value.as_ref())
                                     .and_then(|v| {
                                         if let JsValue::String(s) = v {
-                                            Some(s.to_rust_string())
+                                            Some(s.code_units.clone())
                                         } else {
                                             None
                                         }
@@ -350,7 +328,7 @@ impl Interpreter {
                                     }
                                 }
 
-                                (input, granularity, break_points)
+                                (input_u16, granularity, break_points)
                             } else {
                                 (None, None, Vec::new())
                             }
@@ -358,20 +336,19 @@ impl Interpreter {
                             (None, None, Vec::new())
                         };
 
-                        let input = match input {
+                        let input_u16 = match input_u16 {
                             Some(s) => s,
                             None => return Completion::Normal(JsValue::Undefined),
                         };
                         let granularity = granularity.unwrap_or_else(|| "grapheme".to_string());
 
-                        let input_utf16_len = utf16_len(&input);
-                        if idx >= input_utf16_len {
+                        if idx >= input_u16.len() {
                             return Completion::Normal(JsValue::Undefined);
                         }
 
                         // Find the segment containing idx (UTF-16 index)
                         let mut seg_start = 0;
-                        let mut seg_end = input_utf16_len;
+                        let mut seg_end = input_u16.len();
                         for w in breaks.windows(2) {
                             if w[0] <= idx && idx < w[1] {
                                 seg_start = w[0];
@@ -380,9 +357,9 @@ impl Interpreter {
                             }
                         }
 
-                        let segment = utf16_slice(&input, seg_start, seg_end);
+                        let segment = input_u16[seg_start..seg_end].to_vec();
                         let is_word_like = if granularity == "word" {
-                            Some(compute_word_like_at_break_utf16(&input, seg_end))
+                            Some(compute_word_like_at_break_utf16(&input_u16, seg_end))
                         } else {
                             None
                         };
@@ -391,7 +368,7 @@ impl Interpreter {
                             interp,
                             &segment,
                             seg_start,
-                            &input,
+                            &input_u16,
                             is_word_like,
                         ))
                     },
@@ -402,13 +379,13 @@ impl Interpreter {
 
                 // [Symbol.iterator]() method
                 let granularity_clone = granularity.clone();
-                let input_clone = input.clone();
+                let input_clone = input_u16.clone();
                 let iter_fn = interp.create_function(JsFunction::native(
                     "[Symbol.iterator]".to_string(),
                     0,
                     move |interp, _this, _args| {
                         let segs = compute_segments(&input_clone, &granularity_clone);
-                        let seg_data: Vec<(String, usize, String, bool)> = segs
+                        let seg_data: Vec<(Vec<u16>, usize, Vec<u16>, bool)> = segs
                             .into_iter()
                             .map(|s| {
                                 (
@@ -637,6 +614,8 @@ impl Interpreter {
                 });
 
                 let obj_id = obj.borrow().id.unwrap();
+                let proto_id = proto_clone.borrow().id;
+                interp.apply_new_target_prototype(obj_id, proto_id);
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));

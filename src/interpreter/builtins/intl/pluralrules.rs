@@ -507,6 +507,12 @@ impl Interpreter {
             "PluralRules".to_string(),
             0,
             move |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(interp.create_type_error(
+                        "Intl.PluralRules must be called with 'new'",
+                    ));
+                }
+
                 let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 

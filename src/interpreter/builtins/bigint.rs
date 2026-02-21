@@ -77,13 +77,20 @@ impl Interpreter {
             (
                 "toLocaleString",
                 0,
-                Rc::new(|interp, this, _args| {
+                Rc::new(|interp, this, args| {
                     let Some(n) = this_bigint_value(interp, this) else {
                         return Completion::Throw(interp.create_type_error(
                             "BigInt.prototype.toLocaleString requires a BigInt",
                         ));
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&n.to_string())))
+                    let locales = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let nf = match interp.intl_construct_number_format(&locales, &options) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let bigint_val = JsValue::BigInt(JsBigInt { value: n });
+                    interp.intl_number_format_format(&nf, &bigint_val)
                 }),
             ),
         ];

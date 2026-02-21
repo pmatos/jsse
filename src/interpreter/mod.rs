@@ -432,9 +432,10 @@ impl Interpreter {
     }
 
     fn is_strict_mode_body(body: &[Statement]) -> bool {
+        let use_strict_u16: Vec<u16> = "use strict".encode_utf16().collect();
         for stmt in body {
             if let Statement::Expression(Expression::Literal(Literal::String(s))) = stmt {
-                if s == "use strict" {
+                if *s == use_strict_u16 {
                     return true;
                 }
             } else {
