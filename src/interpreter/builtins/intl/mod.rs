@@ -1,4 +1,5 @@
 mod collator;
+mod displaynames;
 mod listformat;
 mod locale;
 mod numberformat;
@@ -276,6 +277,9 @@ impl Interpreter {
 
         // Intl.Segmenter
         self.setup_intl_segmenter(&intl_obj);
+
+        // Intl.DisplayNames
+        self.setup_intl_display_names(&intl_obj);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.global_env

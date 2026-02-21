@@ -752,6 +752,13 @@ pub(crate) enum IntlData {
         locale: String,
         granularity: String,
     },
+    DisplayNames {
+        locale: String,
+        style: String,
+        display_type: String,
+        fallback: String,
+        language_display: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug)]
