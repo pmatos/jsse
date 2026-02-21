@@ -1,4 +1,5 @@
 mod collator;
+mod listformat;
 mod locale;
 mod numberformat;
 mod pluralrules;
@@ -265,6 +266,9 @@ impl Interpreter {
         // Intl.PluralRules
         self.setup_intl_plural_rules(&intl_obj);
 
+        // Intl.ListFormat
+        self.setup_intl_list_format(&intl_obj);
+
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.global_env
             .borrow_mut()
@@ -394,6 +398,23 @@ impl Interpreter {
         }
     }
 
+    // §9.2.12 GetOptionsObject
+    pub(crate) fn intl_get_options_object(
+        &mut self,
+        options: &JsValue,
+    ) -> Result<JsValue, JsValue> {
+        if matches!(options, JsValue::Undefined) {
+            let obj = self.create_object();
+            obj.borrow_mut().prototype = None;
+            let id = obj.borrow().id.unwrap();
+            return Ok(JsValue::Object(crate::types::JsObject { id }));
+        }
+        if matches!(options, JsValue::Object(_)) {
+            return Ok(options.clone());
+        }
+        Err(self.create_type_error("Options argument must be an object or undefined"))
+    }
+
     // §9.2.12 GetOption
     pub(crate) fn intl_get_option(
         &mut self,
@@ -466,8 +487,27 @@ impl Interpreter {
     pub(crate) fn intl_supported_locales(
         &mut self,
         requested: &[String],
-        _options: &JsValue,
+        options: &JsValue,
     ) -> Result<JsValue, JsValue> {
+        if !matches!(options, JsValue::Undefined) {
+            // Step 1: If options is not undefined, let options be ToObject(options)
+            if matches!(options, JsValue::Null) {
+                return Err(self.create_type_error("Cannot convert null to object"));
+            }
+            let opts = match self.to_object(options) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            // Validate localeMatcher option
+            let _matcher = self.intl_get_option(
+                &opts,
+                "localeMatcher",
+                &["lookup", "best fit"],
+                Some("best fit"),
+            )?;
+        }
+
         let supported: Vec<JsValue> = requested
             .iter()
             .filter_map(|tag| {

@@ -732,6 +732,11 @@ pub(crate) enum IntlData {
         rounding_priority: String,
         trailing_zero_display: String,
     },
+    ListFormat {
+        locale: String,
+        list_type: String,
+        style: String,
+    },
 }
 
 #[derive(Clone, Debug)]
