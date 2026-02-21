@@ -729,15 +729,18 @@ fn validate_duration_record(interp: &mut Interpreter, rec: &DurationRecord) -> R
 
     // Check normalizedSeconds: days * 86400 + hours * 3600 + minutes * 60 + seconds +
     // milliseconds * 1e-3 + microseconds * 1e-6 + nanoseconds * 1e-9
-    let normalized_seconds = rec.days * 86400.0
-        + rec.hours * 3600.0
-        + rec.minutes * 60.0
-        + rec.seconds
-        + rec.milliseconds * 1e-3
-        + rec.microseconds * 1e-6
-        + rec.nanoseconds * 1e-9;
-    let limit_53 = 2.0_f64.powi(53);
-    if normalized_seconds.abs() >= limit_53 {
+    // Use i128 nanosecond arithmetic for precision at the 2^53 boundary
+    let days_ns = (rec.days as i128) * 86_400_000_000_000i128;
+    let hours_ns = (rec.hours as i128) * 3_600_000_000_000i128;
+    let minutes_ns = (rec.minutes as i128) * 60_000_000_000i128;
+    let seconds_ns = (rec.seconds as i128) * 1_000_000_000i128;
+    let millis_ns = (rec.milliseconds as i128) * 1_000_000i128;
+    let micros_ns = (rec.microseconds as i128) * 1_000i128;
+    let nanos_ns = rec.nanoseconds as i128;
+    let total_ns = days_ns + hours_ns + minutes_ns + seconds_ns + millis_ns + micros_ns + nanos_ns;
+    // limit: 2^53 seconds = 2^53 * 10^9 nanoseconds
+    let limit_ns: i128 = 9_007_199_254_740_992_000_000_000;
+    if total_ns.abs() >= limit_ns {
         return Err(interp.create_range_error("Duration value out of range: normalizedSeconds exceeds 2^53"));
     }
 

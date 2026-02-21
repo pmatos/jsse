@@ -10,11 +10,15 @@ fn extract_unicode_extension(locale: &str, key: &str) -> Option<String> {
     let parts: Vec<&str> = ext.split('-').collect();
     for i in 0..parts.len() {
         if parts[i] == key && i + 1 < parts.len() {
-            let mut value = parts[i + 1].to_string();
-            // Some values are multi-part (e.g., "islamic-civil" = "islamic" + "civil")
+            let next = parts[i + 1];
+            // A type value is 3-8 alphanum chars. If the next part is a singleton (1 char)
+            // or another key (2 chars), this key has no value.
+            if next.len() <= 2 {
+                return None;
+            }
+            let mut value = next.to_string();
             let mut j = i + 2;
             while j < parts.len() && parts[j].len() > 2 {
-                // Check if next part is a keyword key (2 chars) or part of current value
                 value.push('-');
                 value.push_str(parts[j]);
                 j += 1;

@@ -2411,14 +2411,21 @@ impl Interpreter {
                             move |interp2, _this2, args2| {
                                 let val = args2.first().cloned().unwrap_or(JsValue::Undefined);
 
-                                let use_string_decimal = if let JsValue::String(s) = &val {
+                                let use_string_decimal = if let JsValue::BigInt(bi) = &val {
+                                    let abs_str = bi.value.to_string().trim_start_matches('-').to_string();
+                                    abs_str.len() > 15
+                                } else if let JsValue::String(s) = &val {
                                     string_needs_decimal_precision(&s.to_string())
                                 } else {
                                     false
                                 };
 
                                 let result = if use_string_decimal {
-                                    let s = if let JsValue::String(s) = &val { s.to_string() } else { unreachable!() };
+                                    let s = match &val {
+                                        JsValue::BigInt(bi) => bi.value.to_string(),
+                                        JsValue::String(s) => s.to_string(),
+                                        _ => unreachable!(),
+                                    };
                                     format_number_from_string_decimal(
                                         &s, &locale, &style, &currency, &currency_display,
                                         &currency_sign, &unit, &unit_display, &sign_display,
