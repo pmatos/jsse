@@ -1,5 +1,6 @@
 mod collator;
 mod displaynames;
+mod durationformat;
 mod listformat;
 mod locale;
 mod numberformat;
@@ -280,6 +281,9 @@ impl Interpreter {
 
         // Intl.DisplayNames
         self.setup_intl_display_names(&intl_obj);
+
+        // Intl.DurationFormat
+        self.setup_intl_duration_format(&intl_obj);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.global_env

@@ -822,7 +822,7 @@ fn intl_to_number(interp: &mut Interpreter, val: &JsValue) -> Result<f64, JsValu
     }
 }
 
-fn format_number_internal(
+pub(crate) fn format_number_internal(
     value: f64,
     locale_str: &str,
     style: &str,
@@ -1718,7 +1718,7 @@ fn format_range_string(
     format!("{}{}{}", fmt_start, range_sep, fmt_end)
 }
 
-fn format_to_parts_internal(
+pub(crate) fn format_to_parts_internal(
     value: f64,
     locale_str: &str,
     style: &str,
