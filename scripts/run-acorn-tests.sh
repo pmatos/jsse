@@ -41,6 +41,11 @@ if [ ! -d "$ACORN_DIR" ]; then
     npm install
     echo "Building acorn..."
     npm run build
+    # Patch: esbuild strips comments, but TestComments uses .toString() to get
+    # function source with comments. Replace with a string literal so comments
+    # survive bundling.
+    echo "Patching TestComments test for esbuild compatibility..."
+    node "$SCRIPT_DIR/patch-acorn-comments.js" test/tests.js
     cd "$PROJECT_DIR"
 else
     echo "Using cached acorn at $ACORN_DIR"
