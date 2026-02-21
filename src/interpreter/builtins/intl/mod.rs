@@ -1,6 +1,7 @@
 mod collator;
 mod locale;
 mod numberformat;
+mod pluralrules;
 
 use super::super::*;
 use icu::locale::Locale as IcuLocale;
@@ -260,6 +261,9 @@ impl Interpreter {
 
         // Intl.NumberFormat
         self.setup_intl_number_format(&intl_obj);
+
+        // Intl.PluralRules
+        self.setup_intl_plural_rules(&intl_obj);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.global_env

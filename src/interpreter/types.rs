@@ -718,6 +718,20 @@ pub(crate) enum IntlData {
         rounding_priority: String,
         trailing_zero_display: String,
     },
+    PluralRules {
+        locale: String,
+        plural_type: String,
+        notation: String,
+        minimum_integer_digits: u32,
+        minimum_fraction_digits: u32,
+        maximum_fraction_digits: u32,
+        minimum_significant_digits: Option<u32>,
+        maximum_significant_digits: Option<u32>,
+        rounding_mode: String,
+        rounding_increment: u32,
+        rounding_priority: String,
+        trailing_zero_display: String,
+    },
 }
 
 #[derive(Clone, Debug)]

@@ -81,6 +81,7 @@ impl Interpreter {
             &self.intl_locale_prototype,
             &self.intl_collator_prototype,
             &self.intl_number_format_prototype,
+            &self.intl_plural_rules_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id
