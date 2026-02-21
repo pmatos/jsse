@@ -14,3 +14,4 @@ ryu-js = "1.0.2"
 iana-time-zone = "0.1"
 chrono-tz = "0.10"
 icu = "2.0"
+fixed_decimal = { version = "0.7", features = ["ryu"] }

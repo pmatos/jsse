@@ -80,6 +80,7 @@ impl Interpreter {
             &self.temporal_zoned_date_time_prototype,
             &self.intl_locale_prototype,
             &self.intl_collator_prototype,
+            &self.intl_number_format_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id
