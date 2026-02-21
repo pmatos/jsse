@@ -356,9 +356,7 @@ impl<'a> Parser<'a> {
         // ModuleExportName: IdentifierName | StringLiteral
         if let Token::StringLiteral(s) = &self.current {
             if Self::has_lone_surrogate(s) {
-                return Err(
-                    self.error("An export name cannot include a lone surrogate."),
-                );
+                return Err(self.error("An export name cannot include a lone surrogate."));
             }
             let s = String::from_utf16_lossy(s);
             self.advance()?;

@@ -720,6 +720,7 @@ impl Interpreter {
                             annexb_function_names: None,
                             class_private_names: None,
                             is_field_initializer: false,
+                            arguments_immutable: false,
                         }));
                         self.exec_statement(body, &with_env)
                     } else {
@@ -858,7 +859,8 @@ impl Interpreter {
                                 Binding {
                                     value: JsValue::Undefined,
                                     kind,
-                                    initialized: false, deletable: false,
+                                    initialized: false,
+                                    deletable: false,
                                 },
                             );
                         }
@@ -1056,25 +1058,10 @@ impl Interpreter {
                         ObjectPatternProperty::Rest(pat) => {
                             let rest_obj = self.create_object();
                             if let JsValue::Object(o) = &obj_val {
-                                if let Some(src) = self.get_object(o.id) {
-                                    let keys: Vec<String> = src.borrow().property_order.clone();
-                                    for key in &keys {
-                                        if !excluded_keys.contains(key) {
-                                            let desc = src.borrow().get_own_property(key);
-                                            if let Some(ref d) = desc
-                                                && d.enumerable.unwrap_or(true)
-                                            {
-                                                let v = match self
-                                                    .get_object_property(o.id, key, &obj_val)
-                                                {
-                                                    Completion::Normal(v) => v,
-                                                    Completion::Throw(e) => return Err(e),
-                                                    _ => JsValue::Undefined,
-                                                };
-                                                rest_obj.borrow_mut().insert_value(key.clone(), v);
-                                            }
-                                        }
-                                    }
+                                let pairs =
+                                    self.copy_data_properties(o.id, &obj_val, &excluded_keys)?;
+                                for (k, v) in pairs {
+                                    rest_obj.borrow_mut().insert_value(k, v);
                                 }
                             }
                             let rest_id = rest_obj.borrow().id.unwrap();
@@ -1466,23 +1453,31 @@ impl Interpreter {
                     if let Some(val) = break_val {
                         v = val;
                     }
-                    self.iterator_close(&iterator, JsValue::Undefined);
+                    if let Err(e) = self.iterator_close_result(&iterator) {
+                        return Completion::Throw(e);
+                    }
                     return Completion::Normal(v);
                 }
-                Completion::Return(v) => {
-                    self.iterator_close(&iterator, JsValue::Undefined);
-                    return Completion::Return(v);
+                Completion::Return(ret_v) => {
+                    if let Err(e) = self.iterator_close_result(&iterator) {
+                        return Completion::Throw(e);
+                    }
+                    return Completion::Return(ret_v);
                 }
                 Completion::Throw(e) => {
-                    self.iterator_close(&iterator, JsValue::Undefined);
+                    self.iterator_close(&iterator, e.clone());
                     return Completion::Throw(e);
                 }
                 Completion::Break(Some(label), val) => {
-                    self.iterator_close(&iterator, JsValue::Undefined);
+                    if let Err(e) = self.iterator_close_result(&iterator) {
+                        return Completion::Throw(e);
+                    }
                     return Completion::Break(Some(label), val);
                 }
                 Completion::Continue(Some(label), val) => {
-                    self.iterator_close(&iterator, JsValue::Undefined);
+                    if let Err(e) = self.iterator_close_result(&iterator) {
+                        return Completion::Throw(e);
+                    }
                     return Completion::Continue(Some(label), val);
                 }
                 other => return other,
@@ -1633,7 +1628,7 @@ impl Interpreter {
                     }
                     Completion::Empty => {}
                     Completion::Break(None, break_val) => {
-                        return Some(Completion::Normal(break_val.unwrap_or(JsValue::Undefined)));
+                        return Some(Completion::Normal(break_val.unwrap_or_else(|| v.clone())));
                     }
                     other => return Some(other),
                 }

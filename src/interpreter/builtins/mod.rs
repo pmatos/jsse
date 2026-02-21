@@ -1147,8 +1147,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    obj.borrow_mut().primitive_value =
-                        Some(JsValue::String(js_str.clone()));
+                    obj.borrow_mut().primitive_value = Some(JsValue::String(js_str.clone()));
                     obj.borrow_mut().class_name = "String".to_string();
                 }
                 Completion::Normal(JsValue::String(js_str))
@@ -1671,14 +1670,16 @@ impl Interpreter {
         self.register_global_fn(
             "escape",
             BindingKind::Var,
-            JsFunction::native("escape".to_string(), 1, |_interp, _this, args| {
+            JsFunction::native("escape".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let s = to_js_string(&val);
+                let s = match interp.to_string_value(&val) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let units: Vec<u16> = s.encode_utf16().collect();
                 let mut result = String::new();
                 for &cu in &units {
                     match cu {
-                        // A-Z a-z 0-9 @ * _ + - . /
                         b if (b'A' as u16..=b'Z' as u16).contains(&b)
                             || (b'a' as u16..=b'z' as u16).contains(&b)
                             || (b'0' as u16..=b'9' as u16).contains(&b)
@@ -1708,9 +1709,12 @@ impl Interpreter {
         self.register_global_fn(
             "unescape",
             BindingKind::Var,
-            JsFunction::native("unescape".to_string(), 1, |_interp, _this, args| {
+            JsFunction::native("unescape".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let s = to_js_string(&val);
+                let s = match interp.to_string_value(&val) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let chars: Vec<char> = s.chars().collect();
                 let mut result: Vec<u16> = Vec::new();
                 let mut i = 0;
@@ -3141,7 +3145,8 @@ impl Interpreter {
             Binding {
                 value: global_val,
                 kind: BindingKind::Const,
-                initialized: true, deletable: false,
+                initialized: true,
+                deletable: false,
             },
         );
 
@@ -4409,22 +4414,35 @@ impl Interpreter {
                         };
                         let keys: Vec<String> = if let Some(src) = interp.get_object(s_id) {
                             let b = src.borrow();
-                            b.property_order
-                                .iter()
-                                .chain(
-                                    b.properties
-                                        .keys()
-                                        .filter(|k| k.starts_with("Symbol("))
-                                        .filter(|k| !b.property_order.contains(k)),
-                                )
-                                .filter(|k| {
-                                    b.properties
-                                        .get(*k)
-                                        .map(|d| d.enumerable != Some(false))
-                                        .unwrap_or(false)
-                                })
-                                .cloned()
-                                .collect()
+                            // String exotic: prepend character indices
+                            let mut result = Vec::new();
+                            if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                let len = s.len();
+                                for i in 0..len {
+                                    result.push(i.to_string());
+                                }
+                            }
+                            let is_string_wrapper =
+                                matches!(b.primitive_value, Some(JsValue::String(_)));
+                            for k in b.property_order.iter().chain(
+                                b.properties
+                                    .keys()
+                                    .filter(|k| k.starts_with("Symbol("))
+                                    .filter(|k| !b.property_order.contains(k)),
+                            ) {
+                                if result.contains(k) {
+                                    continue;
+                                }
+                                if is_string_wrapper && k == "length" {
+                                    continue;
+                                }
+                                if let Some(d) = b.properties.get(k) {
+                                    if d.enumerable != Some(false) {
+                                        result.push(k.clone());
+                                    }
+                                }
+                            }
+                            result
                         } else {
                             continue;
                         };
@@ -4865,24 +4883,41 @@ impl Interpreter {
                             "Object.defineProperties called on non-object",
                         ));
                     }
-                    let descs = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let descs_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let descs = match interp.to_object(&descs_arg) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => return Completion::Normal(target),
+                    };
                     if let JsValue::Object(ref t) = target
                         && let JsValue::Object(ref d) = descs
                         && let Some(desc_obj) = interp.get_object(d.id)
                     {
-                        // Collect enumerable own property keys in insertion order
                         let keys: Vec<String> = {
                             let b = desc_obj.borrow();
-                            b.property_order
-                                .iter()
-                                .filter(|k| {
-                                    b.properties
-                                        .get(*k)
-                                        .map(|p| p.enumerable != Some(false))
-                                        .unwrap_or(false)
-                                })
-                                .cloned()
-                                .collect()
+                            let mut result = Vec::new();
+                            let is_string_wrapper =
+                                matches!(b.primitive_value, Some(JsValue::String(_)));
+                            if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                let len = s.len();
+                                for i in 0..len {
+                                    result.push(i.to_string());
+                                }
+                            }
+                            for k in b.property_order.iter() {
+                                if result.contains(k) {
+                                    continue;
+                                }
+                                if is_string_wrapper && k == "length" {
+                                    continue;
+                                }
+                                if let Some(p) = b.properties.get(k) {
+                                    if p.enumerable != Some(false) {
+                                        result.push(k.clone());
+                                    }
+                                }
+                            }
+                            result
                         };
                         // Collect all descriptors first
                         let mut descriptors: Vec<(String, PropertyDescriptor)> = Vec::new();
@@ -5436,37 +5471,52 @@ impl Interpreter {
         }
     }
 
+    /// IteratorClose per §7.4.6 - called during abrupt completion (e.g., break/throw in for-of).
+    /// The original completion takes priority over errors from return().
     pub(crate) fn iterator_close(&mut self, iterator: &JsValue, _completion: JsValue) -> JsValue {
         if let JsValue::Object(io) = iterator {
-            let return_fn = match self.get_object_property(io.id, "return", iterator) {
-                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
-                _ => None,
+            // GetMethod(iterator, "return"): undefined/null → no-op, non-callable → TypeError
+            let return_val = match self.get_object_property(io.id, "return", iterator) {
+                Completion::Normal(v) => v,
+                Completion::Throw(_e) => return _completion, // original completion takes priority
+                _ => return _completion,
             };
-            if let Some(return_fn) = return_fn {
-                let _ = self.call_function(&return_fn, iterator, &[]);
+            if return_val.is_undefined() || return_val.is_null() {
+                return _completion;
             }
+            if !self.is_callable(&return_val) {
+                // Non-callable return: throw TypeError, but original completion takes priority
+                return _completion;
+            }
+            // Call return(), but original completion takes priority over errors
+            let _ = self.call_function(&return_val, iterator, &[]);
         }
         _completion
     }
 
+    /// IteratorClose for normal completion paths (no abrupt completion to prioritize).
     pub(crate) fn iterator_close_result(&mut self, iterator: &JsValue) -> Result<(), JsValue> {
         if let JsValue::Object(io) = iterator {
-            let return_fn = match self.get_object_property(io.id, "return", iterator) {
-                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
-                Completion::Normal(_) => None,
+            // GetMethod(iterator, "return"): undefined/null → no-op, non-callable → TypeError
+            let return_val = match self.get_object_property(io.id, "return", iterator) {
+                Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => None,
+                _ => return Ok(()),
             };
-            if let Some(return_fn) = return_fn {
-                match self.call_function(&return_fn, iterator, &[]) {
-                    Completion::Normal(inner_result) => {
-                        if !matches!(inner_result, JsValue::Object(_)) {
-                            return Err(self.create_type_error("Iterator result is not an object"));
-                        }
+            if return_val.is_undefined() || return_val.is_null() {
+                return Ok(());
+            }
+            if !self.is_callable(&return_val) {
+                return Err(self.create_type_error("iterator.return is not a function"));
+            }
+            match self.call_function(&return_val, iterator, &[]) {
+                Completion::Normal(inner_result) => {
+                    if !matches!(inner_result, JsValue::Object(_)) {
+                        return Err(self.create_type_error("Iterator result is not an object"));
                     }
-                    Completion::Throw(e) => return Err(e),
-                    _ => {}
                 }
+                Completion::Throw(e) => return Err(e),
+                _ => {}
             }
         }
         Ok(())

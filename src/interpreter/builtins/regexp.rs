@@ -131,9 +131,8 @@ pub(crate) fn js_string_to_regex_input(code_units: &[u16]) -> String {
         let cu = code_units[i];
         if (0xD800..=0xDBFF).contains(&cu) {
             if i + 1 < code_units.len() && (0xDC00..=0xDFFF).contains(&code_units[i + 1]) {
-                let cp = ((cu as u32 - 0xD800) << 10)
-                    + (code_units[i + 1] as u32 - 0xDC00)
-                    + 0x10000;
+                let cp =
+                    ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
                 if let Some(c) = char::from_u32(cp) {
                     result.push(c);
                 }
@@ -182,9 +181,7 @@ pub(crate) fn pua_code_units_to_surrogates(code_units: &[u16]) -> Vec<u16> {
             && i + 1 < code_units.len()
             && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
         {
-            let cp = ((cu as u32 - 0xD800) << 10)
-                + (code_units[i + 1] as u32 - 0xDC00)
-                + 0x10000;
+            let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
             if cp >= SURROGATE_PUA_BASE
                 && cp <= SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START)
             {
@@ -1320,11 +1317,7 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
                         let hex: String = chars[i + 2..i + 6].iter().collect();
                         if let Ok(cp) = u32::from_str_radix(&hex, 16) {
                             if is_surrogate(cp) {
-                                push_literal_char(
-                                    &mut result,
-                                    surrogate_to_pua(cp),
-                                    in_char_class,
-                                );
+                                push_literal_char(&mut result, surrogate_to_pua(cp), in_char_class);
                             } else if let Some(ch) = char::from_u32(cp) {
                                 push_literal_char(&mut result, ch, in_char_class);
                             }
@@ -3934,7 +3927,9 @@ impl Interpreter {
                 if next_source_position < length_s {
                     accumulated_result.push_str(&s[next_source_position..]);
                 }
-                Completion::Normal(JsValue::String(regex_output_to_js_string(&accumulated_result)))
+                Completion::Normal(JsValue::String(regex_output_to_js_string(
+                    &accumulated_result,
+                )))
             },
         ));
         if let Some(key) = get_symbol_key(self, "replace") {

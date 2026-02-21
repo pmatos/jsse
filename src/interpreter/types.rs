@@ -93,6 +93,7 @@ pub struct Environment {
     pub(crate) annexb_function_names: Option<Vec<String>>,
     pub(crate) class_private_names: Option<std::collections::HashMap<String, String>>,
     pub(crate) is_field_initializer: bool,
+    pub(crate) arguments_immutable: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -134,7 +135,12 @@ pub(crate) struct Binding {
 
 impl Binding {
     pub fn new(value: JsValue, kind: BindingKind, initialized: bool) -> Self {
-        Self { value, kind, initialized, deletable: false }
+        Self {
+            value,
+            kind,
+            initialized,
+            deletable: false,
+        }
     }
 }
 
@@ -170,6 +176,7 @@ impl Environment {
             annexb_function_names: None,
             class_private_names: None,
             is_field_initializer: false,
+            arguments_immutable: false,
         }))
     }
 
@@ -187,6 +194,7 @@ impl Environment {
             annexb_function_names: None,
             class_private_names: None,
             is_field_initializer: false,
+            arguments_immutable: false,
         }))
     }
 
@@ -292,8 +300,8 @@ impl Environment {
         if let Some(ref global_obj) = self.global_object {
             let mut gb = global_obj.borrow_mut();
             let existing = gb.properties.get(name);
-            let need_full_desc = existing.is_none()
-                || existing.is_some_and(|d| d.configurable == Some(true));
+            let need_full_desc =
+                existing.is_none() || existing.is_some_and(|d| d.configurable == Some(true));
             if need_full_desc {
                 let desc = PropertyDescriptor::data(value, true, true, configurable);
                 if !gb.properties.contains_key(name) {
@@ -665,6 +673,7 @@ pub enum IteratorState {
         pending_binding: Option<SentValueBinding>,
         delegated_iterator: Option<DelegatedIteratorInfo>,
         pending_exception: Option<JsValue>,
+        pending_return: Option<JsValue>,
     },
     AsyncGenerator {
         body: Vec<Statement>,
@@ -682,6 +691,7 @@ pub enum IteratorState {
         pending_binding: Option<SentValueBinding>,
         delegated_iterator: Option<DelegatedIteratorInfo>,
         pending_exception: Option<JsValue>,
+        pending_return: Option<JsValue>,
     },
     RegExpStringIterator {
         source: String,

@@ -415,12 +415,30 @@ impl<'a> Lexer<'a> {
     fn read_string_escape_into(&mut self, out: &mut Vec<u16>) -> Result<(), LexError> {
         match self.advance() {
             None => Err(self.error("Unterminated escape sequence")),
-            Some('n') => { out.push(0x000A); Ok(()) }
-            Some('r') => { out.push(0x000D); Ok(()) }
-            Some('t') => { out.push(0x0009); Ok(()) }
-            Some('b') => { out.push(0x0008); Ok(()) }
-            Some('f') => { out.push(0x000C); Ok(()) }
-            Some('v') => { out.push(0x000B); Ok(()) }
+            Some('n') => {
+                out.push(0x000A);
+                Ok(())
+            }
+            Some('r') => {
+                out.push(0x000D);
+                Ok(())
+            }
+            Some('t') => {
+                out.push(0x0009);
+                Ok(())
+            }
+            Some('b') => {
+                out.push(0x0008);
+                Ok(())
+            }
+            Some('f') => {
+                out.push(0x000C);
+                Ok(())
+            }
+            Some('v') => {
+                out.push(0x000B);
+                Ok(())
+            }
             Some(ch @ '0'..='7') => {
                 if ch == '0' && !self.peek().is_some_and(|c| c.is_ascii_digit()) {
                     out.push(0x0000);
@@ -445,8 +463,12 @@ impl<'a> Lexer<'a> {
                 Ok(())
             }
             Some('x') => {
-                let h1 = self.advance().ok_or_else(|| self.error("Invalid hex escape"))?;
-                let h2 = self.advance().ok_or_else(|| self.error("Invalid hex escape"))?;
+                let h1 = self
+                    .advance()
+                    .ok_or_else(|| self.error("Invalid hex escape"))?;
+                let h2 = self
+                    .advance()
+                    .ok_or_else(|| self.error("Invalid hex escape"))?;
                 let val = hex_val(h1)
                     .and_then(|a| hex_val(h2).map(|b| a * 16 + b))
                     .ok_or_else(|| self.error("Invalid hex escape"))?;
@@ -499,7 +521,8 @@ impl<'a> Lexer<'a> {
         } else {
             let mut val: u32 = 0;
             for _ in 0..4 {
-                let ch = self.advance()
+                let ch = self
+                    .advance()
                     .ok_or_else(|| self.error("Invalid Unicode escape"))?;
                 let d = hex_val(ch).ok_or_else(|| self.error("Invalid Unicode escape"))?;
                 val = val * 16 + d;

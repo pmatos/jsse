@@ -120,7 +120,8 @@ impl Interpreter {
                     Binding {
                         value,
                         kind: BindingKind::Const,
-                        initialized: true, deletable: false,
+                        initialized: true,
+                        deletable: false,
                     },
                 );
             }
