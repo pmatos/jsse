@@ -742,6 +742,12 @@ pub(crate) enum IntlData {
         list_type: String,
         style: String,
     },
+    RelativeTimeFormat {
+        locale: String,
+        style: String,
+        numeric: String,
+        numbering_system: String,
+    },
     Segmenter {
         locale: String,
         granularity: String,

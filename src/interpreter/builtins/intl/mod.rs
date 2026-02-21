@@ -3,6 +3,7 @@ mod listformat;
 mod locale;
 mod numberformat;
 mod pluralrules;
+mod relativetimeformat;
 mod segmenter;
 
 use super::super::*;
@@ -269,6 +270,9 @@ impl Interpreter {
 
         // Intl.ListFormat
         self.setup_intl_list_format(&intl_obj);
+
+        // Intl.RelativeTimeFormat
+        self.setup_intl_relative_time_format(&intl_obj);
 
         // Intl.Segmenter
         self.setup_intl_segmenter(&intl_obj);

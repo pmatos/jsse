@@ -603,7 +603,7 @@ fn js_rounding_mode_to_fd(mode: &str) -> SignedRoundingMode {
     }
 }
 
-fn numbering_system_zero(ns: &str) -> Option<char> {
+pub(crate) fn numbering_system_zero(ns: &str) -> Option<char> {
     match ns {
         "arab" => Some('\u{0660}'),
         "arabext" => Some('\u{06F0}'),
@@ -630,7 +630,7 @@ fn numbering_system_zero(ns: &str) -> Option<char> {
     }
 }
 
-fn transliterate_digits(s: &str, ns: &str) -> String {
+pub(crate) fn transliterate_digits(s: &str, ns: &str) -> String {
     if ns == "hanidec" {
         let hanidec_digits: [char; 10] = [
             '\u{3007}', '\u{4E00}', '\u{4E8C}', '\u{4E09}', '\u{56DB}',
@@ -673,7 +673,7 @@ fn transliterate_digits(s: &str, ns: &str) -> String {
     }
 }
 
-fn apply_arabic_separators(s: &str, ns: &str) -> String {
+pub(crate) fn apply_arabic_separators(s: &str, ns: &str) -> String {
     let mut result = String::with_capacity(s.len() * 2);
     let chars: Vec<char> = s.chars().collect();
     let len = chars.len();
