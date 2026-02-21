@@ -59,6 +59,7 @@ pub struct Parser<'a> {
     in_field_initializer_eval: bool,
     in_static_block: bool,
     function_param_names: Option<std::collections::HashSet<String>>,
+    eval_new_target_allowed: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -103,6 +104,7 @@ impl<'a> Parser<'a> {
             in_field_initializer_eval: false,
             in_static_block: false,
             function_param_names: None,
+            eval_new_target_allowed: false,
         })
     }
 
@@ -191,6 +193,18 @@ impl<'a> Parser<'a> {
         self.in_field_initializer_eval = true;
         self.allow_super_property = true;
         self.in_function += 1;
+    }
+
+    pub fn set_eval_new_target_allowed(&mut self) {
+        self.eval_new_target_allowed = true;
+    }
+
+    pub fn set_eval_allow_super_property(&mut self) {
+        self.allow_super_property = true;
+    }
+
+    pub fn set_eval_allow_super_call(&mut self) {
+        self.allow_super_call = true;
     }
 
     fn push_private_scope(&mut self) {

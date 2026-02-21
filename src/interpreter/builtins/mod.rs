@@ -3138,7 +3138,7 @@ impl Interpreter {
             Binding {
                 value: global_val,
                 kind: BindingKind::Const,
-                initialized: true,
+                initialized: true, deletable: false,
             },
         );
 

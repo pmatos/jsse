@@ -41,7 +41,7 @@ impl Interpreter {
                 crate::interpreter::types::Binding {
                     value,
                     kind: crate::interpreter::types::BindingKind::Const,
-                    initialized: true,
+                    initialized: true, deletable: false,
                 },
             );
             return;
@@ -103,7 +103,7 @@ impl Interpreter {
             crate::interpreter::types::Binding {
                 value: this_val.clone(),
                 kind: crate::interpreter::types::BindingKind::Const,
-                initialized: true,
+                initialized: true, deletable: false,
             },
         );
         init_env.borrow_mut().class_private_names = class_pn;
@@ -120,7 +120,7 @@ impl Interpreter {
                     crate::interpreter::types::Binding {
                         value: proto_val,
                         kind: crate::interpreter::types::BindingKind::Const,
-                        initialized: true,
+                        initialized: true, deletable: false,
                     },
                 );
             }
@@ -319,6 +319,7 @@ impl Interpreter {
                         parent: Some(env.clone()),
                         strict: env.borrow().strict,
                         is_function_scope: false,
+                        is_arrow_scope: false,
                         with_object: None,
                         dispose_stack: None,
                         global_object: env.borrow().global_object.clone(),
@@ -545,17 +546,23 @@ impl Interpreter {
                     //   - global object configurable properties → delete and return true
                     //   - unresolvable → return true
 
-                    // Check non-global environments first — these are always non-configurable
                     let mut current = Some(env.clone());
                     let global_env = self.global_env.clone();
                     while let Some(ref e) = current {
                         if std::rc::Rc::ptr_eq(e, &global_env) {
                             break;
                         }
-                        if e.borrow().bindings.contains_key(name) {
+                        let eb = e.borrow();
+                        if let Some(binding) = eb.bindings.get(name) {
+                            if binding.deletable {
+                                drop(eb);
+                                e.borrow_mut().bindings.remove(name);
+                                return Completion::Normal(JsValue::Boolean(true));
+                            }
                             return Completion::Normal(JsValue::Boolean(false));
                         }
-                        let next = e.borrow().parent.clone();
+                        let next = eb.parent.clone();
+                        drop(eb);
                         current = next;
                     }
 
@@ -6856,7 +6863,7 @@ impl Interpreter {
                                 Binding {
                                     value: _this_val.clone(),
                                     kind: BindingKind::Const,
-                                    initialized: true,
+                                    initialized: true, deletable: false,
                                 },
                             );
                             let arguments_obj = self.create_arguments_object(
@@ -6934,7 +6941,7 @@ impl Interpreter {
                                 Binding {
                                     value: _this_val.clone(),
                                     kind: BindingKind::Const,
-                                    initialized: true,
+                                    initialized: true, deletable: false,
                                 },
                             );
                             let arguments_obj = self.create_arguments_object(
@@ -6972,6 +6979,9 @@ impl Interpreter {
                         }
                         let closure_strict = closure.borrow().strict;
                         let func_env = Environment::new_function_scope(Some(closure));
+                        if is_arrow {
+                            func_env.borrow_mut().is_arrow_scope = true;
+                        }
                         let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                         if !is_arrow {
                             if self.constructing_derived {
@@ -6981,7 +6991,7 @@ impl Interpreter {
                                     Binding {
                                         value: JsValue::Undefined,
                                         kind: BindingKind::Const,
-                                        initialized: false,
+                                        initialized: false, deletable: false,
                                     },
                                 );
                                 self.constructing_derived = false;
@@ -7008,7 +7018,7 @@ impl Interpreter {
                                     Binding {
                                         value: effective_this,
                                         kind: BindingKind::Const,
-                                        initialized: true,
+                                        initialized: true, deletable: false,
                                     },
                                 );
                             }
@@ -7416,8 +7426,8 @@ impl Interpreter {
         }
         let mut in_field_initializer = false;
         if direct {
-            // Walk caller env chain to find enclosing class private names
-            // and detect field initializer context
+            let mut found_function = false;
+            let mut found_home_object = false;
             let mut env_walk = Some(caller_env.clone());
             loop {
                 let e = match env_walk {
@@ -7428,6 +7438,12 @@ impl Interpreter {
                 if borrowed.is_field_initializer {
                     in_field_initializer = true;
                 }
+                if borrowed.is_function_scope && !borrowed.is_arrow_scope && !found_function {
+                    found_function = true;
+                }
+                if borrowed.bindings.contains_key("__home_object__") && !found_home_object {
+                    found_home_object = true;
+                }
                 if let Some(ref names) = borrowed.class_private_names {
                     let name_set: std::collections::HashSet<String> =
                         names.keys().cloned().collect();
@@ -7435,6 +7451,12 @@ impl Interpreter {
                     break;
                 }
                 env_walk = borrowed.parent.clone();
+            }
+            if found_function {
+                p.set_eval_new_target_allowed();
+            }
+            if found_home_object {
+                p.set_eval_allow_super_property();
             }
         }
         if in_field_initializer {
@@ -7651,6 +7673,37 @@ impl Interpreter {
         };
 
         if !strict {
+            // §19.2.1.4 step 5.a: if varEnv is global, check for lexical conflicts
+            // Only check for true lexical declarations (let/const/class), not built-in
+            // value properties like NaN/Infinity/undefined which are stored as Const
+            // but are part of the object environment record, not the declarative record.
+            if is_global {
+                let all_names: Vec<String> = declared_func_names
+                    .iter()
+                    .chain(declared_var_names.iter())
+                    .cloned()
+                    .collect();
+                let env_b = var_env.borrow();
+                let global_obj = env_b.global_object.clone();
+                for name in &all_names {
+                    if let Some(binding) = env_b.bindings.get(name) {
+                        if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
+                            let on_global_obj = global_obj
+                                .as_ref()
+                                .is_some_and(|g| g.borrow().properties.contains_key(name));
+                            if !on_global_obj {
+                                return Err(self.create_error(
+                                    "SyntaxError",
+                                    &format!(
+                                        "Identifier '{}' has already been declared",
+                                        name
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             // Check for conflicts with lexical declarations in intermediate scopes
             // (between lex_env/caller_env and var_env)
             if !is_global {
@@ -7688,6 +7741,7 @@ impl Interpreter {
             let global_obj = var_env.borrow().global_object.clone();
             if let Some(ref gobj) = global_obj {
                 let gb = gobj.borrow();
+                let extensible = gb.extensible;
                 for fname in &declared_func_names {
                     if let Some(desc) = gb.properties.get(fname) {
                         if desc.configurable != Some(true) {
@@ -7701,6 +7755,19 @@ impl Interpreter {
                                 )));
                             }
                         }
+                    } else if !extensible {
+                        return Err(self.create_type_error(&format!(
+                            "Cannot define global function '{}'",
+                            fname
+                        )));
+                    }
+                }
+                for vname in &declared_var_names {
+                    if !gb.properties.contains_key(vname) && !extensible {
+                        return Err(self.create_type_error(&format!(
+                            "Cannot define global variable '{}'",
+                            vname
+                        )));
                     }
                 }
             }
@@ -7708,13 +7775,6 @@ impl Interpreter {
 
         // Hoist function declarations to var_env
         for f in &functions_to_init {
-            if is_global {
-                if !var_env.borrow().bindings.contains_key(&f.name) {
-                    var_env.borrow_mut().declare_global_var(&f.name);
-                }
-            } else if !var_env.borrow().bindings.contains_key(&f.name) {
-                var_env.borrow_mut().declare(&f.name, BindingKind::Var);
-            }
             let func = JsFunction::User {
                 name: Some(f.name.clone()),
                 params: f.params.clone(),
@@ -7728,16 +7788,64 @@ impl Interpreter {
                 source_text: f.source_text.clone(),
             };
             let val = self.create_function(func);
-            let _ = var_env.borrow_mut().set(&f.name, val);
+            if is_global {
+                var_env
+                    .borrow_mut()
+                    .declare_global_function_binding(&f.name, val, true);
+            } else {
+                if !var_env.borrow().bindings.contains_key(&f.name) {
+                    var_env.borrow_mut().declare_deletable(&f.name, BindingKind::Var);
+                }
+                let _ = var_env.borrow_mut().set(&f.name, val);
+            }
+        }
+
+        // Pre-instantiate lexical declarations (let/const/class) in lex_env — uninitialized (TDZ)
+        // Per spec §19.2.1.4 step 14
+        for stmt in body {
+            match stmt {
+                Statement::Variable(decl) if matches!(decl.kind, VarKind::Let | VarKind::Const) => {
+                    let kind = if decl.kind == VarKind::Const {
+                        BindingKind::Const
+                    } else {
+                        BindingKind::Let
+                    };
+                    for d in &decl.declarations {
+                        let mut names = Vec::new();
+                        Self::collect_pattern_names(&d.pattern, &mut names);
+                        for name in names {
+                            lex_env.borrow_mut().bindings.insert(
+                                name,
+                                Binding {
+                                    value: JsValue::Undefined,
+                                    kind,
+                                    initialized: false, deletable: false,
+                                },
+                            );
+                        }
+                    }
+                }
+                Statement::ClassDeclaration(cls) => {
+                    lex_env.borrow_mut().bindings.insert(
+                        cls.name.clone(),
+                        Binding {
+                            value: JsValue::Undefined,
+                            kind: BindingKind::Let,
+                            initialized: false, deletable: false,
+                        },
+                    );
+                }
+                _ => {}
+            }
         }
 
         // Hoist var declarations to var_env
         for name in &declared_var_names {
             if !var_env.borrow().bindings.contains_key(name) {
                 if is_global {
-                    var_env.borrow_mut().declare_global_var(name);
+                    var_env.borrow_mut().declare_global_var_configurable(name);
                 } else {
-                    var_env.borrow_mut().declare(name, BindingKind::Var);
+                    var_env.borrow_mut().declare_deletable(name, BindingKind::Var);
                 }
             }
         }
@@ -7800,10 +7908,10 @@ impl Interpreter {
 
                         if is_global {
                             if !var_env.borrow().bindings.contains_key(&name) {
-                                var_env.borrow_mut().declare_global_var(&name);
+                                var_env.borrow_mut().declare_global_var_configurable(&name);
                             }
                         } else if !var_env.borrow().bindings.contains_key(&name) {
-                            var_env.borrow_mut().declare(&name, BindingKind::Var);
+                            var_env.borrow_mut().declare_deletable(&name, BindingKind::Var);
                         }
                     }
 
@@ -7995,7 +8103,7 @@ impl Interpreter {
                         Binding {
                             value: proto_val,
                             kind: BindingKind::Const,
-                            initialized: true,
+                            initialized: true, deletable: false,
                         },
                     );
                 }
@@ -10030,7 +10138,7 @@ impl Interpreter {
                 Binding {
                     value: ctor_val.clone(),
                     kind: BindingKind::Const,
-                    initialized: true,
+                    initialized: true, deletable: false,
                 },
             );
             sfe.is_field_initializer = true;
@@ -10042,7 +10150,7 @@ impl Interpreter {
                 Binding {
                     value: ctor_val.clone(),
                     kind: BindingKind::Const,
-                    initialized: true,
+                    initialized: true, deletable: false,
                 },
             );
         }
@@ -10448,7 +10556,7 @@ impl Interpreter {
                             Binding {
                                 value: ctor_val.clone(),
                                 kind: BindingKind::Const,
-                                initialized: true,
+                                initialized: true, deletable: false,
                             },
                         );
                         be.bindings.insert(
@@ -10456,7 +10564,7 @@ impl Interpreter {
                             Binding {
                                 value: ctor_val.clone(),
                                 kind: BindingKind::Const,
-                                initialized: true,
+                                initialized: true, deletable: false,
                             },
                         );
                         be.class_private_names = self.class_private_names.last().cloned();
@@ -10683,6 +10791,9 @@ impl Interpreter {
 
         let closure_strict = closure.borrow().strict;
         let func_env = Environment::new_function_scope(Some(closure));
+        if is_arrow {
+            func_env.borrow_mut().is_arrow_scope = true;
+        }
         for (i, param) in params.iter().enumerate() {
             if let Pattern::Rest(inner) = param {
                 let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
@@ -10724,7 +10835,7 @@ impl Interpreter {
                 Binding {
                     value: effective_this,
                     kind: BindingKind::Const,
-                    initialized: true,
+                    initialized: true, deletable: false,
                 },
             );
             let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));

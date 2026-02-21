@@ -85,6 +85,7 @@ pub struct Environment {
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
     pub(crate) is_function_scope: bool,
+    pub(crate) is_arrow_scope: bool,
     pub(crate) with_object: Option<WithObject>,
     pub(crate) dispose_stack: Option<Vec<DisposableResource>>,
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
@@ -128,6 +129,13 @@ pub(crate) struct Binding {
     pub(crate) value: JsValue,
     pub(crate) kind: BindingKind,
     pub(crate) initialized: bool,
+    pub(crate) deletable: bool,
+}
+
+impl Binding {
+    pub fn new(value: JsValue, kind: BindingKind, initialized: bool) -> Self {
+        Self { value, kind, initialized, deletable: false }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -155,6 +163,7 @@ impl Environment {
             parent,
             strict,
             is_function_scope: false,
+            is_arrow_scope: false,
             with_object: None,
             dispose_stack: None,
             global_object: None,
@@ -171,6 +180,7 @@ impl Environment {
             parent,
             strict,
             is_function_scope: true,
+            is_arrow_scope: false,
             with_object: None,
             dispose_stack: None,
             global_object: None,
@@ -199,6 +209,19 @@ impl Environment {
                 value: JsValue::Undefined,
                 kind,
                 initialized: kind == BindingKind::Var,
+                deletable: false,
+            },
+        );
+    }
+
+    pub fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
+        self.bindings.insert(
+            name.to_string(),
+            Binding {
+                value: JsValue::Undefined,
+                kind,
+                initialized: kind == BindingKind::Var,
+                deletable: true,
             },
         );
     }
@@ -216,6 +239,69 @@ impl Environment {
                     name.to_string(),
                     PropertyDescriptor::data(JsValue::Undefined, true, true, false),
                 );
+            }
+        }
+    }
+
+    /// CreateGlobalVarBinding with configurable:true (for eval-declared vars).
+    pub fn declare_global_var_configurable(&mut self, name: &str) {
+        if !self.bindings.contains_key(name) {
+            // If property already exists on global object, use its value
+            let existing_val = self.global_object.as_ref().and_then(|g| {
+                let gb = g.borrow();
+                gb.properties.get(name).and_then(|d| d.value.clone())
+            });
+            if let Some(val) = existing_val {
+                self.bindings.insert(
+                    name.to_string(),
+                    Binding {
+                        value: val,
+                        kind: BindingKind::Var,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+            } else {
+                self.declare(name, BindingKind::Var);
+            }
+        }
+        if let Some(ref global_obj) = self.global_object {
+            let mut gb = global_obj.borrow_mut();
+            if !gb.properties.contains_key(name) {
+                gb.property_order.push(name.to_string());
+                gb.properties.insert(
+                    name.to_string(),
+                    PropertyDescriptor::data(JsValue::Undefined, true, true, true),
+                );
+            }
+        }
+    }
+
+    /// CreateGlobalFunctionBinding(fn, fo, configurable) for eval-declared functions.
+    pub fn declare_global_function_binding(
+        &mut self,
+        name: &str,
+        value: JsValue,
+        configurable: bool,
+    ) {
+        self.declare(name, BindingKind::Var);
+        if let Some(binding) = self.bindings.get_mut(name) {
+            binding.value = value.clone();
+            binding.initialized = true;
+        }
+        if let Some(ref global_obj) = self.global_object {
+            let mut gb = global_obj.borrow_mut();
+            let existing = gb.properties.get(name);
+            let need_full_desc = existing.is_none()
+                || existing.is_some_and(|d| d.configurable == Some(true));
+            if need_full_desc {
+                let desc = PropertyDescriptor::data(value, true, true, configurable);
+                if !gb.properties.contains_key(name) {
+                    gb.property_order.push(name.to_string());
+                }
+                gb.properties.insert(name.to_string(), desc);
+            } else {
+                gb.set_property_value(name, value);
             }
         }
     }
@@ -264,11 +350,7 @@ impl Environment {
             }
             self.bindings.insert(
                 name.to_string(),
-                Binding {
-                    value,
-                    kind: BindingKind::Var,
-                    initialized: true,
-                },
+                Binding::new(value, BindingKind::Var, true),
             );
             Ok(())
         }

@@ -591,7 +591,7 @@ impl<'a> Parser<'a> {
                 _ => false,
             };
             if is_target {
-                if self.in_function == 0 && !self.in_static_block {
+                if self.in_function == 0 && !self.in_static_block && !self.eval_new_target_allowed {
                     return Err(self.error("new.target expression is not allowed here"));
                 }
                 self.advance()?; // target

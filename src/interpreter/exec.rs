@@ -593,7 +593,11 @@ impl Interpreter {
                     if let Some(ref h) = t.handler {
                         let prev_len = blocked.len();
                         if let Some(ref param) = h.param {
-                            Self::collect_pattern_names(param, blocked);
+                            // B.3.5: simple BindingIdentifier catch params
+                            // do NOT block var redeclaration
+                            if !matches!(param, Pattern::Identifier(_)) {
+                                Self::collect_pattern_names(param, blocked);
+                            }
                         }
                         Self::collect_annexb_function_names(&h.body, names, blocked);
                         blocked.truncate(prev_len);
@@ -705,6 +709,7 @@ impl Interpreter {
                             parent: Some(env.clone()),
                             strict: env.borrow().strict,
                             is_function_scope: false,
+                            is_arrow_scope: false,
                             with_object: Some(WithObject {
                                 object: obj_data,
                                 obj_id: obj_ref.id,
@@ -781,12 +786,8 @@ impl Interpreter {
         for d in &decl.declarations {
             if d.init.is_none()
                 && decl.kind == VarKind::Var
-                && let Pattern::Identifier(ref name) = d.pattern
+                && matches!(d.pattern, Pattern::Identifier(_))
             {
-                let var_scope = Environment::find_var_scope(env);
-                if !var_scope.borrow().bindings.contains_key(name) {
-                    var_scope.borrow_mut().declare(name, kind);
-                }
                 continue;
             }
             let val = if let Some(init) = &d.init {
@@ -857,7 +858,7 @@ impl Interpreter {
                                 Binding {
                                     value: JsValue::Undefined,
                                     kind,
-                                    initialized: false,
+                                    initialized: false, deletable: false,
                                 },
                             );
                         }

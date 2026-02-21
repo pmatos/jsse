@@ -202,7 +202,7 @@ These are tracked across all phases:
 | `language/statements` | 9,337 | Second largest |
 | `language/module-code` | 737 | |
 | `language/literals` | 534 | |
-| `language/eval-code` | 347 | |
+| `language/eval-code` | 347 (315/454 pass, 69.38%) | +33 from eval-code compliance |
 | `language/identifiers` | 268 | |
 | `language/arguments-object` | 263 | |
 | `language/function-code` | 217 | |
