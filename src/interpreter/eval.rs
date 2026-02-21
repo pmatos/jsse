@@ -2721,10 +2721,10 @@ impl Interpreter {
                             }
                         }
                     }
-                    // OrdinarySet: if no own property, check for proxy in prototype chain
+                    // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
                     if !obj.borrow().has_own_property(&key) {
-                        let proto = obj.borrow().prototype.clone();
-                        if let Some(proto_rc) = proto {
+                        let mut proto_opt = obj.borrow().prototype.clone();
+                        while let Some(proto_rc) = proto_opt {
                             let proto_id = proto_rc.borrow().id.unwrap();
                             if self.has_proxy_in_prototype_chain(proto_id) {
                                 let receiver = obj_val.clone();
@@ -2742,6 +2742,50 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 }
                             }
+                            let inherited = proto_rc.borrow().get_property_descriptor(&key);
+                            if let Some(ref inherited_desc) = inherited {
+                                if inherited_desc.is_data_descriptor() {
+                                    if inherited_desc.writable == Some(false) {
+                                        if env.borrow().strict {
+                                            return Completion::Throw(self.create_type_error(
+                                                &format!(
+                                                    "Cannot assign to read only property '{key}'"
+                                                ),
+                                            ));
+                                        }
+                                        return Completion::Normal(final_val);
+                                    }
+                                    break;
+                                }
+                                if inherited_desc.is_accessor_descriptor() {
+                                    if let Some(ref setter) = inherited_desc.set {
+                                        if !matches!(setter, JsValue::Undefined) {
+                                            let setter = setter.clone();
+                                            let this = obj_val.clone();
+                                            return match self.call_function(
+                                                &setter,
+                                                &this,
+                                                &[final_val.clone()],
+                                            ) {
+                                                Completion::Normal(_) => {
+                                                    Completion::Normal(final_val)
+                                                }
+                                                other => other,
+                                            };
+                                        }
+                                    }
+                                    if env.borrow().strict {
+                                        return Completion::Throw(self.create_type_error(
+                                            &format!(
+                                                "Cannot set property '{key}' which has only a getter"
+                                            ),
+                                        ));
+                                    }
+                                    return Completion::Normal(final_val);
+                                }
+                                break;
+                            }
+                            proto_opt = proto_rc.borrow().prototype.clone();
                         }
                     }
                     let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
@@ -2760,8 +2804,8 @@ impl Interpreter {
                     other => return other,
                 };
                 match self.destructure_array_assignment(elements, &rval, env) {
-                    Ok(()) => Completion::Normal(rval),
-                    Err(e) => Completion::Throw(e),
+                    Completion::Normal(_) => Completion::Normal(rval),
+                    other => other,
                 }
             }
             Expression::Object(props) if op == AssignOp::Assign => {
@@ -2770,8 +2814,8 @@ impl Interpreter {
                     other => return other,
                 };
                 match self.destructure_object_assignment(props, &rval, env) {
-                    Ok(()) => Completion::Normal(rval),
-                    Err(e) => Completion::Throw(e),
+                    Completion::Normal(_) => Completion::Normal(rval),
+                    other => other,
                 }
             }
             _ => {
@@ -3277,10 +3321,10 @@ impl Interpreter {
                     return Ok(());
                 }
             }
-            // OrdinarySet: if no own property, check for proxy in prototype chain
+            // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
             if !obj.borrow().has_own_property(&key) {
-                let proto = obj.borrow().prototype.clone();
-                if let Some(proto_rc) = proto {
+                let mut proto_opt = obj.borrow().prototype.clone();
+                while let Some(proto_rc) = proto_opt {
                     let proto_id = proto_rc.borrow().id.unwrap();
                     if self.has_proxy_in_prototype_chain(proto_id) {
                         let receiver = obj_val.clone();
@@ -3296,6 +3340,41 @@ impl Interpreter {
                             Err(e) => return Err(e),
                         }
                     }
+                    let inherited = proto_rc.borrow().get_property_descriptor(&key);
+                    if let Some(ref inherited_desc) = inherited {
+                        if inherited_desc.is_data_descriptor() {
+                            if inherited_desc.writable == Some(false) {
+                                if env.borrow().strict {
+                                    return Err(self.create_type_error(&format!(
+                                        "Cannot assign to read only property '{key}'"
+                                    )));
+                                }
+                                return Ok(());
+                            }
+                            break;
+                        }
+                        if inherited_desc.is_accessor_descriptor() {
+                            if let Some(ref setter) = inherited_desc.set {
+                                if !matches!(setter, JsValue::Undefined) {
+                                    let setter = setter.clone();
+                                    let this = obj_val.clone();
+                                    return match self.call_function(&setter, &this, &[val]) {
+                                        Completion::Normal(_) => Ok(()),
+                                        Completion::Throw(e) => Err(e),
+                                        _ => Ok(()),
+                                    };
+                                }
+                            }
+                            if env.borrow().strict {
+                                return Err(self.create_type_error(&format!(
+                                    "Cannot set property '{key}' which has only a getter"
+                                )));
+                            }
+                            return Ok(());
+                        }
+                        break;
+                    }
+                    proto_opt = proto_rc.borrow().prototype.clone();
                 }
             }
             let success = obj.borrow_mut().set_property_value(&key, val);
@@ -3312,7 +3391,7 @@ impl Interpreter {
         pat: &crate::ast::Pattern,
         val: JsValue,
         env: &EnvRef,
-    ) -> Result<(), JsValue> {
+    ) -> Completion {
         let expr = Self::pattern_to_assignment_expr(pat);
         self.put_value_to_target(&expr, val, env)
     }
@@ -3383,47 +3462,58 @@ impl Interpreter {
         target: &Expression,
         val: JsValue,
         env: &EnvRef,
-    ) -> Result<(), JsValue> {
-        match target {
+    ) -> Completion {
+        let result = match target {
             Expression::Identifier(name) => match self.resolve_with_set(name, val.clone(), env) {
-                Ok(Some(())) => Ok(()),
+                Ok(Some(())) => Completion::Normal(JsValue::Undefined),
                 Ok(None) => match Environment::check_set_binding(env, name) {
-                    SetBindingCheck::TdzError => Err(self.create_reference_error(&format!(
-                        "Cannot access '{}' before initialization",
-                        name
-                    ))),
-                    SetBindingCheck::ConstAssign => {
-                        Err(self.create_type_error("Assignment to constant variable."))
-                    }
+                    SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
+                        &format!("Cannot access '{}' before initialization", name),
+                    )),
+                    SetBindingCheck::ConstAssign => Completion::Throw(
+                        self.create_type_error("Assignment to constant variable."),
+                    ),
                     SetBindingCheck::FunctionNameAssign => {
                         if env.borrow().strict {
-                            Err(self.create_type_error("Assignment to constant variable."))
+                            Completion::Throw(
+                                self.create_type_error("Assignment to constant variable."),
+                            )
                         } else {
-                            Ok(())
+                            Completion::Normal(JsValue::Undefined)
                         }
                     }
                     SetBindingCheck::Unresolvable => {
                         if env.borrow().strict {
-                            Err(self.create_reference_error(&format!("{name} is not defined")))
+                            Completion::Throw(
+                                self.create_reference_error(&format!("{name} is not defined")),
+                            )
                         } else {
                             let var_scope = Environment::find_var_scope(env);
                             if !var_scope.borrow().bindings.contains_key(name) {
                                 var_scope.borrow_mut().declare(name, BindingKind::Var);
                             }
-                            var_scope.borrow_mut().set(name, val).map_err(|_| {
-                                self.create_type_error("Assignment to constant variable.")
-                            })
+                            match var_scope.borrow_mut().set(name, val) {
+                                Ok(()) => Completion::Normal(JsValue::Undefined),
+                                Err(_) => Completion::Throw(
+                                    self.create_type_error("Assignment to constant variable."),
+                                ),
+                            }
                         }
                     }
-                    SetBindingCheck::Ok => env
-                        .borrow_mut()
-                        .set(name, val)
-                        .map_err(|_| self.create_type_error("Assignment to constant variable.")),
+                    SetBindingCheck::Ok => match env.borrow_mut().set(name, val) {
+                        Ok(()) => Completion::Normal(JsValue::Undefined),
+                        Err(_) => Completion::Throw(
+                            self.create_type_error("Assignment to constant variable."),
+                        ),
+                    },
                 },
-                Err(e) => Err(e),
+                Err(e) => Completion::Throw(e),
             },
             Expression::Member(obj_expr, prop) => {
-                self.set_member_property(obj_expr, prop, val, env)
+                match self.set_member_property(obj_expr, prop, val, env) {
+                    Ok(()) => Completion::Normal(JsValue::Undefined),
+                    Err(e) => Completion::Throw(e),
+                }
             }
             Expression::Array(elements) => self.destructure_array_assignment(elements, &val, env),
             Expression::Object(props) => self.destructure_object_assignment(props, &val, env),
@@ -3431,16 +3521,24 @@ impl Interpreter {
                 let v = if val.is_undefined() {
                     match self.eval_expr(default, env) {
                         Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::Undefined,
+                        other => {
+                            if matches!(other, Completion::Yield(_)) {
+                                self.destructuring_yield = true;
+                            }
+                            return other;
+                        }
                     }
                 } else {
                     val
                 };
                 self.put_value_to_target(inner_target, v, env)
             }
-            _ => Ok(()),
+            _ => Completion::Normal(JsValue::Undefined),
+        };
+        if matches!(result, Completion::Yield(_)) {
+            self.destructuring_yield = true;
         }
+        result
     }
 
     fn destructure_array_assignment(
@@ -3448,13 +3546,17 @@ impl Interpreter {
         elements: &[Option<Expression>],
         rval: &JsValue,
         env: &EnvRef,
-    ) -> Result<(), JsValue> {
-        let iterator = self.get_iterator(rval)?;
+    ) -> Completion {
+        let iterator = match self.get_iterator(rval) {
+            Ok(v) => v,
+            Err(e) => return Completion::Throw(e),
+        };
         if let JsValue::Object(o) = &iterator {
             self.gc_temp_roots.push(o.id);
         }
         let mut done = false;
         let mut error: Option<JsValue> = None;
+        let mut yield_val: Option<JsValue> = None;
 
         for elem in elements {
             match elem {
@@ -3500,9 +3602,13 @@ impl Interpreter {
                     }
                     if error.is_none() {
                         let arr = self.create_array(rest);
-                        // The inner of Spread can itself have a default
-                        if let Err(e) = self.put_value_to_target(inner, arr, env) {
-                            error = Some(e);
+                        match self.put_value_to_target(inner, arr, env) {
+                            Completion::Normal(_) | Completion::Empty => {}
+                            Completion::Throw(e) => error = Some(e),
+                            Completion::Yield(v) => {
+                                yield_val = Some(v);
+                            }
+                            _ => {}
                         }
                     }
                     break;
@@ -3555,7 +3661,11 @@ impl Interpreter {
                                     error = Some(e);
                                     break;
                                 }
-                                _ => JsValue::Undefined,
+                                Completion::Yield(v) => {
+                                    yield_val = Some(v);
+                                    break;
+                                }
+                                other => return other,
                             }
                         } else {
                             item
@@ -3564,9 +3674,17 @@ impl Interpreter {
                         item
                     };
 
-                    if let Err(e) = self.put_value_to_target(target, val, env) {
-                        error = Some(e);
-                        break;
+                    match self.put_value_to_target(target, val, env) {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        Completion::Throw(e) => {
+                            error = Some(e);
+                            break;
+                        }
+                        Completion::Yield(v) => {
+                            yield_val = Some(v);
+                            break;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -3580,23 +3698,31 @@ impl Interpreter {
             }
         };
 
+        if let Some(yv) = yield_val {
+            unroot(self);
+            return Completion::Yield(yv);
+        }
+
         // IteratorClose: if iterator is not done, call return()
         if !done {
             if let Some(err) = error {
                 let _ = self.iterator_close_result(&iterator);
                 unroot(self);
-                return Err(err);
+                return Completion::Throw(err);
             }
             let r = self.iterator_close_result(&iterator);
             unroot(self);
-            return r;
+            return match r {
+                Ok(()) => Completion::Normal(JsValue::Undefined),
+                Err(e) => Completion::Throw(e),
+            };
         }
 
         unroot(self);
         if let Some(err) = error {
-            return Err(err);
+            return Completion::Throw(err);
         }
-        Ok(())
+        Completion::Normal(JsValue::Undefined)
     }
 
     fn destructure_object_assignment(
@@ -3604,17 +3730,17 @@ impl Interpreter {
         props: &[Property],
         rval: &JsValue,
         env: &EnvRef,
-    ) -> Result<(), JsValue> {
+    ) -> Completion {
         // RequireObjectCoercible
         match self.require_object_coercible(rval) {
-            Completion::Throw(e) => return Err(e),
+            Completion::Throw(e) => return Completion::Throw(e),
             _ => {}
         }
 
         // ToObject to wrap primitives
         let obj_val = match self.to_object(rval) {
             Completion::Normal(v) => v,
-            Completion::Throw(e) => return Err(e),
+            Completion::Throw(e) => return Completion::Throw(e),
             _ => unreachable!(),
         };
 
@@ -3625,14 +3751,20 @@ impl Interpreter {
             if let Expression::Spread(inner) = &prop.value {
                 let rest_obj = self.create_object();
                 if let JsValue::Object(o) = &obj_val {
-                    let pairs = self.copy_data_properties(o.id, &obj_val, &excluded_keys)?;
+                    let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys) {
+                        Ok(p) => p,
+                        Err(e) => return Completion::Throw(e),
+                    };
                     for (k, v) in pairs {
                         rest_obj.borrow_mut().insert_value(k, v);
                     }
                 }
                 let rest_id = rest_obj.borrow().id.unwrap();
                 let rest_val = JsValue::Object(crate::types::JsObject { id: rest_id });
-                self.put_value_to_target(inner, rest_val, env)?;
+                match self.put_value_to_target(inner, rest_val, env) {
+                    Completion::Normal(_) | Completion::Empty => {}
+                    other => return other,
+                }
                 continue;
             }
 
@@ -3642,12 +3774,16 @@ impl Interpreter {
                         PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
                         PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => self.to_property_key(&v)?,
-                            Completion::Throw(e) => return Err(e),
-                            _ => String::new(),
+                            Completion::Normal(v) => match self.to_property_key(&v) {
+                                Ok(k) => k,
+                                Err(e) => return Completion::Throw(e),
+                            },
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            Completion::Yield(v) => return Completion::Yield(v),
+                            other => return other,
                         },
                         PropertyKey::Private(_) => {
-                            return Err(self.create_type_error(
+                            return Completion::Throw(self.create_type_error(
                                 "Private names are not valid in object patterns",
                             ));
                         }
@@ -3658,7 +3794,8 @@ impl Interpreter {
                     let val = if let JsValue::Object(o) = &obj_val {
                         match self.get_object_property(o.id, &key, &obj_val) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Err(e),
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            Completion::Yield(v) => return Completion::Yield(v),
                             _ => JsValue::Undefined,
                         }
                     } else {
@@ -3688,8 +3825,9 @@ impl Interpreter {
                                     }
                                     v
                                 }
-                                Completion::Throw(e) => return Err(e),
-                                _ => JsValue::Undefined,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                Completion::Yield(v) => return Completion::Yield(v),
+                                other => return other,
                             }
                         } else {
                             val
@@ -3698,12 +3836,15 @@ impl Interpreter {
                         val
                     };
 
-                    self.put_value_to_target(target, val, env)?;
+                    match self.put_value_to_target(target, val, env) {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        other => return other,
+                    }
                 }
                 _ => continue,
             }
         }
-        Ok(())
+        Completion::Normal(JsValue::Undefined)
     }
 
     fn eval_call(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
@@ -4208,11 +4349,11 @@ impl Interpreter {
                         Ok(d) => d,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let value = match self.iterator_value(&iter_result) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
                     if done {
+                        let value = match self.iterator_value(&iter_result) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         if let Some(ref bind) = binding {
                             use crate::interpreter::generator_transform::SentValueBindingKind;
                             match &bind.kind {
@@ -4227,7 +4368,8 @@ impl Interpreter {
                                         &func_env,
                                     );
                                 }
-                                SentValueBindingKind::Discard => {}
+                                SentValueBindingKind::Discard
+                                | SentValueBindingKind::InlineYield { .. } => {}
                             }
                         }
                         obj_rc.borrow_mut().iterator_state =
@@ -4269,7 +4411,8 @@ impl Interpreter {
                                 pending_exception: None,
                                 pending_return: None,
                             });
-                        return Completion::Normal(self.create_iter_result_object(value, false));
+                        // Per spec §14.4.14: yield innerResult directly
+                        return Completion::Normal(iter_result);
                     }
                 }
                 Err(e) => {
@@ -4322,6 +4465,8 @@ impl Interpreter {
         });
 
         use crate::interpreter::generator_transform::SentValueBindingKind;
+        let mut initial_inline_yield_target: Option<usize> = None;
+        let mut initial_inline_yield_sent: Option<JsValue> = None;
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
@@ -4332,6 +4477,10 @@ impl Interpreter {
                         self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard => {}
+                SentValueBindingKind::InlineYield { yield_target } => {
+                    initial_inline_yield_target = Some(*yield_target);
+                    initial_inline_yield_sent = Some(sent_value.clone());
+                }
             }
         }
 
@@ -4339,6 +4488,8 @@ impl Interpreter {
         let mut current_try_stack = try_stack;
         let mut pending_exception: Option<JsValue> = stored_pending_exception;
         let mut pending_return: Option<JsValue> = stored_pending_return;
+        let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
+        let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
 
         loop {
             let (statements, terminator) = {
@@ -4346,7 +4497,49 @@ impl Interpreter {
                 (gen_state.statements.clone(), gen_state.terminator.clone())
             };
 
+            let is_inline_replay = inline_yield_target.is_some();
+            if let Some(target) = inline_yield_target.take() {
+                let sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
+                self.generator_context = Some(GeneratorContext {
+                    target_yield: target,
+                    current_yield: 0,
+                    sent_value: sv,
+                    is_async: false,
+                });
+            }
+
             let stmt_result = self.exec_statements(&statements, &func_env);
+            let ctx_after = if is_inline_replay {
+                self.generator_context.take()
+            } else {
+                None
+            };
+
+            if let Completion::Yield(yield_val) = stmt_result {
+                self.destructuring_yield = false;
+                let yield_count = ctx_after.map(|c| c.current_yield).unwrap_or(1);
+                obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
+                    state_machine: state_machine.clone(),
+                    func_env: func_env.clone(),
+                    is_strict,
+                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                        state_id: current_id,
+                    },
+                    sent_value: JsValue::Undefined,
+                    try_stack: current_try_stack.clone(),
+                    pending_binding: Some(
+                        crate::interpreter::generator_transform::SentValueBinding {
+                            kind: SentValueBindingKind::InlineYield {
+                                yield_target: yield_count,
+                            },
+                        },
+                    ),
+                    delegated_iterator: None,
+                    pending_exception: None,
+                    pending_return: None,
+                });
+                return Completion::Normal(self.create_iter_result_object(yield_val, false));
+            }
             if let Completion::Throw(e) = stmt_result {
                 if let Some(try_info) = current_try_stack.pop() {
                     if let Some(catch_state) = try_info.catch_state {
@@ -4471,14 +4664,48 @@ impl Interpreter {
                         let next_method = if let JsValue::Object(io) = &iterator {
                             match self.get_object_property(io.id, "next", &iterator) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
+                                Completion::Throw(e) => {
+                                    // Route through try-stack
+                                    if let Some(try_info) = current_try_stack.last() {
+                                        if let Some(catch_state) = try_info.catch_state {
+                                            let new_try_stack = current_try_stack
+                                                [..current_try_stack.len() - 1]
+                                                .to_vec();
+                                            obj_rc.borrow_mut().iterator_state =
+                                                Some(IteratorState::StateMachineGenerator {
+                                                    state_machine: state_machine.clone(),
+                                                    func_env: func_env.clone(),
+                                                    is_strict,
+                                                    execution_state:
+                                                        StateMachineExecutionState::SuspendedAtState {
+                                                            state_id: catch_state,
+                                                        },
+                                                    sent_value: JsValue::Undefined,
+                                                    try_stack: new_try_stack,
+                                                    pending_binding: None,
+                                                    delegated_iterator: None,
+                                                    pending_exception: Some(e),
+                                                    pending_return: None,
+                                                });
+                                            return self.generator_next_state_machine(
+                                                this,
+                                                JsValue::Undefined,
+                                            );
+                                        }
+                                    }
+                                    return Completion::Throw(e);
+                                }
                                 _ => JsValue::Undefined,
                             }
                         } else {
                             JsValue::Undefined
                         };
 
-                        let iter_result = match self.call_function(&next_method, &iterator, &[]) {
+                        let iter_result = match self.call_function(
+                            &next_method,
+                            &iterator,
+                            &[JsValue::Undefined],
+                        ) {
                             Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Ok(v),
                             Completion::Normal(_) => {
                                 Err(self.create_type_error("Iterator result is not an object"))
@@ -4537,14 +4764,72 @@ impl Interpreter {
 
                         let done = match self.iterator_complete(&iter_result) {
                             Ok(d) => d,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let value = match self.iterator_value(&iter_result) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => {
+                                if let Some(try_info) = current_try_stack.last() {
+                                    if let Some(catch_state) = try_info.catch_state {
+                                        let new_try_stack = current_try_stack
+                                            [..current_try_stack.len() - 1]
+                                            .to_vec();
+                                        obj_rc.borrow_mut().iterator_state =
+                                            Some(IteratorState::StateMachineGenerator {
+                                                state_machine: state_machine.clone(),
+                                                func_env: func_env.clone(),
+                                                is_strict,
+                                                execution_state:
+                                                    StateMachineExecutionState::SuspendedAtState {
+                                                        state_id: catch_state,
+                                                    },
+                                                sent_value: JsValue::Undefined,
+                                                try_stack: new_try_stack,
+                                                pending_binding: None,
+                                                delegated_iterator: None,
+                                                pending_exception: Some(e),
+                                                pending_return: None,
+                                            });
+                                        return self.generator_next_state_machine(
+                                            this,
+                                            JsValue::Undefined,
+                                        );
+                                    }
+                                }
+                                return Completion::Throw(e);
+                            }
                         };
 
                         if done {
+                            let value = match self.iterator_value(&iter_result) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    if let Some(try_info) = current_try_stack.last() {
+                                        if let Some(catch_state) = try_info.catch_state {
+                                            let new_try_stack = current_try_stack
+                                                [..current_try_stack.len() - 1]
+                                                .to_vec();
+                                            obj_rc.borrow_mut().iterator_state =
+                                                Some(IteratorState::StateMachineGenerator {
+                                                    state_machine: state_machine.clone(),
+                                                    func_env: func_env.clone(),
+                                                    is_strict,
+                                                    execution_state:
+                                                        StateMachineExecutionState::SuspendedAtState {
+                                                            state_id: catch_state,
+                                                        },
+                                                    sent_value: JsValue::Undefined,
+                                                    try_stack: new_try_stack,
+                                                    pending_binding: None,
+                                                    delegated_iterator: None,
+                                                    pending_exception: Some(e),
+                                                    pending_return: None,
+                                                });
+                                            return self.generator_next_state_machine(
+                                                this,
+                                                JsValue::Undefined,
+                                            );
+                                        }
+                                    }
+                                    return Completion::Throw(e);
+                                }
+                            };
                             use crate::interpreter::generator_transform::SentValueBindingKind;
                             if let Some(binding) = sent_value_binding {
                                 match &binding.kind {
@@ -4559,7 +4844,8 @@ impl Interpreter {
                                             &func_env,
                                         );
                                     }
-                                    SentValueBindingKind::Discard => {}
+                                    SentValueBindingKind::Discard
+                                    | SentValueBindingKind::InlineYield { .. } => {}
                                 }
                             }
                             current_id = *resume_state;
@@ -4587,9 +4873,8 @@ impl Interpreter {
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            return Completion::Normal(
-                                self.create_iter_result_object(value, false),
-                            );
+                            // Per spec §14.4.14: yield innerResult directly (don't extract value)
+                            return Completion::Normal(iter_result);
                         }
                     }
 
@@ -4900,27 +5185,29 @@ impl Interpreter {
                             Ok(d) => d,
                             Err(e) => return Completion::Throw(e),
                         };
-                        let result_value = match self.iterator_value(&iter_result) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
                         if done {
+                            let result_value = match self.iterator_value(&iter_result) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            // Clear delegation and propagate return through
+                            // generator's try-finally stack
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineGenerator {
-                                    state_machine,
-                                    func_env,
+                                    state_machine: state_machine.clone(),
+                                    func_env: func_env.clone(),
                                     is_strict,
-                                    execution_state: StateMachineExecutionState::Completed,
+                                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                                        state_id: resume_state,
+                                    },
                                     sent_value: JsValue::Undefined,
-                                    try_stack: vec![],
+                                    try_stack: try_stack.clone(),
                                     pending_binding: None,
                                     delegated_iterator: None,
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            return Completion::Normal(
-                                self.create_iter_result_object(result_value, true),
-                            );
+                            return self.generator_return_state_machine(this, result_value);
                         } else {
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineGenerator {
@@ -4944,9 +5231,8 @@ impl Interpreter {
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            return Completion::Normal(
-                                self.create_iter_result_object(result_value, false),
-                            );
+                            // Per spec §14.4.14: yield innerReturnResult directly
+                            return Completion::Normal(iter_result);
                         }
                     }
                     Ok(None) => {
@@ -4972,20 +5258,23 @@ impl Interpreter {
                         return self.generator_return_state_machine(this, value);
                     }
                     Err(e) => {
+                        // Propagate error through generator's try-catch
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
+                                state_machine: state_machine.clone(),
+                                func_env: func_env.clone(),
                                 is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: resume_state,
+                                },
                                 sent_value: JsValue::Undefined,
-                                try_stack: vec![],
+                                try_stack: try_stack.clone(),
                                 pending_binding: None,
                                 delegated_iterator: None,
                                 pending_exception: None,
                                 pending_return: None,
                             });
-                        return Completion::Throw(e);
+                        return self.generator_throw_state_machine(this, e);
                     }
                 }
             }
@@ -5067,11 +5356,11 @@ impl Interpreter {
                             Ok(d) => d,
                             Err(e) => return Completion::Throw(e),
                         };
-                        let result_value = match self.iterator_value(&iter_result) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
                         if done {
+                            let result_value = match self.iterator_value(&iter_result) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             use crate::interpreter::generator_transform::SentValueBindingKind;
                             if let Some(ref bind) = binding {
                                 match &bind.kind {
@@ -5086,7 +5375,8 @@ impl Interpreter {
                                             &func_env,
                                         );
                                     }
-                                    SentValueBindingKind::Discard => {}
+                                    SentValueBindingKind::Discard
+                                    | SentValueBindingKind::InlineYield { .. } => {}
                                 }
                             }
                             obj_rc.borrow_mut().iterator_state =
@@ -5128,9 +5418,8 @@ impl Interpreter {
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            return Completion::Normal(
-                                self.create_iter_result_object(result_value, false),
-                            );
+                            // Per spec §14.4.14: yield innerResult directly
+                            return Completion::Normal(iter_result);
                         }
                     }
                     Ok(None) => {
@@ -5401,7 +5690,8 @@ impl Interpreter {
                                         &func_env,
                                     );
                                 }
-                                SentValueBindingKind::Discard => {}
+                                SentValueBindingKind::Discard
+                                | SentValueBindingKind::InlineYield { .. } => {}
                             }
                         }
                         obj_rc.borrow_mut().iterator_state =
@@ -5524,6 +5814,8 @@ impl Interpreter {
         });
 
         use crate::interpreter::generator_transform::SentValueBindingKind;
+        let mut initial_inline_yield_target: Option<usize> = None;
+        let mut initial_inline_yield_sent: Option<JsValue> = None;
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
@@ -5534,6 +5826,10 @@ impl Interpreter {
                         self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard => {}
+                SentValueBindingKind::InlineYield { yield_target } => {
+                    initial_inline_yield_target = Some(*yield_target);
+                    initial_inline_yield_sent = Some(sent_value.clone());
+                }
             }
         }
 
@@ -5541,6 +5837,8 @@ impl Interpreter {
         let mut current_try_stack = try_stack;
         let mut pending_exception: Option<JsValue> = stored_pending_exception;
         let mut pending_return: Option<JsValue> = stored_pending_return;
+        let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
+        let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
 
         loop {
             let (statements, terminator) = {
@@ -5548,7 +5846,24 @@ impl Interpreter {
                 (gen_state.statements.clone(), gen_state.terminator.clone())
             };
 
+            let is_inline_replay = inline_yield_target.is_some();
+            if let Some(target) = inline_yield_target.take() {
+                let sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
+                self.generator_context = Some(GeneratorContext {
+                    target_yield: target,
+                    current_yield: 0,
+                    sent_value: sv,
+                    is_async: true,
+                });
+            }
+
             let stmt_result = self.exec_statements(&statements, &func_env);
+            let ctx_after = if is_inline_replay {
+                self.generator_context.take()
+            } else {
+                None
+            };
+
             if let Completion::Throw(e) = stmt_result {
                 if let Some(try_info) = current_try_stack.pop() {
                     if let Some(catch_state) = try_info.catch_state {
@@ -5618,8 +5933,9 @@ impl Interpreter {
                 self.drain_microtasks();
                 return Completion::Normal(promise);
             }
-            // Handle Yield completions from exec_statements (e.g., from yields inside for-of loops)
             if let Completion::Yield(yield_val) = stmt_result {
+                let is_destructuring = self.destructuring_yield;
+                self.destructuring_yield = false;
                 let awaited_val = match self.await_value(&yield_val) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => {
@@ -5642,21 +5958,44 @@ impl Interpreter {
                     }
                     _ => yield_val,
                 };
-                // For yields inside for-of/for-await-of, we can't properly resume
-                // the loop, so we mark as completed after yielding
-                obj_rc.borrow_mut().iterator_state =
-                    Some(IteratorState::StateMachineAsyncGenerator {
-                        state_machine,
-                        func_env,
-                        is_strict,
-                        execution_state: StateMachineExecutionState::Completed,
-                        sent_value: JsValue::Undefined,
-                        try_stack: current_try_stack,
-                        pending_binding: None,
-                        delegated_iterator: None,
-                        pending_exception: None,
-                        pending_return: None,
-                    });
+                if is_inline_replay || is_destructuring {
+                    let yield_count = ctx_after.map(|c| c.current_yield).unwrap_or(1);
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineAsyncGenerator {
+                            state_machine: state_machine.clone(),
+                            func_env: func_env.clone(),
+                            is_strict,
+                            execution_state: StateMachineExecutionState::SuspendedAtState {
+                                state_id: current_id,
+                            },
+                            sent_value: JsValue::Undefined,
+                            try_stack: current_try_stack.clone(),
+                            pending_binding: Some(
+                                crate::interpreter::generator_transform::SentValueBinding {
+                                    kind: SentValueBindingKind::InlineYield {
+                                        yield_target: yield_count,
+                                    },
+                                },
+                            ),
+                            delegated_iterator: None,
+                            pending_exception: None,
+                            pending_return: None,
+                        });
+                } else {
+                    obj_rc.borrow_mut().iterator_state =
+                        Some(IteratorState::StateMachineAsyncGenerator {
+                            state_machine,
+                            func_env,
+                            is_strict,
+                            execution_state: StateMachineExecutionState::Completed,
+                            sent_value: JsValue::Undefined,
+                            try_stack: current_try_stack,
+                            pending_binding: None,
+                            delegated_iterator: None,
+                            pending_exception: None,
+                            pending_return: None,
+                        });
+                }
                 let iter_result = self.create_iter_result_object(awaited_val, false);
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
                 self.drain_microtasks();
@@ -5872,7 +6211,8 @@ impl Interpreter {
                                             &func_env,
                                         );
                                     }
-                                    SentValueBindingKind::Discard => {}
+                                    SentValueBindingKind::Discard
+                                    | SentValueBindingKind::InlineYield { .. } => {}
                                 }
                             }
                             current_id = *resume_state;
@@ -6908,7 +7248,8 @@ impl Interpreter {
                                             &func_env,
                                         );
                                     }
-                                    SentValueBindingKind::Discard => {}
+                                    SentValueBindingKind::Discard
+                                    | SentValueBindingKind::InlineYield { .. } => {}
                                 }
                             }
                             obj_rc.borrow_mut().iterator_state =
@@ -7167,6 +7508,25 @@ impl Interpreter {
                             // Create persistent function environment
                             let func_env = Environment::new_function_scope(Some(closure.clone()));
                             func_env.borrow_mut().strict = is_strict;
+                            func_env.borrow_mut().bindings.insert(
+                                "this".to_string(),
+                                Binding {
+                                    value: _this_val.clone(),
+                                    kind: BindingKind::Const,
+                                    initialized: true,
+                                    deletable: false,
+                                },
+                            );
+                            let arguments_obj = self.create_arguments_object(
+                                args,
+                                JsValue::Undefined,
+                                is_strict,
+                                None,
+                                &[],
+                            );
+                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                            func_env.borrow_mut().arguments_immutable = true;
                             for (i, param) in params.iter().enumerate() {
                                 if let Pattern::Rest(inner) = param {
                                     let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
@@ -7188,35 +7548,42 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                             }
-                            func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
-                                Binding {
-                                    value: _this_val.clone(),
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
-                            let arguments_obj = self.create_arguments_object(
-                                args,
-                                JsValue::Undefined,
-                                is_strict,
-                                None,
-                                &[],
-                            );
-                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            func_env.borrow_mut().arguments_immutable = true;
+                            let is_simple =
+                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let exec_env = if !is_simple {
+                                let body_env =
+                                    Environment::new_function_scope(Some(func_env.clone()));
+                                body_env.borrow_mut().strict = func_env.borrow().strict;
+                                let mut var_names = std::collections::HashSet::new();
+                                Self::collect_var_names_from_stmts(&body, &mut var_names);
+                                let mut param_names_set = std::collections::HashSet::new();
+                                for p in &params {
+                                    Self::collect_var_names_from_pattern(p, &mut param_names_set);
+                                }
+                                for name in &var_names {
+                                    body_env.borrow_mut().declare(name, BindingKind::Var);
+                                    if param_names_set.contains(name) {
+                                        let val = func_env
+                                            .borrow()
+                                            .get(name)
+                                            .unwrap_or(JsValue::Undefined);
+                                        let _ = body_env.borrow_mut().set(name, val);
+                                    }
+                                }
+                                body_env
+                            } else {
+                                func_env.clone()
+                            };
 
                             use crate::interpreter::generator_transform::transform_generator;
                             let state_machine = Rc::new(transform_generator(&body, &params));
                             for temp_var in &state_machine.temp_vars {
-                                func_env.borrow_mut().declare(temp_var, BindingKind::Var);
+                                exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
                             gen_obj.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
-                                    func_env,
+                                    func_env: exec_env,
                                     is_strict,
                                     execution_state: StateMachineExecutionState::SuspendedStart,
                                     sent_value: JsValue::Undefined,
@@ -7248,6 +7615,25 @@ impl Interpreter {
                             // Create persistent function environment
                             let func_env = Environment::new_function_scope(Some(closure.clone()));
                             func_env.borrow_mut().strict = is_strict;
+                            func_env.borrow_mut().bindings.insert(
+                                "this".to_string(),
+                                Binding {
+                                    value: _this_val.clone(),
+                                    kind: BindingKind::Const,
+                                    initialized: true,
+                                    deletable: false,
+                                },
+                            );
+                            let arguments_obj = self.create_arguments_object(
+                                args,
+                                JsValue::Undefined,
+                                is_strict,
+                                None,
+                                &[],
+                            );
+                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                            func_env.borrow_mut().arguments_immutable = true;
                             for (i, param) in params.iter().enumerate() {
                                 if let Pattern::Rest(inner) = param {
                                     let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
@@ -7269,36 +7655,42 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                             }
-                            func_env.borrow_mut().bindings.insert(
-                                "this".to_string(),
-                                Binding {
-                                    value: _this_val.clone(),
-                                    kind: BindingKind::Const,
-                                    initialized: true,
-                                    deletable: false,
-                                },
-                            );
-                            let arguments_obj = self.create_arguments_object(
-                                args,
-                                JsValue::Undefined,
-                                is_strict,
-                                None,
-                                &[],
-                            );
-                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            func_env.borrow_mut().arguments_immutable = true;
+                            let is_simple =
+                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let exec_env = if !is_simple {
+                                let body_env =
+                                    Environment::new_function_scope(Some(func_env.clone()));
+                                body_env.borrow_mut().strict = func_env.borrow().strict;
+                                let mut var_names = std::collections::HashSet::new();
+                                Self::collect_var_names_from_stmts(&body, &mut var_names);
+                                let mut param_names_set = std::collections::HashSet::new();
+                                for p in &params {
+                                    Self::collect_var_names_from_pattern(p, &mut param_names_set);
+                                }
+                                for name in &var_names {
+                                    body_env.borrow_mut().declare(name, BindingKind::Var);
+                                    if param_names_set.contains(name) {
+                                        let val = func_env
+                                            .borrow()
+                                            .get(name)
+                                            .unwrap_or(JsValue::Undefined);
+                                        let _ = body_env.borrow_mut().set(name, val);
+                                    }
+                                }
+                                body_env
+                            } else {
+                                func_env.clone()
+                            };
 
                             use crate::interpreter::generator_transform::transform_generator;
                             let state_machine = Rc::new(transform_generator(&body, &params));
-                            // Declare temp variables used by the state machine
                             for temp_var in &state_machine.temp_vars {
-                                func_env.borrow_mut().declare(temp_var, BindingKind::Var);
+                                exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
                             gen_obj.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineGenerator {
                                     state_machine,
-                                    func_env,
+                                    func_env: exec_env,
                                     is_strict,
                                     execution_state: StateMachineExecutionState::SuspendedStart,
                                     sent_value: JsValue::Undefined,
@@ -7777,7 +8169,7 @@ impl Interpreter {
                 return Completion::Throw(self.create_error("SyntaxError", "Invalid eval source"));
             }
         };
-        if caller_strict {
+        if caller_strict && direct {
             p.set_strict(true);
         }
         let mut in_field_initializer = false;
@@ -7841,7 +8233,7 @@ impl Interpreter {
         let eval_code_strict = program.body.first().is_some_and(|s| {
             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
         });
-        let is_strict = caller_strict || eval_code_strict;
+        let is_strict = (caller_strict && direct) || eval_code_strict;
 
         // Determine varEnv and lexEnv per spec PerformEval / EvalDeclarationInstantiation
         let (var_env, lex_env) = if is_strict {
@@ -7863,6 +8255,7 @@ impl Interpreter {
         } else {
             // Non-strict indirect eval: var is global, lex is new child of global
             let lex_env = Environment::new(Some(self.global_env.clone()));
+            lex_env.borrow_mut().strict = false;
             (self.global_env.clone(), lex_env)
         };
 

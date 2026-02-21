@@ -84,6 +84,9 @@ pub enum SentValueBindingKind {
     Pattern(Pattern),
     #[allow(dead_code)]
     Discard,
+    InlineYield {
+        yield_target: usize,
+    },
 }
 
 struct TransformContext {
@@ -575,6 +578,23 @@ fn transform_yielding_expression(
                     Box::new(Expression::Identifier(temp_var)),
                 );
                 emit_expression_with_binding(&combined, &binding, ctx);
+            } else if expr_contains_yield(left) {
+                // Yield in LHS (e.g. destructuring defaults like [x = yield] = vals)
+                // Evaluate RHS to temp, emit assignment as statement (yield propagates at runtime)
+                let temp_var = ctx.new_temp_var("assign_rhs");
+                ctx.emit_statement(Statement::Variable(crate::ast::VariableDeclaration {
+                    kind: crate::ast::VarKind::Var,
+                    declarations: vec![crate::ast::VariableDeclarator {
+                        pattern: Pattern::Identifier(temp_var.clone()),
+                        init: Some(*right.clone()),
+                    }],
+                }));
+                let combined = Expression::Assign(
+                    *op,
+                    left.clone(),
+                    Box::new(Expression::Identifier(temp_var)),
+                );
+                emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
 
@@ -741,7 +761,9 @@ fn emit_expression_with_binding(
             });
             ctx.emit_statement(decl);
         }
-        Some(SentValueBindingKind::Discard) | None => {
+        Some(SentValueBindingKind::Discard)
+        | Some(SentValueBindingKind::InlineYield { .. })
+        | None => {
             ctx.emit_statement(Statement::Expression(expr.clone()));
         }
     }

@@ -683,6 +683,10 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Identifier("let".to_string()))
             }
+            Token::Keyword(Keyword::Static) if !self.strict => {
+                self.advance()?;
+                Ok(Expression::Identifier("static".to_string()))
+            }
             Token::Keyword(Keyword::Import) => {
                 self.advance()?;
                 if self.current == Token::Dot {
@@ -1148,8 +1152,13 @@ impl<'a> Parser<'a> {
                     self.in_generator = prev_generator;
                     self.in_static_block = prev_static_block;
                     self.set_function_param_names(&params);
-                    let (body, _) =
+                    let (body, body_strict) =
                         self.parse_function_body_inner(is_generator, true, true, false)?;
+                    if body_strict && !Self::is_simple_parameter_list(&params) {
+                        return Err(self.error(
+                            "Illegal 'use strict' directive in function with non-simple parameter list",
+                        ));
+                    }
                     self.check_duplicate_params_strict(&params)?;
                     let source_text = Some(self.source_since(method_source_start));
                     return Ok(Property {
@@ -1189,7 +1198,12 @@ impl<'a> Parser<'a> {
             self.in_generator = prev_generator;
             self.in_static_block = prev_static_block;
             self.set_function_param_names(&params);
-            let (body, _) = self.parse_function_body_inner(true, false, true, false)?;
+            let (body, body_strict) = self.parse_function_body_inner(true, false, true, false)?;
+            if body_strict && !Self::is_simple_parameter_list(&params) {
+                return Err(self.error(
+                    "Illegal 'use strict' directive in function with non-simple parameter list",
+                ));
+            }
             self.check_duplicate_params_strict(&params)?;
             let source_text = Some(self.source_since(method_source_start));
             return Ok(Property {

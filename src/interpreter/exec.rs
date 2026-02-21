@@ -644,7 +644,7 @@ impl Interpreter {
             Statement::DoWhile(dw) => self.exec_do_while(dw, env),
             Statement::For(f) => self.exec_for(f, env),
             Statement::ForIn(fi) => self.exec_for_in(fi, env),
-            Statement::ForOf(fo) => self.exec_for_of(fo, env),
+            Statement::ForOf(fo) => self.exec_for_of(fo, env, None),
             Statement::Return(expr) => {
                 let val = if let Some(e) = expr {
                     match self.eval_expr(e, env) {
@@ -668,7 +668,10 @@ impl Interpreter {
             Statement::Try(t) => self.exec_try(t, env),
             Statement::Switch(s) => self.exec_switch(s, env),
             Statement::Labeled(label, stmt) => {
-                let comp = self.exec_statement(stmt, env);
+                let comp = match stmt.as_ref() {
+                    Statement::ForOf(fo) => self.exec_for_of(fo, env, Some(label)),
+                    _ => self.exec_statement(stmt, env),
+                };
                 match &comp {
                     Completion::Break(Some(l), val) if l == label => {
                         Completion::Normal(val.clone().unwrap_or(JsValue::Undefined))
@@ -1335,7 +1338,12 @@ impl Interpreter {
         Completion::Normal(v)
     }
 
-    fn exec_for_of(&mut self, fo: &ForOfStatement, env: &EnvRef) -> Completion {
+    fn exec_for_of(
+        &mut self,
+        fo: &ForOfStatement,
+        env: &EnvRef,
+        label: Option<&str>,
+    ) -> Completion {
         let iterable = match self.eval_expr(&fo.right, env) {
             Completion::Normal(v) => v,
             other => return other,
@@ -1354,7 +1362,7 @@ impl Interpreter {
         };
 
         self.gc_root_value(&iterator);
-        let result = self.exec_for_of_loop(fo, env, &iterator);
+        let result = self.exec_for_of_loop(fo, env, &iterator, label);
         self.gc_unroot_value(&iterator);
         result
     }
@@ -1364,6 +1372,7 @@ impl Interpreter {
         fo: &ForOfStatement,
         env: &EnvRef,
         iterator: &JsValue,
+        loop_label: Option<&str>,
     ) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
@@ -1393,7 +1402,6 @@ impl Interpreter {
             let val = match self.iterator_value(&step_result) {
                 Ok(v) => v,
                 Err(e) => {
-                    self.iterator_close(&iterator, e.clone());
                     return Completion::Throw(e);
                 }
             };
@@ -1430,12 +1438,14 @@ impl Interpreter {
                         return Completion::Throw(e);
                     }
                 }
-                ForInOfLeft::Pattern(pat) => {
-                    if let Err(e) = self.assign_to_for_pattern(pat, val, env) {
+                ForInOfLeft::Pattern(pat) => match self.assign_to_for_pattern(pat, val, env) {
+                    Completion::Normal(_) | Completion::Empty => {}
+                    Completion::Throw(e) => {
                         self.iterator_close(&iterator, e.clone());
                         return Completion::Throw(e);
                     }
-                }
+                    other => return other,
+                },
             }
             let body_result = self.exec_statement(&fo.body, &for_env);
             let body_result = self.dispose_resources(&for_env, body_result);
@@ -1474,11 +1484,17 @@ impl Interpreter {
                     }
                     return Completion::Break(Some(label), val);
                 }
-                Completion::Continue(Some(label), val) => {
-                    if let Err(e) = self.iterator_close_result(&iterator) {
-                        return Completion::Throw(e);
+                Completion::Continue(Some(lbl), val) => {
+                    if loop_label == Some(lbl.as_str()) {
+                        if let Some(v2) = val {
+                            v = v2;
+                        }
+                    } else {
+                        if let Err(e) = self.iterator_close_result(&iterator) {
+                            return Completion::Throw(e);
+                        }
+                        return Completion::Continue(Some(lbl), val);
                     }
-                    return Completion::Continue(Some(label), val);
                 }
                 other => return other,
             }

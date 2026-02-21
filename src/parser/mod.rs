@@ -362,6 +362,7 @@ impl<'a> Parser<'a> {
                 Some("await".to_string())
             }
             Token::Keyword(Keyword::Let) if !self.strict => Some("let".to_string()),
+            Token::Keyword(Keyword::Static) if !self.strict => Some("static".to_string()),
             Token::Keyword(Keyword::Async) => Some("async".to_string()),
             Token::Keyword(Keyword::Of) => Some("of".to_string()),
             _ => None,
