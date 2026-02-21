@@ -3499,6 +3499,9 @@ impl Interpreter {
             PropertyDescriptor::data(dtf_ctor.clone(), true, false, true),
         );
 
+        // Save built-in constructor for internal use (e.g. Date.toLocaleString)
+        self.intl_date_time_format_ctor = Some(dtf_ctor.clone());
+
         // Register Intl.DateTimeFormat on the Intl namespace
         intl_obj.borrow_mut().insert_property(
             "DateTimeFormat".to_string(),

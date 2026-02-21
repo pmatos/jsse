@@ -1058,7 +1058,14 @@ pub(crate) fn format_number_internal(
 
     let work_value = if rounding_increment > 1 && minimum_significant_digits.is_none() {
         let scale = 10f64.powi(maximum_fraction_digits as i32);
-        let scaled = work_value * scale;
+        let raw_scaled = work_value * scale;
+        // Snap to nearest integer to avoid floating-point imprecision
+        // (e.g. 1.15 * 100 = 114.99999999999999 instead of 115)
+        let scaled = if (raw_scaled - raw_scaled.round()).abs() < 1e-8 {
+            raw_scaled.round()
+        } else {
+            raw_scaled
+        };
         let ri = rounding_increment as f64;
         let rounded = match rounding_mode {
             "ceil" => (scaled / ri).ceil() * ri,
@@ -1134,7 +1141,7 @@ pub(crate) fn format_number_internal(
         work_value
     };
 
-    let mut dec = if rounding_priority != "auto" && minimum_significant_digits.is_some() {
+    let (mut dec, used_sd) = if rounding_priority != "auto" && minimum_significant_digits.is_some() {
         // roundingPriority: "lessPrecision" or "morePrecision"
         // Format with sig digits
         let min_sd = minimum_significant_digits.unwrap();
@@ -1156,47 +1163,49 @@ pub(crate) fn format_number_internal(
             dec_fd.absolute.pad_end(-(minimum_fraction_digits as i16));
         }
 
-        // Count fraction digits to compare precision
-        fn count_fraction_digits(d: &Decimal) -> i16 {
-            let s = d.absolute.to_string();
-            if let Some(dot) = s.find('.') {
-                (s.len() - dot - 1) as i16
-            } else {
-                0
-            }
-        }
-
-        let sd_frac = count_fraction_digits(&dec_sd);
-        let fd_frac = count_fraction_digits(&dec_fd);
-
-        if rounding_priority == "lessPrecision" {
-            if fd_frac <= sd_frac { dec_fd } else { dec_sd }
+        // Compare by rounding magnitude per spec:
+        // SD rounding magnitude = floor(log10(|x|)) - maxSD + 1
+        // FD rounding magnitude = -maxFD
+        // morePrecision: pick lower magnitude (more precise rounding point)
+        // lessPrecision: pick higher magnitude (less precise rounding point)
+        let sd_mag: i32 = if work_value.abs() == 0.0 {
+            1 - max_sd as i32
         } else {
-            // morePrecision
-            if fd_frac >= sd_frac { dec_fd } else { dec_sd }
-        }
+            work_value.abs().log10().floor() as i32 - max_sd as i32 + 1
+        };
+        let fd_mag: i32 = -(maximum_fraction_digits as i32);
+
+        let use_sd = if rounding_priority == "lessPrecision" {
+            sd_mag >= fd_mag
+        } else {
+            // morePrecision (or auto with both specified)
+            sd_mag <= fd_mag
+        };
+
+        let rp_used_sd = use_sd;
+        (if use_sd { dec_sd } else { dec_fd }, rp_used_sd)
     } else if let Some(min_sd) = minimum_significant_digits {
         let max_sd = maximum_significant_digits.unwrap_or(*min_sd);
-        format_with_significant_digits(work_value, *min_sd, max_sd, rounding_mode)
+        (format_with_significant_digits(work_value, *min_sd, max_sd, rounding_mode), true)
     } else {
-        match Decimal::try_from_f64(work_value, FloatPrecision::RoundTrip) {
+        (match Decimal::try_from_f64(work_value, FloatPrecision::RoundTrip) {
             Ok(d) => d,
             Err(_) => match Decimal::try_from_str(&format!("{}", work_value)) {
                 Ok(d) => d,
                 Err(_) => Decimal::from(0),
             },
-        }
+        }, false)
     };
 
     // Apply rounding to max fraction digits (only when not using sig digits directly)
-    if minimum_significant_digits.is_none() {
+    if !used_sd {
         let mode = js_rounding_mode_to_fd(rounding_mode);
         dec.round_with_mode(-(maximum_fraction_digits as i16), mode);
         dec.absolute.trim_end();
     }
 
-    // Pad fractional digits to minimum (always apply, even with rounding priority)
-    if minimum_fraction_digits > 0 {
+    // Pad fractional digits to minimum (only when not using sig digits result from rounding priority)
+    if !used_sd && minimum_fraction_digits > 0 {
         dec.absolute.pad_end(-(minimum_fraction_digits as i16));
     }
 
@@ -3878,6 +3887,9 @@ impl Interpreter {
             "constructor".to_string(),
             PropertyDescriptor::data(nf_ctor.clone(), true, false, true),
         );
+
+        // Save built-in constructor for internal use (e.g. toLocaleString)
+        self.intl_number_format_ctor = Some(nf_ctor.clone());
 
         // Register Intl.NumberFormat on the Intl namespace
         intl_obj.borrow_mut().insert_property(

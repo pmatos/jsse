@@ -785,28 +785,23 @@ impl Interpreter {
         locales: &JsValue,
         options: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        let intl_val = self.global_env.borrow().get("Intl").unwrap_or(JsValue::Undefined);
-        if let JsValue::Object(intl_obj) = &intl_val {
-            let nf_ctor = match self.get_object_property(intl_obj.id, "NumberFormat", &intl_val) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Err(self.create_type_error("Intl.NumberFormat is not available")),
-            };
-            let old_new_target = self.new_target.take();
-            self.new_target = Some(nf_ctor.clone());
-            let result = self.call_function(
-                &nf_ctor,
-                &JsValue::Undefined,
-                &[locales.clone(), options.clone()],
-            );
-            self.new_target = old_new_target;
-            match result {
-                Completion::Normal(v) => Ok(v),
-                Completion::Throw(e) => Err(e),
-                _ => Err(self.create_type_error("NumberFormat construction failed")),
-            }
+        let nf_ctor = if let Some(ref ctor) = self.intl_number_format_ctor {
+            ctor.clone()
         } else {
-            Err(self.create_type_error("Intl object not found"))
+            return Err(self.create_type_error("Intl.NumberFormat is not available"));
+        };
+        let old_new_target = self.new_target.take();
+        self.new_target = Some(nf_ctor.clone());
+        let result = self.call_function(
+            &nf_ctor,
+            &JsValue::Undefined,
+            &[locales.clone(), options.clone()],
+        );
+        self.new_target = old_new_target;
+        match result {
+            Completion::Normal(v) => Ok(v),
+            Completion::Throw(e) => Err(e),
+            _ => Err(self.create_type_error("NumberFormat construction failed")),
         }
     }
 

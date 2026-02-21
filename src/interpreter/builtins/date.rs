@@ -125,8 +125,8 @@ fn date_to_locale_string(
     let opt_id = options_obj.borrow().id.unwrap();
     let opt_val = JsValue::Object(crate::types::JsObject { id: opt_id });
 
-    // Look up Intl.DateTimeFormat constructor
-    let intl_val = match interp.global_env.borrow().get("Intl") {
+    // Use the built-in DateTimeFormat constructor directly (not through user-visible Intl property)
+    let dtf_val = match interp.intl_date_time_format_ctor.clone() {
         Some(v) => v,
         None => {
             return Completion::Normal(JsValue::String(JsString::from_str(
@@ -134,22 +134,6 @@ fn date_to_locale_string(
             )));
         }
     };
-
-    let dtf_val = if let JsValue::Object(intl_obj) = &intl_val {
-        match interp.get_object_property(intl_obj.id, "DateTimeFormat", &intl_val) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Completion::Throw(e),
-            _ => JsValue::Undefined,
-        }
-    } else {
-        JsValue::Undefined
-    };
-
-    if matches!(dtf_val, JsValue::Undefined) || !matches!(&dtf_val, JsValue::Object(_)) {
-        return Completion::Normal(JsValue::String(JsString::from_str(
-            &format_date_string(tv),
-        )));
-    }
 
     // Call new Intl.DateTimeFormat(locales, options)
     let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, opt_val]) {
