@@ -1581,8 +1581,7 @@ impl Interpreter {
             if *n != n.trunc() {
                 return false;
             }
-            use num_bigint::BigInt;
-            let n_as_bigint = BigInt::from(*n as i64);
+            let n_as_bigint = crate::interpreter::builtins::bigint::f64_to_bigint(*n);
             return bigint_ops::equal(&b.value, &n_as_bigint);
         }
         // BigInt == String
@@ -1646,15 +1645,16 @@ impl Interpreter {
             if *n == f64::NEG_INFINITY {
                 return Ok(Some(false));
             }
-            use num_bigint::BigInt;
-            let n_floor = BigInt::from(*n as i64);
+            let n_trunc = n.trunc();
+            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
             if b.value < n_floor {
                 return Ok(Some(true));
             }
             if b.value > n_floor {
                 return Ok(Some(false));
             }
-            return Ok(Some((*n as i64 as f64) < *n));
+            // n_floor == b.value, so result depends on fractional part
+            return Ok(Some(n_trunc < *n));
         }
         if let (JsValue::Number(n), JsValue::BigInt(b)) = (&lprim, &rprim) {
             if n.is_nan() {
@@ -1666,15 +1666,16 @@ impl Interpreter {
             if *n == f64::INFINITY {
                 return Ok(Some(false));
             }
-            use num_bigint::BigInt;
-            let n_floor = BigInt::from(*n as i64);
+            let n_trunc = n.trunc();
+            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
             if n_floor < b.value {
                 return Ok(Some(true));
             }
             if n_floor > b.value {
                 return Ok(Some(false));
             }
-            return Ok(Some(*n < (*n as i64 as f64)));
+            // n_floor == b.value, so result depends on fractional part
+            return Ok(Some(*n < n_trunc));
         }
         // BigInt vs String: try parsing
         if let (JsValue::BigInt(_), JsValue::String(s)) = (&lprim, &rprim) {

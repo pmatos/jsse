@@ -1,5 +1,35 @@
 use super::super::*;
 
+/// Convert an f64 integer value to a BigInt, handling the full range of
+/// IEEE 754 double-precision values (not just the i64 range).
+pub fn f64_to_bigint(n: f64) -> num_bigint::BigInt {
+    if n == 0.0 {
+        return num_bigint::BigInt::from(0);
+    }
+    let negative = n < 0.0;
+    let abs_n = n.abs();
+    // For values that fit in i64 (up to 2^63 - 1), use direct conversion
+    if abs_n < 9223372036854775808.0 {
+        return num_bigint::BigInt::from(n as i64);
+    }
+    // For larger values, decompose the f64 into mantissa and exponent.
+    // IEEE 754: value = (-1)^sign * 2^(exp-1023) * (1 + mantissa/2^52)
+    let bits = abs_n.to_bits();
+    let biased_exp = ((bits >> 52) & 0x7FF) as i32;
+    let mantissa = bits & 0x000F_FFFF_FFFF_FFFF;
+    let exp = biased_exp - 1023;
+    // Full mantissa with implicit leading 1 bit: 2^52 + mantissa
+    let full_mantissa = num_bigint::BigInt::from((1u64 << 52) | mantissa);
+    // value = full_mantissa * 2^(exp - 52)
+    let shift = exp - 52;
+    let result = if shift >= 0 {
+        full_mantissa << (shift as u32)
+    } else {
+        full_mantissa >> ((-shift) as u32)
+    };
+    if negative { -result } else { result }
+}
+
 impl Interpreter {
     pub(crate) fn setup_bigint_prototype(&mut self) {
         let proto = self.create_object();
@@ -134,7 +164,7 @@ impl Interpreter {
                             ));
                         }
                         Completion::Normal(JsValue::BigInt(JsBigInt {
-                            value: num_bigint::BigInt::from(*n as i64),
+                            value: f64_to_bigint(*n),
                         }))
                     }
                     JsValue::String(s) => {

@@ -1,5 +1,5 @@
 pub(crate) mod array;
-mod bigint;
+pub(crate) mod bigint;
 mod collections;
 mod date;
 mod disposable;

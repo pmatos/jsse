@@ -864,6 +864,16 @@ fn locale_uses_narrow_currency(locale: &str, cur_code: &str) -> bool {
     }
 }
 
+fn locale_percent_has_space(locale: &str) -> bool {
+    let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
+    matches!(lang, "de" | "fr" | "es" | "pt" | "nl" | "it" | "ca" | "da" | "fi" | "nb" | "nn"
+        | "no" | "sv" | "pl" | "cs" | "sk" | "hu" | "ro" | "bg" | "hr" | "sl" | "sr" | "tr"
+        | "el" | "uk" | "ru" | "be" | "et" | "lv" | "lt" | "ar" | "he" | "fa" | "hi" | "bn"
+        | "ta" | "te" | "mr" | "gu" | "kn" | "ml" | "si" | "th" | "ka" | "hy" | "az" | "kk"
+        | "uz" | "ky" | "mn" | "sq" | "mk" | "bs" | "mt" | "is" | "ga" | "cy" | "eu" | "gl"
+        | "af" | "zu" | "xh" | "sw" | "rw" | "gv")
+}
+
 fn wrap_style(
     num_str: &str,
     style: &str,
@@ -911,7 +921,11 @@ fn wrap_style(
             }
         }
         "percent" => {
-            format!("{}%", num_str)
+            if locale_percent_has_space(locale) {
+                format!("{}\u{00A0}%", num_str)
+            } else {
+                format!("{}%", num_str)
+            }
         }
         "unit" => {
             let u = unit.as_deref().unwrap_or("degree");
@@ -1458,7 +1472,7 @@ fn format_scientific(
         let dec_sep = locale_decimal_separator(locale_str);
         let localized_mantissa = mantissa.replace('.', dec_sep);
         let result = format!("{}{}E0", sign_prefix, localized_mantissa);
-        return wrap_with_style(&result, style, currency, currency_display, unit, unit_display);
+        return wrap_with_style(&result, style, currency, currency_display, unit, unit_display, locale_str);
     }
 
     let abs_val = value.abs();
@@ -1502,7 +1516,7 @@ fn format_scientific(
     let dec_sep = locale_decimal_separator(locale_str);
     let localized_mantissa = mantissa_str.replace('.', dec_sep);
     let result = format!("{}{}E{}", sign_prefix, localized_mantissa, adjusted_exp);
-    wrap_with_style(&result, style, currency, currency_display, unit, unit_display)
+    wrap_with_style(&result, style, currency, currency_display, unit, unit_display, locale_str)
 }
 
 fn format_mantissa_sig_digits(value: f64, min_sd: u32, max_sd: u32) -> String {
@@ -1721,7 +1735,7 @@ fn format_compact(
     let num_str = formatter.format(&dec).to_string();
     let result = format!("{}{}", num_str, suffix);
 
-    wrap_with_style(&result, style, currency, currency_display, unit, unit_display)
+    wrap_with_style(&result, style, currency, currency_display, unit, unit_display, locale_str)
 }
 
 fn wrap_with_style(
@@ -1731,6 +1745,7 @@ fn wrap_with_style(
     currency_display: &Option<String>,
     unit: &Option<String>,
     unit_display: &Option<String>,
+    locale: &str,
 ) -> String {
     match style {
         "currency" => {
@@ -1743,7 +1758,13 @@ fn wrap_with_style(
                 format!("{}{}", sym, num_str)
             }
         }
-        "percent" => format!("{}%", num_str),
+        "percent" => {
+            if locale_percent_has_space(locale) {
+                format!("{}\u{00A0}%", num_str)
+            } else {
+                format!("{}%", num_str)
+            }
+        }
         "unit" => {
             let u = unit.as_deref().unwrap_or("degree");
             let u_disp = unit_display.as_deref().unwrap_or("short");
@@ -1915,6 +1936,9 @@ pub(crate) fn format_to_parts_internal(
             }
         }
         if style == "percent" {
+            if locale_percent_has_space(locale_str) {
+                parts.push(("literal".to_string(), "\u{00A0}".to_string()));
+            }
             parts.push(("percentSign".to_string(), "%".to_string()));
         }
         return parts;
@@ -1971,6 +1995,9 @@ pub(crate) fn format_to_parts_internal(
             }
         }
         if style == "percent" {
+            if locale_percent_has_space(locale_str) {
+                parts.push(("literal".to_string(), "\u{00A0}".to_string()));
+            }
             parts.push(("percentSign".to_string(), "%".to_string()));
         }
         return parts;
