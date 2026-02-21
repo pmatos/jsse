@@ -69,6 +69,15 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Run custom tests: `uv run python scripts/run-custom-tests.py`
 - After implementation, also update `PLAN.md` with new pass counts for affected built-ins.
 
+## Acorn Tests
+- Run acorn tests: `./scripts/run-acorn-tests.sh`
+- Compare with Node baseline: `./scripts/run-acorn-tests.sh --node`
+- Force a fresh clone: `./scripts/run-acorn-tests.sh --clean`
+- The script clones acorn into `/tmp/acorn`, bundles its test suite with esbuild into a single IIFE, prepends runtime shims (`scripts/acorn-shim.js`), and runs it on jsse.
+- Cloned acorn and esbuild bundle are cached in `/tmp/`; use `--clean` to rebuild from scratch.
+- **esbuild comment stripping**: esbuild removes comments from function bodies. The `TestComments` test relies on `Function.prototype.toString()` preserving comments, so a pre-bundle patch (`scripts/patch-acorn-comments.js`) replaces the `.toString()` call with a string literal.
+- All 13,507 acorn tests should pass on both jsse and Node.
+
 ## Architecture Notes
 - The interpreter is a single-pass tree-walker over the AST — no bytecode compilation.
 - Built-in prototypes (e.g. `string_prototype`, `symbol_prototype`) are stored as fields on `Interpreter` and wired up in `setup_builtins()` / `setup_*_prototype()` methods.

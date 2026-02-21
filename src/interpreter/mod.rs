@@ -410,7 +410,7 @@ impl Interpreter {
     fn is_strict_mode_body(body: &[Statement]) -> bool {
         for stmt in body {
             if let Statement::Expression(Expression::Literal(Literal::String(s))) = stmt {
-                if s == "use strict" {
+                if utf16_eq(s, "use strict") {
                     return true;
                 }
             } else {

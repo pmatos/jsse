@@ -6,7 +6,7 @@ impl<'a> Parser<'a> {
 
         // import "module" (side effect import)
         if let Token::StringLiteral(source) = &self.current {
-            let source = source.clone();
+            let source = String::from_utf16_lossy(source);
             self.advance()?;
             self.eat_semicolon()?;
             return Ok(ImportDeclaration {
@@ -344,7 +344,7 @@ impl<'a> Parser<'a> {
     fn parse_module_specifier(&mut self) -> Result<String, ParseError> {
         match &self.current {
             Token::StringLiteral(s) => {
-                let s = s.clone();
+                let s = String::from_utf16_lossy(s);
                 self.advance()?;
                 Ok(s)
             }
@@ -355,7 +355,12 @@ impl<'a> Parser<'a> {
     fn parse_module_export_name(&mut self) -> Result<String, ParseError> {
         // ModuleExportName: IdentifierName | StringLiteral
         if let Token::StringLiteral(s) = &self.current {
-            let s = s.clone();
+            if Self::has_lone_surrogate(s) {
+                return Err(
+                    self.error("An export name cannot include a lone surrogate."),
+                );
+            }
+            let s = String::from_utf16_lossy(s);
             self.advance()?;
             return Ok(s);
         }
@@ -365,6 +370,25 @@ impl<'a> Parser<'a> {
             return Ok(name);
         }
         Err(self.error("Expected identifier or string"))
+    }
+
+    fn has_lone_surrogate(code_units: &[u16]) -> bool {
+        let mut i = 0;
+        while i < code_units.len() {
+            let cu = code_units[i];
+            if (0xD800..=0xDBFF).contains(&cu) {
+                if i + 1 < code_units.len() && (0xDC00..=0xDFFF).contains(&code_units[i + 1]) {
+                    i += 2; // valid surrogate pair
+                } else {
+                    return true; // lone high surrogate
+                }
+            } else if (0xDC00..=0xDFFF).contains(&cu) {
+                return true; // lone low surrogate
+            } else {
+                i += 1;
+            }
+        }
+        false
     }
 
     pub(super) fn current_identifier_name_including_keywords(&self) -> Option<String> {

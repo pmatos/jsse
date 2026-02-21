@@ -1123,20 +1123,23 @@ impl Interpreter {
             "String",
             BindingKind::Var,
             JsFunction::constructor("String".to_string(), 1, |interp, this, args| {
-                let s = if args.is_empty() {
-                    String::new()
+                let js_str = if args.is_empty() {
+                    JsString::from_str("")
                 } else {
                     let val = &args[0];
                     // §22.1.1.1: If value is Symbol, return SymbolDescriptiveString
                     if let JsValue::Symbol(sym) = val {
-                        if let Some(desc) = &sym.description {
+                        let desc = if let Some(desc) = &sym.description {
                             format!("Symbol({desc})")
                         } else {
                             "Symbol()".to_string()
-                        }
+                        };
+                        JsString::from_str(&desc)
+                    } else if let JsValue::String(s) = val {
+                        s.clone()
                     } else {
                         match interp.to_string_value(val) {
-                            Ok(s) => s,
+                            Ok(s) => JsString::from_str(&s),
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -1145,10 +1148,10 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     obj.borrow_mut().primitive_value =
-                        Some(JsValue::String(JsString::from_str(&s)));
+                        Some(JsValue::String(js_str.clone()));
                     obj.borrow_mut().class_name = "String".to_string();
                 }
-                Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                Completion::Normal(JsValue::String(js_str))
             }),
         );
         self.setup_string_prototype();
@@ -2200,7 +2203,7 @@ impl Interpreter {
                     program.body.first()
                 {
                     let is_strict = fe.body.first().is_some_and(|s| {
-                        matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                        matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                     });
                     let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                     dynamic_fn_env.borrow_mut().strict = false;
@@ -2594,7 +2597,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
@@ -2697,7 +2700,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
@@ -2800,7 +2803,7 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
                         let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;

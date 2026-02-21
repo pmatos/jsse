@@ -1200,7 +1200,10 @@ impl Interpreter {
             Literal::Null => JsValue::Null,
             Literal::Boolean(b) => JsValue::Boolean(*b),
             Literal::Number(n) => JsValue::Number(*n),
-            Literal::String(s) => JsValue::String(JsString::from_str(s)),
+            Literal::String(s) => {
+                let code_units = crate::interpreter::builtins::regexp::pua_code_units_to_surrogates(s);
+                JsValue::String(JsString { code_units })
+            }
             Literal::BigInt(s) => {
                 use num_bigint::BigInt;
                 let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))
@@ -1222,15 +1225,15 @@ impl Interpreter {
                     .clone()
                     .or(self.object_prototype.clone());
                 obj.class_name = "RegExp".to_string();
-                let source_str = if pattern.is_empty() {
-                    "(?:)".to_string()
+                let source_js = if pattern.is_empty() {
+                    JsString::from_str("(?:)")
                 } else {
-                    pattern.clone()
+                    crate::interpreter::builtins::regexp::regex_output_to_js_string(pattern)
                 };
                 obj.insert_property(
                     "__original_source__".to_string(),
                     PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&source_str)),
+                        JsValue::String(source_js),
                         false,
                         false,
                         false,
@@ -1770,9 +1773,9 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 if is_string(&lprim) || is_string(&rprim) {
-                    let ls = to_js_string(&lprim);
-                    let rs = to_js_string(&rprim);
-                    Completion::Normal(JsValue::String(JsString::from_str(&format!("{ls}{rs}"))))
+                    let mut code_units = js_value_to_code_units(&lprim);
+                    code_units.extend(js_value_to_code_units(&rprim));
+                    Completion::Normal(JsValue::String(JsString { code_units }))
                 } else if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
                     Completion::Normal(JsValue::BigInt(JsBigInt {
                         value: bigint_ops::add(&a.value, &b.value),
@@ -7414,7 +7417,12 @@ impl Interpreter {
         if !matches!(&arg, JsValue::String(_)) {
             return Completion::Normal(arg);
         }
-        let code = to_js_string(&arg);
+        // Use PUA mapping to preserve lone surrogates through the UTF-8 parser
+        let code = if let JsValue::String(ref s) = arg {
+            crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
+        } else {
+            to_js_string(&arg)
+        };
         let mut p = match parser::Parser::new(&code) {
             Ok(p) => p,
             Err(_) => {
@@ -7483,7 +7491,7 @@ impl Interpreter {
             }
         }
         let eval_code_strict = program.body.first().is_some_and(|s| {
-            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if s == "use strict")
+            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
         });
         let is_strict = caller_strict || eval_code_strict;
 
