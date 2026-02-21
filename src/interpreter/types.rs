@@ -602,6 +602,11 @@ pub enum IteratorState {
         kind: IteratorKind,
         done: bool,
     },
+    SegmentIterator {
+        segments: Vec<(String, usize, String, bool)>, // (segment, index, input, isWordLike)
+        position: usize,
+        done: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -736,6 +741,10 @@ pub(crate) enum IntlData {
         locale: String,
         list_type: String,
         style: String,
+    },
+    Segmenter {
+        locale: String,
+        granularity: String,
     },
 }
 

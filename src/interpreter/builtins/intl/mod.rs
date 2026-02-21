@@ -3,6 +3,7 @@ mod listformat;
 mod locale;
 mod numberformat;
 mod pluralrules;
+mod segmenter;
 
 use super::super::*;
 use icu::locale::Locale as IcuLocale;
@@ -268,6 +269,9 @@ impl Interpreter {
 
         // Intl.ListFormat
         self.setup_intl_list_format(&intl_obj);
+
+        // Intl.Segmenter
+        self.setup_intl_segmenter(&intl_obj);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.global_env

@@ -83,6 +83,7 @@ impl Interpreter {
             &self.intl_number_format_prototype,
             &self.intl_plural_rules_prototype,
             &self.intl_list_format_prototype,
+            &self.intl_segmenter_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id
