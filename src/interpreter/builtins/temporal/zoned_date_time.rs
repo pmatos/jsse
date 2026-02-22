@@ -407,6 +407,84 @@ fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
     hi
 }
 
+/// Find the next UTC offset transition strictly after epoch_ns.
+/// Returns None if no transition exists within valid epoch range.
+fn get_next_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
+    let ns_max: i128 = 8_640_000_000_000_000_000_000;
+    let current_off = get_tz_offset_ns(tz, &BigInt::from(epoch_ns)) as i128;
+
+    // Exponentially probe forward to find a point with a different offset
+    let mut step: i128 = NS_PER_SEC;
+    let mut probe = ((epoch_ns / NS_PER_SEC) + 1) * NS_PER_SEC; // next second boundary
+    loop {
+        if probe > ns_max {
+            return None;
+        }
+        let probe_off = get_tz_offset_ns(tz, &BigInt::from(probe)) as i128;
+        if probe_off != current_off {
+            // Binary search between (probe - step) and probe at second granularity
+            let mut lo = (probe - step).max(((epoch_ns / NS_PER_SEC) + 1) * NS_PER_SEC);
+            let mut hi = probe;
+            let lo_off = get_tz_offset_ns(tz, &BigInt::from(lo)) as i128;
+            while hi - lo > NS_PER_SEC {
+                let mid = lo + (hi - lo) / 2;
+                let mid_sec = (mid / NS_PER_SEC) * NS_PER_SEC;
+                let mid_off = get_tz_offset_ns(tz, &BigInt::from(mid_sec)) as i128;
+                if mid_off == lo_off {
+                    lo = mid_sec;
+                } else {
+                    hi = mid_sec;
+                }
+            }
+            // hi is the first second with a different offset = the transition point
+            return Some(hi);
+        }
+        step = (step * 2).min(NS_PER_DAY * 180);
+        probe += step;
+    }
+}
+
+/// Find the previous UTC offset transition strictly before epoch_ns.
+/// Returns None if no transition exists within valid epoch range.
+fn get_previous_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
+    let ns_min: i128 = -8_640_000_000_000_000_000_000;
+    // Check offset at the second boundary just before epoch_ns
+    let ref_second = (epoch_ns - 1) / NS_PER_SEC;
+    let ref_ns = ref_second * NS_PER_SEC;
+    let current_off = get_tz_offset_ns(tz, &BigInt::from(ref_ns)) as i128;
+
+    // Exponentially probe backward
+    let mut step: i128 = NS_PER_SEC;
+    let mut probe = ref_ns - NS_PER_SEC;
+    loop {
+        if probe < ns_min {
+            return None;
+        }
+        let probe_off = get_tz_offset_ns(tz, &BigInt::from(probe)) as i128;
+        if probe_off != current_off {
+            // Binary search: find the exact transition between probe and (probe + step)
+            let mut lo = probe;
+            let mut hi = (probe + step).min(ref_ns);
+            let lo_off = get_tz_offset_ns(tz, &BigInt::from(lo)) as i128;
+            while hi - lo > NS_PER_SEC {
+                let mid = lo + (hi - lo) / 2;
+                // Snap to second boundary for probing
+                let mid_sec = (mid / NS_PER_SEC) * NS_PER_SEC;
+                let mid_off = get_tz_offset_ns(tz, &BigInt::from(mid_sec)) as i128;
+                if mid_off == lo_off {
+                    lo = mid_sec;
+                } else {
+                    hi = mid_sec;
+                }
+            }
+            // hi is the first second with the "current" offset = the transition point
+            return Some(hi);
+        }
+        step = (step * 2).min(NS_PER_DAY * 180);
+        probe -= step;
+    }
+}
+
 fn parse_offset_to_ns(s: &str) -> i64 {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
@@ -3024,7 +3102,7 @@ impl Interpreter {
                 "getTimeZoneTransition".to_string(),
                 1,
                 |interp, this, args| {
-                    let _ = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -3064,7 +3142,27 @@ impl Interpreter {
                             )));
                         }
                     }
-                    Completion::Normal(JsValue::Null)
+                    let epoch_ns_i128: i128 = ns.try_into().unwrap_or(0);
+                    // Offset time zones have no transitions
+                    if tz.starts_with('+') || tz.starts_with('-') || tz == "UTC" {
+                        return Completion::Normal(JsValue::Null);
+                    }
+                    let transition = if direction == "next" {
+                        get_next_transition(&tz, epoch_ns_i128)
+                    } else {
+                        get_previous_transition(&tz, epoch_ns_i128)
+                    };
+                    match transition {
+                        Some(t) => {
+                            let t_bi = BigInt::from(t);
+                            if !is_valid_epoch_ns(&t_bi) {
+                                Completion::Normal(JsValue::Null)
+                            } else {
+                                create_zdt(interp, t_bi, tz, cal)
+                            }
+                        }
+                        None => Completion::Normal(JsValue::Null),
+                    }
                 },
             ));
             proto
