@@ -277,6 +277,28 @@ pub(crate) fn calendar_has_eras(cal: &str) -> bool {
     )
 }
 
+fn extract_calendar_annotation(s: &str) -> Option<String> {
+    let mut rest = s;
+    while let Some(bracket_pos) = rest.find('[') {
+        let after = &rest[bracket_pos + 1..];
+        let skip_bang = if after.starts_with('!') { 1 } else { 0 };
+        let content = &after[skip_bang..];
+        if let Some(close) = content.find(']') {
+            let annotation = &content[..close];
+            if let Some(eq) = annotation.find('=') {
+                let key = &annotation[..eq];
+                if key == "u-ca" {
+                    return Some(annotation[eq + 1..].to_string());
+                }
+            }
+            rest = &content[close + 1..];
+        } else {
+            break;
+        }
+    }
+    None
+}
+
 pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
     if !cal.bytes().all(|b| b.is_ascii()) {
         return None;
@@ -293,6 +315,13 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
         }
     }
     if parse_temporal_time_string(cal).is_some() {
+        // Extract calendar from [u-ca=...] annotation if present
+        if let Some(ca_cal) = extract_calendar_annotation(cal) {
+            let cn = canonicalize_temporal_calendar(&ca_cal);
+            if is_supported_temporal_calendar(&cn) {
+                return Some(cn);
+            }
+        }
         return Some("iso8601".to_string());
     }
     if let Some(parsed) = parse_temporal_month_day_string(cal) {
