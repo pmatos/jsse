@@ -2937,6 +2937,7 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 {
                     adjusted.hour = Some("numeric".to_string());
                     adjusted.minute = Some("2-digit".to_string());
+                    adjusted.second = Some("2-digit".to_string());
                 }
             }
             TemporalType::PlainYearMonth => {
@@ -3039,6 +3040,7 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
             adjusted.era = None;
             adjusted.hour = Some("numeric".to_string());
             adjusted.minute = Some("2-digit".to_string());
+            adjusted.second = Some("2-digit".to_string());
             adjusted.time_zone_name = None;
         }
         TemporalType::PlainYearMonth => {
