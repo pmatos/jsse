@@ -1160,12 +1160,7 @@ fn instant_to_string_with_tz(
         }
     };
 
-    let mut result = format!("{year_str}-{month:02}-{day:02}T{time_str}{offset_str}");
-
-    // Add timezone annotation if not UTC/offset
-    if tz_id != "UTC" && !tz_id.starts_with('+') && !tz_id.starts_with('-') {
-        result.push_str(&format!("[{tz_id}]"));
-    }
+    let result = format!("{year_str}-{month:02}-{day:02}T{time_str}{offset_str}");
 
     result
 }

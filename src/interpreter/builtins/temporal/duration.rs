@@ -202,7 +202,8 @@ fn to_relative_to_date(
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        let _cal = super::to_temporal_calendar_slot_value(interp, &cal_val)?;
+        let cal = super::to_temporal_calendar_slot_value(interp, &cal_val)?;
+        let cal_has_era = matches!(cal.as_str(), "gregory" | "japanese" | "roc" | "coptic" | "ethiopic" | "ethioaa");
 
         // 2. day (required, coerce if defined)
         let d_val = match get_prop(interp, val, "day") {
@@ -215,6 +216,28 @@ fn to_relative_to_date(
         } else {
             0.0
         };
+
+        // 2b. era (coerce if defined, only for calendars with eras)
+        let mut era_str: Option<String> = None;
+        let mut era_year: Option<f64> = None;
+        if cal_has_era {
+            let era_val = match get_prop(interp, val, "era") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            if !is_undefined(&era_val) {
+                era_str = Some(super::to_primitive_and_require_string(interp, &era_val, "era")?);
+            }
+
+            // 2c. eraYear (coerce if defined)
+            let era_year_val = match get_prop(interp, val, "eraYear") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            if !is_undefined(&era_year_val) {
+                era_year = Some(super::to_integer_with_truncation(interp, &era_year_val)?);
+            }
+        }
 
         // 3. hour (coerce if defined)
         let hour_val = match get_prop(interp, val, "hour") {
@@ -323,17 +346,20 @@ fn to_relative_to_date(
             other => return Err(other),
         };
 
-        // 13. year (required, coerce)
+        // 13. year (required, coerce — or computed from era+eraYear)
         let y_val = match get_prop(interp, val, "year") {
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        if is_undefined(&y_val) {
+        let year: i32 = if !is_undefined(&y_val) {
+            super::to_integer_with_truncation(interp, &y_val)? as i32
+        } else if let (Some(_era), Some(ey)) = (&era_str, era_year) {
+            ey as i32
+        } else {
             return Err(Completion::Throw(
                 interp.create_type_error("year is required"),
             ));
-        }
-        let year = super::to_integer_with_truncation(interp, &y_val)? as i32;
+        };
 
         // --- After all reads, validate ---
         if !has_day {

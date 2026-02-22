@@ -2154,12 +2154,12 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Greenwich", "UTC"), ("UCT", "UTC"), ("Universal", "UTC"), ("Zulu", "UTC"),
         // Africa
         ("Africa/Asmera", "Africa/Asmara"), ("Africa/Timbuktu", "Africa/Bamako"),
-        ("Africa/Accra", "Africa/Abidjan"), ("Africa/Bamako", "Africa/Abidjan"),
+        ("Africa/Bamako", "Africa/Abidjan"),
         ("Africa/Banjul", "Africa/Abidjan"), ("Africa/Conakry", "Africa/Abidjan"),
         ("Africa/Dakar", "Africa/Abidjan"), ("Africa/Freetown", "Africa/Abidjan"),
         ("Africa/Lome", "Africa/Abidjan"), ("Africa/Nouakchott", "Africa/Abidjan"),
         ("Africa/Ouagadougou", "Africa/Abidjan"), ("Atlantic/St_Helena", "Africa/Abidjan"),
-        ("Africa/Addis_Ababa", "Africa/Nairobi"), ("Africa/Asmara", "Africa/Nairobi"),
+        ("Africa/Asmara", "Africa/Nairobi"),
         ("Africa/Dar_es_Salaam", "Africa/Nairobi"), ("Africa/Djibouti", "Africa/Nairobi"),
         ("Africa/Kampala", "Africa/Nairobi"), ("Africa/Mogadishu", "Africa/Nairobi"),
         ("Indian/Antananarivo", "Africa/Nairobi"), ("Indian/Comoro", "Africa/Nairobi"),
@@ -2245,7 +2245,6 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Asia/Phnom_Penh", "Asia/Bangkok"), ("Asia/Vientiane", "Asia/Bangkok"),
         ("Asia/Muscat", "Asia/Dubai"),
         ("Asia/Brunei", "Asia/Kuching"),
-        ("Asia/Kuala_Lumpur", "Asia/Singapore"),
         // Europe
         ("Europe/Belfast", "Europe/London"),
         ("Europe/Kiev", "Europe/Kyiv"),
@@ -2266,12 +2265,9 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Europe/Skopje", "Europe/Belgrade"),
         ("Europe/Zagreb", "Europe/Belgrade"),
         ("Europe/Bratislava", "Europe/Prague"),
-        ("Europe/Amsterdam", "Europe/Brussels"),
         ("Europe/Copenhagen", "Europe/Berlin"),
         ("Europe/Luxembourg", "Europe/Brussels"),
         ("Europe/Monaco", "Europe/Paris"),
-        ("Europe/Oslo", "Europe/Berlin"),
-        ("Europe/Stockholm", "Europe/Berlin"),
         // Australia
         ("Antarctica/South_Pole", "Antarctica/McMurdo"),
         ("Australia/ACT", "Australia/Sydney"), ("Australia/Canberra", "Australia/Sydney"),
@@ -2294,10 +2290,8 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Pacific/Truk", "Pacific/Chuuk"), ("Pacific/Yap", "Pacific/Chuuk"),
         ("Pacific/Saipan", "Pacific/Guam"),
         ("Pacific/Midway", "Pacific/Pago_Pago"),
-        ("Pacific/Chuuk", "Pacific/Port_Moresby"),
         ("Pacific/Funafuti", "Pacific/Tarawa"),
         ("Pacific/Majuro", "Pacific/Tarawa"),
-        ("Pacific/Pohnpei", "Pacific/Guadalcanal"),
         ("Pacific/Wake", "Pacific/Tarawa"),
         ("Pacific/Wallis", "Pacific/Tarawa"),
         // Brazil / Canada / Chile / Mexico
@@ -2345,7 +2339,6 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Antarctica/Vostok", "Asia/Urumqi"),
         ("Atlantic/Jan_Mayen", "Arctic/Longyearbyen"),
         ("Atlantic/Faeroe", "Atlantic/Faroe"),
-        ("Atlantic/Reykjavik", "Africa/Abidjan"),
     ];
     let mut current = s.to_string();
     for _ in 0..5 {
