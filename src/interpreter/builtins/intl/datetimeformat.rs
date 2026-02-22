@@ -2935,9 +2935,8 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                     && adjusted.second.is_none() && adjusted.fractional_second_digits.is_none()
                     && adjusted.day_period.is_none() && adjusted.time_style.is_none()
                 {
-                    adjusted.hour = Some("2-digit".to_string());
+                    adjusted.hour = Some("numeric".to_string());
                     adjusted.minute = Some("2-digit".to_string());
-                    adjusted.second = Some("2-digit".to_string());
                 }
             }
             TemporalType::PlainYearMonth => {
@@ -3038,9 +3037,8 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
             adjusted.day = None;
             adjusted.weekday = None;
             adjusted.era = None;
-            adjusted.hour = Some("2-digit".to_string());
+            adjusted.hour = Some("numeric".to_string());
             adjusted.minute = Some("2-digit".to_string());
-            adjusted.second = Some("2-digit".to_string());
             adjusted.time_zone_name = None;
         }
         TemporalType::PlainYearMonth => {
@@ -3095,7 +3093,7 @@ fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
 
     // Check explicit component options
     let has_any_date_opt = opts.year.is_some() || opts.month.is_some() || opts.day.is_some()
-        || opts.weekday.is_some() || opts.era.is_some();
+        || opts.weekday.is_some();
     let has_any_time_opt = opts.hour.is_some() || opts.minute.is_some() || opts.second.is_some()
         || opts.day_period.is_some() || opts.fractional_second_digits.is_some();
 
@@ -4053,7 +4051,6 @@ impl Interpreter {
                 // Step 41: dateStyle/timeStyle conflict with component options
                 let has_style = date_style.is_some() || time_style.is_some();
                 let has_date_time_component = weekday.is_some()
-                    || era.is_some()
                     || year_opt.is_some()
                     || month_opt.is_some()
                     || day_opt.is_some()
@@ -4062,7 +4059,7 @@ impl Interpreter {
                     || minute_opt.is_some()
                     || second_opt.is_some()
                     || fsd_opt.is_some();
-                let has_component = has_date_time_component || tz_name.is_some();
+                let has_component = has_date_time_component || era.is_some() || tz_name.is_some();
 
                 if has_style && has_component {
                     return Completion::Throw(interp.create_type_error(
@@ -4164,6 +4161,7 @@ impl Interpreter {
                     }
                 }
 
+                let has_era = era.is_some();
                 let obj = interp.create_object();
                 obj.borrow_mut().prototype = Some(proto_clone.clone());
                 obj.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
