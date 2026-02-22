@@ -1698,7 +1698,7 @@ impl Interpreter {
                         let has_explicit = {
                             let b = opts_obj.borrow();
                             ["year", "month", "day", "weekday", "hour", "minute",
-                             "second", "era", "dayPeriod",
+                             "second", "dayPeriod",
                              "fractionalSecondDigits", "dateStyle", "timeStyle"]
                                 .iter().any(|k| {
                                     b.properties.get(*k).is_some_and(|pd| {
@@ -1707,15 +1707,28 @@ impl Interpreter {
                                 })
                         };
                         if !has_explicit {
+                            let has_tz_name = {
+                                let b = opts_obj.borrow();
+                                b.properties.get("timeZoneName").is_some_and(|pd| {
+                                    !matches!(pd.value, Some(JsValue::Undefined) | None)
+                                })
+                            };
                             for (k, v) in [
                                 ("year", "numeric"), ("month", "numeric"), ("day", "numeric"),
                                 ("hour", "numeric"), ("minute", "numeric"), ("second", "numeric"),
-                                ("timeZoneName", "short"),
                             ] {
                                 opts_obj.borrow_mut().insert_property(
                                     k.to_string(),
                                     crate::interpreter::types::PropertyDescriptor::data(
                                         JsValue::String(JsString::from_str(v)), true, true, true,
+                                    ),
+                                );
+                            }
+                            if !has_tz_name {
+                                opts_obj.borrow_mut().insert_property(
+                                    "timeZoneName".to_string(),
+                                    crate::interpreter::types::PropertyDescriptor::data(
+                                        JsValue::String(JsString::from_str("short")), true, true, true,
                                     ),
                                 );
                             }
