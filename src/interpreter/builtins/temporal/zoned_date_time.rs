@@ -312,6 +312,101 @@ fn offset_match_or_reject(
     }
 }
 
+/// Disambiguate a local wall-clock time to a single UTC epoch nanosecond.
+/// `mode`: "compatible" | "earlier" | "later"
+fn disambiguate_instant(tz: &str, local_ns: i128, mode: &str) -> i128 {
+    let candidates = get_possible_epoch_ns(tz, local_ns);
+    match candidates.len() {
+        0 => {
+            // Gap: per spec DisambiguatePossibleEpochNanoseconds.
+            // Find offsetBefore and offsetAfter by probing on each side of the gap.
+            // Use local_ns as an approximate UTC to find the two offsets around transition.
+            let off_a = get_tz_offset_ns(tz, &BigInt::from(local_ns)) as i128;
+            let epoch_a = local_ns - off_a;
+            let off_b = get_tz_offset_ns(tz, &BigInt::from(epoch_a)) as i128;
+
+            // Determine which offset is before/after the transition
+            let (offset_before, offset_after) = if off_a < off_b {
+                (off_a, off_b)
+            } else {
+                (off_b, off_a)
+            };
+            let nanoseconds = offset_after - offset_before;
+
+            if mode == "earlier" {
+                // Shift requested time backward by nanoseconds, then resolve
+                let earlier_local = local_ns - nanoseconds;
+                let earlier_candidates = get_possible_epoch_ns(tz, earlier_local);
+                if !earlier_candidates.is_empty() {
+                    earlier_candidates[0]
+                } else {
+                    // Fallback: use pre-transition offset
+                    local_ns - offset_before
+                }
+            } else {
+                // "compatible" or "later": shift forward by nanoseconds, then resolve
+                let later_local = local_ns + nanoseconds;
+                let later_candidates = get_possible_epoch_ns(tz, later_local);
+                if !later_candidates.is_empty() {
+                    *later_candidates.last().unwrap()
+                } else {
+                    // Fallback: use post-transition offset
+                    local_ns - offset_after
+                }
+            }
+        }
+        1 => candidates[0],
+        _ => {
+            // Overlap: candidates are sorted chronologically
+            if mode == "later" {
+                *candidates.last().unwrap()
+            } else {
+                // "compatible" or "earlier": use the first (earlier) instant
+                candidates[0]
+            }
+        }
+    }
+}
+
+/// Find the start of day per spec GetStartOfDay:
+/// Try midnight; if it exists, return earliest instant. If gap, find first valid local time.
+fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
+    let local_midnight = epoch_days * NS_PER_DAY;
+    let candidates = get_possible_epoch_ns(tz, local_midnight);
+    if !candidates.is_empty() {
+        return candidates[0];
+    }
+    // Midnight is in a gap. Binary search for the first local time that resolves.
+    // The transition is within this day. Search forward from midnight.
+    let off_a = get_tz_offset_ns(tz, &BigInt::from(local_midnight)) as i128;
+    let epoch_a = local_midnight - off_a;
+    let off_b = get_tz_offset_ns(tz, &BigInt::from(epoch_a)) as i128;
+
+    // The two candidate instants bracket the transition
+    let (mut lo, mut hi) = if epoch_a < local_midnight - off_b {
+        (epoch_a, local_midnight - off_b)
+    } else {
+        (local_midnight - off_b, epoch_a)
+    };
+
+    // Binary search for exact transition nanosecond
+    let lo_off = get_tz_offset_ns(tz, &BigInt::from(lo)) as i128;
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        let mid_off = get_tz_offset_ns(tz, &BigInt::from(mid)) as i128;
+        if mid_off == lo_off {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    // Snap to second boundary
+    lo = (lo / NS_PER_SEC) * NS_PER_SEC;
+    hi = lo + NS_PER_SEC;
+    // Return the first instant after the transition
+    hi
+}
+
 fn parse_offset_to_ns(s: &str) -> i64 {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
@@ -1142,10 +1237,12 @@ fn from_string_with_options(
                 }
                 _ => BigInt::from(exact_ns),
             }
+        } else if !parsed.has_time {
+            // No time in string → start-of-day per spec (time is ~start-of-day~)
+            BigInt::from(get_start_of_day(&tz, epoch_days))
         } else {
-            let approx = BigInt::from(local_ns);
-            let off = get_tz_offset_ns(&tz, &approx) as i128;
-            BigInt::from(local_ns - off)
+            // Time specified but no offset → wall clock disambiguation
+            BigInt::from(disambiguate_instant(&tz, local_ns, &_disambiguation))
         };
 
     if !is_valid_epoch_ns(&epoch_ns) {
@@ -1599,8 +1696,6 @@ impl Interpreter {
                             interp.create_range_error("date outside representable range"),
                         );
                     }
-                    let start_local_ns = start_days as i128 * NS_PER_DAY;
-
                     let (ny, nm, nd) = super::balance_iso_date(y, m as i32, d as i32 + 1);
                     let next_days = super::iso_date_to_epoch_days(ny, nm, nd);
                     if next_days.abs() > 100_000_000 {
@@ -1608,13 +1703,9 @@ impl Interpreter {
                             interp.create_range_error("date outside representable range"),
                         );
                     }
-                    let next_local_ns = next_days as i128 * NS_PER_DAY;
 
-                    let start_approx = BigInt::from(start_local_ns);
-                    let start_offset = get_tz_offset_ns(&tz, &start_approx) as i128;
-                    let start_utc = start_local_ns - start_offset;
+                    let start_utc = get_start_of_day(&tz, start_days as i128);
 
-                    // Validate start-of-day epoch_ns is within representable range
                     let ns_max: i128 = 8_640_000_000_000_000_000_000;
                     if start_utc < -ns_max || start_utc > ns_max {
                         return Completion::Throw(
@@ -1622,9 +1713,7 @@ impl Interpreter {
                         );
                     }
 
-                    let next_approx = BigInt::from(next_local_ns);
-                    let next_offset = get_tz_offset_ns(&tz, &next_approx) as i128;
-                    let next_utc = next_local_ns - next_offset;
+                    let next_utc = get_start_of_day(&tz, next_days as i128);
 
                     if next_utc < -ns_max || next_utc > ns_max {
                         return Completion::Throw(
@@ -2046,11 +2135,8 @@ impl Interpreter {
                     };
                     let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(&ns, &tz);
                     let start_days = super::iso_date_to_epoch_days(y, m, d) as i128;
-                    let local_midnight = start_days * NS_PER_DAY;
-                    let approx = BigInt::from(local_midnight);
-                    let offset = get_tz_offset_ns(&tz, &approx) as i128;
-                    let epoch_ns = BigInt::from(local_midnight - offset);
-                    create_zdt(interp, epoch_ns, tz, cal)
+                    let epoch_ns = get_start_of_day(&tz, start_days);
+                    create_zdt(interp, BigInt::from(epoch_ns), tz, cal)
                 },
             ));
             proto
@@ -2121,26 +2207,27 @@ impl Interpreter {
                     };
                     let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(&ns, &tz);
                     let time_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let (h, mi, s, ms, us, nanos) = if is_undefined(&time_arg) {
-                        (0u8, 0u8, 0u8, 0u16, 0u16, 0u16)
+                    let epoch_days = super::iso_date_to_epoch_days(y, m, d) as i128;
+                    if is_undefined(&time_arg) {
+                        // Per spec: use GetStartOfDay
+                        let epoch_ns = get_start_of_day(&tz, epoch_days);
+                        create_zdt(interp, BigInt::from(epoch_ns), tz, cal)
                     } else {
-                        match super::plain_time::to_temporal_plain_time(interp, time_arg) {
+                        let (h, mi, s, ms, us, nanos) = match super::plain_time::to_temporal_plain_time(interp, time_arg) {
                             Ok(f) => f,
                             Err(c) => return c,
-                        }
-                    };
-                    let epoch_days = super::iso_date_to_epoch_days(y, m, d) as i128;
-                    let day_ns = h as i128 * NS_PER_HOUR
-                        + mi as i128 * NS_PER_MIN
-                        + s as i128 * NS_PER_SEC
-                        + ms as i128 * NS_PER_MS
-                        + us as i128 * 1_000
-                        + nanos as i128;
-                    let local_ns = epoch_days * NS_PER_DAY + day_ns;
-                    let approx = BigInt::from(local_ns);
-                    let offset = get_tz_offset_ns(&tz, &approx) as i128;
-                    let epoch_ns = BigInt::from(local_ns - offset);
-                    create_zdt(interp, epoch_ns, tz, cal)
+                        };
+                        let day_ns = h as i128 * NS_PER_HOUR
+                            + mi as i128 * NS_PER_MIN
+                            + s as i128 * NS_PER_SEC
+                            + ms as i128 * NS_PER_MS
+                            + us as i128 * 1_000
+                            + nanos as i128;
+                        let local_ns = epoch_days * NS_PER_DAY + day_ns;
+                        // Per spec: use GetEpochNanosecondsFor with compatible
+                        let epoch_ns = BigInt::from(disambiguate_instant(&tz, local_ns, "compatible"));
+                        create_zdt(interp, epoch_ns, tz, cal)
+                    }
                 },
             ));
             proto
@@ -2843,6 +2930,7 @@ impl Interpreter {
 
                     // For day rounding, we need to compute relative to start of day
                     let rounded_ns = if smallest_unit == "day" {
+                        // Per spec: use GetStartOfDay for day boundaries
                         let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(&ns, &tz);
                         let today_days = super::iso_date_to_epoch_days(y, m, d);
                         if today_days.abs() > 100_000_000 {
@@ -2857,13 +2945,13 @@ impl Interpreter {
                                 interp.create_range_error("next day outside representable range"),
                             );
                         }
-                        let local_ns = total_ns + offset_ns;
-                        let epoch_days = local_ns.div_euclid(NS_PER_DAY);
-                        let day_ns = local_ns.rem_euclid(NS_PER_DAY);
+                        let start_ns = get_start_of_day(&tz, today_days as i128);
+                        let end_ns = get_start_of_day(&tz, tomorrow_days as i128);
+                        let day_length_ns = end_ns - start_ns;
+                        let day_progress_ns = total_ns - start_ns;
                         let rounded_day_ns =
-                            round_ns_to_increment(day_ns, NS_PER_DAY, &rounding_mode);
-                        let new_local = epoch_days * NS_PER_DAY + rounded_day_ns;
-                        new_local - offset_ns
+                            round_ns_to_increment(day_progress_ns, day_length_ns, &rounding_mode);
+                        start_ns + rounded_day_ns
                     } else {
                         let inc_ns = unit_ns * increment as i128;
                         let local_ns = total_ns + offset_ns;
