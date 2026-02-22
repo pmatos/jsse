@@ -1155,7 +1155,17 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
                         _ => c.hour,
                     }
                 ),
-                _ => hour_str.clone(),
+                _ => {
+                    // h23/h24: always use 2-digit padding per ICU convention
+                    if hc == "h23" || hc == "h24" {
+                        format_2digit(match hc {
+                            "h24" => if c.hour == 0 { 24 } else { c.hour },
+                            _ => c.hour,
+                        })
+                    } else {
+                        hour_str.clone()
+                    }
+                }
             };
             time_parts.push(h_str);
         }
@@ -2796,7 +2806,8 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.time_style = None;
                 // If no date components remain, add defaults
                 if adjusted.year.is_none() && adjusted.month.is_none()
-                    && adjusted.day.is_none() && adjusted.date_style.is_none()
+                    && adjusted.day.is_none() && adjusted.weekday.is_none()
+                    && adjusted.date_style.is_none()
                 {
                     adjusted.year = Some("numeric".to_string());
                     adjusted.month = Some("numeric".to_string());
@@ -2814,7 +2825,8 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.date_style = None;
                 // If no time components remain, add defaults
                 if adjusted.hour.is_none() && adjusted.minute.is_none()
-                    && adjusted.second.is_none() && adjusted.time_style.is_none()
+                    && adjusted.second.is_none() && adjusted.fractional_second_digits.is_none()
+                    && adjusted.day_period.is_none() && adjusted.time_style.is_none()
                 {
                     adjusted.hour = Some("2-digit".to_string());
                     adjusted.minute = Some("2-digit".to_string());

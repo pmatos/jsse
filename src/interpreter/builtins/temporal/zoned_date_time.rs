@@ -1641,30 +1641,88 @@ impl Interpreter {
                         }
                     };
                     let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    // Inject timeZone into options for proper ZDT formatting
                     let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let effective_opts = if super::is_undefined(&options_arg) {
+                    // Reject user-provided timeZone option
+                    if let JsValue::Object(ref o) = options_arg {
+                        let tz_val = match interp.get_object_property(o.id, "timeZone", &options_arg) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+                        if !matches!(tz_val, JsValue::Undefined) {
+                            return Completion::Throw(interp.create_type_error(
+                                "ZonedDateTime toLocaleString does not accept a timeZone option",
+                            ));
+                        }
+                    }
+                    // Inject timeZone from ZDT into options
+                    let effective_opts = {
                         let opts_obj = interp.create_object();
                         if let Some(ref op) = interp.object_prototype {
                             opts_obj.borrow_mut().prototype = Some(op.clone());
                         }
+                        // Copy properties from user options if present
+                        if let JsValue::Object(ref o) = options_arg {
+                            let keys: Vec<String> = interp.get_object(o.id)
+                                .map(|rc| rc.borrow().properties.keys().cloned().collect())
+                                .unwrap_or_default();
+                            for key in keys {
+                                let val = match interp.get_object_property(o.id, &key, &options_arg) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => JsValue::Undefined,
+                                };
+                                opts_obj.borrow_mut().insert_property(
+                                    key,
+                                    crate::interpreter::types::PropertyDescriptor::data(
+                                        val, true, true, true,
+                                    ),
+                                );
+                            }
+                        }
+                        // Set timeZone from ZDT
                         opts_obj.borrow_mut().insert_property(
                             "timeZone".to_string(),
                             crate::interpreter::types::PropertyDescriptor::data(
                                 JsValue::String(JsString::from_str(&tz)), true, true, true,
                             ),
                         );
+                        // If no explicit date/time components/styles, set ZDT defaults
+                        // (timeZoneName alone doesn't count as explicit)
+                        let has_explicit = {
+                            let b = opts_obj.borrow();
+                            ["year", "month", "day", "weekday", "hour", "minute",
+                             "second", "era", "dayPeriod",
+                             "fractionalSecondDigits", "dateStyle", "timeStyle"]
+                                .iter().any(|k| {
+                                    b.properties.get(*k).is_some_and(|pd| {
+                                        !matches!(pd.value, Some(JsValue::Undefined) | None)
+                                    })
+                                })
+                        };
+                        if !has_explicit {
+                            for (k, v) in [
+                                ("year", "numeric"), ("month", "numeric"), ("day", "numeric"),
+                                ("hour", "numeric"), ("minute", "numeric"), ("second", "numeric"),
+                                ("timeZoneName", "short"),
+                            ] {
+                                opts_obj.borrow_mut().insert_property(
+                                    k.to_string(),
+                                    crate::interpreter::types::PropertyDescriptor::data(
+                                        JsValue::String(JsString::from_str(v)), true, true, true,
+                                    ),
+                                );
+                            }
+                        }
                         let oid = opts_obj.borrow().id.unwrap();
                         JsValue::Object(crate::types::JsObject { id: oid })
-                    } else {
-                        options_arg
                     };
                     let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, effective_opts]) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => return Completion::Normal(JsValue::Undefined),
                     };
-                    // Pass epoch ms as a Number, not the ZDT itself
+                    // Convert ZDT to epoch ms for DTF.format()
                     let epoch_ms = {
                         use num_bigint::BigInt;
                         let ms_bigint = &ns / BigInt::from(1_000_000i64);
