@@ -1647,14 +1647,26 @@ impl Interpreter {
         let to_locale_fn = self.create_function(JsFunction::native(
             "toLocaleString".to_string(),
             0,
-            |interp, this, _args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+            |interp, this, args| {
+                let (_y, _m, _d, _h, _mi, _s, _ms, _us, _ns, _cal) = match get_pdt_fields(interp, &this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let result =
-                    format_plain_date_time(y, m, d, h, mi, s, ms, us, ns, &cal, "auto", None);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                    Some(v) => v,
+                    None => {
+                        let result = format_plain_date_time(_y, _m, _d, _h, _mi, _s, _ms, _us, _ns, &_cal, "auto", None);
+                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                    }
+                };
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => return Completion::Normal(JsValue::Undefined),
+                };
+                super::temporal_format_with_dtf(interp, &dtf_instance, &this)
             },
         ));
         proto

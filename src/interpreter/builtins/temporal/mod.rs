@@ -10,6 +10,136 @@ pub(crate) mod zoned_date_time;
 
 use super::*;
 
+/// Which default date/time components to use when constructing DTF from toLocaleString.
+pub(crate) enum TemporalDefaults {
+    /// date + time (Instant, PlainDateTime, ZonedDateTime)
+    All,
+    /// date only (PlainDate)
+    Date,
+    /// time only (PlainTime)
+    Time,
+    /// year + month only (PlainYearMonth)
+    YearMonth,
+    /// month + day only (PlainMonthDay)
+    MonthDay,
+}
+
+/// Check if options object has any explicit date/time formatting properties.
+fn has_datetime_options(interp: &mut Interpreter, options: &JsValue) -> bool {
+    if matches!(options, JsValue::Undefined | JsValue::Null) {
+        return false;
+    }
+    if let JsValue::Object(o) = options {
+        for key in &[
+            "dateStyle", "timeStyle", "year", "month", "day", "weekday",
+            "hour", "minute", "second", "fractionalSecondDigits", "dayPeriod",
+            "timeZoneName", "era",
+        ] {
+            if let Completion::Normal(v) = interp.get_object_property(o.id, key, options) {
+                if !matches!(v, JsValue::Undefined) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Construct a DateTimeFormat with Temporal-type-appropriate defaults.
+/// If user didn't specify any date/time options, add defaults based on the Temporal type.
+pub(crate) fn temporal_construct_dtf(
+    interp: &mut Interpreter,
+    dtf_ctor: &JsValue,
+    locales: &JsValue,
+    options: &JsValue,
+    defaults: TemporalDefaults,
+) -> Completion {
+    if has_datetime_options(interp, options) {
+        return interp.construct(dtf_ctor, &[locales.clone(), options.clone()]);
+    }
+
+    // Create options object with appropriate defaults
+    let opts_obj = interp.create_object();
+    if let Some(ref op) = interp.object_prototype {
+        opts_obj.borrow_mut().prototype = Some(op.clone());
+    }
+
+    // Copy any existing properties from user options (e.g. timeZone)
+    if let JsValue::Object(o) = options {
+        if let Some(obj) = interp.get_object(o.id) {
+            let keys: Vec<String> = obj.borrow().property_order.clone();
+            for key in keys {
+                if let Completion::Normal(v) = interp.get_object_property(o.id, &key, options) {
+                    if !matches!(v, JsValue::Undefined) {
+                        opts_obj.borrow_mut().insert_property(
+                            key,
+                            PropertyDescriptor::data(v, true, true, true),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Add type-specific defaults
+    let numeric = JsValue::String(JsString::from_str("numeric"));
+    let two_digit = JsValue::String(JsString::from_str("2-digit"));
+    match defaults {
+        TemporalDefaults::All => {
+            opts_obj.borrow_mut().insert_property("year".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("month".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("day".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("hour".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("minute".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("second".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
+        }
+        TemporalDefaults::Date => {
+            opts_obj.borrow_mut().insert_property("year".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("month".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("day".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+        }
+        TemporalDefaults::Time => {
+            opts_obj.borrow_mut().insert_property("hour".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("minute".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("second".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
+        }
+        TemporalDefaults::YearMonth => {
+            opts_obj.borrow_mut().insert_property("year".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("month".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+        }
+        TemporalDefaults::MonthDay => {
+            opts_obj.borrow_mut().insert_property("month".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property("day".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+        }
+    }
+
+    let opts_id = opts_obj.borrow().id.unwrap();
+    let opts_val = JsValue::Object(crate::types::JsObject { id: opts_id });
+    interp.construct(dtf_ctor, &[locales.clone(), opts_val])
+}
+
+/// Call DTF.format(temporal_value) on a constructed DTF instance
+pub(crate) fn temporal_format_with_dtf(
+    interp: &mut Interpreter,
+    dtf_instance: &JsValue,
+    temporal_this: &JsValue,
+) -> Completion {
+    if let JsValue::Object(dtf_obj) = dtf_instance {
+        let format_val = match interp.get_object_property(dtf_obj.id, "format", dtf_instance) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Completion::Throw(e),
+            _ => JsValue::Undefined,
+        };
+        match interp.call_function(&format_val, dtf_instance, &[temporal_this.clone()]) {
+            Completion::Normal(v) => Completion::Normal(v),
+            Completion::Throw(e) => Completion::Throw(e),
+            _ => Completion::Normal(JsValue::Undefined),
+        }
+    } else {
+        Completion::Normal(JsValue::Undefined)
+    }
+}
+
 /// ASCII-only lowercase for calendar IDs per spec (ToTemporalCalendarSlotValue).
 /// Only lowercase ASCII A-Z; non-ASCII characters are NOT lowercased.
 pub(crate) fn ascii_lowercase(s: &str) -> String {

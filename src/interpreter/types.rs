@@ -805,6 +805,7 @@ pub(crate) enum IntlData {
         time_zone_name: Option<String>,
         date_style: Option<String>,
         time_style: Option<String>,
+        has_explicit_components: bool,
     },
 }
 

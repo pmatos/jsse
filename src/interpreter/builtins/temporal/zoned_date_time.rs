@@ -1451,14 +1451,26 @@ impl Interpreter {
             let method = self.create_function(JsFunction::native(
                 "toLocaleString".to_string(),
                 0,
-                |interp, this, _args| {
+                |interp, this, args| {
                     let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let result =
-                        zdt_to_string(&ns, &tz, &cal, "auto", "auto", "auto", None, "trunc");
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                        Some(v) => v,
+                        None => {
+                            let result = zdt_to_string(&ns, &tz, &cal, "auto", "auto", "auto", None, "trunc");
+                            return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                        }
+                    };
+                    let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => return Completion::Normal(JsValue::Undefined),
+                    };
+                    super::temporal_format_with_dtf(interp, &dtf_instance, &this)
                 },
             ));
             proto

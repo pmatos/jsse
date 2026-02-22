@@ -95,7 +95,7 @@ impl Interpreter {
                 worklist.push(id);
             }
         }
-        for ctor in [&self.intl_number_format_ctor, &self.intl_date_time_format_ctor] {
+        for ctor in [&self.intl_number_format_ctor, &self.intl_date_time_format_ctor, &self.intl_duration_format_ctor] {
             if let Some(JsValue::Object(o)) = ctor {
                 worklist.push(o.id);
             }

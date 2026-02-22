@@ -490,13 +490,26 @@ impl Interpreter {
         let to_locale_fn = self.create_function(JsFunction::native(
             "toLocaleString".to_string(),
             0,
-            |interp, this, _args| {
-                let ns = match get_instant_ns(interp, &this) {
+            |interp, this, args| {
+                let _ns = match get_instant_ns(interp, &this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let result = instant_to_string_with_tz(&ns, "UTC", 0, None, false);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                    Some(v) => v,
+                    None => {
+                        let result = instant_to_string_with_tz(&_ns, "UTC", 0, None, false);
+                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                    }
+                };
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => return Completion::Normal(JsValue::Undefined),
+                };
+                super::temporal_format_with_dtf(interp, &dtf_instance, &this)
             },
         ));
         proto

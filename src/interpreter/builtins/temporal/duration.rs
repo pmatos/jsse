@@ -1457,18 +1457,48 @@ impl Interpreter {
         let to_locale_string_fn = self.create_function(JsFunction::native(
             "toLocaleString".to_string(),
             0,
-            |interp, this, _args| {
+            |interp, this, args| {
                 let fields = match get_duration_fields(interp, &this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
-                let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                let result =
-                    match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
+                let df_val = match interp.intl_duration_format_ctor.clone() {
+                    Some(v) => v,
+                    None => {
+                        let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
+                        let result = match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
+                            Ok(s) => s,
+                            Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                        };
+                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                    }
+                };
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let df_instance = match interp.construct(&df_val, &[locales_arg, options_arg]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => return Completion::Normal(JsValue::Undefined),
+                };
+                if let JsValue::Object(df_obj) = &df_instance {
+                    let format_val = match interp.get_object_property(df_obj.id, "format", &df_instance) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => JsValue::Undefined,
+                    };
+                    match interp.call_function(&format_val, &df_instance, &[this.clone()]) {
+                        Completion::Normal(v) => Completion::Normal(v),
+                        Completion::Throw(e) => Completion::Throw(e),
+                        _ => Completion::Normal(JsValue::Undefined),
+                    }
+                } else {
+                    let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
+                    let result = match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
                         Ok(s) => s,
                         Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
                     };
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                }
             },
         ));
         proto

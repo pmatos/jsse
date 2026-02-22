@@ -703,6 +703,8 @@ struct DtfOptions {
     time_zone_name: Option<String>,
     date_style: Option<String>,
     time_style: Option<String>,
+    // True if user explicitly set any date/time component options (not DTF defaults)
+    has_explicit_components: bool,
 }
 
 fn locale_default_hour12(locale: &str) -> &'static str {
@@ -2561,6 +2563,7 @@ fn extract_dtf_data(
                 ref time_zone_name,
                 ref date_style,
                 ref time_style,
+                has_explicit_components,
             }) = b.intl_data
             {
                 return Ok(DtfOptions {
@@ -2583,6 +2586,7 @@ fn extract_dtf_data(
                     time_zone_name: time_zone_name.clone(),
                     date_style: date_style.clone(),
                     time_style: time_style.clone(),
+                    has_explicit_components,
                 });
             }
         }
@@ -2611,12 +2615,160 @@ fn resolve_date_value(interp: &mut Interpreter, date_arg: &JsValue) -> Result<f6
     if matches!(date_arg, JsValue::Undefined) {
         return Ok(now_ms().floor());
     }
+    // Check if it's a Temporal object
+    if let JsValue::Object(o) = date_arg {
+        if let Some(obj) = interp.get_object(o.id) {
+            let temporal = obj.borrow().temporal_data.clone();
+            if let Some(td) = temporal {
+                return temporal_to_epoch_ms(&td);
+            }
+        }
+    }
     let num = interp.to_number_value(date_arg)?;
     let clipped = time_clip(num);
     if clipped.is_nan() {
         return Err(interp.create_range_error("Invalid time value"));
     }
     Ok(clipped)
+}
+
+#[derive(Clone, Copy)]
+enum TemporalType {
+    Instant,
+    ZonedDateTime,
+    PlainDate,
+    PlainTime,
+    PlainDateTime,
+    PlainYearMonth,
+    PlainMonthDay,
+}
+
+fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalType> {
+    if let JsValue::Object(o) = val {
+        if let Some(obj) = interp.get_object(o.id) {
+            let td = obj.borrow().temporal_data.clone();
+            return match td {
+                Some(TemporalData::Instant { .. }) => Some(TemporalType::Instant),
+                Some(TemporalData::ZonedDateTime { .. }) => Some(TemporalType::ZonedDateTime),
+                Some(TemporalData::PlainDate { .. }) => Some(TemporalType::PlainDate),
+                Some(TemporalData::PlainTime { .. }) => Some(TemporalType::PlainTime),
+                Some(TemporalData::PlainDateTime { .. }) => Some(TemporalType::PlainDateTime),
+                Some(TemporalData::PlainYearMonth { .. }) => Some(TemporalType::PlainYearMonth),
+                Some(TemporalData::PlainMonthDay { .. }) => Some(TemporalType::PlainMonthDay),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+fn has_explicit_date_time_opts(opts: &DtfOptions) -> bool {
+    opts.has_explicit_components
+}
+
+fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
+    if has_explicit_date_time_opts(opts) {
+        return opts.clone();
+    }
+    let mut adjusted = opts.clone();
+    match tt {
+        TemporalType::Instant | TemporalType::PlainDateTime | TemporalType::ZonedDateTime => {
+            adjusted.year = Some("numeric".to_string());
+            adjusted.month = Some("numeric".to_string());
+            adjusted.day = Some("numeric".to_string());
+            adjusted.hour = Some("2-digit".to_string());
+            adjusted.minute = Some("2-digit".to_string());
+            adjusted.second = Some("2-digit".to_string());
+        }
+        TemporalType::PlainDate => {
+            adjusted.year = Some("numeric".to_string());
+            adjusted.month = Some("numeric".to_string());
+            adjusted.day = Some("numeric".to_string());
+        }
+        TemporalType::PlainTime => {
+            adjusted.hour = Some("2-digit".to_string());
+            adjusted.minute = Some("2-digit".to_string());
+            adjusted.second = Some("2-digit".to_string());
+        }
+        TemporalType::PlainYearMonth => {
+            adjusted.year = Some("numeric".to_string());
+            adjusted.month = Some("numeric".to_string());
+        }
+        TemporalType::PlainMonthDay => {
+            adjusted.month = Some("numeric".to_string());
+            adjusted.day = Some("numeric".to_string());
+        }
+    }
+    adjusted
+}
+
+fn bigint_to_epoch_ms(epoch_nanoseconds: &num_bigint::BigInt) -> f64 {
+    let ms_bigint = epoch_nanoseconds / num_bigint::BigInt::from(1_000_000i64);
+    ms_bigint.to_string().parse::<f64>().unwrap_or(f64::NAN)
+}
+
+fn temporal_to_epoch_ms(td: &TemporalData) -> Result<f64, JsValue> {
+    match td {
+        TemporalData::Instant { epoch_nanoseconds } => {
+            Ok(bigint_to_epoch_ms(epoch_nanoseconds))
+        }
+        TemporalData::ZonedDateTime { epoch_nanoseconds, .. } => {
+            Ok(bigint_to_epoch_ms(epoch_nanoseconds))
+        }
+        TemporalData::PlainDate { iso_year, iso_month, iso_day, .. } => {
+            let ms = date_fields_to_epoch_ms(*iso_year, *iso_month, *iso_day, 0, 0, 0, 0);
+            Ok(ms)
+        }
+        TemporalData::PlainTime { hour, minute, second, millisecond, .. } => {
+            // Use epoch date 1970-01-01
+            let ms = date_fields_to_epoch_ms(1970, 1, 1, *hour as u8, *minute as u8, *second as u8, *millisecond as u16);
+            Ok(ms)
+        }
+        TemporalData::PlainDateTime { iso_year, iso_month, iso_day, hour, minute, second, millisecond, .. } => {
+            let ms = date_fields_to_epoch_ms(*iso_year, *iso_month, *iso_day, *hour, *minute, *second, *millisecond);
+            Ok(ms)
+        }
+        TemporalData::PlainYearMonth { iso_year, iso_month, reference_iso_day, .. } => {
+            let ms = date_fields_to_epoch_ms(*iso_year, *iso_month, *reference_iso_day, 0, 0, 0, 0);
+            Ok(ms)
+        }
+        TemporalData::PlainMonthDay { iso_month, iso_day, reference_iso_year, .. } => {
+            let ms = date_fields_to_epoch_ms(*reference_iso_year, *iso_month, *iso_day, 0, 0, 0, 0);
+            Ok(ms)
+        }
+        TemporalData::Duration { .. } => {
+            Err(JsValue::Undefined) // Duration is not a date type
+        }
+    }
+}
+
+fn date_fields_to_epoch_ms(year: i32, month: u8, day: u8, hour: u8, minute: u8, second: u8, millisecond: u16) -> f64 {
+    // Compute UTC epoch milliseconds from ISO date/time fields
+    let y = year as f64;
+    let m = month as f64;
+    let d = day as f64;
+    // Using the same algorithm as Date.UTC
+    let ym = y + (m - 1.0).div_euclid(12.0).floor();
+    let mn = ((m - 1.0) % 12.0 + 12.0) % 12.0;
+    // Days from epoch to year
+    let yd = 365.0 * (ym - 1970.0) + ((ym - 1969.0) / 4.0).floor()
+        - ((ym - 1901.0) / 100.0).floor()
+        + ((ym - 1601.0) / 400.0).floor();
+    // Days in months for the target month (cumulative)
+    let month_days: [f64; 12] = [0.0, 31.0, 59.0, 90.0, 120.0, 151.0, 181.0, 212.0, 243.0, 273.0, 304.0, 334.0];
+    let md = month_days[mn as usize];
+    // Leap day adjustment
+    let leap = if mn >= 2.0 && (ym % 4.0 == 0.0 && (ym % 100.0 != 0.0 || ym % 400.0 == 0.0)) {
+        1.0
+    } else {
+        0.0
+    };
+    let total_days = yd + md + leap + (d - 1.0);
+    total_days * 86_400_000.0
+        + hour as f64 * 3_600_000.0
+        + minute as f64 * 60_000.0
+        + second as f64 * 1_000.0
+        + millisecond as f64
 }
 
 impl Interpreter {
@@ -2690,6 +2842,7 @@ impl Interpreter {
                                 ref time_zone_name,
                                 ref date_style,
                                 ref time_style,
+                                has_explicit_components,
                             }) = b.intl_data
                             {
                                 DtfOptions {
@@ -2712,6 +2865,7 @@ impl Interpreter {
                                     time_zone_name: time_zone_name.clone(),
                                     date_style: date_style.clone(),
                                     time_style: time_style.clone(),
+                                    has_explicit_components,
                                 }
                             } else {
                                 return Completion::Throw(interp.create_type_error(
@@ -2731,11 +2885,17 @@ impl Interpreter {
                         move |interp2, _this2, args2| {
                             let date_arg =
                                 args2.first().cloned().unwrap_or(JsValue::Undefined);
+                            let temporal_type = detect_temporal_type(interp2, &date_arg);
                             let ms = match resolve_date_value(interp2, &date_arg) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            let result = format_with_options(ms, &opts);
+                            let effective_opts = if let Some(tt) = temporal_type {
+                                adjust_opts_for_temporal(&opts, tt)
+                            } else {
+                                opts.clone()
+                            };
+                            let result = format_with_options(ms, &effective_opts);
                             Completion::Normal(JsValue::String(JsString::from_str(&result)))
                         },
                     ));
@@ -2770,12 +2930,18 @@ impl Interpreter {
                 };
 
                 let date_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let temporal_type = detect_temporal_type(interp, &date_arg);
                 let ms = match resolve_date_value(interp, &date_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
+                let effective_opts = if let Some(tt) = temporal_type {
+                    adjust_opts_for_temporal(&opts, tt)
+                } else {
+                    opts
+                };
 
-                let parts = format_to_parts_with_options(ms, &opts);
+                let parts = format_to_parts_with_options(ms, &effective_opts);
 
                 let js_parts: Vec<JsValue> = parts
                     .into_iter()
@@ -2833,29 +2999,22 @@ impl Interpreter {
                     );
                 }
 
-                let start_num = match interp.to_number_value(&start_arg) {
+                let temporal_type = detect_temporal_type(interp, &start_arg);
+                let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let end_num = match interp.to_number_value(&end_arg) {
+                let end_ms = match resolve_date_value(interp, &end_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let start_ms = time_clip(start_num);
-                if start_ms.is_nan() {
-                    return Completion::Throw(
-                        interp.create_range_error("Invalid time value"),
-                    );
-                }
-                let end_ms = time_clip(end_num);
-                if end_ms.is_nan() {
-                    return Completion::Throw(
-                        interp.create_range_error("Invalid time value"),
-                    );
-                }
-
-                let result = format_range_with_options(start_ms, end_ms, &opts);
+                let effective_opts = if let Some(tt) = temporal_type {
+                    adjust_opts_for_temporal(&opts, tt)
+                } else {
+                    opts
+                };
+                let result = format_range_with_options(start_ms, end_ms, &effective_opts);
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -2882,29 +3041,22 @@ impl Interpreter {
                     );
                 }
 
-                let start_num = match interp.to_number_value(&start_arg) {
+                let temporal_type = detect_temporal_type(interp, &start_arg);
+                let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let end_num = match interp.to_number_value(&end_arg) {
+                let end_ms = match resolve_date_value(interp, &end_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let start_ms = time_clip(start_num);
-                if start_ms.is_nan() {
-                    return Completion::Throw(
-                        interp.create_range_error("Invalid time value"),
-                    );
-                }
-                let end_ms = time_clip(end_num);
-                if end_ms.is_nan() {
-                    return Completion::Throw(
-                        interp.create_range_error("Invalid time value"),
-                    );
-                }
-
-                let all_parts = format_range_to_parts_with_options(start_ms, end_ms, &opts);
+                let effective_opts = if let Some(tt) = temporal_type {
+                    adjust_opts_for_temporal(&opts, tt)
+                } else {
+                    opts
+                };
+                let all_parts = format_range_to_parts_with_options(start_ms, end_ms, &effective_opts);
 
                 let js_parts: Vec<JsValue> = all_parts
                     .into_iter()
@@ -3456,6 +3608,7 @@ impl Interpreter {
                     time_zone_name: tz_name,
                     date_style,
                     time_style,
+                    has_explicit_components: has_component || has_style,
                 });
 
                 let obj_id = obj.borrow().id.unwrap();

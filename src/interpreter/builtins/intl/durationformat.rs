@@ -1670,6 +1670,9 @@ impl Interpreter {
             PropertyDescriptor::data(duration_format_ctor.clone(), true, false, true),
         );
 
+        // Save built-in constructor for internal use (e.g. Duration.toLocaleString)
+        self.intl_duration_format_ctor = Some(duration_format_ctor.clone());
+
         // Register Intl.DurationFormat on the Intl namespace
         intl_obj.borrow_mut().insert_property(
             "DurationFormat".to_string(),
