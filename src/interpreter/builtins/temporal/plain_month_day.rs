@@ -447,7 +447,7 @@ impl Interpreter {
                     }
                     create_plain_month_day_result(interp, new_m, new_d, ry, &cal)
                 } else {
-                    let cm = new_m.max(1).min(12);
+                    let cm = new_m.clamp(1, 12);
                     let cd = new_d.max(1).min(iso_days_in_month(ry, cm));
                     create_plain_month_day_result(interp, cm, cd, ry, &cal)
                 }

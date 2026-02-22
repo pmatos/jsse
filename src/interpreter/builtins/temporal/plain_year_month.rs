@@ -150,7 +150,7 @@ fn to_temporal_plain_year_month_with_overflow(
 ) -> Result<(i32, u8, u8, String), Completion> {
     let (y, m, rd, cal) = to_temporal_plain_year_month(interp, item)?;
     if overflow == "constrain" {
-        let cm = m.max(1).min(12);
+        let cm = m.clamp(1, 12);
         Ok((y, cm, rd, cal))
     } else {
         if !(1..=12).contains(&m) {
@@ -482,7 +482,7 @@ impl Interpreter {
                     }
                     create_plain_year_month_result(interp, new_y, new_m, rd, &cal)
                 } else {
-                    let cm = new_m.max(1).min(12);
+                    let cm = new_m.clamp(1, 12);
                     create_plain_year_month_result(interp, new_y, cm, rd, &cal)
                 }
             },
@@ -539,7 +539,7 @@ impl Interpreter {
                     }
                     let (ry, rm, _) =
                         add_iso_date(y, m, rd, (dur.0 as i32) * sign, (dur.1 as i32) * sign, 0, 0);
-                    let cm = rm.max(1).min(12);
+                    let cm = rm.clamp(1, 12);
                     let final_rd = rd.min(iso_days_in_month(ry, cm));
                     if !super::iso_date_within_limits(ry, cm, final_rd) {
                         return Completion::Throw(

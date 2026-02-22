@@ -462,7 +462,7 @@ impl Interpreter {
                     }
                     create_plain_date_result(interp, new_y, new_m, new_d, &cal)
                 } else {
-                    let cm = new_m.max(1).min(12);
+                    let cm = new_m.clamp(1, 12);
                     let cd = new_d.max(1).min(iso_days_in_month(new_y, cm));
                     create_plain_date_result(interp, new_y, cm, cd, &cal)
                 }
@@ -549,7 +549,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    m2 = m2.max(1).min(12);
+                    m2 = m2.clamp(1, 12);
                     d2 = d2.max(1).min(iso_days_in_month(y2, m2));
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     let date_units: &[&str] = &["year", "month", "week", "day"];
@@ -671,7 +671,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                m2 = m2.max(1).min(12);
+                m2 = m2.clamp(1, 12);
                 d2 = d2.max(1).min(iso_days_in_month(y2, m2));
                 let eq = y1 == y2 && m1 == m2 && d1 == d2 && c1 == c2;
                 Completion::Normal(JsValue::Boolean(eq))
@@ -1167,7 +1167,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                m1 = m1.max(1).min(12);
+                m1 = m1.clamp(1, 12);
                 d1 = d1.max(1).min(iso_days_in_month(y1, m1));
                 let (y2, mut m2, mut d2, _) = match to_temporal_plain_date(
                     interp,
@@ -1176,7 +1176,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                m2 = m2.max(1).min(12);
+                m2 = m2.clamp(1, 12);
                 d2 = d2.max(1).min(iso_days_in_month(y2, m2));
                 let result = if y1 != y2 {
                     if y1 < y2 { -1.0 } else { 1.0 }
@@ -1621,7 +1621,7 @@ pub(super) fn month_code_to_number_pub(mc: &str) -> Option<u8> {
 
 fn constrain_or_reject_date(y: i32, mut m: u8, mut d: u8, overflow: &str) -> (i32, u8, u8) {
     if overflow == "constrain" {
-        m = m.max(1).min(12);
+        m = m.clamp(1, 12);
         let dim = iso_days_in_month(y, m);
         d = d.max(1).min(dim);
     }

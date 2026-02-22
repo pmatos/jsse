@@ -141,12 +141,12 @@ impl Interpreter {
                         new_ns as u16,
                     )
                 } else {
-                    let ch = (new_h.max(0.0).min(23.0)) as u8;
-                    let cm = (new_m.max(0.0).min(59.0)) as u8;
-                    let cs = (new_s.max(0.0).min(59.0)) as u8;
-                    let cms = (new_ms.max(0.0).min(999.0)) as u16;
-                    let cus = (new_us.max(0.0).min(999.0)) as u16;
-                    let cns = (new_ns.max(0.0).min(999.0)) as u16;
+                    let ch = (new_h.clamp(0.0, 23.0)) as u8;
+                    let cm = (new_m.clamp(0.0, 59.0)) as u8;
+                    let cs = (new_s.clamp(0.0, 59.0)) as u8;
+                    let cms = (new_ms.clamp(0.0, 999.0)) as u16;
+                    let cus = (new_us.clamp(0.0, 999.0)) as u16;
+                    let cns = (new_ns.clamp(0.0, 999.0)) as u16;
                     create_plain_time_result(interp, ch, cm, cs, cms, cus, cns)
                 }
             },

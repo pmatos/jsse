@@ -378,7 +378,7 @@ fn apply_pdt_overflow(
         }
         Ok((y, month, d, h, mi, s, ms, us, ns, cal))
     } else {
-        let month = month.max(1).min(12);
+        let month = month.clamp(1, 12);
         let dim = iso_days_in_month(y, month);
         let d = d.max(1).min(dim);
         let h = h.min(23);
@@ -815,14 +815,14 @@ impl Interpreter {
                         interp, new_y, new_m, new_d, ch, cmi, cs, cms, cus, cns, &cal,
                     )
                 } else {
-                    let cm = new_m.max(1).min(12);
+                    let cm = new_m.clamp(1, 12);
                     let cd = new_d.max(1).min(iso_days_in_month(new_y, cm));
-                    let ch = (new_h.max(0.0).min(23.0)) as u8;
-                    let cmi = (new_mi.max(0.0).min(59.0)) as u8;
-                    let cs = (new_s.max(0.0).min(59.0)) as u8;
-                    let cms = (new_ms.max(0.0).min(999.0)) as u16;
-                    let cus = (new_us.max(0.0).min(999.0)) as u16;
-                    let cns = (new_ns.max(0.0).min(999.0)) as u16;
+                    let ch = (new_h.clamp(0.0, 23.0)) as u8;
+                    let cmi = (new_mi.clamp(0.0, 59.0)) as u8;
+                    let cs = (new_s.clamp(0.0, 59.0)) as u8;
+                    let cms = (new_ms.clamp(0.0, 999.0)) as u16;
+                    let cus = (new_us.clamp(0.0, 999.0)) as u16;
+                    let cns = (new_ns.clamp(0.0, 999.0)) as u16;
                     if !iso_date_time_within_limits(new_y, cm, cd, ch, cmi, cs, cms, cus, cns) {
                         return Completion::Throw(
                             interp.create_range_error("DateTime outside valid range"),
