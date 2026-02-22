@@ -1722,6 +1722,9 @@ impl Interpreter {
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => return Completion::Normal(JsValue::Undefined),
                     };
+                    if let Err(e) = super::check_calendar_mismatch(interp, &dtf_instance, &_cal, true) {
+                        return Completion::Throw(e);
+                    }
                     // Convert ZDT to epoch ms for DTF.format()
                     let epoch_ms = {
                         use num_bigint::BigInt;

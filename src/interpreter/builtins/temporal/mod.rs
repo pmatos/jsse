@@ -156,6 +156,48 @@ pub(crate) fn check_locale_string_style_conflict(
     Ok(())
 }
 
+/// Check calendar mismatch: if the Temporal object has a non-ISO calendar,
+/// the DTF's calendar must match. Call after constructing the DTF.
+pub(crate) fn check_calendar_mismatch(
+    interp: &mut Interpreter,
+    dtf_instance: &JsValue,
+    temporal_calendar: &str,
+    allow_iso: bool,
+) -> Result<(), JsValue> {
+    if allow_iso && temporal_calendar == "iso8601" {
+        return Ok(());
+    }
+    if let JsValue::Object(dtf_obj) = dtf_instance {
+        let resolved_fn = match interp.get_object_property(dtf_obj.id, "resolvedOptions", dtf_instance) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(()),
+        };
+        let resolved = match interp.call_function(&resolved_fn, dtf_instance, &[]) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Ok(()),
+        };
+        if let JsValue::Object(ro) = &resolved {
+            let dtf_cal = match interp.get_object_property(ro.id, "calendar", &resolved) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            if let JsValue::String(ref s) = dtf_cal {
+                let dtf_cal_str = s.to_string();
+                if dtf_cal_str != temporal_calendar {
+                    return Err(interp.create_range_error(&format!(
+                        "calendar mismatch: Temporal object uses '{}' but locale uses '{}'",
+                        temporal_calendar, dtf_cal_str
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Call DTF.format(temporal_value) on a constructed DTF instance
 pub(crate) fn temporal_format_with_dtf(
     interp: &mut Interpreter,

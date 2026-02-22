@@ -671,6 +671,9 @@ impl Interpreter {
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => return Completion::Normal(JsValue::Undefined),
                 };
+                if let Err(e) = super::check_calendar_mismatch(interp, &dtf_instance, &cal, false) {
+                    return Completion::Throw(e);
+                }
                 super::temporal_format_with_dtf(interp, &dtf_instance, &this)
             },
         ));
