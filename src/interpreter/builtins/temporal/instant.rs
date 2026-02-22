@@ -455,10 +455,15 @@ impl Interpreter {
                     frac_digits.map(|d| d as i32)
                 };
 
+                let actual_offset = if tz_id != "UTC" && tz_id.contains('/') {
+                    super::zoned_date_time::get_tz_offset_ns_pub(&tz_id, &rounded_ns)
+                } else {
+                    tz_offset_ns
+                };
                 let result = instant_to_string_with_tz(
                     &rounded_ns,
                     &tz_id,
-                    tz_offset_ns,
+                    actual_offset,
                     precision,
                     tz_explicit,
                 );
