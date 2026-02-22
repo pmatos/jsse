@@ -2640,6 +2640,7 @@ fn round_i128_to_increment(value: i128, increment: i128, mode: &str) -> i128 {
                 truncated
             }
         }
+        #[allow(clippy::if_same_then_else)]
         "halfEven" => {
             if remainder * 2 > increment {
                 expanded

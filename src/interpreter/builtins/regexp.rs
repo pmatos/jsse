@@ -644,7 +644,7 @@ impl VClassSet {
         s.normalize_ranges();
         s.dedup_strings();
         // Sort strings longest first for greedy matching
-        s.strings.sort_by(|a, b| b.len().cmp(&a.len()));
+        s.strings.sort_by_key(|b| std::cmp::Reverse(b.len()));
 
         let has_ranges = !s.ranges.is_empty();
         let has_strings = !s.strings.is_empty();

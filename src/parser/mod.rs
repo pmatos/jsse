@@ -341,13 +341,10 @@ impl<'a> Parser<'a> {
                 }
             }
             Token::IdentifierWithEscape(name) => {
-                // Escaped identifiers can still be reserved words - reject them
-                if Self::is_reserved_identifier(name, self.strict) {
-                    None
-                } else if name == "yield" && (self.in_generator || self.strict) {
-                    None
-                } else if name == "await"
-                    && (self.in_async || self.in_static_block || self.is_module)
+                if Self::is_reserved_identifier(name, self.strict)
+                    || (name == "yield" && (self.in_generator || self.strict))
+                    || (name == "await"
+                        && (self.in_async || self.in_static_block || self.is_module))
                 {
                     None
                 } else {

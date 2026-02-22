@@ -1905,9 +1905,7 @@ fn to_uint8(v: &JsValue) -> u8 {
 }
 fn to_uint8_clamped(v: &JsValue) -> u8 {
     let n = to_number(v);
-    if n.is_nan() {
-        0
-    } else if n <= 0.0 {
+    if n.is_nan() || n <= 0.0 {
         0
     } else if n >= 255.0 {
         255

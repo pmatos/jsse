@@ -708,14 +708,14 @@ fn match_rtl_all(
     atoms: &[LbAtom],
     input: &[char],
     end_pos: usize,
-    captures: &mut Vec<Option<(usize, usize)>>,
+    captures: &mut [Option<(usize, usize)>],
     ext_caps: &[Option<String>],
     flags: &LbFlags,
     full_input: &[char],
     full_offset: usize,
 ) -> Vec<(usize, Vec<Option<(usize, usize)>>)> {
     if atoms.is_empty() {
-        return vec![(end_pos, captures.clone())];
+        return vec![(end_pos, captures.to_vec())];
     }
 
     let last = &atoms[atoms.len() - 1];
@@ -732,10 +732,10 @@ fn match_rtl_all(
             let max_count = max.unwrap_or(end_pos as u32 + 1);
             let mut positions: Vec<(usize, Vec<Option<(usize, usize)>>)> = Vec::new();
             if *min == 0 {
-                positions.push((end_pos, captures.clone()));
+                positions.push((end_pos, captures.to_vec()));
             }
             let mut cur_pos = end_pos;
-            let mut cur_caps = captures.clone();
+            let mut cur_caps = captures.to_vec();
             for count in 1..=max_count {
                 let mut iter_caps = cur_caps.clone();
                 if let Some(new_pos) = match_single_atom_rtl(
@@ -780,7 +780,7 @@ fn match_rtl_all(
         }
         LbAtom::Alternation(alternatives) => {
             for alt in alternatives {
-                let mut alt_caps = captures.clone();
+                let mut alt_caps = captures.to_vec();
                 let alt_results = match_rtl_all(
                     alt,
                     input,
@@ -809,7 +809,7 @@ fn match_rtl_all(
         }
         _ => {
             // For simple atoms, just try matching and recurse
-            let mut try_caps = captures.clone();
+            let mut try_caps = captures.to_vec();
             if let Some(new_pos) = match_rtl(
                 std::slice::from_ref(last),
                 input,
@@ -1303,8 +1303,8 @@ fn get_backref_text_ltr(
 // ============================================================================
 
 fn is_suffix_position(chars: &[char], pos: usize) -> bool {
-    for i in pos..chars.len() {
-        match chars[i] {
+    for ch in &chars[pos..] {
+        match ch {
             '$' | ')' => continue,
             _ => return false,
         }

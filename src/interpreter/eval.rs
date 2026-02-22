@@ -328,7 +328,7 @@ impl Interpreter {
             Expression::Array(elements) => self.eval_array_literal(elements, env),
             Expression::Object(props) => self.eval_object_literal(props, env),
             Expression::Function(f) => {
-                let closure_env = if f.name.is_some() {
+                let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
                         bindings: HashMap::new(),
                         parent: Some(env.clone()),
@@ -345,7 +345,7 @@ impl Interpreter {
                     }));
                     func_env
                         .borrow_mut()
-                        .declare(f.name.as_ref().unwrap(), BindingKind::FunctionName);
+                        .declare(name, BindingKind::FunctionName);
                     func_env
                 } else {
                     env.clone()
@@ -1488,8 +1488,8 @@ impl Interpreter {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_primitive(
-        #[allow(clippy::wrong_self_convention)]
         &mut self,
         val: &JsValue,
         preferred_type: &str,
@@ -9168,7 +9168,7 @@ impl Interpreter {
                         "@@hasInstance is not callable",
                     )));
                 }
-                let result = self.call_function(&method, right, std::slice::from_ref(&left));
+                let result = self.call_function(&method, right, std::slice::from_ref(left));
                 return match result {
                     Completion::Normal(v) => Completion::Normal(JsValue::Boolean(to_boolean(&v))),
                     other => other,

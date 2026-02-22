@@ -26,8 +26,9 @@ pub(crate) fn ascii_lowercase(s: &str) -> String {
 
 /// Validate and normalize a calendar ID per spec's ToTemporalCalendarSlotValue.
 /// Accepts:
-///   - "iso8601" (case-insensitive, ASCII only)
-///   - An ISO 8601 date string (extracts calendar annotation, defaults to "iso8601")
+/// - "iso8601" (case-insensitive, ASCII only)
+/// - An ISO 8601 date string (extracts calendar annotation, defaults to "iso8601")
+///
 /// Returns the normalized calendar ID, or None if invalid.
 pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
     // Must be ASCII-only (no non-ASCII chars)
@@ -160,20 +161,18 @@ pub(crate) fn is_partial_temporal_object(
 
     if let Some(obj) = interp.get_object(obj_ref.id) {
         let td = obj.borrow().temporal_data.clone();
-        if let Some(ref data) = td {
-            match data {
-                TemporalData::PlainDate { .. }
-                | TemporalData::PlainDateTime { .. }
-                | TemporalData::PlainTime { .. }
-                | TemporalData::PlainMonthDay { .. }
-                | TemporalData::PlainYearMonth { .. }
-                | TemporalData::ZonedDateTime { .. } => {
-                    return Err(Completion::Throw(interp.create_type_error(
-                        "a Temporal object is not allowed as argument to with()",
-                    )));
-                }
-                _ => {}
-            }
+        if let Some(
+            TemporalData::PlainDate { .. }
+            | TemporalData::PlainDateTime { .. }
+            | TemporalData::PlainTime { .. }
+            | TemporalData::PlainMonthDay { .. }
+            | TemporalData::PlainYearMonth { .. }
+            | TemporalData::ZonedDateTime { .. },
+        ) = td
+        {
+            return Err(Completion::Throw(interp.create_type_error(
+                "a Temporal object is not allowed as argument to with()",
+            )));
         }
     }
 
@@ -1769,7 +1768,7 @@ pub(crate) fn parse_temporal_year_month_string(
                 let next_is_dash = np < bytes.len() && bytes[np] == b'-';
                 let next_is_t = np < bytes.len()
                     && (bytes[np] == b'T' || bytes[np] == b't' || bytes[np] == b' ');
-                if !next_is_digit && !(has_sep && next_is_dash) && !next_is_t {
+                if !(next_is_digit || next_is_t || has_sep && next_is_dash) {
                     let mut pos = np;
                     let mut calendar = None;
                     pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
@@ -1985,9 +1984,8 @@ fn parse_iso_time(bytes: &[u8], start: usize) -> Option<(u8, u8, u8, u16, u16, u
                     return None;
                 }
                 let mut frac_digits = [b'0'; 9];
-                for i in 0..9.min(frac_len) {
-                    frac_digits[i] = bytes[frac_start + i];
-                }
+                let copy_len = 9.min(frac_len);
+                frac_digits[..copy_len].copy_from_slice(&bytes[frac_start..frac_start + copy_len]);
                 let ms_str = std::str::from_utf8(&frac_digits[0..3]).ok()?;
                 let us_str = std::str::from_utf8(&frac_digits[3..6]).ok()?;
                 let ns_str = std::str::from_utf8(&frac_digits[6..9]).ok()?;
@@ -2155,9 +2153,8 @@ fn parse_iso_offset(bytes: &[u8], start: usize) -> Option<(ParsedOffset, usize)>
                 let frac_len = pos - frac_start;
                 if frac_len > 0 {
                     let mut frac_digits = [b'0'; 9];
-                    for i in 0..9.min(frac_len) {
-                        frac_digits[i] = bytes[frac_start + i];
-                    }
+                    let copy_len = 9.min(frac_len);
+                    frac_digits[..copy_len].copy_from_slice(&bytes[frac_start..frac_start + copy_len]);
                     let ns_str = std::str::from_utf8(&frac_digits[..9]).ok()?;
                     nanoseconds = ns_str.parse().ok()?;
                 }
@@ -2469,6 +2466,7 @@ pub(crate) fn round_i128_to_increment(x: i128, increment: i128, rounding_mode: &
                 truncated
             }
         }
+        #[allow(clippy::if_same_then_else)]
         "halfEven" => {
             let q_trunc = x / increment;
             if 2 * abs_rem > increment {

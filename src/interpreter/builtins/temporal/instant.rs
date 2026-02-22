@@ -1025,8 +1025,6 @@ fn round_temporal_instant(n: &BigInt, increment: i128, mode: &str) -> BigInt {
         "halfCeil" | "halfExpand" => {
             if d1 < d2 {
                 r1
-            } else if d2 < d1 {
-                r2
             } else {
                 r2
             }

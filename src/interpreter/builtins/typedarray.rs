@@ -476,8 +476,8 @@ impl Interpreter {
                 } else {
                     None
                 };
-                let buf = if max_byte_length.is_some() {
-                    let mut v = Vec::with_capacity(max_byte_length.unwrap());
+                let buf = if let Some(max_len) = max_byte_length {
+                    let mut v = Vec::with_capacity(max_len);
                     v.resize(len, 0u8);
                     v
                 } else {
@@ -3316,14 +3316,14 @@ impl Interpreter {
                             if let Some(src_obj) = interp.get_object(o.id) {
                                 let src_ref = src_obj.borrow();
                                 // Case: new XArray(arraybuffer, byteOffset?, length?)
-                                if src_ref.arraybuffer_data.is_some() {
+                                if let Some(ref ab_data) = src_ref.arraybuffer_data {
                                     if let Some(ref det) = src_ref.arraybuffer_detached
                                         && det.get() {
                                             return Completion::Throw(interp.create_type_error(
                                                 "Cannot construct TypedArray from detached ArrayBuffer"
                                             ));
                                         }
-                                    let buf_rc = src_ref.arraybuffer_data.as_ref().unwrap().clone();
+                                    let buf_rc = ab_data.clone();
                                     let detached = src_ref.arraybuffer_detached.clone()
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
                                     let is_resizable = src_ref.arraybuffer_max_byte_length.is_some();

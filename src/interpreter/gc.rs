@@ -382,8 +382,8 @@ impl Interpreter {
         }
 
         // Sweep phase
-        for i in 0..obj_count {
-            if !marks[i] && self.objects[i].is_some() {
+        for (i, mark) in marks.iter().enumerate().take(obj_count) {
+            if !mark && self.objects[i].is_some() {
                 self.objects[i] = None;
                 self.free_list.push(i);
             }
@@ -402,13 +402,9 @@ impl Interpreter {
             if obj.class_name == "WeakMap" {
                 if let Some(ref mut entries) = obj.map_data {
                     for entry in entries.iter_mut() {
-                        let dead = if let Some((ref k, _)) = *entry {
-                            if let JsValue::Object(key_obj) = k {
-                                let kid = key_obj.id as usize;
-                                kid >= obj_count || !marks[kid]
-                            } else {
-                                false
-                            }
+                        let dead = if let Some((JsValue::Object(key_obj), _)) = entry {
+                            let kid = key_obj.id as usize;
+                            kid >= obj_count || !marks[kid]
                         } else {
                             false
                         };
@@ -421,13 +417,9 @@ impl Interpreter {
                 && let Some(ref mut entries) = obj.set_data
             {
                 for entry in entries.iter_mut() {
-                    let dead = if let Some(ref val) = *entry {
-                        if let JsValue::Object(val_obj) = val {
-                            let vid = val_obj.id as usize;
-                            vid >= obj_count || !marks[vid]
-                        } else {
-                            false
-                        }
+                    let dead = if let Some(JsValue::Object(val_obj)) = entry {
+                        let vid = val_obj.id as usize;
+                        vid >= obj_count || !marks[vid]
                     } else {
                         false
                     };

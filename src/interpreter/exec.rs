@@ -1705,7 +1705,7 @@ impl Interpreter {
             Completion::Throw(e) => Some(e.clone()),
             _ => None,
         };
-        let had_error = current_error.is_some();
+        let _had_error = current_error.is_some();
 
         for resource in &stack {
             let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
@@ -1729,11 +1729,7 @@ impl Interpreter {
         }
 
         if let Some(err) = current_error {
-            if had_error {
-                Completion::Throw(err)
-            } else {
-                Completion::Throw(err)
-            }
+            Completion::Throw(err)
         } else {
             completion
         }

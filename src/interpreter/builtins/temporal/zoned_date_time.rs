@@ -1365,20 +1365,12 @@ impl Interpreter {
             );
         }
 
-        zdt_getter!("era", |_ns, _tz, cal| {
-            if cal == "iso8601" {
-                Completion::Normal(JsValue::Undefined)
-            } else {
-                Completion::Normal(JsValue::Undefined)
-            }
+        zdt_getter!("era", |_ns, _tz, _cal| {
+            Completion::Normal(JsValue::Undefined)
         });
 
-        zdt_getter!("eraYear", |_ns, _tz, cal| {
-            if cal == "iso8601" {
-                Completion::Normal(JsValue::Undefined)
-            } else {
-                Completion::Normal(JsValue::Undefined)
-            }
+        zdt_getter!("eraYear", |_ns, _tz, _cal| {
+            Completion::Normal(JsValue::Undefined)
         });
 
         self.temporal_zoned_date_time_prototype = Some(proto.clone());
