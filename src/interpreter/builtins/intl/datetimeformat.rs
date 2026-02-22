@@ -2794,6 +2794,14 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.day_period = None;
                 adjusted.time_zone_name = None;
                 adjusted.time_style = None;
+                // If no date components remain, add defaults
+                if adjusted.year.is_none() && adjusted.month.is_none()
+                    && adjusted.day.is_none() && adjusted.date_style.is_none()
+                {
+                    adjusted.year = Some("numeric".to_string());
+                    adjusted.month = Some("numeric".to_string());
+                    adjusted.day = Some("numeric".to_string());
+                }
             }
             TemporalType::PlainTime => {
                 // Remove date components
@@ -2804,6 +2812,14 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.era = None;
                 adjusted.time_zone_name = None;
                 adjusted.date_style = None;
+                // If no time components remain, add defaults
+                if adjusted.hour.is_none() && adjusted.minute.is_none()
+                    && adjusted.second.is_none() && adjusted.time_style.is_none()
+                {
+                    adjusted.hour = Some("2-digit".to_string());
+                    adjusted.minute = Some("2-digit".to_string());
+                    adjusted.second = Some("2-digit".to_string());
+                }
             }
             TemporalType::PlainYearMonth => {
                 // Keep only year, month, era
@@ -2816,6 +2832,13 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.day_period = None;
                 adjusted.time_zone_name = None;
                 adjusted.time_style = None;
+                // If no year/month remain, add defaults
+                if adjusted.year.is_none() && adjusted.month.is_none()
+                    && adjusted.date_style.is_none()
+                {
+                    adjusted.year = Some("numeric".to_string());
+                    adjusted.month = Some("numeric".to_string());
+                }
             }
             TemporalType::PlainMonthDay => {
                 // Keep only month, day
@@ -2829,10 +2852,27 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.day_period = None;
                 adjusted.time_zone_name = None;
                 adjusted.time_style = None;
+                // If no month/day remain, add defaults
+                if adjusted.month.is_none() && adjusted.day.is_none()
+                    && adjusted.date_style.is_none()
+                {
+                    adjusted.month = Some("numeric".to_string());
+                    adjusted.day = Some("numeric".to_string());
+                }
             }
             TemporalType::PlainDateTime => {
-                // Remove timeZoneName only
                 adjusted.time_zone_name = None;
+                // If no date/time components remain, add defaults
+                if !has_explicit_date_time_opts(&adjusted) && adjusted.date_style.is_none()
+                    && adjusted.time_style.is_none()
+                {
+                    adjusted.year = Some("numeric".to_string());
+                    adjusted.month = Some("numeric".to_string());
+                    adjusted.day = Some("numeric".to_string());
+                    adjusted.hour = Some("2-digit".to_string());
+                    adjusted.minute = Some("2-digit".to_string());
+                    adjusted.second = Some("2-digit".to_string());
+                }
             }
             TemporalType::Instant => {
                 // Instant formats like a full date/time, keep timeZoneName
@@ -2866,9 +2906,19 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
             adjusted.year = Some("numeric".to_string());
             adjusted.month = Some("numeric".to_string());
             adjusted.day = Some("numeric".to_string());
+            adjusted.hour = None;
+            adjusted.minute = None;
+            adjusted.second = None;
+            adjusted.fractional_second_digits = None;
+            adjusted.day_period = None;
             adjusted.time_zone_name = None;
         }
         TemporalType::PlainTime => {
+            adjusted.year = None;
+            adjusted.month = None;
+            adjusted.day = None;
+            adjusted.weekday = None;
+            adjusted.era = None;
             adjusted.hour = Some("2-digit".to_string());
             adjusted.minute = Some("2-digit".to_string());
             adjusted.second = Some("2-digit".to_string());
@@ -2877,11 +2927,26 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
         TemporalType::PlainYearMonth => {
             adjusted.year = Some("numeric".to_string());
             adjusted.month = Some("numeric".to_string());
+            adjusted.day = None;
+            adjusted.weekday = None;
+            adjusted.hour = None;
+            adjusted.minute = None;
+            adjusted.second = None;
+            adjusted.fractional_second_digits = None;
+            adjusted.day_period = None;
             adjusted.time_zone_name = None;
         }
         TemporalType::PlainMonthDay => {
+            adjusted.year = None;
+            adjusted.era = None;
+            adjusted.weekday = None;
             adjusted.month = Some("numeric".to_string());
             adjusted.day = Some("numeric".to_string());
+            adjusted.hour = None;
+            adjusted.minute = None;
+            adjusted.second = None;
+            adjusted.fractional_second_digits = None;
+            adjusted.day_period = None;
             adjusted.time_zone_name = None;
         }
     }
