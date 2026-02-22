@@ -925,6 +925,19 @@ impl Interpreter {
                             );
                         }
 
+                        if super::calendar_has_eras(&cal) {
+                            if has_era && !has_era_year {
+                                return Completion::Throw(interp.create_type_error(
+                                    "era provided without eraYear",
+                                ));
+                            }
+                            if has_era_year && !has_era {
+                                return Completion::Throw(interp.create_type_error(
+                                    "eraYear provided without era",
+                                ));
+                            }
+                        }
+
                         let mc_for_icu = if has_mc {
                             raw_month_code.clone()
                         } else if !has_m {
