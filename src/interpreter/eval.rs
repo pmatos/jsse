@@ -1296,6 +1296,7 @@ impl Interpreter {
     }
 
     // §7.1.14 ToPropertyKey
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_property_key(&mut self, val: &JsValue) -> Result<String, JsValue> {
         match val {
             JsValue::Symbol(s) => Ok(s.to_property_key()),
@@ -1398,6 +1399,7 @@ impl Interpreter {
         false
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_index(&mut self, val: &JsValue) -> Completion {
         if val.is_undefined() {
             return Completion::Normal(JsValue::Number(0.0));
@@ -1428,6 +1430,7 @@ impl Interpreter {
         len.min(9007199254740991.0).floor() // 2^53 - 1
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_object(&mut self, val: &JsValue) -> Completion {
         match val {
             JsValue::Undefined | JsValue::Null => {
@@ -1486,6 +1489,7 @@ impl Interpreter {
     }
 
     pub(crate) fn to_primitive(
+        #[allow(clippy::wrong_self_convention)]
         &mut self,
         val: &JsValue,
         preferred_type: &str,
@@ -1565,6 +1569,7 @@ impl Interpreter {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_number_coerce(&mut self, val: &JsValue) -> f64 {
         match self.to_primitive(val, "number") {
             Ok(prim) => to_number(&prim),
@@ -1573,6 +1578,7 @@ impl Interpreter {
     }
 
     // §7.1.17 ToString — calls ToPrimitive for objects
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_string_value(&mut self, val: &JsValue) -> Result<String, JsValue> {
         match val {
             JsValue::Undefined => Ok("undefined".to_string()),
@@ -1592,6 +1598,7 @@ impl Interpreter {
     }
 
     // §7.1.4 ToNumber — calls ToPrimitive for objects
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_number_value(&mut self, val: &JsValue) -> Result<f64, JsValue> {
         match val {
             JsValue::Object(_) => {
@@ -1609,6 +1616,7 @@ impl Interpreter {
     }
 
     // §7.1.13 ToBigInt
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_bigint_value(&mut self, val: &JsValue) -> Result<JsValue, JsValue> {
         let prim = match val {
             JsValue::Object(_) => self.to_primitive(val, "number")?,
@@ -2404,7 +2412,7 @@ impl Interpreter {
                                                 }
                                             };
                                             let setter = setter.clone();
-                                            self.call_function(&setter, &obj_val, &[final_val.clone()]);
+                                            self.call_function(&setter, &obj_val, std::slice::from_ref(&final_val));
                                             Completion::Normal(final_val)
                                         } else {
                                             Completion::Throw(self.create_type_error(&format!(
@@ -2586,7 +2594,7 @@ impl Interpreter {
                     {
                         let setter = setter.clone();
                         let this = obj_val.clone();
-                        return match self.call_function(&setter, &this, &[final_val.clone()]) {
+                        return match self.call_function(&setter, &this, std::slice::from_ref(&final_val)) {
                             Completion::Normal(_) => Completion::Normal(final_val),
                             other => other,
                         };
@@ -2680,7 +2688,7 @@ impl Interpreter {
                                             return match self.call_function(
                                                 &setter,
                                                 &this,
-                                                &[final_val.clone()],
+                                                std::slice::from_ref(&final_val),
                                             ) {
                                                 Completion::Normal(_) => {
                                                     Completion::Normal(final_val)
@@ -2870,7 +2878,7 @@ impl Interpreter {
                                 Some(PrivateElement::Accessor { set, .. }) => {
                                     if let Some(setter) = &set {
                                         let setter = setter.clone();
-                                        self.call_function(&setter, &obj_val, &[rval.clone()]);
+                                        self.call_function(&setter, &obj_val, std::slice::from_ref(&rval));
                                     } else {
                                         return Completion::Throw(self.create_type_error(&format!(
                                             "Cannot set private member #{name} which has no setter"
@@ -2986,7 +2994,7 @@ impl Interpreter {
                     {
                         let setter = setter.clone();
                         let this = boxed_obj.clone();
-                        return match self.call_function(&setter, &this, &[rval.clone()]) {
+                        return match self.call_function(&setter, &this, std::slice::from_ref(&rval)) {
                             Completion::Normal(_) => Completion::Normal(rval),
                             other => other,
                         };
@@ -4204,7 +4212,7 @@ impl Interpreter {
             let resume_state = deleg_info.resume_state;
             let binding = deleg_info.sent_value_binding.clone();
 
-            let result = match self.call_function(&next_method, &iterator, &[sent_value.clone()]) {
+            let result = match self.call_function(&next_method, &iterator, std::slice::from_ref(&sent_value)) {
                 Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Ok(v),
                 Completion::Normal(_) => {
                     Err(self.create_type_error("Iterator result is not an object"))
@@ -5459,7 +5467,7 @@ impl Interpreter {
             let resume_state = deleg_info.resume_state;
             let binding = deleg_info.sent_value_binding.clone();
 
-            let result = match self.call_function(&next_method, &iterator, &[sent_value.clone()]) {
+            let result = match self.call_function(&next_method, &iterator, std::slice::from_ref(&sent_value)) {
                 Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Ok(v),
                 Completion::Normal(_) => {
                     Err(self.create_type_error("Iterator result is not an object"))
@@ -9160,7 +9168,7 @@ impl Interpreter {
                         "@@hasInstance is not callable",
                     )));
                 }
-                let result = self.call_function(&method, right, &[left.clone()]);
+                let result = self.call_function(&method, right, std::slice::from_ref(&left));
                 return match result {
                     Completion::Normal(v) => Completion::Normal(JsValue::Boolean(to_boolean(&v))),
                     other => other,
