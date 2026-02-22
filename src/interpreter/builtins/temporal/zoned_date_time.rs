@@ -3151,10 +3151,15 @@ fn zdt_until_since(
         Completion::Normal(v) => v,
         c => return c,
     };
-    let (ns2, tz2, _cal2) = match get_zdt_fields(interp, &other_val) {
+    let (ns2, tz2, cal2) = match get_zdt_fields(interp, &other_val) {
         Ok(v) => v,
         Err(c) => return c,
     };
+    if cal != cal2 {
+        return Completion::Throw(interp.create_range_error(
+            &format!("cannot compute difference between dates of different calendars: {} and {}", cal, cal2),
+        ));
+    }
 
     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
     let all_units: &[&str] = &[

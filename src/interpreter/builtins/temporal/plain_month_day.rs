@@ -528,6 +528,13 @@ impl Interpreter {
                             .create_type_error("with() requires at least one recognized property"),
                     );
                 }
+                if cal != "iso8601" && has_m && !has_mc {
+                    return Completion::Throw(
+                        interp.create_type_error(
+                            "month requires monthCode for non-ISO calendars in PlainMonthDay.with()",
+                        ),
+                    );
+                }
                 let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let overflow = match parse_overflow_option(interp, &options) {
                     Ok(v) => v,
@@ -1135,11 +1142,7 @@ fn get_opt_u8(
 
 fn format_month_day(m: u8, d: u8, ref_year: i32, cal: &str, show_calendar: &str) -> String {
     let mut result = format!("{m:02}-{d:02}");
-    let need_year = match show_calendar {
-        "always" | "critical" => true,
-        "auto" if cal != "iso8601" => true,
-        _ => false,
-    };
+    let need_year = cal != "iso8601" || matches!(show_calendar, "always" | "critical");
     if need_year {
         let year_str = if ref_year >= 0 && ref_year <= 9999 {
             format!("{ref_year:04}")

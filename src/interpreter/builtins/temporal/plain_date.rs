@@ -761,10 +761,15 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let (y2, mut m2, mut d2, _) = match to_temporal_plain_date(interp, other) {
+                    let (y2, mut m2, mut d2, cal2) = match to_temporal_plain_date(interp, other) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != cal2 {
+                        return Completion::Throw(interp.create_range_error(
+                            &format!("cannot compute difference between dates of different calendars: {} and {}", cal, cal2),
+                        ));
+                    }
                     m2 = m2.max(1).min(12);
                     d2 = d2.max(1).min(iso_days_in_month(y2, m2));
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);

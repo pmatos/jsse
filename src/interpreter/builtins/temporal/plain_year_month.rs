@@ -801,10 +801,15 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let (y2, m2, rd2, _) = match to_temporal_plain_year_month(interp, other) {
+                    let (y2, m2, rd2, cal2) = match to_temporal_plain_year_month(interp, other) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != cal2 {
+                        return Completion::Throw(interp.create_range_error(
+                            &format!("cannot compute difference between dates of different calendars: {} and {}", cal, cal2),
+                        ));
+                    }
                     // Step 6: early return if both ISO dates are equal
                     if y1 == y2 && m1 == m2 && rd1 == rd2 {
                         return super::duration::create_duration_result(
@@ -1452,11 +1457,7 @@ fn format_year_month(y: i32, m: u8, ref_day: u8, cal: &str, show_calendar: &str)
         format!("-{:06}", y.unsigned_abs())
     };
     let mut result = format!("{year_str}-{m:02}");
-    let need_day = match show_calendar {
-        "always" | "critical" => true,
-        "auto" if cal != "iso8601" => true,
-        _ => false,
-    };
+    let need_day = cal != "iso8601" || matches!(show_calendar, "always" | "critical");
     if need_day {
         result.push_str(&format!("-{ref_day:02}"));
     }

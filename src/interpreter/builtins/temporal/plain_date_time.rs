@@ -161,7 +161,7 @@ pub(super) fn to_temporal_plain_date_time_with_overflow(
                 ) {
                     return Ok((iso_y, iso_m, iso_d, h, mi, s, ms, us, ns, cal));
                 }
-                if overflow == "reject" {
+                if icu_era.is_some() || overflow == "reject" {
                     return Err(Completion::Throw(
                         interp.create_range_error("Invalid calendar date"),
                     ));
@@ -1281,11 +1281,16 @@ impl Interpreter {
                             Err(c) => return c,
                         };
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let (y2, m2, d2, h2, mi2, s2, ms2, us2, ns2, _) =
+                    let (y2, m2, d2, h2, mi2, s2, ms2, us2, ns2, cal2) =
                         match to_temporal_plain_date_time(interp, other) {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
+                    if cal != cal2 {
+                        return Completion::Throw(interp.create_range_error(
+                            &format!("cannot compute difference between dates of different calendars: {} and {}", cal, cal2),
+                        ));
+                    }
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     let all_units: &[&str] = &[
                         "year",
@@ -2410,7 +2415,7 @@ impl Interpreter {
                                 );
                             }
                             None => {
-                                if overflow == "reject" {
+                                if icu_era.is_some() || overflow == "reject" {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid calendar date"),
                                     );
