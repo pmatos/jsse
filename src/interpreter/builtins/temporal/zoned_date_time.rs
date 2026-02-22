@@ -1629,25 +1629,49 @@ impl Interpreter {
                 "toLocaleString".to_string(),
                 0,
                 |interp, this, args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, _cal) = match get_zdt_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
                     let dtf_val = match interp.intl_date_time_format_ctor.clone() {
                         Some(v) => v,
                         None => {
-                            let result = zdt_to_string(&ns, &tz, &cal, "auto", "auto", "auto", None, "trunc");
+                            let result = zdt_to_string(&ns, &tz, &_cal, "auto", "auto", "auto", None, "trunc");
                             return Completion::Normal(JsValue::String(JsString::from_str(&result)));
                         }
                     };
                     let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    // Inject timeZone into options for proper ZDT formatting
                     let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
+                    let effective_opts = if super::is_undefined(&options_arg) {
+                        let opts_obj = interp.create_object();
+                        if let Some(ref op) = interp.object_prototype {
+                            opts_obj.borrow_mut().prototype = Some(op.clone());
+                        }
+                        opts_obj.borrow_mut().insert_property(
+                            "timeZone".to_string(),
+                            crate::interpreter::types::PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(&tz)), true, true, true,
+                            ),
+                        );
+                        let oid = opts_obj.borrow().id.unwrap();
+                        JsValue::Object(crate::types::JsObject { id: oid })
+                    } else {
+                        options_arg
+                    };
+                    let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, effective_opts]) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => return Completion::Normal(JsValue::Undefined),
                     };
-                    super::temporal_format_with_dtf(interp, &dtf_instance, &this)
+                    // Pass epoch ms as a Number, not the ZDT itself
+                    let epoch_ms = {
+                        use num_bigint::BigInt;
+                        let ms_bigint = &ns / BigInt::from(1_000_000i64);
+                        ms_bigint.to_string().parse::<f64>().unwrap_or(f64::NAN)
+                    };
+                    let ms_val = JsValue::Number(epoch_ms);
+                    super::temporal_format_with_dtf(interp, &dtf_instance, &ms_val)
                 },
             ));
             proto

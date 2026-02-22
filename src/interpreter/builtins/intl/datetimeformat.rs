@@ -2886,6 +2886,11 @@ impl Interpreter {
                             let date_arg =
                                 args2.first().cloned().unwrap_or(JsValue::Undefined);
                             let temporal_type = detect_temporal_type(interp2, &date_arg);
+                            if matches!(temporal_type, Some(TemporalType::ZonedDateTime)) {
+                                return Completion::Throw(interp2.create_type_error(
+                                    "Temporal.ZonedDateTime is not supported in DateTimeFormat format()",
+                                ));
+                            }
                             let ms = match resolve_date_value(interp2, &date_arg) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
@@ -2931,6 +2936,11 @@ impl Interpreter {
 
                 let date_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let temporal_type = detect_temporal_type(interp, &date_arg);
+                if matches!(temporal_type, Some(TemporalType::ZonedDateTime)) {
+                    return Completion::Throw(interp.create_type_error(
+                        "Temporal.ZonedDateTime is not supported in DateTimeFormat formatToParts()",
+                    ));
+                }
                 let ms = match resolve_date_value(interp, &date_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -2999,7 +3009,15 @@ impl Interpreter {
                     );
                 }
 
-                let temporal_type = detect_temporal_type(interp, &start_arg);
+                let start_tt = detect_temporal_type(interp, &start_arg);
+                let end_tt = detect_temporal_type(interp, &end_arg);
+                if matches!(start_tt, Some(TemporalType::ZonedDateTime))
+                    || matches!(end_tt, Some(TemporalType::ZonedDateTime))
+                {
+                    return Completion::Throw(interp.create_type_error(
+                        "Temporal.ZonedDateTime is not supported in DateTimeFormat formatRange()",
+                    ));
+                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -3009,7 +3027,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let effective_opts = if let Some(tt) = temporal_type {
+                let effective_opts = if let Some(tt) = start_tt {
                     adjust_opts_for_temporal(&opts, tt)
                 } else {
                     opts
@@ -3041,7 +3059,15 @@ impl Interpreter {
                     );
                 }
 
-                let temporal_type = detect_temporal_type(interp, &start_arg);
+                let start_tt = detect_temporal_type(interp, &start_arg);
+                let end_tt = detect_temporal_type(interp, &end_arg);
+                if matches!(start_tt, Some(TemporalType::ZonedDateTime))
+                    || matches!(end_tt, Some(TemporalType::ZonedDateTime))
+                {
+                    return Completion::Throw(interp.create_type_error(
+                        "Temporal.ZonedDateTime is not supported in DateTimeFormat formatRangeToParts()",
+                    ));
+                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -3051,7 +3077,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let effective_opts = if let Some(tt) = temporal_type {
+                let effective_opts = if let Some(tt) = start_tt {
                     adjust_opts_for_temporal(&opts, tt)
                 } else {
                     opts
