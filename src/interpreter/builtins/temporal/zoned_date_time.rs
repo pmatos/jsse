@@ -1403,13 +1403,19 @@ impl Interpreter {
             Completion::Normal(JsValue::Number(super::iso_day_of_year(y, m, d) as f64))
         });
 
-        zdt_getter!("weekOfYear", |ns, tz, _cal| {
+        zdt_getter!("weekOfYear", |ns, tz, cal| {
+            if cal != "iso8601" {
+                return Completion::Normal(JsValue::Undefined);
+            }
             let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
             let (woy, _) = super::iso_week_of_year(y, m, d);
             Completion::Normal(JsValue::Number(woy as f64))
         });
 
-        zdt_getter!("yearOfWeek", |ns, tz, _cal| {
+        zdt_getter!("yearOfWeek", |ns, tz, cal| {
+            if cal != "iso8601" {
+                return Completion::Normal(JsValue::Undefined);
+            }
             let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
             let (_, yow) = super::iso_week_of_year(y, m, d);
             Completion::Normal(JsValue::Number(yow as f64))

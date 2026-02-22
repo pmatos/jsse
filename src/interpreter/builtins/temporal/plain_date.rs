@@ -186,10 +186,13 @@ impl Interpreter {
                 "get weekOfYear".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, m, d, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
                     let (week, _) = iso_week_of_year(y, m, d);
                     Completion::Normal(JsValue::Number(week as f64))
                 },
@@ -213,10 +216,13 @@ impl Interpreter {
                 "get yearOfWeek".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, m, d, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
                     let (_, year_of_week) = iso_week_of_year(y, m, d);
                     Completion::Normal(JsValue::Number(year_of_week as f64))
                 },

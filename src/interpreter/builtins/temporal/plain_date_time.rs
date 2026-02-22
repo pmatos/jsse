@@ -729,18 +729,14 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     if cal != "iso8601" {
+                        // weekOfYear and yearOfWeek are undefined for non-ISO calendars
+                        if which == 2 || which == 3 {
+                            return Completion::Normal(JsValue::Undefined);
+                        }
                         if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
                             let val = match which {
                                 0 => JsValue::Number(iso_day_of_week(y, m, d) as f64),
                                 1 => JsValue::Number(cf.day_of_year as f64),
-                                2 => {
-                                    let (w, _) = iso_week_of_year(y, m, d);
-                                    JsValue::Number(w as f64)
-                                }
-                                3 => {
-                                    let (_, yw) = iso_week_of_year(y, m, d);
-                                    JsValue::Number(yw as f64)
-                                }
                                 4 => JsValue::Number(7.0),
                                 5 => JsValue::Number(cf.days_in_month as f64),
                                 6 => JsValue::Number(cf.days_in_year as f64),
