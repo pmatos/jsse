@@ -252,7 +252,7 @@ fn to_temporal_plain_year_month(
                         (None, y)
                     };
 
-                if let Some((iso_y, iso_m, _)) = super::calendar_fields_to_iso(
+                if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso(
                     icu_era.as_deref(),
                     icu_year,
                     mc_str.as_deref(),
@@ -260,7 +260,7 @@ fn to_temporal_plain_year_month(
                     1,
                     &cal,
                 ) {
-                    return Ok((iso_y, iso_m, 1, cal));
+                    return Ok((iso_y, iso_m, iso_d, cal));
                 }
             }
 
@@ -601,10 +601,9 @@ impl Interpreter {
                             1, // day=1 for year-month
                             &cal,
                         ) {
-                            Some((iso_y, iso_m, _)) => {
-                                let final_rd = rd.min(super::iso_days_in_month(iso_y, iso_m));
+                            Some((iso_y, iso_m, iso_d)) => {
                                 return create_plain_year_month_result(
-                                    interp, iso_y, iso_m, final_rd, &cal,
+                                    interp, iso_y, iso_m, iso_d, &cal,
                                 );
                             }
                             None => {
@@ -1235,7 +1234,7 @@ impl Interpreter {
                                 (None, y)
                             };
 
-                        if let Some((iso_y, iso_m, _)) = super::calendar_fields_to_iso(
+                        if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso(
                             icu_era.as_deref(),
                             icu_year,
                             mc_str.as_deref(),
@@ -1243,7 +1242,7 @@ impl Interpreter {
                             1, // day=1 for year-month
                             &cal,
                         ) {
-                            return create_plain_year_month_result(interp, iso_y, iso_m, 1, &cal);
+                            return create_plain_year_month_result(interp, iso_y, iso_m, iso_d, &cal);
                         }
                         if overflow == "reject" {
                             return Completion::Throw(

@@ -553,6 +553,53 @@ fn to_temporal_zoned_date_time_with_options(
                 return Completion::Throw(interp.create_range_error("day out of range"));
             }
 
+            // Non-ISO calendar: convert calendar fields to ISO
+            let (year, month_raw, day_i) = if calendar != "iso8601" {
+                // Read era/eraYear for calendars that support them
+                let era_val = match get_prop(interp, item, "era") {
+                    Completion::Normal(v) => v,
+                    c => return c,
+                };
+                let era_year_val = match get_prop(interp, item, "eraYear") {
+                    Completion::Normal(v) => v,
+                    c => return c,
+                };
+                let (icu_era, icu_year) = if !is_undefined(&era_val) && !is_undefined(&era_year_val) {
+                    let era_str = match super::to_primitive_and_require_string(interp, &era_val, "era") {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let ey = match to_integer_with_truncation(interp, &era_year_val) {
+                        Ok(v) => v as i32,
+                        Err(c) => return c,
+                    };
+                    (Some(era_str), ey)
+                } else {
+                    (None, year)
+                };
+                let mc = month_code_str.as_deref().unwrap_or_else(|| {
+                    // We already resolved month_raw, so build month code
+                    ""
+                });
+                let mc_opt = if !mc.is_empty() { Some(mc) } else { None };
+                let mo_opt = if has_month { Some(month_raw as u8) } else { None };
+                match super::calendar_fields_to_iso(
+                    icu_era.as_deref(), icu_year, mc_opt, mo_opt, day_i as u8, &calendar,
+                ) {
+                    Some((iy, im, id)) => (iy, im as i32, id as f64),
+                    None => {
+                        if overflow == "reject" {
+                            return Completion::Throw(
+                                interp.create_range_error("Invalid calendar date for ZonedDateTime"),
+                            );
+                        }
+                        (year, month_raw, day_i)
+                    }
+                }
+            } else {
+                (year, month_raw, day_i)
+            };
+
             // Apply overflow to all fields
             let (month, day, hour, minute, second, millisecond, microsecond, nanosecond) =
                 if overflow == "reject" {
