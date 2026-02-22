@@ -341,6 +341,308 @@ pub(crate) fn calendar_fields_to_iso(
     ))
 }
 
+/// Add years/months/weeks/days to an ISO date using a non-ISO calendar for year/month arithmetic.
+/// Returns the resulting ISO date (y, m, d).
+pub(crate) fn add_calendar_date(
+    iso_year: i32,
+    iso_month: u8,
+    iso_day: u8,
+    years: i32,
+    months: i32,
+    weeks: i32,
+    days: i32,
+    calendar_id: &str,
+    overflow: &str,
+) -> Option<(i32, u8, u8)> {
+    let kind = calendar_id_to_icu_kind(calendar_id)?;
+    let cal = AnyCalendar::new(kind);
+
+    // Convert ISO → calendar date
+    let iso = IcuDate::try_new_iso(iso_year, iso_month, iso_day).ok()?;
+    let mut cal_date = iso.to_any().to_calendar(cal);
+
+    // Step 1: add years
+    if years != 0 {
+        let yi = cal_date.year().extended_year();
+        let new_y = yi + years;
+        let mc = cal_date.month().standard_code;
+        let mc_str = mc.0.to_string();
+        let d = cal_date.day_of_month().0;
+        let new_cal = AnyCalendar::new(kind);
+        let mut fields = IcuDateFields::default();
+        fields.extended_year = Some(new_y);
+        fields.month_code = Some(mc_str.as_bytes());
+        fields.day = Some(d);
+        cal_date = match IcuDate::try_from_fields(fields, Default::default(), new_cal) {
+            Ok(d) => d,
+            Err(_) => {
+                if overflow == "reject" {
+                    return None;
+                }
+                // Constrain: try clamping day
+                let new_cal2 = AnyCalendar::new(kind);
+                let mut fields2 = IcuDateFields::default();
+                fields2.extended_year = Some(new_y);
+                fields2.month_code = Some(mc_str.as_bytes());
+                fields2.day = Some(1);
+                let temp = IcuDate::try_from_fields(fields2, Default::default(), new_cal2).ok()?;
+                let max_d = temp.days_in_month();
+                let clamped_d = d.min(max_d);
+                let new_cal3 = AnyCalendar::new(kind);
+                let mut fields3 = IcuDateFields::default();
+                fields3.extended_year = Some(new_y);
+                fields3.month_code = Some(mc_str.as_bytes());
+                fields3.day = Some(clamped_d);
+                IcuDate::try_from_fields(fields3, Default::default(), new_cal3).ok()?
+            }
+        };
+    }
+
+    // Step 2: add months
+    if months != 0 {
+        let yi = cal_date.year().extended_year();
+        let mo = cal_date.month().ordinal;
+        let d = cal_date.day_of_month().0;
+        let miy = cal_date.months_in_year();
+
+        // Compute new month ordinal and year, wrapping around
+        let mut total_months = (mo as i32 - 1) + months;
+        let mut new_y = yi;
+        while total_months < 0 {
+            new_y -= 1;
+            // Get months in the new year
+            let new_cal = AnyCalendar::new(kind);
+            let mut fields = IcuDateFields::default();
+            fields.extended_year = Some(new_y);
+            fields.ordinal_month = Some(1);
+            fields.day = Some(1);
+            if let Ok(temp) = IcuDate::try_from_fields(fields, Default::default(), new_cal) {
+                total_months += temp.months_in_year() as i32;
+            } else {
+                total_months += miy as i32;
+            }
+        }
+        while total_months >= miy as i32 {
+            // Get months in the current year
+            let new_cal = AnyCalendar::new(kind);
+            let mut fields = IcuDateFields::default();
+            fields.extended_year = Some(new_y);
+            fields.ordinal_month = Some(1);
+            fields.day = Some(1);
+            let cur_miy = if let Ok(temp) =
+                IcuDate::try_from_fields(fields, Default::default(), new_cal)
+            {
+                temp.months_in_year()
+            } else {
+                miy
+            };
+            if total_months < cur_miy as i32 {
+                break;
+            }
+            total_months -= cur_miy as i32;
+            new_y += 1;
+        }
+        let new_mo = (total_months as u8) + 1;
+
+        let new_cal = AnyCalendar::new(kind);
+        let mut fields = IcuDateFields::default();
+        fields.extended_year = Some(new_y);
+        fields.ordinal_month = Some(new_mo);
+        fields.day = Some(d);
+        cal_date = match IcuDate::try_from_fields(fields, Default::default(), new_cal) {
+            Ok(d) => d,
+            Err(_) => {
+                if overflow == "reject" {
+                    return None;
+                }
+                // Constrain day
+                let new_cal2 = AnyCalendar::new(kind);
+                let mut fields2 = IcuDateFields::default();
+                fields2.extended_year = Some(new_y);
+                fields2.ordinal_month = Some(new_mo);
+                fields2.day = Some(1);
+                let temp =
+                    IcuDate::try_from_fields(fields2, Default::default(), new_cal2).ok()?;
+                let max_d = temp.days_in_month();
+                let clamped_d = d.min(max_d);
+                let new_cal3 = AnyCalendar::new(kind);
+                let mut fields3 = IcuDateFields::default();
+                fields3.extended_year = Some(new_y);
+                fields3.ordinal_month = Some(new_mo);
+                fields3.day = Some(clamped_d);
+                IcuDate::try_from_fields(fields3, Default::default(), new_cal3).ok()?
+            }
+        };
+    }
+
+    // Step 3: Convert back to ISO and add weeks/days
+    let iso_result = cal_date.to_iso();
+    let mut ry = iso_result.year().extended_year();
+    let mut rm = iso_result.month().ordinal;
+    let mut rd = iso_result.day_of_month().0;
+
+    let total_days = days + weeks * 7;
+    if total_days != 0 {
+        let epoch = iso_date_to_epoch_days(ry, rm, rd) + total_days as i64;
+        let (ny, nm, nd) = epoch_days_to_iso_date(epoch);
+        ry = ny;
+        rm = nm;
+        rd = nd;
+    }
+
+    Some((ry, rm, rd))
+}
+
+/// Compute the difference between two ISO dates in calendar-relative units.
+/// Returns (years, months, weeks, days).
+pub(crate) fn difference_calendar_date(
+    iso_y1: i32,
+    iso_m1: u8,
+    iso_d1: u8,
+    iso_y2: i32,
+    iso_m2: u8,
+    iso_d2: u8,
+    largest_unit: &str,
+    calendar_id: &str,
+) -> Option<(i32, i32, i32, i32)> {
+    let kind = calendar_id_to_icu_kind(calendar_id)?;
+
+    let cal1 = AnyCalendar::new(kind);
+    let cal2 = AnyCalendar::new(kind);
+    let date1_iso = IcuDate::try_new_iso(iso_y1, iso_m1, iso_d1).ok()?;
+    let date2_iso = IcuDate::try_new_iso(iso_y2, iso_m2, iso_d2).ok()?;
+    let d1 = date1_iso.to_any().to_calendar(cal1);
+    let d2 = date2_iso.to_any().to_calendar(cal2);
+
+    let y1 = d1.year().extended_year();
+    let m1 = d1.month().ordinal;
+    let day1 = d1.day_of_month().0;
+    let y2 = d2.year().extended_year();
+    let m2 = d2.month().ordinal;
+    let day2 = d2.day_of_month().0;
+
+    match largest_unit {
+        "year" => {
+            // Compute years + months + days difference
+            let mut years = y2 - y1;
+            let mut months;
+            let mut days;
+
+            // Adjust: find the date that is (y1+years, m1, day1) in the calendar
+            // and see how it compares to d2
+            let intermediate = add_calendar_date(
+                iso_y1, iso_m1, iso_d1, years, 0, 0, 0, calendar_id, "constrain",
+            )?;
+            let epoch_inter = iso_date_to_epoch_days(intermediate.0, intermediate.1, intermediate.2);
+            let epoch2 = iso_date_to_epoch_days(iso_y2, iso_m2, iso_d2);
+
+            if epoch_inter > epoch2 && years > 0 {
+                years -= 1;
+            } else if epoch_inter < epoch2 && years < 0 {
+                years += 1;
+            }
+
+            // Now compute months from the intermediate date
+            let inter2 = add_calendar_date(
+                iso_y1, iso_m1, iso_d1, years, 0, 0, 0, calendar_id, "constrain",
+            )?;
+
+            // Count months
+            months = 0;
+            let sign: i32 = if epoch2 >= iso_date_to_epoch_days(inter2.0, inter2.1, inter2.2) {
+                1
+            } else {
+                -1
+            };
+            loop {
+                let next = add_calendar_date(
+                    iso_y1,
+                    iso_m1,
+                    iso_d1,
+                    years,
+                    months + sign,
+                    0,
+                    0,
+                    calendar_id,
+                    "constrain",
+                )?;
+                let epoch_next = iso_date_to_epoch_days(next.0, next.1, next.2);
+                if sign > 0 && epoch_next > epoch2 {
+                    break;
+                }
+                if sign < 0 && epoch_next < epoch2 {
+                    break;
+                }
+                months += sign;
+                if epoch_next == epoch2 {
+                    break;
+                }
+            }
+
+            // Remaining days
+            let final_date = add_calendar_date(
+                iso_y1, iso_m1, iso_d1, years, months, 0, 0, calendar_id, "constrain",
+            )?;
+            let epoch_final = iso_date_to_epoch_days(final_date.0, final_date.1, final_date.2);
+            days = (epoch2 - epoch_final) as i32;
+
+            Some((years, months, 0, days))
+        }
+        "month" => {
+            let epoch1 = iso_date_to_epoch_days(iso_y1, iso_m1, iso_d1);
+            let epoch2 = iso_date_to_epoch_days(iso_y2, iso_m2, iso_d2);
+            let sign: i32 = if epoch2 >= epoch1 { 1 } else { -1 };
+
+            let mut months = 0i32;
+            loop {
+                let next = add_calendar_date(
+                    iso_y1,
+                    iso_m1,
+                    iso_d1,
+                    0,
+                    months + sign,
+                    0,
+                    0,
+                    calendar_id,
+                    "constrain",
+                )?;
+                let epoch_next = iso_date_to_epoch_days(next.0, next.1, next.2);
+                if sign > 0 && epoch_next > epoch2 {
+                    break;
+                }
+                if sign < 0 && epoch_next < epoch2 {
+                    break;
+                }
+                months += sign;
+                if epoch_next == epoch2 {
+                    break;
+                }
+            }
+
+            let final_date = add_calendar_date(
+                iso_y1, iso_m1, iso_d1, 0, months, 0, 0, calendar_id, "constrain",
+            )?;
+            let epoch_final = iso_date_to_epoch_days(final_date.0, final_date.1, final_date.2);
+            let days = (epoch2 - epoch_final) as i32;
+
+            Some((0, months, 0, days))
+        }
+        _ => {
+            // For week/day largest unit, just use ISO difference
+            let epoch1 = iso_date_to_epoch_days(iso_y1, iso_m1, iso_d1);
+            let epoch2 = iso_date_to_epoch_days(iso_y2, iso_m2, iso_d2);
+            let total_days = (epoch2 - epoch1) as i32;
+            if largest_unit == "week" {
+                let weeks = total_days / 7;
+                let days = total_days % 7;
+                Some((0, 0, weeks, days))
+            } else {
+                Some((0, 0, 0, total_days))
+            }
+        }
+    }
+}
+
 /// Per spec ToTemporalCalendarSlotValue:
 /// - If value is a Temporal object with a calendar slot, extract it
 /// - If value is a string, validate as calendar identifier
