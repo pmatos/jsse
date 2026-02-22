@@ -984,7 +984,7 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         };
 
         let effective_time_style = opts.time_style.as_ref().map(|ts| {
-            if opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
+            if opts.temporal_type.is_some() && opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
                 "medium".to_string()
             } else {
                 ts.clone()
@@ -2411,7 +2411,7 @@ fn format_to_parts_with_options_raw(
             parts.extend(date_parts);
         }
         let effective_ts = opts.time_style.as_ref().map(|ts| {
-            if opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
+            if opts.temporal_type.is_some() && opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
                 "medium".to_string()
             } else {
                 ts.clone()
@@ -2837,58 +2837,73 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
     }
 
     // No explicit components: set defaults based on Temporal type
+    // Also strip timeZoneName for plain types (they have no timezone)
     match tt {
-        TemporalType::Instant | TemporalType::PlainDateTime | TemporalType::ZonedDateTime => {
+        TemporalType::Instant | TemporalType::ZonedDateTime => {
             adjusted.year = Some("numeric".to_string());
             adjusted.month = Some("numeric".to_string());
             adjusted.day = Some("numeric".to_string());
             adjusted.hour = Some("2-digit".to_string());
             adjusted.minute = Some("2-digit".to_string());
             adjusted.second = Some("2-digit".to_string());
+        }
+        TemporalType::PlainDateTime => {
+            adjusted.year = Some("numeric".to_string());
+            adjusted.month = Some("numeric".to_string());
+            adjusted.day = Some("numeric".to_string());
+            adjusted.hour = Some("2-digit".to_string());
+            adjusted.minute = Some("2-digit".to_string());
+            adjusted.second = Some("2-digit".to_string());
+            adjusted.time_zone_name = None;
         }
         TemporalType::PlainDate => {
             adjusted.year = Some("numeric".to_string());
             adjusted.month = Some("numeric".to_string());
             adjusted.day = Some("numeric".to_string());
+            adjusted.time_zone_name = None;
         }
         TemporalType::PlainTime => {
             adjusted.hour = Some("2-digit".to_string());
             adjusted.minute = Some("2-digit".to_string());
             adjusted.second = Some("2-digit".to_string());
+            adjusted.time_zone_name = None;
         }
         TemporalType::PlainYearMonth => {
             adjusted.year = Some("numeric".to_string());
             adjusted.month = Some("numeric".to_string());
+            adjusted.time_zone_name = None;
         }
         TemporalType::PlainMonthDay => {
             adjusted.month = Some("numeric".to_string());
             adjusted.day = Some("numeric".to_string());
+            adjusted.time_zone_name = None;
         }
     }
     adjusted
 }
 
 fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
-    // Returns true if there IS overlap (i.e., formatting is allowed).
     // Instant and PlainDateTime overlap with everything.
     if matches!(tt, TemporalType::Instant | TemporalType::PlainDateTime | TemporalType::ZonedDateTime) {
+        return true;
+    }
+
+    // If no explicit date/time components (only defaults/timeZoneName), always overlap
+    if !opts.has_explicit_components {
         return true;
     }
 
     let type_has_date = matches!(tt, TemporalType::PlainDate | TemporalType::PlainYearMonth | TemporalType::PlainMonthDay);
     let type_has_time = matches!(tt, TemporalType::PlainTime);
 
-    // Style-based overlap: any overlap with the type's field set is sufficient
+    // Style-based overlap
     if opts.date_style.is_some() || opts.time_style.is_some() {
-        // If dateStyle is present and type has date fields → overlap
         if opts.date_style.is_some() && type_has_date {
             return true;
         }
-        // If timeStyle is present and type has time fields → overlap
         if opts.time_style.is_some() && type_has_time {
             return true;
         }
-        // No style matches the type's fields
         return false;
     }
 
@@ -3946,7 +3961,7 @@ impl Interpreter {
                     time_zone_name: tz_name,
                     date_style,
                     time_style,
-                    has_explicit_components: has_component || has_style,
+                    has_explicit_components: has_date_time_component || has_style,
                 });
 
                 let obj_id = obj.borrow().id.unwrap();
