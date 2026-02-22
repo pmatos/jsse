@@ -196,19 +196,39 @@ fn normalize_offset_timezone(tz: &str) -> Option<String> {
     Some(format!("{}{:02}:{:02}", sign, h.abs(), m))
 }
 
-/// Get the UTC offset in milliseconds for a timezone.
-/// For named timezones, uses standard (non-DST) offsets.
-/// For offset timezones, computes directly.
-fn tz_offset_ms(tz: &str) -> f64 {
+/// Get the UTC offset in milliseconds for a timezone at a specific UTC epoch ms.
+/// Uses chrono_tz for DST-aware offset computation for IANA timezones.
+fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
     if let Some((h, m)) = parse_offset_timezone(tz) {
         let total_min = h * 60 + if h < 0 { -(m as i32) } else { m as i32 };
         return total_min as f64 * 60_000.0;
     }
+
+    use chrono::{Offset, TimeZone, Utc};
+    use chrono_tz::Tz;
+
+    let canonical = canonicalize_timezone(tz);
+    let tz_str = if canonical.eq_ignore_ascii_case(tz) && canonical != tz.to_string() {
+        canonical
+    } else {
+        tz.to_string()
+    };
+
+    if let Ok(tz_parsed) = tz_str.parse::<Tz>() {
+        let epoch_secs = (epoch_ms / 1000.0).floor() as i64;
+        let nanos = ((epoch_ms % 1000.0) * 1_000_000.0).abs() as u32;
+        if let Some(dt) = Utc.timestamp_opt(epoch_secs, nanos).single() {
+            let offset = dt.with_timezone(&tz_parsed).offset().fix();
+            return offset.local_minus_utc() as f64 * 1000.0;
+        }
+    }
+
+    // Fallback to static lookup
     if let Some(info) = tz_lookup(tz) {
         let total_min = info.offset_hours * 60 + info.offset_minutes;
         return total_min as f64 * 60_000.0;
     }
-    0.0 // UTC fallback
+    0.0
 }
 
 fn is_valid_timezone(tz: &str) -> bool {
@@ -833,17 +853,13 @@ fn format_reduced_date_style(c: &DateComponents, style: &str, has_year: bool, ha
     }
 }
 
-fn format_time_style(c: &DateComponents, style: &str, hc: &str, tz: &str) -> String {
+fn format_time_style(c: &DateComponents, style: &str, hc: &str, tz: &str, epoch_ms: f64) -> String {
     let (hour_str, period) = format_hour(c.hour, hc);
     let uses_period = hc == "h12" || hc == "h11";
 
     match style {
         "full" => {
-            let tz_name = if is_utc_equivalent(tz) {
-                "Coordinated Universal Time"
-            } else {
-                tz
-            };
+            let tz_name = format_tz_name(tz, "long", epoch_ms);
             if uses_period {
                 format!(
                     "{}:{:02}:{:02} {} {}",
@@ -854,7 +870,7 @@ fn format_time_style(c: &DateComponents, style: &str, hc: &str, tz: &str) -> Str
             }
         }
         "long" => {
-            let short_tz = if is_utc_equivalent(tz) { "UTC" } else { tz };
+            let short_tz = format_tz_name(tz, "short", epoch_ms);
             if uses_period {
                 format!(
                     "{}:{:02}:{:02} {} {}",
@@ -965,7 +981,7 @@ fn format_with_options(ms: f64, opts: &DtfOptions) -> String {
 }
 
 fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
-    let adjusted_ms = ms + tz_offset_ms(&opts.time_zone);
+    let adjusted_ms = ms + tz_offset_ms(&opts.time_zone, ms);
     let c = timestamp_to_components(adjusted_ms);
     let hc = resolve_hour_cycle(opts);
 
@@ -998,7 +1014,7 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         });
         let time_part = effective_time_style
             .as_ref()
-            .map(|ts| format_time_style(&c, ts, hc, &opts.time_zone));
+            .map(|ts| format_time_style(&c, ts, hc, &opts.time_zone, ms));
 
         if need_reduced_date {
             let ds = opts.date_style.as_deref().unwrap_or("short");
@@ -1224,14 +1240,14 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
                 let mut final_str = format!("{}, {}", date_str, with_dp);
                 if let Some(ref tzn) = opts.time_zone_name {
                     final_str.push(' ');
-                    final_str.push_str(&format_tz_name(&opts.time_zone, tzn));
+                    final_str.push_str(&format_tz_name(&opts.time_zone, tzn, ms));
                 }
                 return final_str;
             }
             let mut final_str = with_dp;
             if let Some(ref tzn) = opts.time_zone_name {
                 final_str.push(' ');
-                final_str.push_str(&format_tz_name(&opts.time_zone, tzn));
+                final_str.push_str(&format_tz_name(&opts.time_zone, tzn, ms));
             }
             return final_str;
         }
@@ -1249,14 +1265,14 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
                     // TimeZone name
                     if let Some(ref tzn) = opts.time_zone_name {
                         final_str.push(' ');
-                        final_str.push_str(&format_tz_name(&opts.time_zone, tzn));
+                        final_str.push_str(&format_tz_name(&opts.time_zone, tzn, ms));
                     }
                     return final_str;
                 }
                 let mut final_str = with_period;
                 if let Some(ref tzn) = opts.time_zone_name {
                     final_str.push(' ');
-                    final_str.push_str(&format_tz_name(&opts.time_zone, tzn));
+                    final_str.push_str(&format_tz_name(&opts.time_zone, tzn, ms));
                 }
                 return final_str;
             }
@@ -1289,7 +1305,7 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         if !result.is_empty() {
             result.push(' ');
         }
-        result.push_str(&format_tz_name(&opts.time_zone, tzn));
+        result.push_str(&format_tz_name(&opts.time_zone, tzn, ms));
     }
 
     result
@@ -2192,7 +2208,7 @@ fn format_offset_long(hours: i32, minutes: i32) -> String {
     format!("GMT{}{:02}:{:02}", sign, ah, am)
 }
 
-fn format_tz_name(tz: &str, style: &str) -> String {
+fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
     // Handle offset timezones (+03:00, -07:00, etc.)
     if let Some((h, m)) = parse_offset_timezone(tz) {
         return match style {
@@ -2200,12 +2216,58 @@ fn format_tz_name(tz: &str, style: &str) -> String {
             _ => format_offset_short(h, m as i32),
         };
     }
+
+    // For offset-based styles, use DST-aware offset via chrono_tz
+    if matches!(style, "shortOffset" | "longOffset") {
+        let offset_ms = tz_offset_ms(tz, epoch_ms);
+        let total_secs = (offset_ms / 1000.0) as i32;
+        let hours = total_secs / 3600;
+        let minutes = (total_secs.abs() % 3600) / 60;
+        let signed_min = if hours < 0 { -(minutes) } else { minutes };
+        return match style {
+            "longOffset" => format_offset_long(hours, signed_min),
+            _ => format_offset_short(hours, signed_min),
+        };
+    }
+
+    // For named styles ("short", "long"), use chrono_tz for DST-aware names
+    {
+        use chrono::{Offset, TimeZone, Utc};
+        use chrono_tz::Tz;
+
+        let canonical = canonicalize_timezone(tz);
+        let tz_str = if canonical.eq_ignore_ascii_case(tz) && canonical != tz.to_string() {
+            canonical
+        } else {
+            tz.to_string()
+        };
+
+        if let Ok(tz_parsed) = tz_str.parse::<Tz>() {
+            let epoch_secs = (epoch_ms / 1000.0).floor() as i64;
+            let nanos = ((epoch_ms % 1000.0) * 1_000_000.0).abs() as u32;
+            if let Some(dt) = Utc.timestamp_opt(epoch_secs, nanos).single() {
+                let local = dt.with_timezone(&tz_parsed);
+                let abbr = local.format("%Z").to_string();
+                let offset = local.offset().fix();
+                let offset_secs = offset.local_minus_utc();
+
+                match style {
+                    "short" | "shortGeneric" => return abbr,
+                    "long" | "longGeneric" => {
+                        // Map common abbreviations to full names
+                        return tz_abbr_to_long_name(&abbr, offset_secs);
+                    }
+                    _ => return abbr,
+                }
+            }
+        }
+    }
+
+    // Fallback to static lookup
     if let Some(info) = tz_lookup(tz) {
         match style {
             "long" => info.long_name.to_string(),
             "short" => info.short_name.to_string(),
-            "shortOffset" => format_offset_short(info.offset_hours, info.offset_minutes),
-            "longOffset" => format_offset_long(info.offset_hours, info.offset_minutes),
             "shortGeneric" => info.short_name.to_string(),
             "longGeneric" => info.long_name.to_string(),
             _ => info.long_name.to_string(),
@@ -2221,6 +2283,49 @@ fn format_tz_name(tz: &str, style: &str) -> String {
         match style {
             "shortOffset" | "longOffset" => "GMT".to_string(),
             _ => tz.to_string(),
+        }
+    }
+}
+
+fn tz_abbr_to_long_name(abbr: &str, offset_secs: i32) -> String {
+    match abbr {
+        "EST" => "Eastern Standard Time".to_string(),
+        "EDT" => "Eastern Daylight Time".to_string(),
+        "CST" => "Central Standard Time".to_string(),
+        "CDT" => "Central Daylight Time".to_string(),
+        "MST" => "Mountain Standard Time".to_string(),
+        "MDT" => "Mountain Daylight Time".to_string(),
+        "PST" => "Pacific Standard Time".to_string(),
+        "PDT" => "Pacific Daylight Time".to_string(),
+        "AKST" => "Alaska Standard Time".to_string(),
+        "AKDT" => "Alaska Daylight Time".to_string(),
+        "HST" => "Hawaii-Aleutian Standard Time".to_string(),
+        "HDT" => "Hawaii-Aleutian Daylight Time".to_string(),
+        "GMT" | "UTC" => "Coordinated Universal Time".to_string(),
+        "BST" => "British Summer Time".to_string(),
+        "IST" => "Irish Standard Time".to_string(),
+        "CET" => "Central European Standard Time".to_string(),
+        "CEST" => "Central European Summer Time".to_string(),
+        "EET" => "Eastern European Standard Time".to_string(),
+        "EEST" => "Eastern European Summer Time".to_string(),
+        "WET" => "Western European Standard Time".to_string(),
+        "WEST" => "Western European Summer Time".to_string(),
+        "JST" => "Japan Standard Time".to_string(),
+        "KST" => "Korean Standard Time".to_string(),
+        "CST" if offset_secs == 8 * 3600 => "China Standard Time".to_string(),
+        "IST" if offset_secs == 19800 => "India Standard Time".to_string(),
+        "AEST" => "Australian Eastern Standard Time".to_string(),
+        "AEDT" => "Australian Eastern Daylight Time".to_string(),
+        "ACST" => "Australian Central Standard Time".to_string(),
+        "ACDT" => "Australian Central Daylight Time".to_string(),
+        "AWST" => "Australian Western Standard Time".to_string(),
+        "NZST" => "New Zealand Standard Time".to_string(),
+        "NZDT" => "New Zealand Daylight Time".to_string(),
+        _ => {
+            // Fallback: use static lookup or abbreviation
+            let hours = offset_secs / 3600;
+            let minutes = (offset_secs.abs() % 3600) / 60;
+            format_offset_long(hours, if hours < 0 { -(minutes) } else { minutes })
         }
     }
 }
@@ -2313,7 +2418,7 @@ fn format_reduced_date_style_to_parts(c: &DateComponents, style: &str, has_year:
     parts
 }
 
-fn format_time_style_to_parts(c: &DateComponents, style: &str, hc: &str, tz: &str) -> Vec<(String, String)> {
+fn format_time_style_to_parts(c: &DateComponents, style: &str, hc: &str, tz: &str, epoch_ms: f64) -> Vec<(String, String)> {
     let mut parts: Vec<(String, String)> = Vec::new();
     let (hour_str, period) = format_hour(c.hour, hc);
     let uses_period = hc == "h12" || hc == "h11";
@@ -2329,13 +2434,9 @@ fn format_time_style_to_parts(c: &DateComponents, style: &str, hc: &str, tz: &st
                 parts.push(("literal".to_string(), " ".to_string()));
                 parts.push(("dayPeriod".to_string(), period.to_string()));
             }
-            let tz_name = if is_utc_equivalent(tz) {
-                "Coordinated Universal Time"
-            } else {
-                tz
-            };
+            let tz_name = format_tz_name(tz, "long", epoch_ms);
             parts.push(("literal".to_string(), " ".to_string()));
-            parts.push(("timeZoneName".to_string(), tz_name.to_string()));
+            parts.push(("timeZoneName".to_string(), tz_name));
         }
         "long" => {
             parts.push(("hour".to_string(), hour_str));
@@ -2347,9 +2448,9 @@ fn format_time_style_to_parts(c: &DateComponents, style: &str, hc: &str, tz: &st
                 parts.push(("literal".to_string(), " ".to_string()));
                 parts.push(("dayPeriod".to_string(), period.to_string()));
             }
-            let short_tz = if is_utc_equivalent(tz) { "UTC" } else { tz };
+            let short_tz = format_tz_name(tz, "short", epoch_ms);
             parts.push(("literal".to_string(), " ".to_string()));
-            parts.push(("timeZoneName".to_string(), short_tz.to_string()));
+            parts.push(("timeZoneName".to_string(), short_tz));
         }
         "medium" => {
             parts.push(("hour".to_string(), hour_str));
@@ -2409,7 +2510,7 @@ fn format_to_parts_with_options_raw(
     ms: f64,
     opts: &DtfOptions,
 ) -> Vec<(String, String)> {
-    let adjusted_ms = ms + tz_offset_ms(&opts.time_zone);
+    let adjusted_ms = ms + tz_offset_ms(&opts.time_zone, ms);
     let c = timestamp_to_components(adjusted_ms);
     let hc = resolve_hour_cycle(opts);
     let mut parts: Vec<(String, String)> = Vec::new();
@@ -2437,7 +2538,7 @@ fn format_to_parts_with_options_raw(
             parts.push(("literal".to_string(), ", ".to_string()));
         }
         if let Some(ref ts) = effective_ts {
-            let time_parts = format_time_style_to_parts(&c, ts, hc, &opts.time_zone);
+            let time_parts = format_time_style_to_parts(&c, ts, hc, &opts.time_zone, ms);
             parts.extend(time_parts);
         }
         return parts;
@@ -2650,7 +2751,7 @@ fn format_to_parts_with_options_raw(
         parts.push(("literal".to_string(), " ".to_string()));
         parts.push((
             "timeZoneName".to_string(),
-            format_tz_name(&opts.time_zone, tzn),
+            format_tz_name(&opts.time_zone, tzn, ms),
         ));
     }
 
@@ -3026,7 +3127,7 @@ fn adjust_plain_temporal_ms(ms: f64, tz: &str, tt: TemporalType) -> f64 {
     match tt {
         TemporalType::PlainDate | TemporalType::PlainTime | TemporalType::PlainDateTime
         | TemporalType::PlainYearMonth | TemporalType::PlainMonthDay => {
-            ms - tz_offset_ms(tz)
+            ms - tz_offset_ms(tz, ms)
         }
         // Instant and ZonedDateTime already encode a real UTC instant
         TemporalType::Instant | TemporalType::ZonedDateTime => ms,
