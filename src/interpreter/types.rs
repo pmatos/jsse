@@ -328,13 +328,12 @@ impl Environment {
                 }
                 return Ok(());
             }
-            if binding.kind == BindingKind::Var {
-                if let Some(ref global_obj) = self.global_object {
+            if binding.kind == BindingKind::Var
+                && let Some(ref global_obj) = self.global_object {
                     global_obj
                         .borrow_mut()
                         .set_property_value(name, value.clone());
                 }
-            }
             binding.value = value;
             binding.initialized = true;
             Ok(())
@@ -894,35 +893,32 @@ impl JsObjectData {
     }
 
     fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String" {
                 let units = &s.code_units;
                 if key == "length" {
                     return Some(JsValue::Number(units.len() as f64));
                 }
-                if let Ok(idx) = key.parse::<usize>() {
-                    if idx < units.len() {
+                if let Ok(idx) = key.parse::<usize>()
+                    && idx < units.len() {
                         return Some(JsValue::String(crate::types::JsString {
                             code_units: vec![units[idx]],
                         }));
                     }
-                }
             }
-        }
         None
     }
 
     pub fn get_property(&self, key: &str) -> JsValue {
         // Module namespace: look up live binding from environment
-        if let Some(ref ns_data) = self.module_namespace {
-            if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+        if let Some(ref ns_data) = self.module_namespace
+            && let Some(binding_name) = ns_data.export_to_binding.get(key) {
                 return ns_data
                     .env
                     .borrow()
                     .get(binding_name)
                     .unwrap_or(JsValue::Undefined);
             }
-        }
         if let Some(ref map) = self.parameter_map
             && let Some((env_ref, param_name)) = map.get(key)
             && let Some(val) = env_ref.borrow().get(param_name)
@@ -941,14 +937,13 @@ impl JsObjectData {
         {
             return elems[idx].clone();
         }
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key) {
                 if is_valid_integer_index(ta, index) {
                     return typed_array_get_index(ta, index as usize);
                 }
                 return JsValue::Undefined;
             }
-        }
         if let Some(val) = self.string_exotic_value(key) {
             return val;
         }
@@ -982,8 +977,8 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key) {
                 if is_valid_integer_index(ta, index) {
                     return Some(PropertyDescriptor {
                         value: Some(typed_array_get_index(ta, index as usize)),
@@ -996,9 +991,8 @@ impl JsObjectData {
                 }
                 return None;
             }
-        }
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String" {
                 let units = &s.code_units;
                 if key == "length" {
                     return Some(PropertyDescriptor {
@@ -1010,8 +1004,8 @@ impl JsObjectData {
                         set: None,
                     });
                 }
-                if let Ok(idx) = key.parse::<usize>() {
-                    if idx < units.len() {
+                if let Ok(idx) = key.parse::<usize>()
+                    && idx < units.len() {
                         return Some(PropertyDescriptor {
                             value: Some(JsValue::String(crate::types::JsString {
                                 code_units: vec![units[idx]],
@@ -1023,9 +1017,7 @@ impl JsObjectData {
                             set: None,
                         });
                     }
-                }
             }
-        }
         if let Some(proto) = &self.prototype {
             return proto.borrow().get_property_descriptor(key);
         }
@@ -1058,8 +1050,8 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key) {
                 if is_valid_integer_index(ta, index) {
                     return Some(PropertyDescriptor {
                         value: Some(typed_array_get_index(ta, index as usize)),
@@ -1072,9 +1064,8 @@ impl JsObjectData {
                 }
                 return None;
             }
-        }
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String" {
                 let units = &s.code_units;
                 if key == "length" {
                     return Some(PropertyDescriptor {
@@ -1086,8 +1077,8 @@ impl JsObjectData {
                         set: None,
                     });
                 }
-                if let Ok(idx) = key.parse::<usize>() {
-                    if idx < units.len() {
+                if let Ok(idx) = key.parse::<usize>()
+                    && idx < units.len() {
                         return Some(PropertyDescriptor {
                             value: Some(JsValue::String(crate::types::JsString {
                                 code_units: vec![units[idx]],
@@ -1099,16 +1090,14 @@ impl JsObjectData {
                             set: None,
                         });
                     }
-                }
             }
-        }
         None
     }
 
     pub fn get_own_property(&self, key: &str) -> Option<PropertyDescriptor> {
         // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
-        if let Some(ref ns_data) = self.module_namespace {
-            if !key.starts_with("Symbol(") {
+        if let Some(ref ns_data) = self.module_namespace
+            && !key.starts_with("Symbol(") {
                 if ns_data.export_names.contains(&key.to_string()) {
                     let val = if let Some(binding_name) = ns_data.export_to_binding.get(key) {
                         ns_data
@@ -1132,13 +1121,12 @@ impl JsObjectData {
                 return self.properties.get(key).cloned();
             }
             // Symbol keys: fall through to ordinary
-        }
         if let Some(desc) = self.properties.get(key) {
             return Some(desc.clone());
         }
         // TypedArray: §10.4.5.1
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key) {
                 if is_valid_integer_index(ta, index) {
                     return Some(PropertyDescriptor {
                         value: Some(typed_array_get_index(ta, index as usize)),
@@ -1151,10 +1139,9 @@ impl JsObjectData {
                 }
                 return None;
             }
-        }
         // String exotic: §10.4.3.1
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String" {
                 if key == "length" {
                     return Some(PropertyDescriptor::data(
                         JsValue::Number(s.code_units.len() as f64),
@@ -1163,8 +1150,8 @@ impl JsObjectData {
                         false,
                     ));
                 }
-                if let Ok(idx) = key.parse::<usize>() {
-                    if idx < s.code_units.len() {
+                if let Ok(idx) = key.parse::<usize>()
+                    && idx < s.code_units.len() {
                         let ch = std::char::from_u32(s.code_units[idx] as u32)
                             .map(|c| c.to_string())
                             .unwrap_or_else(|| String::from_utf16_lossy(&[s.code_units[idx]]));
@@ -1175,30 +1162,26 @@ impl JsObjectData {
                             false,
                         ));
                     }
-                }
             }
-        }
         None
     }
 
     pub fn has_own_property(&self, key: &str) -> bool {
         // Module namespace exotic: [[HasProperty]] checks export list
-        if let Some(ref ns_data) = self.module_namespace {
-            if !key.starts_with("Symbol(") {
+        if let Some(ref ns_data) = self.module_namespace
+            && !key.starts_with("Symbol(") {
                 return ns_data.export_names.contains(&key.to_string());
             }
-        }
         if self.properties.contains_key(key) {
             return true;
         }
         // TypedArray: §10.4.5.2
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key) {
                 return is_valid_integer_index(ta, index);
             }
-        }
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String" {
                 if key == "length" {
                     return true;
                 }
@@ -1206,7 +1189,6 @@ impl JsObjectData {
                     return idx < s.code_units.len();
                 }
             }
-        }
         false
     }
 
@@ -1219,8 +1201,8 @@ impl JsObjectData {
         let mut string_keys: Vec<String> = Vec::new();
 
         // String exotic: indices come first (they are enumerable)
-        if let Some(JsValue::String(ref s)) = self.primitive_value {
-            if self.class_name == "String" {
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String" {
                 let utf16_len = s.code_units.len();
                 for i in 0..utf16_len {
                     let k = i.to_string();
@@ -1229,7 +1211,6 @@ impl JsObjectData {
                     }
                 }
             }
-        }
 
         // Own properties: add ALL to seen set (even non-enumerable, to shadow proto)
         for k in &self.property_order {
@@ -1238,15 +1219,14 @@ impl JsObjectData {
             }
             if let Some(desc) = self.properties.get(k) {
                 let is_enumerable = desc.enumerable != Some(false);
-                if seen.insert(k.clone()) {
-                    if is_enumerable {
+                if seen.insert(k.clone())
+                    && is_enumerable {
                         if let Some(idx) = parse_array_index(k) {
                             index_keys.push((idx, k.clone()));
                         } else {
                             string_keys.push(k.clone());
                         }
                     }
-                }
             }
         }
 
@@ -1294,28 +1274,23 @@ impl JsObjectData {
                     return true;
                 }
                 // Check each present field matches current
-                if let Some(ref v) = desc.value {
-                    if let Some(ref cv) = current.value {
-                        if !same_value(v, cv) {
+                if let Some(ref v) = desc.value
+                    && let Some(ref cv) = current.value
+                        && !same_value(v, cv) {
                             return false;
                         }
-                    }
-                }
-                if let Some(w) = desc.writable {
-                    if current.writable != Some(w) {
+                if let Some(w) = desc.writable
+                    && current.writable != Some(w) {
                         return false;
                     }
-                }
-                if let Some(e) = desc.enumerable {
-                    if current.enumerable != Some(e) {
+                if let Some(e) = desc.enumerable
+                    && current.enumerable != Some(e) {
                         return false;
                     }
-                }
-                if let Some(c) = desc.configurable {
-                    if current.configurable != Some(c) {
+                if let Some(c) = desc.configurable
+                    && current.configurable != Some(c) {
                         return false;
                     }
-                }
                 if desc.get.is_some() || desc.set.is_some() {
                     return false;
                 }
@@ -1324,8 +1299,8 @@ impl JsObjectData {
             return false;
         }
         // TypedArray: §10.4.5.3 [[DefineOwnProperty]]
-        if self.typed_array_info.is_some() {
-            if let Some(index) = canonical_numeric_index_string(&key) {
+        if self.typed_array_info.is_some()
+            && let Some(index) = canonical_numeric_index_string(&key) {
                 let ta = self.typed_array_info.as_ref().unwrap();
                 if !is_valid_integer_index(ta, index) {
                     return false;
@@ -1349,7 +1324,6 @@ impl JsObjectData {
                 }
                 return true;
             }
-        }
         // Check array_elements for existing array index properties
         let current_from_array = if !self.properties.contains_key(&key) {
             if let Some(ref elems) = self.array_elements
@@ -1563,18 +1537,17 @@ impl JsObjectData {
     }
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key) {
                 if is_valid_integer_index(ta, index) {
                     let ta_clone = ta.clone();
                     return typed_array_set_index(&ta_clone, index as usize, &value);
                 }
                 return false;
             }
-        }
         // ArraySetLength (spec §10.4.2.1): reducing length deletes configurable properties
-        if self.class_name == "Array" && key == "length" {
-            if let JsValue::Number(new_len_f) = &value {
+        if self.class_name == "Array" && key == "length"
+            && let JsValue::Number(new_len_f) = &value {
                 let new_len_u32 = *new_len_f as u32;
                 if (new_len_u32 as f64) == *new_len_f {
                     let mut actual_new_len = new_len_u32;
@@ -1589,8 +1562,8 @@ impl JsObjectData {
                                 None
                             }
                         });
-                    if let Some(old_len) = old_len {
-                        if new_len_u32 < old_len {
+                    if let Some(old_len) = old_len
+                        && new_len_u32 < old_len {
                             let mut idx_keys: Vec<(u32, String)> = self
                                 .properties
                                 .keys()
@@ -1620,22 +1593,20 @@ impl JsObjectData {
                                 elements.truncate(actual_new_len as usize);
                             }
                         }
-                    }
                     if let Some(desc) = self.properties.get_mut("length") {
                         desc.value = Some(JsValue::Number(actual_new_len as f64));
                         return true;
                     }
                 }
             }
-        }
         if let Some(ref map) = self.parameter_map
             && let Some((env_ref, param_name)) = map.get(key)
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
         }
         // Keep array_elements in sync with properties for numeric indices
-        if let Some(ref mut elements) = self.array_elements {
-            if let Ok(idx) = key.parse::<usize>() {
+        if let Some(ref mut elements) = self.array_elements
+            && let Ok(idx) = key.parse::<usize>() {
                 // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
                 if idx < elements.len() {
                     elements[idx] = value.clone();
@@ -1652,17 +1623,14 @@ impl JsObjectData {
                 } else if idx < 0xFFFF_FFFF {
                     // Valid array index but too sparse for array_elements — update length
                     let new_len = (idx + 1) as f64;
-                    if let Some(len_desc) = self.properties.get_mut("length") {
-                        if let Some(JsValue::Number(cur_len)) = &len_desc.value {
-                            if new_len > *cur_len {
+                    if let Some(len_desc) = self.properties.get_mut("length")
+                        && let Some(JsValue::Number(cur_len)) = &len_desc.value
+                            && new_len > *cur_len {
                                 len_desc.value = Some(JsValue::Number(new_len));
                             }
-                        }
-                    }
                 }
                 // idx >= 0xFFFFFFFF: not a valid array index, stored as named property
             }
-        }
         if let Some(desc) = self.properties.get_mut(key) {
             if desc.writable == Some(false) {
                 return false;

@@ -2490,13 +2490,12 @@ impl Interpreter {
                         let unregister_token = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                         // If CanBeHeldWeakly(unregisterToken) is false:
                         //   If unregisterToken is not undefined, throw TypeError
-                        if !interp.can_be_held_weakly(&unregister_token) {
-                            if !matches!(unregister_token, JsValue::Undefined) {
+                        if !interp.can_be_held_weakly(&unregister_token)
+                            && !matches!(unregister_token, JsValue::Undefined) {
                                 return Completion::Throw(interp.create_type_error(
                                     "FinalizationRegistry.register: unregisterToken must be an object, non-registered symbol, or undefined",
                                 ));
                             }
-                        }
                         // Store cell: map_data stores (target, heldValue), set_data stores unregisterToken
                         let token_entry = if matches!(unregister_token, JsValue::Undefined) {
                             None

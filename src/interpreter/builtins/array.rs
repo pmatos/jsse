@@ -91,8 +91,8 @@ fn obj_set_throw(
 ) -> Result<(), JsValue> {
     if let JsValue::Object(obj_ref) = o {
         // Check for Proxy
-        if let Some(obj) = interp.get_object(obj_ref.id) {
-            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+        if let Some(obj) = interp.get_object(obj_ref.id)
+            && (obj.borrow().is_proxy() || obj.borrow().proxy_revoked) {
                 match interp.proxy_set(obj_ref.id, key, value, o) {
                     Ok(true) => return Ok(()),
                     Ok(false) => {
@@ -103,13 +103,12 @@ fn obj_set_throw(
                     Err(e) => return Err(e),
                 }
             }
-        }
         // Check for setter in prototype chain
         if let Some(obj) = interp.get_object(obj_ref.id) {
             let desc = obj.borrow().get_property_descriptor(key);
             if let Some(ref d) = desc {
-                if let Some(ref setter) = d.set {
-                    if !matches!(setter, JsValue::Undefined) {
+                if let Some(ref setter) = d.set
+                    && !matches!(setter, JsValue::Undefined) {
                         let setter = setter.clone();
                         let this = o.clone();
                         return match interp.call_function(&setter, &this, &[value]) {
@@ -118,7 +117,6 @@ fn obj_set_throw(
                             _ => Ok(()),
                         };
                     }
-                }
                 // Accessor with no setter
                 if d.is_accessor_descriptor() {
                     return Err(interp.create_type_error(&format!(
@@ -159,8 +157,8 @@ pub(crate) fn create_data_property_or_throw(
 ) -> Result<(), JsValue> {
     if let JsValue::Object(obj_ref) = o {
         // Check for Proxy defineProperty trap
-        if let Some(obj) = interp.get_object(obj_ref.id) {
-            if obj.borrow().is_proxy() {
+        if let Some(obj) = interp.get_object(obj_ref.id)
+            && obj.borrow().is_proxy() {
                 // Build descriptor object for proxy trap
                 let desc_obj = interp.create_object();
                 {
@@ -184,7 +182,6 @@ pub(crate) fn create_data_property_or_throw(
                     Err(e) => Err(e),
                 };
             }
-        }
         if let Some(obj) = interp.get_object(obj_ref.id) {
             // Check extensibility — if object is not extensible and property doesn't exist, fail
             {
@@ -195,13 +192,12 @@ pub(crate) fn create_data_property_or_throw(
                     )));
                 }
                 // Check for non-configurable existing property
-                if let Some(desc) = borrow.get_own_property(key) {
-                    if desc.configurable == Some(false) {
+                if let Some(desc) = borrow.get_own_property(key)
+                    && desc.configurable == Some(false) {
                         return Err(
                             interp.create_type_error(&format!("Cannot redefine property: {key}"))
                         );
                     }
-                }
             }
             let mut borrow = obj.borrow_mut();
             if let Some(ref mut elems) = borrow.array_elements
@@ -248,8 +244,8 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
 fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<(), JsValue> {
     if let JsValue::Object(obj_ref) = o {
         // Check for Proxy deleteProperty trap
-        if let Some(obj) = interp.get_object(obj_ref.id) {
-            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+        if let Some(obj) = interp.get_object(obj_ref.id)
+            && (obj.borrow().is_proxy() || obj.borrow().proxy_revoked) {
                 match interp.proxy_delete_property(obj_ref.id, key) {
                     Ok(true) => return Ok(()),
                     Ok(false) => {
@@ -260,16 +256,14 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
                     Err(e) => return Err(e),
                 }
             }
-        }
         // Check if property is non-configurable
         if let Some(obj) = interp.get_object(obj_ref.id) {
             let desc = obj.borrow().get_own_property(key);
-            if let Some(ref d) = desc {
-                if d.configurable == Some(false) {
+            if let Some(ref d) = desc
+                && d.configurable == Some(false) {
                     return Err(interp
                         .create_type_error(&format!("Cannot delete property '{key}' of object")));
                 }
-            }
         }
     }
     obj_delete(interp, o, key);
@@ -288,26 +282,24 @@ fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
 
 // Set(O, "length", len, true) — uses obj_set_throw for setter invocation
 fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result<(), JsValue> {
-    if let Some(obj) = get_obj(interp, o) {
-        if obj.borrow().array_elements.is_some() {
+    if let Some(obj) = get_obj(interp, o)
+        && obj.borrow().array_elements.is_some() {
             // Check if length is writable
             let desc = obj.borrow().get_own_property("length");
-            if let Some(ref d) = desc {
-                if d.writable == Some(false) {
+            if let Some(ref d) = desc
+                && d.writable == Some(false) {
                     return Err(
                         interp.create_type_error("Cannot assign to read only property 'length'")
                     );
                 }
-            }
             // Check if frozen (not extensible + all props non-configurable)
             if !obj.borrow().extensible {
                 let desc = obj.borrow().get_own_property("length");
-                if let Some(ref d) = desc {
-                    if d.configurable == Some(false) && d.writable == Some(false) {
+                if let Some(ref d) = desc
+                    && d.configurable == Some(false) && d.writable == Some(false) {
                         return Err(interp
                             .create_type_error("Cannot assign to read only property 'length'"));
                     }
-                }
             }
             let mut borrow = obj.borrow_mut();
             if let Some(ref mut elems) = borrow.array_elements {
@@ -316,7 +308,6 @@ fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result
             borrow.set_property_value("length", JsValue::Number(len as f64));
             return Ok(());
         }
-    }
     obj_set_throw(interp, o, "length", JsValue::Number(len as f64))
 }
 
@@ -2394,7 +2385,7 @@ impl Interpreter {
                     for k in 0..source_len {
                         let pk = k.to_string();
                         let exists = obj_has_throw(interp, source, &pk)
-                            .map_err(|e| Completion::Throw(e))?;
+                            .map_err(Completion::Throw)?;
                         if exists {
                             let elem = match obj_get(interp, source, &pk) {
                                 Ok(v) => v,
@@ -3201,14 +3192,13 @@ impl Interpreter {
                         };
                         if done {
                             // Set length and resolve
-                            if let JsValue::Object(ref o) = arr {
-                                if let Some(obj) = interp.get_object(o.id) {
+                            if let JsValue::Object(ref o) = arr
+                                && let Some(obj) = interp.get_object(o.id) {
                                     obj.borrow_mut().insert_property(
                                         "length".to_string(),
                                         PropertyDescriptor::data(JsValue::Number(k as f64), true, false, false),
                                     );
                                 }
-                            }
                             let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
                             return Completion::Normal(promise);
                         }
@@ -3256,8 +3246,8 @@ impl Interpreter {
                         }
                         // Set element
                         let key_str = k.to_string();
-                        if let JsValue::Object(ref o) = arr {
-                            if let Some(obj) = interp.get_object(o.id) {
+                        if let JsValue::Object(ref o) = arr
+                            && let Some(obj) = interp.get_object(o.id) {
                                 obj.borrow_mut().insert_property(
                                     key_str,
                                     PropertyDescriptor::data(value, true, true, true),
@@ -3269,7 +3259,6 @@ impl Interpreter {
                                     }
                                 }
                             }
-                        }
                         k += 1;
                     }
                 } else {
@@ -3353,8 +3342,8 @@ impl Interpreter {
                                 _ => JsValue::Undefined,
                             };
                         }
-                        if let JsValue::Object(ref o) = arr {
-                            if let Some(obj) = interp.get_object(o.id) {
+                        if let JsValue::Object(ref o) = arr
+                            && let Some(obj) = interp.get_object(o.id) {
                                 obj.borrow_mut().insert_property(
                                     key_str,
                                     PropertyDescriptor::data(value, true, true, true),
@@ -3365,17 +3354,15 @@ impl Interpreter {
                                     }
                                 }
                             }
-                        }
                     }
                     // Set length and resolve
-                    if let JsValue::Object(ref o) = arr {
-                        if let Some(obj) = interp.get_object(o.id) {
+                    if let JsValue::Object(ref o) = arr
+                        && let Some(obj) = interp.get_object(o.id) {
                             obj.borrow_mut().insert_property(
                                 "length".to_string(),
                                 PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
                             );
                         }
-                    }
                     let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
                     Completion::Normal(promise)
                 }

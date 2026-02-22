@@ -618,8 +618,8 @@ pub fn match_rtl(
                     flags,
                     full_input,
                     full_offset,
-                ) {
-                    if let Some(result) = match_rtl(
+                )
+                    && let Some(result) = match_rtl(
                         rest,
                         input,
                         start,
@@ -632,7 +632,6 @@ pub fn match_rtl(
                         *captures = alt_caps;
                         return Some(result);
                     }
-                }
             }
             None
         }
@@ -1094,14 +1093,12 @@ fn match_ltr(
             for alt in alternatives {
                 let mut alt_caps = captures.clone();
                 if let Some(end) = match_ltr(alt, input, start_pos, &mut alt_caps, ext_caps, flags)
-                {
-                    if let Some(result) =
+                    && let Some(result) =
                         match_ltr(rest, input, end, &mut alt_caps, ext_caps, flags)
                     {
                         *captures = alt_caps;
                         return Some(result);
                     }
-                }
             }
             None
         }
@@ -1274,11 +1271,10 @@ fn get_backref_text(
     _full_offset: usize,
 ) -> String {
     // Try internal captures first (char-index based)
-    if n < captures.len() {
-        if let Some((start, end)) = captures[n] {
+    if n < captures.len()
+        && let Some((start, end)) = captures[n] {
             return input[start..end].iter().collect();
         }
-    }
     // Fall through to external captures (string-based) if internal is absent
     if n < ext_caps.len() {
         return ext_caps[n].clone().unwrap_or_default();
@@ -1292,11 +1288,10 @@ fn get_backref_text_ltr(
     n: usize,
     input: &[char],
 ) -> String {
-    if n < captures.len() {
-        if let Some((start, end)) = captures[n] {
+    if n < captures.len()
+        && let Some((start, end)) = captures[n] {
             return input[start..end].iter().collect();
         }
-    }
     if n < ext_caps.len() {
         return ext_caps[n].clone().unwrap_or_default();
     }
@@ -1660,22 +1655,20 @@ pub fn match_with_lookbehind(
                     if marker_groups.contains(&(stripped_idx as u32)) {
                         continue;
                     }
-                    if orig_idx < result.len() {
-                        if let Some(m) = caps.get(stripped_idx) {
+                    if orig_idx < result.len()
+                        && let Some(m) = caps.get(stripped_idx) {
                             result[orig_idx] = Some((m.start(), m.end()));
                         }
-                    }
                     orig_idx += 1;
                 }
 
                 // Merge lookbehind captures (convert char offsets to byte offsets)
                 for lb_caps in &lb_cap_results {
                     for (idx, cap) in lb_caps.iter().enumerate() {
-                        if idx > 0 && idx < result.len() {
-                            if let Some((cs, ce)) = cap {
+                        if idx > 0 && idx < result.len()
+                            && let Some((cs, ce)) = cap {
                                 result[idx] = Some((char_to_byte[*cs], char_to_byte[*ce]));
                             }
-                        }
                     }
                 }
 
@@ -1835,11 +1828,10 @@ pub fn match_with_lookbehind_no_backtrack(
             // Merge lookbehind captures
             for lb_caps in &lb_caps_all {
                 for (idx, cap) in lb_caps.iter().enumerate() {
-                    if idx > 0 && idx < result.len() {
-                        if let Some((cs, ce)) = cap {
+                    if idx > 0 && idx < result.len()
+                        && let Some((cs, ce)) = cap {
                             result[idx] = Some((char_to_byte_fn(*cs), char_to_byte_fn(*ce)));
                         }
-                    }
                 }
             }
 

@@ -85,8 +85,8 @@ fn to_relative_to_date(
             if !after.starts_with("u-ca=") {
                 // This is a ZonedDateTime string
                 if let Some(parsed) = super::parse_temporal_date_time_string(&raw) {
-                    if let Some(ref offset) = parsed.offset {
-                        if !parsed.has_utc_designator {
+                    if let Some(ref offset) = parsed.offset
+                        && !parsed.has_utc_designator {
                             let tz_end = after.find(']').unwrap_or(after.len());
                             let tz_name = &after[..tz_end];
                             if let Some(canonical_tz) = super::parse_utc_offset_timezone(tz_name) {
@@ -115,7 +115,6 @@ fn to_relative_to_date(
                                 }
                             }
                         }
-                    }
                     // CheckISODaysRange + epoch_ns validation for ZDT relativeTo
                     let zdt_epoch_ns = if let Some(ref offset) = parsed.offset {
                         let wall_epoch_days =
@@ -160,8 +159,8 @@ fn to_relative_to_date(
         }
     }
     // If the value is a Temporal object, handle directly (no property bag reading)
-    if let JsValue::Object(obj_ref) = val {
-        if let Some(obj) = interp.get_object(obj_ref.id) {
+    if let JsValue::Object(obj_ref) = val
+        && let Some(obj) = interp.get_object(obj_ref.id) {
             let td = obj.borrow().temporal_data.clone();
             if let Some(super::TemporalData::ZonedDateTime {
                 epoch_nanoseconds,
@@ -193,7 +192,6 @@ fn to_relative_to_date(
                 return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
             }
         }
-    }
 
     // Property bag: read ALL fields in alphabetical order per spec PrepareTemporalFields.
     if let JsValue::Object(_) = val {
@@ -352,13 +350,12 @@ fn to_relative_to_date(
         let month = if let Some(ref mc) = month_code_str {
             match super::plain_date::month_code_to_number_pub(mc) {
                 Some(n) => {
-                    if let Some(explicit_m) = month_coerced {
-                        if explicit_m != n as i32 {
+                    if let Some(explicit_m) = month_coerced
+                        && explicit_m != n as i32 {
                             return Err(Completion::Throw(
                                 interp.create_range_error("month and monthCode conflict"),
                             ));
                         }
-                    }
                     n
                 }
                 None => {
@@ -693,7 +690,7 @@ fn round_relative_duration(
             );
             if smallest_unit == "week" && dd != 0 {
                 dw = dd / 7;
-                dd = dd % 7;
+                dd %= 7;
             }
             Ok((
                 dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -890,7 +887,7 @@ impl Interpreter {
             "negated".to_string(),
             0,
             |interp, this, _args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -907,7 +904,7 @@ impl Interpreter {
             "abs".to_string(),
             0,
             |interp, this, _args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -934,7 +931,7 @@ impl Interpreter {
             "with".to_string(),
             1,
             |interp, this, args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -992,7 +989,7 @@ impl Interpreter {
             "add".to_string(),
             1,
             |interp, this, args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -1035,7 +1032,7 @@ impl Interpreter {
             "subtract".to_string(),
             1,
             |interp, this, args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -1080,7 +1077,7 @@ impl Interpreter {
             "round".to_string(),
             1,
             |interp, this, args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -1231,7 +1228,7 @@ impl Interpreter {
             "total".to_string(),
             1,
             |interp, this, args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -1395,7 +1392,7 @@ impl Interpreter {
             "toString".to_string(),
             0,
             |interp, this, args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -1436,7 +1433,7 @@ impl Interpreter {
             "toJSON".to_string(),
             0,
             |interp, this, _args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -1458,7 +1455,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, _args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -1591,8 +1588,8 @@ impl Interpreter {
         ));
 
         // Constructor.prototype
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 let proto_val = JsValue::Object(crate::types::JsObject {
                     id: proto.borrow().id.unwrap(),
                 });
@@ -1601,7 +1598,6 @@ impl Interpreter {
                     PropertyDescriptor::data(proto_val, false, false, false),
                 );
             }
-        }
 
         // prototype.constructor
         proto.borrow_mut().insert_property(
@@ -1623,11 +1619,10 @@ impl Interpreter {
                 create_duration_result(interp, y, mo, w, d, h, mi, s, ms, us, ns)
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
-        }
 
         // Duration.compare(one, two)
         let compare_fn = self.create_function(JsFunction::native(
@@ -1748,12 +1743,11 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut()
                     .insert_builtin("compare".to_string(), compare_fn);
             }
-        }
 
         // Register Duration on Temporal namespace
         temporal_obj.borrow_mut().insert_property(
@@ -1910,8 +1904,8 @@ pub(crate) fn to_temporal_duration_record(
         ));
     }
     // Check for existing Duration instance
-    if let JsValue::Object(o) = &item {
-        if let Some(obj) = interp.get_object(o.id) {
+    if let JsValue::Object(o) = &item
+        && let Some(obj) = interp.get_object(o.id) {
             let data = obj.borrow();
             if let Some(TemporalData::Duration {
                 years,
@@ -1940,7 +1934,6 @@ pub(crate) fn to_temporal_duration_record(
                 ));
             }
         }
-    }
     // Property bag — read all plural fields
     let obj_val = item.clone();
     macro_rules! get_dur_field {
@@ -2188,10 +2181,7 @@ fn parse_to_string_options(
     options: Option<&JsValue>,
 ) -> Result<(Option<u8>, &'static str), Completion> {
     let opt_val = options.cloned().unwrap_or(JsValue::Undefined);
-    let has_opts = match super::get_options_object(interp, &opt_val) {
-        Ok(v) => v,
-        Err(c) => return Err(c),
-    };
+    let has_opts = super::get_options_object(interp, &opt_val)?;
     if !has_opts {
         return Ok((None, "trunc"));
     }
@@ -2215,7 +2205,7 @@ fn parse_to_string_options(
             )));
         }
         let floored = n.floor();
-        if floored < 0.0 || floored > 9.0 {
+        if !(0.0..=9.0).contains(&floored) {
             return Err(Completion::Throw(interp.create_range_error(
                 "fractionalSecondDigits must be 0-9 or 'auto'",
             )));
@@ -2536,11 +2526,10 @@ fn format_duration_iso(
     } else {
         days.abs() as i128
     };
-    if precision.is_some() {
-        if balanced_s > MAX_SAFE || ami > MAX_SAFE || ah > MAX_SAFE || total_days > MAX_SAFE {
+    if precision.is_some()
+        && (balanced_s > MAX_SAFE || ami > MAX_SAFE || ah > MAX_SAFE || total_days > MAX_SAFE) {
             return Err("Rounded duration is out of range".to_string());
         }
-    }
 
     let mut result = String::new();
     if sign < 0 {
@@ -2656,12 +2645,10 @@ fn round_i128_to_increment(value: i128, increment: i128, mode: &str) -> i128 {
                 expanded
             } else if remainder * 2 < increment {
                 truncated
+            } else if (truncated / increment) % 2 == 0 {
+                truncated
             } else {
-                if (truncated / increment) % 2 == 0 {
-                    truncated
-                } else {
-                    expanded
-                }
+                expanded
             }
         }
         _ => truncated,

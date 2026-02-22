@@ -781,8 +781,8 @@ impl Interpreter {
                     }
                     let separator = args.first().cloned().unwrap_or(JsValue::Undefined);
                     // Check for Symbol.split on the separator
-                    if let JsValue::Object(ref o) = separator {
-                        if let Some(key) = interp.get_symbol_key("split") {
+                    if let JsValue::Object(ref o) = separator
+                        && let Some(key) = interp.get_symbol_key("split") {
                             let method = match interp.get_object_property(o.id, &key, &separator) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -798,7 +798,6 @@ impl Interpreter {
                                 );
                             }
                         }
-                    }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -884,8 +883,8 @@ impl Interpreter {
                         ));
                     }
                     let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_value {
-                        if let Some(key) = interp.get_symbol_key("replace") {
+                    if let JsValue::Object(ref o) = search_value
+                        && let Some(key) = interp.get_symbol_key("replace") {
                             let method = match interp.get_object_property(o.id, &key, &search_value)
                             {
                                 Completion::Normal(v) => v,
@@ -902,7 +901,6 @@ impl Interpreter {
                                 );
                             }
                         }
-                    }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -1188,8 +1186,8 @@ impl Interpreter {
                         ));
                     }
                     let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = regexp {
-                        if let Some(key) = interp.get_symbol_key("search") {
+                    if let JsValue::Object(ref o) = regexp
+                        && let Some(key) = interp.get_symbol_key("search") {
                             let method = match interp.get_object_property(o.id, &key, &regexp) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -1200,7 +1198,6 @@ impl Interpreter {
                                 return interp.call_function(&method, &regexp, &[this_str]);
                             }
                         }
-                    }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
@@ -1244,8 +1241,8 @@ impl Interpreter {
                         ));
                     }
                     let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = regexp {
-                        if let Some(key) = interp.get_symbol_key("match") {
+                    if let JsValue::Object(ref o) = regexp
+                        && let Some(key) = interp.get_symbol_key("match") {
                             let method = match interp.get_object_property(o.id, &key, &regexp) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -1256,7 +1253,6 @@ impl Interpreter {
                                 return interp.call_function(&method, &regexp, &[this_str]);
                             }
                         }
-                    }
                     let s = match to_str(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,

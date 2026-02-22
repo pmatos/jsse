@@ -67,19 +67,17 @@ fn round_ns_i128(total: i128, increment: i128, mode: &str) -> i128 {
         "halfExpand" => {
             let abs_rem = remainder.unsigned_abs();
             let half = increment.unsigned_abs() / 2;
-            let exact_half = increment.unsigned_abs() % 2 == 0 && abs_rem == half;
+            let exact_half = increment.unsigned_abs().is_multiple_of(2) && abs_rem == half;
             if total >= 0 {
                 if abs_rem > half || (exact_half && abs_rem >= half) {
                     quotient + 1
                 } else {
                     quotient
                 }
+            } else if abs_rem > half || (exact_half && abs_rem >= half) {
+                quotient - 1
             } else {
-                if abs_rem > half || (exact_half && abs_rem >= half) {
-                    quotient - 1
-                } else {
-                    quotient
-                }
+                quotient
             }
         }
         "halfTrunc" => {
@@ -522,13 +520,12 @@ fn to_temporal_zoned_date_time_with_options(
             let month_raw: i32 = if let Some(ref mc) = month_code_str {
                 match super::plain_date::month_code_to_number_pub(mc) {
                     Some(n) => {
-                        if let Some(explicit_m) = month_coerced {
-                            if explicit_m != n as i32 {
+                        if let Some(explicit_m) = month_coerced
+                            && explicit_m != n as i32 {
                                 return Completion::Throw(
                                     interp.create_range_error("month and monthCode conflict"),
                                 );
                             }
-                        }
                         n as i32
                     }
                     None => {
@@ -562,26 +559,26 @@ fn to_temporal_zoned_date_time_with_options(
                     if day_i > super::iso_days_in_month(year, month_raw as u8) as f64 {
                         return Completion::Throw(interp.create_range_error("day out of range"));
                     }
-                    if hour_raw < 0 || hour_raw > 23 {
+                    if !(0..=23).contains(&hour_raw) {
                         return Completion::Throw(interp.create_range_error("hour out of range"));
                     }
-                    if minute_raw < 0 || minute_raw > 59 {
+                    if !(0..=59).contains(&minute_raw) {
                         return Completion::Throw(interp.create_range_error("minute out of range"));
                     }
-                    if second_raw < 0 || second_raw > 59 {
+                    if !(0..=59).contains(&second_raw) {
                         return Completion::Throw(interp.create_range_error("second out of range"));
                     }
-                    if millisecond_raw < 0 || millisecond_raw > 999 {
+                    if !(0..=999).contains(&millisecond_raw) {
                         return Completion::Throw(
                             interp.create_range_error("millisecond out of range"),
                         );
                     }
-                    if microsecond_raw < 0 || microsecond_raw > 999 {
+                    if !(0..=999).contains(&microsecond_raw) {
                         return Completion::Throw(
                             interp.create_range_error("microsecond out of range"),
                         );
                     }
-                    if nanosecond_raw < 0 || nanosecond_raw > 999 {
+                    if !(0..=999).contains(&nanosecond_raw) {
                         return Completion::Throw(
                             interp.create_range_error("nanosecond out of range"),
                         );
@@ -637,13 +634,12 @@ fn to_temporal_zoned_date_time_with_options(
                 "use" => bag_offset_ns.map(|o| o as i128).unwrap_or(tz_offset),
                 "ignore" => tz_offset,
                 "reject" => {
-                    if let Some(bag_ns) = bag_offset_ns {
-                        if bag_ns as i128 != tz_offset {
+                    if let Some(bag_ns) = bag_offset_ns
+                        && bag_ns as i128 != tz_offset {
                             return Completion::Throw(
                                 interp.create_range_error("offset does not agree with time zone"),
                             );
                         }
-                    }
                     tz_offset
                 }
                 "prefer" => {
@@ -938,10 +934,7 @@ fn parse_zdt_options(
     options: &JsValue,
     default_offset: &str,
 ) -> Result<(String, String, String), Completion> {
-    let has_options = match super::get_options_object(interp, options) {
-        Ok(v) => v,
-        Err(c) => return Err(c),
-    };
+    let has_options = super::get_options_object(interp, options)?;
     if !has_options {
         return Ok((
             "compatible".to_string(),
@@ -1062,7 +1055,7 @@ fn zdt_to_string(
     let minute = ((day_ns / NS_PER_MIN) % 60) as u8;
     let hour = ((day_ns / NS_PER_HOUR) % 24) as u8;
 
-    let year_str = if year >= 0 && year <= 9999 {
+    let year_str = if (0..=9999).contains(&year) {
         format!("{year:04}")
     } else if year >= 0 {
         format!("+{year:06}")
@@ -1310,7 +1303,7 @@ impl Interpreter {
                 "get hoursInDay".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, _cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, _cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1398,7 +1391,7 @@ impl Interpreter {
                 "toString".to_string(),
                 0,
                 |interp, this, args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1432,7 +1425,7 @@ impl Interpreter {
                 "toJSON".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1452,7 +1445,7 @@ impl Interpreter {
                 "toLocaleString".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1488,7 +1481,7 @@ impl Interpreter {
                 "equals".to_string(),
                 1,
                 |interp, this, args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1517,7 +1510,7 @@ impl Interpreter {
                 "toInstant".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, _, _) = match get_zdt_fields(interp, &this) {
+                    let (ns, _, _) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1544,7 +1537,7 @@ impl Interpreter {
                 "toPlainDate".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1563,7 +1556,7 @@ impl Interpreter {
                 "toPlainTime".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, _cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, _cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1582,7 +1575,7 @@ impl Interpreter {
                 "toPlainDateTime".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1603,7 +1596,7 @@ impl Interpreter {
                 "toPlainYearMonth".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1622,7 +1615,7 @@ impl Interpreter {
                 "toPlainMonthDay".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1642,7 +1635,7 @@ impl Interpreter {
                 "startOfDay".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1666,7 +1659,7 @@ impl Interpreter {
                 "withCalendar".to_string(),
                 1,
                 |interp, this, args| {
-                    let (ns, tz, _cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, _cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1694,7 +1687,7 @@ impl Interpreter {
                 "withTimeZone".to_string(),
                 1,
                 |interp, this, args| {
-                    let (ns, _tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, _tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1717,7 +1710,7 @@ impl Interpreter {
                 "withPlainTime".to_string(),
                 0,
                 |interp, this, args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1756,7 +1749,7 @@ impl Interpreter {
                 "with".to_string(),
                 1,
                 |interp, this, args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1880,7 +1873,7 @@ impl Interpreter {
 
                     // Apply overflow behavior to ALL fields
                     let (nm, nd, nh, nmi, ns2, nms, nus, nns) = if overflow == "reject" {
-                        if nm_raw < 1 || nm_raw > 12 {
+                        if !(1..=12).contains(&nm_raw) {
                             return Completion::Throw(
                                 interp.create_range_error("month out of range"),
                             );
@@ -1891,32 +1884,32 @@ impl Interpreter {
                                 interp.create_range_error("day out of range"),
                             );
                         }
-                        if nh_raw < 0 || nh_raw > 23 {
+                        if !(0..=23).contains(&nh_raw) {
                             return Completion::Throw(
                                 interp.create_range_error("hour out of range"),
                             );
                         }
-                        if nmi_raw < 0 || nmi_raw > 59 {
+                        if !(0..=59).contains(&nmi_raw) {
                             return Completion::Throw(
                                 interp.create_range_error("minute out of range"),
                             );
                         }
-                        if ns2_raw < 0 || ns2_raw > 59 {
+                        if !(0..=59).contains(&ns2_raw) {
                             return Completion::Throw(
                                 interp.create_range_error("second out of range"),
                             );
                         }
-                        if nms_raw < 0 || nms_raw > 999 {
+                        if !(0..=999).contains(&nms_raw) {
                             return Completion::Throw(
                                 interp.create_range_error("millisecond out of range"),
                             );
                         }
-                        if nus_raw < 0 || nus_raw > 999 {
+                        if !(0..=999).contains(&nus_raw) {
                             return Completion::Throw(
                                 interp.create_range_error("microsecond out of range"),
                             );
                         }
-                        if nns_raw < 0 || nns_raw > 999 {
+                        if !(0..=999).contains(&nns_raw) {
                             return Completion::Throw(
                                 interp.create_range_error("nanosecond out of range"),
                             );
@@ -1981,7 +1974,7 @@ impl Interpreter {
             let method = self.create_function(JsFunction::native(
                 "add".to_string(),
                 1,
-                |interp, this, args| zdt_add_subtract(interp, &this, args, 1),
+                |interp, this, args| zdt_add_subtract(interp, this, args, 1),
             ));
             proto.borrow_mut().insert_builtin("add".to_string(), method);
         }
@@ -1991,7 +1984,7 @@ impl Interpreter {
             let method = self.create_function(JsFunction::native(
                 "subtract".to_string(),
                 1,
-                |interp, this, args| zdt_add_subtract(interp, &this, args, -1),
+                |interp, this, args| zdt_add_subtract(interp, this, args, -1),
             ));
             proto
                 .borrow_mut()
@@ -2003,7 +1996,7 @@ impl Interpreter {
             let method = self.create_function(JsFunction::native(
                 "until".to_string(),
                 1,
-                |interp, this, args| zdt_until_since(interp, &this, args, 1),
+                |interp, this, args| zdt_until_since(interp, this, args, 1),
             ));
             proto
                 .borrow_mut()
@@ -2015,7 +2008,7 @@ impl Interpreter {
             let method = self.create_function(JsFunction::native(
                 "since".to_string(),
                 1,
-                |interp, this, args| zdt_until_since(interp, &this, args, -1),
+                |interp, this, args| zdt_until_since(interp, this, args, -1),
             ));
             proto
                 .borrow_mut()
@@ -2028,7 +2021,7 @@ impl Interpreter {
                 "round".to_string(),
                 1,
                 |interp, this, args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -2214,7 +2207,7 @@ impl Interpreter {
                 "getISOFields".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, &this) {
+                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -2260,7 +2253,7 @@ impl Interpreter {
                 "getTimeZoneTransition".to_string(),
                 1,
                 |interp, this, args| {
-                    let _ = match get_zdt_fields(interp, &this) {
+                    let _ = match get_zdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -2340,8 +2333,8 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 let proto_val = JsValue::Object(crate::types::JsObject {
                     id: proto.borrow().id.unwrap(),
                 });
@@ -2350,7 +2343,6 @@ impl Interpreter {
                     PropertyDescriptor::data(proto_val, false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -2414,11 +2406,10 @@ impl Interpreter {
                     )
                 },
             ));
-            if let JsValue::Object(ref o) = constructor {
-                if let Some(obj) = self.get_object(o.id) {
+            if let JsValue::Object(ref o) = constructor
+                && let Some(obj) = self.get_object(o.id) {
                     obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
                 }
-            }
         }
 
         // ZonedDateTime.compare(one, two)
@@ -2455,12 +2446,11 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(result))
                 },
             ));
-            if let JsValue::Object(ref o) = constructor {
-                if let Some(obj) = self.get_object(o.id) {
+            if let JsValue::Object(ref o) = constructor
+                && let Some(obj) = self.get_object(o.id) {
                     obj.borrow_mut()
                         .insert_builtin("compare".to_string(), compare_fn);
                 }
-            }
         }
 
         temporal_obj.borrow_mut().insert_property(
@@ -2646,16 +2636,16 @@ fn zdt_until_since(
         let max_correction = if poly_sign == -1 { 2 } else { 1 };
 
         let mut time_remainder: i128 = 0;
-        let mut adj_oy = oy as i32;
+        let mut adj_oy = oy;
         let mut adj_om = om;
         let mut adj_od = od;
 
         loop {
             let (ay, am, ad) = if day_correction == 0 {
-                (oy as i32, om, od)
+                (oy, om, od)
             } else {
                 super::balance_iso_date(
-                    oy as i32,
+                    oy,
                     om as i32,
                     od as i32 + day_correction * poly_sign,
                 )
@@ -2971,7 +2961,7 @@ fn parse_zdt_to_string_options(
             )));
         }
         let digits = n.floor() as i32;
-        if digits < 0 || digits > 9 {
+        if !(0..=9).contains(&digits) {
             return Err(Completion::Throw(interp.create_range_error(&format!(
                 "fractionalSecondDigits must be 0-9 or auto, got {n}"
             ))));

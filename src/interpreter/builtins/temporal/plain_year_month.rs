@@ -122,13 +122,12 @@ fn resolve_pym_month_from_raw(
     if let Some(ref mc) = mc_str {
         match super::plain_date::month_code_to_number_pub(mc) {
             Some(n) => {
-                if let Some(mn) = month_num {
-                    if mn as u8 != n {
+                if let Some(mn) = month_num
+                    && mn as u8 != n {
                         return Err(Completion::Throw(
                             interp.create_range_error("month and monthCode conflict"),
                         ));
                     }
-                }
                 Ok(n)
             }
             None => Err(Completion::Throw(
@@ -154,7 +153,7 @@ fn to_temporal_plain_year_month_with_overflow(
         let cm = m.max(1).min(12);
         Ok((y, cm, rd, cal))
     } else {
-        if m < 1 || m > 12 {
+        if !(1..=12).contains(&m) {
             return Err(Completion::Throw(
                 interp.create_range_error("Invalid month"),
             ));
@@ -226,13 +225,12 @@ fn to_temporal_plain_year_month(
             let m = if let Some(ref mc) = mc_str {
                 match super::plain_date::month_code_to_number_pub(mc) {
                     Some(n) => {
-                        if let Some(mn) = month_num {
-                            if mn as u8 != n {
+                        if let Some(mn) = month_num
+                            && mn as u8 != n {
                                 return Err(Completion::Throw(
                                     interp.create_range_error("month and monthCode conflict"),
                                 ));
                             }
-                        }
                         n
                     }
                     None => {
@@ -323,7 +321,7 @@ impl Interpreter {
                 "get calendarId".to_string(),
                 0,
                 |interp, this, _| {
-                    let (_, _, _, cal) = match get_ym_fields(interp, &this) {
+                    let (_, _, _, cal) = match get_ym_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -347,7 +345,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _| {
-                    let (y, m, _, _) = match get_ym_fields(interp, &this) {
+                    let (y, m, _, _) = match get_ym_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -371,7 +369,7 @@ impl Interpreter {
                 "get monthCode".to_string(),
                 0,
                 |interp, this, _| {
-                    let (_, m, _, _) = match get_ym_fields(interp, &this) {
+                    let (_, m, _, _) = match get_ym_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -404,7 +402,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _| {
-                    let (y, m, _, _) = match get_ym_fields(interp, &this) {
+                    let (y, m, _, _) = match get_ym_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -436,7 +434,7 @@ impl Interpreter {
             "with".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, rd, cal) = match get_ym_fields(interp, &this) {
+                let (y, m, rd, cal) = match get_ym_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -479,7 +477,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 if overflow == "reject" {
-                    if new_m < 1 || new_m > 12 {
+                    if !(1..=12).contains(&new_m) {
                         return Completion::Throw(interp.create_range_error("Invalid month"));
                     }
                     create_plain_year_month_result(interp, new_y, new_m, rd, &cal)
@@ -499,7 +497,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (y, m, rd, cal) = match get_ym_fields(interp, &this) {
+                    let (y, m, rd, cal) = match get_ym_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -560,7 +558,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (y1, m1, rd1, _) = match get_ym_fields(interp, &this) {
+                    let (y1, m1, rd1, _) = match get_ym_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -682,7 +680,7 @@ impl Interpreter {
             "equals".to_string(),
             1,
             |interp, this, args| {
-                let (y1, m1, rd1, c1) = match get_ym_fields(interp, &this) {
+                let (y1, m1, rd1, c1) = match get_ym_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -705,7 +703,7 @@ impl Interpreter {
             "toString".to_string(),
             0,
             |interp, this, args| {
-                let (y, m, ref_day, cal) = match get_ym_fields(interp, &this) {
+                let (y, m, ref_day, cal) = match get_ym_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -738,7 +736,7 @@ impl Interpreter {
                 } else {
                     "auto".to_string()
                 };
-                let result = format_year_month(y, m, ref_day as u8, &cal, &show_cal_owned);
+                let result = format_year_month(y, m, ref_day, &cal, &show_cal_owned);
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -750,14 +748,14 @@ impl Interpreter {
             "toJSON".to_string(),
             0,
             |interp, this, _| {
-                let (y, m, ref_day, cal) = match get_ym_fields(interp, &this) {
+                let (y, m, ref_day, cal) = match get_ym_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 Completion::Normal(JsValue::String(JsString::from_str(&format_year_month(
                     y,
                     m,
-                    ref_day as u8,
+                    ref_day,
                     &cal,
                     "auto",
                 ))))
@@ -771,14 +769,14 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, _| {
-                let (y, m, ref_day, cal) = match get_ym_fields(interp, &this) {
+                let (y, m, ref_day, cal) = match get_ym_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 Completion::Normal(JsValue::String(JsString::from_str(&format_year_month(
                     y,
                     m,
-                    ref_day as u8,
+                    ref_day,
                     &cal,
                     "auto",
                 ))))
@@ -807,7 +805,7 @@ impl Interpreter {
             "toPlainDate".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, _, cal) = match get_ym_fields(interp, &this) {
+                let (y, m, _, cal) = match get_ym_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -872,7 +870,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         let t = n.trunc();
-                        if t < 1.0 || t > 12.0 {
+                        if !(1.0..=12.0).contains(&t) {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         t as u8
@@ -896,7 +894,7 @@ impl Interpreter {
                                     );
                                 }
                                 let t = n.trunc();
-                                if t < 1.0 || t > 31.0 {
+                                if !(1.0..=31.0).contains(&t) {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid referenceISODay"),
                                     );
@@ -923,8 +921,8 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 let proto_val = JsValue::Object(crate::types::JsObject {
                     id: proto.borrow().id.unwrap(),
                 });
@@ -933,7 +931,6 @@ impl Interpreter {
                     PropertyDescriptor::data(proto_val, false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -1007,7 +1004,7 @@ impl Interpreter {
                         let cm = m.min(12);
                         (y, cm, 1, cal)
                     } else {
-                        if m < 1 || m > 12 {
+                        if !(1..=12).contains(&m) {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         (y, m, 1, cal)
@@ -1016,11 +1013,10 @@ impl Interpreter {
                 }
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
-        }
 
         // compare
         let compare_fn = self.create_function(JsFunction::native(
@@ -1053,12 +1049,11 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(r))
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut()
                     .insert_builtin("compare".to_string(), compare_fn);
             }
-        }
 
         temporal_obj.borrow_mut().insert_property(
             "PlainYearMonth".to_string(),
@@ -1102,7 +1097,7 @@ fn get_opt_u8(
 }
 
 fn format_year_month(y: i32, m: u8, ref_day: u8, cal: &str, show_calendar: &str) -> String {
-    let year_str = if y >= 0 && y <= 9999 {
+    let year_str = if (0..=9999).contains(&y) {
         format!("{y:04}")
     } else if y >= 0 {
         format!("+{y:06}")

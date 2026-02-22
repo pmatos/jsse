@@ -173,7 +173,7 @@ fn epoch_ms_to_local_components(epoch_ms: i64) -> (i32, u8, u8, u8, u8, u8, u16)
     let utc = Utc.timestamp_millis_opt(epoch_ms).unwrap();
     let local = utc.with_timezone(&Local);
     (
-        local.year() as i32,
+        local.year(),
         local.month() as u8,
         local.day() as u8,
         local.hour() as u8,

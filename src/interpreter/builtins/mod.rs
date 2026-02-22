@@ -2391,8 +2391,8 @@ impl Interpreter {
                                 .flat_map(collect_pd_objects)
                                 .collect();
                             for pv in &level2_vals {
-                                if let JsValue::Object(po) = pv {
-                                    if let Some(pobj) = self.get_object(po.id) {
+                                if let JsValue::Object(po) = pv
+                                    && let Some(pobj) = self.get_object(po.id) {
                                         // Don't set fp's own [[Prototype]] to itself
                                         if Some(po.id) != fp_id {
                                             fix_callable(&pobj, &fp);
@@ -2415,7 +2415,6 @@ impl Interpreter {
                                             }
                                         }
                                     }
-                                }
                             }
                         }
                     }
@@ -4443,11 +4442,10 @@ impl Interpreter {
                                 if is_string_wrapper && k == "length" {
                                     continue;
                                 }
-                                if let Some(d) = b.properties.get(k) {
-                                    if d.enumerable != Some(false) {
+                                if let Some(d) = b.properties.get(k)
+                                    && d.enumerable != Some(false) {
                                         result.push(k.clone());
                                     }
-                                }
                             }
                             result
                         } else {
@@ -4918,11 +4916,10 @@ impl Interpreter {
                                 if is_string_wrapper && k == "length" {
                                     continue;
                                 }
-                                if let Some(p) = b.properties.get(k) {
-                                    if p.enumerable != Some(false) {
+                                if let Some(p) = b.properties.get(k)
+                                    && p.enumerable != Some(false) {
                                         result.push(k.clone());
                                     }
-                                }
                             }
                             result
                         };
@@ -6006,15 +6003,14 @@ impl Interpreter {
                     let mut has_virtual_length = false;
                     {
                         let b = obj.borrow();
-                        if b.class_name == "String" {
-                            if let Some(JsValue::String(ref s)) = b.primitive_value {
+                        if b.class_name == "String"
+                            && let Some(JsValue::String(ref s)) = b.primitive_value {
                                 let slen = s.code_units.len();
                                 for i in 0..slen {
                                     virtual_indices.push(i as u32);
                                 }
                                 has_virtual_length = true;
                             }
-                        }
                     }
                     let property_order = obj.borrow().property_order.clone();
                     // Collect keys already in property_order into virtual_indices set for dedup
@@ -6268,11 +6264,10 @@ impl Interpreter {
                     if matches!(proto, JsValue::Null) && current_proto_id.is_none() {
                         return Completion::Normal(JsValue::Boolean(true));
                     }
-                    if let (Some(new_id), Some(cur_id)) = (new_proto_id, current_proto_id) {
-                        if new_id == cur_id {
+                    if let (Some(new_id), Some(cur_id)) = (new_proto_id, current_proto_id)
+                        && new_id == cur_id {
                             return Completion::Normal(JsValue::Boolean(true));
                         }
-                    }
                     // Step 5: If not extensible, return false
                     if !obj.borrow().extensible {
                         return Completion::Normal(JsValue::Boolean(false));

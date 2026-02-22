@@ -31,7 +31,7 @@ impl Interpreter {
                 "get calendarId".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (_, _, _, cal) = match get_plain_date_fields(interp, &this) {
+                    let (_, _, _, cal) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -57,7 +57,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (y, m, d, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, d, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -88,7 +88,7 @@ impl Interpreter {
                 "get monthCode".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (_, m, _, _) = match get_plain_date_fields(interp, &this) {
+                    let (_, m, _, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -114,7 +114,7 @@ impl Interpreter {
                 "get dayOfWeek".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, m, d, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, d, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -140,7 +140,7 @@ impl Interpreter {
                 "get dayOfYear".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, m, d, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, d, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -166,7 +166,7 @@ impl Interpreter {
                 "get weekOfYear".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, m, d, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, d, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -193,7 +193,7 @@ impl Interpreter {
                 "get yearOfWeek".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, m, d, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, d, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -220,7 +220,7 @@ impl Interpreter {
                 "get daysInWeek".to_string(),
                 0,
                 |interp, this, _args| {
-                    let _ = match get_plain_date_fields(interp, &this) {
+                    let _ = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -246,7 +246,7 @@ impl Interpreter {
                 "get daysInMonth".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, m, _, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, _, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -272,7 +272,7 @@ impl Interpreter {
                 "get daysInYear".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, _, _, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, _, _, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -298,7 +298,7 @@ impl Interpreter {
                 "get monthsInYear".to_string(),
                 0,
                 |interp, this, _args| {
-                    let _ = match get_plain_date_fields(interp, &this) {
+                    let _ = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -324,7 +324,7 @@ impl Interpreter {
                 "get inLeapYear".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, _, _, _) = match get_plain_date_fields(interp, &this) {
+                    let (y, _, _, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -350,7 +350,7 @@ impl Interpreter {
                 "get era".to_string(),
                 0,
                 |interp, this, _args| {
-                    let _ = match get_plain_date_fields(interp, &this) {
+                    let _ = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -376,7 +376,7 @@ impl Interpreter {
                 "get eraYear".to_string(),
                 0,
                 |interp, this, _args| {
-                    let _ = match get_plain_date_fields(interp, &this) {
+                    let _ = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -401,7 +401,7 @@ impl Interpreter {
             "with".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -453,7 +453,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 // Validate year range
-                if new_y < -271821 || new_y > 275760 {
+                if !(-271821..=275760).contains(&new_y) {
                     return Completion::Throw(interp.create_range_error("year out of range"));
                 }
                 if overflow == "reject" {
@@ -478,7 +478,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                    let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -540,7 +540,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (y1, m1, d1, _) = match get_plain_date_fields(interp, &this) {
+                    let (y1, m1, d1, _) = match get_plain_date_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -662,7 +662,7 @@ impl Interpreter {
             "equals".to_string(),
             1,
             |interp, this, args| {
-                let (y1, m1, d1, c1) = match get_plain_date_fields(interp, &this) {
+                let (y1, m1, d1, c1) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -686,7 +686,7 @@ impl Interpreter {
             "toString".to_string(),
             0,
             |interp, this, args| {
-                let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -737,7 +737,7 @@ impl Interpreter {
             "toJSON".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -754,7 +754,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -786,7 +786,7 @@ impl Interpreter {
             "toPlainDateTime".to_string(),
             0,
             |interp, this, args| {
-                let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -818,7 +818,7 @@ impl Interpreter {
             "toPlainYearMonth".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, _d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, _d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -834,7 +834,7 @@ impl Interpreter {
             "toPlainMonthDay".to_string(),
             0,
             |interp, this, _args| {
-                let (_y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                let (_y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -851,7 +851,7 @@ impl Interpreter {
             "withCalendar".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, d, _) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, _) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -877,7 +877,7 @@ impl Interpreter {
             "getISOFields".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -916,7 +916,7 @@ impl Interpreter {
             "toZonedDateTime".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1017,7 +1017,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         let t = n.trunc();
-                        if t < 1.0 || t > 12.0 {
+                        if !(1.0..=12.0).contains(&t) {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         t as u8
@@ -1031,7 +1031,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_range_error("Invalid day"));
                         }
                         let t = n.trunc();
-                        if t < 1.0 || t > 31.0 {
+                        if !(1.0..=31.0).contains(&t) {
                             return Completion::Throw(interp.create_range_error("Invalid day"));
                         }
                         t as u8
@@ -1056,8 +1056,8 @@ impl Interpreter {
         ));
 
         // Constructor.prototype
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 let proto_val = JsValue::Object(crate::types::JsObject {
                     id: proto.borrow().id.unwrap(),
                 });
@@ -1066,7 +1066,6 @@ impl Interpreter {
                     PropertyDescriptor::data(proto_val, false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -1151,11 +1150,10 @@ impl Interpreter {
                 }
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
-        }
 
         // PlainDate.compare(one, two)
         let compare_fn = self.create_function(JsFunction::native(
@@ -1192,12 +1190,11 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut()
                     .insert_builtin("compare".to_string(), compare_fn);
             }
-        }
 
         temporal_obj.borrow_mut().insert_property(
             "PlainDate".to_string(),
@@ -1341,13 +1338,12 @@ fn resolve_pd_month(
     if let Some(ref mc) = mc_str {
         match month_code_to_number(mc) {
             Some(n) => {
-                if let Some(mn) = month_num {
-                    if mn != n {
+                if let Some(mn) = month_num
+                    && mn != n {
                         return Err(Completion::Throw(
                             interp.create_range_error("month and monthCode conflict"),
                         ));
                     }
-                }
                 Ok(n)
             }
             None => Err(Completion::Throw(
@@ -1498,13 +1494,12 @@ pub(super) fn to_temporal_plain_date(
 
             // Resolve month
             let m = if let Some(mc_n) = month_code_num {
-                if let Some(explicit_m) = month_num {
-                    if explicit_m != mc_n {
+                if let Some(explicit_m) = month_num
+                    && explicit_m != mc_n {
                         return Err(Completion::Throw(
                             interp.create_range_error("month and monthCode conflict"),
                         ));
                     }
-                }
                 mc_n
             } else if let Some(mn) = month_num {
                 mn
@@ -1632,7 +1627,7 @@ fn constrain_or_reject_date(y: i32, mut m: u8, mut d: u8, overflow: &str) -> (i3
 }
 
 pub(super) fn format_plain_date(y: i32, m: u8, d: u8, cal: &str, show_calendar: &str) -> String {
-    let year_str = if y >= 0 && y <= 9999 {
+    let year_str = if (0..=9999).contains(&y) {
         format!("{y:04}")
     } else if y >= 0 {
         format!("+{y:06}")

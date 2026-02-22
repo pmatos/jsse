@@ -269,14 +269,13 @@ impl Interpreter {
                             _ => 0,
                         }
                     };
-                    if let Some(max) = max_byte_length {
-                        if new_len > max {
+                    if let Some(max) = max_byte_length
+                        && new_len > max {
                             return Completion::Throw(interp.create_error(
                                 "RangeError",
                                 "new byte length exceeds maxByteLength",
                             ));
                         }
-                    }
                     let old_data = {
                         let obj_ref = obj.borrow();
                         obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
@@ -658,11 +657,10 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_is_shared {
-                        if let Some(ref buf) = obj_ref.arraybuffer_data {
+                    if obj_ref.arraybuffer_is_shared
+                        && let Some(ref buf) = obj_ref.arraybuffer_data {
                             return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
                         }
-                    }
                 }
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
@@ -688,14 +686,13 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_is_shared {
-                        if let Some(ref buf) = obj_ref.arraybuffer_data {
+                    if obj_ref.arraybuffer_is_shared
+                        && let Some(ref buf) = obj_ref.arraybuffer_data {
                             let max = obj_ref
                                 .arraybuffer_max_byte_length
                                 .unwrap_or_else(|| buf.borrow().len());
                             return Completion::Normal(JsValue::Number(max as f64));
                         }
-                    }
                 }
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
@@ -1158,7 +1155,7 @@ impl Interpreter {
                             Ok(n) => to_integer(n) as i64,
                             Err(e) => return Completion::Throw(e),
                         };
-                        let len = typed_array_length(&ta) as i64;
+                        let len = typed_array_length(ta) as i64;
                         let actual = if idx < 0 { len + idx } else { idx };
                         if actual < 0 || actual >= len {
                             return Completion::Normal(JsValue::Undefined);
@@ -1262,20 +1259,18 @@ impl Interpreter {
                                         &src_buf[src_start..src_start + byte_count],
                                     );
                                 }
+                            } else if same_buffer {
+                                // Clone all source values first
+                                let values: Vec<JsValue> = (0..src_len)
+                                    .map(|i| typed_array_get_index(&src_ta, i))
+                                    .collect();
+                                for (i, val) in values.iter().enumerate() {
+                                    typed_array_set_index(&ta, offset + i, val);
+                                }
                             } else {
-                                if same_buffer {
-                                    // Clone all source values first
-                                    let values: Vec<JsValue> = (0..src_len)
-                                        .map(|i| typed_array_get_index(&src_ta, i))
-                                        .collect();
-                                    for (i, val) in values.iter().enumerate() {
-                                        typed_array_set_index(&ta, offset + i, val);
-                                    }
-                                } else {
-                                    for i in 0..src_len {
-                                        let val = typed_array_get_index(&src_ta, i);
-                                        typed_array_set_index(&ta, offset + i, &val);
-                                    }
+                                for i in 0..src_len {
+                                    let val = typed_array_get_index(&src_ta, i);
+                                    typed_array_set_index(&ta, offset + i, &val);
                                 }
                             }
                             return Completion::Normal(JsValue::Undefined);
@@ -3813,13 +3808,12 @@ impl Interpreter {
         };
 
         // ContentType compatibility check (only for single-length-arg case)
-        if args.len() == 1 {
-            if kind.is_bigint() != result_kind.is_bigint() {
+        if args.len() == 1
+            && kind.is_bigint() != result_kind.is_bigint() {
                 return Err(self.create_type_error(
                     "species constructor returned a TypedArray with incompatible content type",
                 ));
             }
-        }
 
         // Validate length >= requested
         if let Some(JsValue::Number(requested_len)) = args.first() {
@@ -3828,13 +3822,12 @@ impl Interpreter {
                 && let Some(obj) = self.get_object(o.id)
             {
                 let obj_ref = obj.borrow();
-                if let Some(ref ta) = obj_ref.typed_array_info {
-                    if typed_array_length(&ta) < requested {
+                if let Some(ref ta) = obj_ref.typed_array_info
+                    && typed_array_length(ta) < requested {
                         return Err(self.create_type_error(
                             "species constructor returned a TypedArray that is too small",
                         ));
                     }
-                }
             }
         }
 

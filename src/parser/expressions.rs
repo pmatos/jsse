@@ -1334,7 +1334,7 @@ impl<'a> Parser<'a> {
                         | "static"
                         | "yield"
                 ) {
-                    return Err(self.error(&format!("Unexpected strict mode reserved word '{n}'")));
+                    return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
                 }
             }
             return Ok(Property {

@@ -114,7 +114,7 @@ fn surrogate_to_pua(cp: u32) -> char {
 
 fn pua_to_surrogate(c: char) -> Option<u16> {
     let cp = c as u32;
-    if cp >= SURROGATE_PUA_BASE && cp <= SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START) {
+    if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START)).contains(&cp) {
         Some((cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16)
     } else {
         None
@@ -182,8 +182,7 @@ pub(crate) fn pua_code_units_to_surrogates(code_units: &[u16]) -> Vec<u16> {
             && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
         {
             let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
-            if cp >= SURROGATE_PUA_BASE
-                && cp <= SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START)
+            if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START)).contains(&cp)
             {
                 let surrogate = (cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16;
                 result.push(surrogate);
@@ -821,11 +820,10 @@ fn parse_v_class_operand(chars: &[char], i: &mut usize, flags: &str) -> Result<V
             break;
         }
         // Check for -- or && (set operation boundary)
-        if *i + 1 < len {
-            if (c == '-' && chars[*i + 1] == '-') || (c == '&' && chars[*i + 1] == '&') {
+        if *i + 1 < len
+            && ((c == '-' && chars[*i + 1] == '-') || (c == '&' && chars[*i + 1] == '&')) {
                 break;
             }
-        }
         if c == '[' {
             // Nested class in union position
             *i += 1;
@@ -1040,11 +1038,10 @@ fn unescape_q_string(s: &str) -> String {
     while i < chars.len() {
         if chars[i] == '\\' && i + 1 < chars.len() {
             i += 1;
-            if let Some(cp) = parse_v_class_escape(&chars, &mut i) {
-                if let Some(ch) = char::from_u32(cp) {
+            if let Some(cp) = parse_v_class_escape(&chars, &mut i)
+                && let Some(ch) = char::from_u32(cp) {
                     result.push(ch);
                 }
-            }
         } else {
             result.push(chars[i]);
             i += 1;
@@ -1496,8 +1493,8 @@ pub(super) fn translate_js_pattern_ex(
                         validate_unicode_property_escape(&content)?;
                         let negated = next == 'P';
                         // Check for property-of-strings (v-flag only, outside char class)
-                        if flags.contains('v') && !in_char_class {
-                            if let Some((singles, multi_strs)) =
+                        if flags.contains('v') && !in_char_class
+                            && let Some((singles, multi_strs)) =
                                 crate::emoji_strings::lookup_string_property(&content)
                             {
                                 if negated {
@@ -1517,7 +1514,6 @@ pub(super) fn translate_js_pattern_ex(
                                 i = start + end + 1;
                                 continue;
                             }
-                        }
                         if let Some(ranges) = crate::unicode_tables::lookup_property(&content) {
                             expand_property_to_char_class(
                                 &mut result,
@@ -1717,7 +1713,7 @@ pub(super) fn translate_js_pattern_ex(
                 // Check if next chars are {N} with exact count
                 let mut j = i + 1;
                 if j < len && chars[j] == '{' {
-                    let brace_start = j;
+                    let _brace_start = j;
                     j += 1;
                     let num_start = j;
                     while j < len && chars[j].is_ascii_digit() {
@@ -3287,25 +3283,23 @@ fn build_regex_ex(
     let name_order = tr.group_name_order;
 
     // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
-    if lookbehind_needs_custom_rtl(source) {
-        if let Some(result) =
+    if lookbehind_needs_custom_rtl(source)
+        && let Some(result) =
             try_build_custom_lookbehind(source, flags, dup_map.clone(), name_order.clone())
         {
             return Ok(result);
         }
-    }
 
     match fancy_regex::Regex::new(&tr.pattern) {
         Ok(r) => Ok((CompiledRegex::Fancy(r), dup_map, name_order)),
         Err(_) => {
             // If fancy-regex fails and the pattern has lookbehinds, try custom path
-            if source.contains("(?<=") || source.contains("(?<!") {
-                if let Some(result) =
+            if (source.contains("(?<=") || source.contains("(?<!"))
+                && let Some(result) =
                     try_build_custom_lookbehind(source, flags, dup_map.clone(), name_order.clone())
                 {
                     return Ok(result);
                 }
-            }
             regex::Regex::new(&tr.pattern)
                 .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
                 .map_err(|e| e.to_string())
@@ -3327,11 +3321,10 @@ fn count_capture_groups(source: &str) -> usize {
             }
             '(' if !in_cc => {
                 if i + 1 < chars.len() && chars[i + 1] == '?' {
-                    if i + 2 < chars.len() && chars[i + 2] == '<' {
-                        if i + 3 < chars.len() && chars[i + 3] != '=' && chars[i + 3] != '!' {
+                    if i + 2 < chars.len() && chars[i + 2] == '<'
+                        && i + 3 < chars.len() && chars[i + 3] != '=' && chars[i + 3] != '!' {
                             count += 1; // named group
                         }
-                    }
                 } else {
                     count += 1;
                 }

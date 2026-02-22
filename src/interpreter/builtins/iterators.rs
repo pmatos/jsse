@@ -324,13 +324,10 @@ impl Interpreter {
                                 PropertyDescriptor::data(v, true, true, true),
                             );
                         }
-                    } else {
-                        if let Some(od) = interp.get_object(this_id) {
-                            if !od.borrow_mut().set_property_value(&prop_key, v) {
-                                let err = interp.create_type_error("Cannot set property");
-                                return Completion::Throw(err);
-                            }
-                        }
+                    } else if let Some(od) = interp.get_object(this_id)
+                    && !od.borrow_mut().set_property_value(&prop_key, v) {
+                        let err = interp.create_type_error("Cannot set property");
+                        return Completion::Throw(err);
                     }
                     Completion::Normal(JsValue::Undefined)
                 },
@@ -472,13 +469,12 @@ impl Interpreter {
                         }
                     } else {
                         // Set(this, "constructor", v, true)
-                        if let Some(od) = interp.get_object(this_id) {
-                            if !od.borrow_mut().set_property_value("constructor", v) {
+                        if let Some(od) = interp.get_object(this_id)
+                            && !od.borrow_mut().set_property_value("constructor", v) {
                                 let err =
                                     interp.create_type_error("Cannot set property constructor");
                                 return Completion::Throw(err);
                             }
-                        }
                     }
                     Completion::Normal(JsValue::Undefined)
                 },

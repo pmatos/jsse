@@ -11,11 +11,10 @@ impl Interpreter {
         while let Some(e) = current {
             let next = {
                 let borrowed = e.borrow();
-                if let Some(ref names) = borrowed.class_private_names {
-                    if let Some(branded) = names.get(source_name) {
+                if let Some(ref names) = borrowed.class_private_names
+                    && let Some(branded) = names.get(source_name) {
                         return branded.clone();
                     }
-                }
                 borrowed.parent.clone()
             };
             current = next;
@@ -541,14 +540,13 @@ impl Interpreter {
                         // TypedArray: §10.4.5.4 [[Delete]]
                         {
                             let obj_borrow = obj.borrow();
-                            if let Some(ref ta) = obj_borrow.typed_array_info {
-                                if let Some(index) = canonical_numeric_index_string(&key) {
+                            if let Some(ref ta) = obj_borrow.typed_array_info
+                                && let Some(index) = canonical_numeric_index_string(&key) {
                                     if is_valid_integer_index(ta, index) {
                                         return Completion::Normal(JsValue::Boolean(false));
                                     }
                                     return Completion::Normal(JsValue::Boolean(true));
                                 }
-                            }
                         }
                         let is_strict = env.borrow().strict;
                         let mut obj_mut = obj.borrow_mut();
@@ -754,7 +752,7 @@ impl Interpreter {
                         }
                     }
                     // Yield the value - callers handle this completion type
-                    return Completion::Yield(value);
+                    Completion::Yield(value)
                 }
             }
             Expression::Await(expr) => {
@@ -1175,11 +1173,10 @@ impl Interpreter {
 
     fn get_template_object(&mut self, tmpl: &TemplateLiteral) -> JsValue {
         let cache_key = tmpl as *const TemplateLiteral as usize;
-        if let Some(&obj_id) = self.template_cache.get(&cache_key) {
-            if self.get_object(obj_id).is_some() {
+        if let Some(&obj_id) = self.template_cache.get(&cache_key)
+            && self.get_object(obj_id).is_some() {
                 return JsValue::Object(crate::types::JsObject { id: obj_id });
             }
-        }
 
         let cooked_vals: Vec<JsValue> = tmpl
             .quasis
@@ -1198,14 +1195,13 @@ impl Interpreter {
         let raw_arr = self.create_frozen_template_array(raw_vals);
         let template_arr = self.create_frozen_template_array(cooked_vals);
 
-        if let JsValue::Object(o) = &template_arr {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(o) = &template_arr
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut().insert_property(
                     "raw".to_string(),
                     PropertyDescriptor::data(raw_arr, false, false, false),
                 );
             }
-        }
 
         if let JsValue::Object(o) = &template_arr {
             self.template_cache.insert(cache_key, o.id);
@@ -2198,8 +2194,8 @@ impl Interpreter {
                 Err(e) => return Completion::Throw(e),
             };
             // Set value back
-            if let JsValue::Object(ref o) = obj_val {
-                if let Some(obj) = self.get_object(o.id) {
+            if let JsValue::Object(ref o) = obj_val
+                && let Some(obj) = self.get_object(o.id) {
                     if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                         let receiver = obj_val.clone();
                         match self.proxy_set(o.id, &key, new_val.clone(), &receiver) {
@@ -2210,7 +2206,6 @@ impl Interpreter {
                         let _ = obj.borrow_mut().set_property_value(&key, new_val.clone());
                     }
                 }
-            }
             Completion::Normal(if prefix { new_val } else { old_val })
         } else {
             Completion::Normal(JsValue::Number(f64::NAN))
@@ -2238,19 +2233,16 @@ impl Interpreter {
                             Completion::Throw(e) => return Err(e),
                             _ => return Ok(()),
                         };
-                        match self.to_property_key(&v) {
-                            Ok(s) => s,
-                            Err(e) => return Err(e),
-                        }
+                        self.to_property_key(&v)?
                     }
                     MemberProperty::Private(_) => return Ok(()),
                 };
-                if let JsValue::Object(ref o) = obj_val {
-                    if let Some(obj) = self.get_object(o.id) {
+                if let JsValue::Object(ref o) = obj_val
+                    && let Some(obj) = self.get_object(o.id) {
                         // TypedArray [[Set]]
                         let is_ta = obj.borrow().typed_array_info.is_some();
-                        if is_ta {
-                            if let Some(index) = canonical_numeric_index_string(&key) {
+                        if is_ta
+                            && let Some(index) = canonical_numeric_index_string(&key) {
                                 let is_bigint = obj
                                     .borrow()
                                     .typed_array_info
@@ -2271,10 +2263,8 @@ impl Interpreter {
                                 }
                                 return Ok(());
                             }
-                        }
                         obj.borrow_mut().set_property_value(&key, value);
                     }
-                }
                 Ok(())
             }
             _ => Ok(()),
@@ -2615,8 +2605,8 @@ impl Interpreter {
                     // TypedArray [[Set]]: ToNumber/ToBigInt before index check
                     {
                         let is_ta = obj.borrow().typed_array_info.is_some();
-                        if is_ta {
-                            if let Some(index) = canonical_numeric_index_string(&key) {
+                        if is_ta
+                            && let Some(index) = canonical_numeric_index_string(&key) {
                                 let is_bigint = obj
                                     .borrow()
                                     .typed_array_info
@@ -2644,7 +2634,6 @@ impl Interpreter {
                                 }
                                 return Completion::Normal(final_val);
                             }
-                        }
                     }
                     // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
                     if !obj.borrow().has_own_property(&key) {
@@ -2683,8 +2672,8 @@ impl Interpreter {
                                     break;
                                 }
                                 if inherited_desc.is_accessor_descriptor() {
-                                    if let Some(ref setter) = inherited_desc.set {
-                                        if !matches!(setter, JsValue::Undefined) {
+                                    if let Some(ref setter) = inherited_desc.set
+                                        && !matches!(setter, JsValue::Undefined) {
                                             let setter = setter.clone();
                                             let this = obj_val.clone();
                                             return match self.call_function(
@@ -2698,7 +2687,6 @@ impl Interpreter {
                                                 other => other,
                                             };
                                         }
-                                    }
                                     if env.borrow().strict {
                                         return Completion::Throw(self.create_type_error(
                                             &format!(
@@ -3227,8 +3215,8 @@ impl Interpreter {
             }
             // TypedArray [[Set]]
             let is_ta = obj.borrow().typed_array_info.is_some();
-            if is_ta {
-                if let Some(index) = canonical_numeric_index_string(&key) {
+            if is_ta
+                && let Some(index) = canonical_numeric_index_string(&key) {
                     let is_bigint = obj
                         .borrow()
                         .typed_array_info
@@ -3249,7 +3237,6 @@ impl Interpreter {
                     }
                     return Ok(());
                 }
-            }
             // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
             if !obj.borrow().has_own_property(&key) {
                 let mut proto_opt = obj.borrow().prototype.clone();
@@ -3283,8 +3270,8 @@ impl Interpreter {
                             break;
                         }
                         if inherited_desc.is_accessor_descriptor() {
-                            if let Some(ref setter) = inherited_desc.set {
-                                if !matches!(setter, JsValue::Undefined) {
+                            if let Some(ref setter) = inherited_desc.set
+                                && !matches!(setter, JsValue::Undefined) {
                                     let setter = setter.clone();
                                     let this = obj_val.clone();
                                     return match self.call_function(&setter, &this, &[val]) {
@@ -3293,7 +3280,6 @@ impl Interpreter {
                                         _ => Ok(()),
                                     };
                                 }
-                            }
                             if env.borrow().strict {
                                 return Err(self.create_type_error(&format!(
                                     "Cannot set property '{key}' which has only a getter"
@@ -3544,11 +3530,10 @@ impl Interpreter {
                         if let Some(default) = default_expr {
                             match self.eval_expr(default, env) {
                                 Completion::Normal(v) => {
-                                    if let Expression::Identifier(name) = target {
-                                        if default.is_anonymous_function_definition() {
+                                    if let Expression::Identifier(name) = target
+                                        && default.is_anonymous_function_definition() {
                                             self.set_function_name(&v, name);
                                         }
-                                    }
                                     v
                                 }
                                 Completion::Throw(e) => {
@@ -3585,11 +3570,10 @@ impl Interpreter {
         }
 
         let unroot = |s: &mut Self| {
-            if let JsValue::Object(o) = &iterator {
-                if let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id) {
+            if let JsValue::Object(o) = &iterator
+                && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id) {
                     s.gc_temp_roots.remove(pos);
                 }
-            }
         };
 
         if let Some(yv) = yield_val {
@@ -3626,10 +3610,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         // RequireObjectCoercible
-        match self.require_object_coercible(rval) {
-            Completion::Throw(e) => return Completion::Throw(e),
-            _ => {}
-        }
+        if let Completion::Throw(e) = self.require_object_coercible(rval) { return Completion::Throw(e) }
 
         // ToObject to wrap primitives
         let obj_val = match self.to_object(rval) {
@@ -3712,11 +3693,10 @@ impl Interpreter {
                         if let Some(default) = default_expr {
                             match self.eval_expr(default, env) {
                                 Completion::Normal(v) => {
-                                    if let Expression::Identifier(name) = target {
-                                        if default.is_anonymous_function_definition() {
+                                    if let Expression::Identifier(name) = target
+                                        && default.is_anonymous_function_definition() {
                                             self.set_function_name(&v, name);
                                         }
-                                    }
                                     v
                                 }
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -3760,23 +3740,18 @@ impl Interpreter {
                 self.new_target = saved_new_target;
                 if let Completion::Normal(ref v) = result {
                     // Set prototype from new.target.prototype (the derived class)
-                    if let JsValue::Object(this_obj) = v {
-                        if let Some(nt) = &self.new_target {
-                            if let JsValue::Object(nt_o) = nt {
-                                if let Some(nt_func) = self.get_object(nt_o.id) {
+                    if let JsValue::Object(this_obj) = v
+                        && let Some(nt) = &self.new_target
+                            && let JsValue::Object(nt_o) = nt
+                                && let Some(nt_func) = self.get_object(nt_o.id) {
                                     let proto_val =
                                         nt_func.borrow().get_property_value("prototype");
-                                    if let Some(JsValue::Object(proto_obj)) = proto_val {
-                                        if let Some(proto_rc) = self.get_object(proto_obj.id) {
-                                            if let Some(obj) = self.get_object(this_obj.id) {
+                                    if let Some(JsValue::Object(proto_obj)) = proto_val
+                                        && let Some(proto_rc) = self.get_object(proto_obj.id)
+                                            && let Some(obj) = self.get_object(this_obj.id) {
                                                 obj.borrow_mut().prototype = Some(proto_rc);
                                             }
-                                        }
-                                    }
                                 }
-                            }
-                        }
-                    }
                     // Bind this in the function environment
                     Self::initialize_this_binding(env, v.clone());
                     // Initialize instance elements (private/public fields) for the current class
@@ -3993,8 +3968,8 @@ impl Interpreter {
         };
 
         // Direct eval: callee is bare `eval` identifier and resolves to built-in eval
-        if matches!(callee, Expression::Identifier(n) if n == "eval") {
-            if self.is_builtin_eval(&func_val) {
+        if matches!(callee, Expression::Identifier(n) if n == "eval")
+            && self.is_builtin_eval(&func_val) {
                 let evaluated_args = match self.eval_spread_args(args, env) {
                     Ok(args) => args,
                     Err(e) => return Completion::Throw(e),
@@ -4002,7 +3977,6 @@ impl Interpreter {
                 let caller_strict = env.borrow().strict;
                 return self.perform_eval(&evaluated_args, caller_strict, true, env);
             }
-        }
 
         // Root func_val and this_val before evaluating args (which may trigger GC)
         self.gc_root_value(&func_val);
@@ -4511,8 +4485,8 @@ impl Interpreter {
                         let iterator = match self.get_iterator(&yield_val) {
                             Ok(it) => it,
                             Err(e) => {
-                                if let Some(try_info) = current_try_stack.last() {
-                                    if let Some(catch_state) = try_info.catch_state {
+                                if let Some(try_info) = current_try_stack.last()
+                                    && let Some(catch_state) = try_info.catch_state {
                                         let new_try_stack = current_try_stack
                                             [..current_try_stack.len() - 1]
                                             .to_vec();
@@ -4537,7 +4511,6 @@ impl Interpreter {
                                             JsValue::Undefined,
                                         );
                                     }
-                                }
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineGenerator {
                                         state_machine,
@@ -4560,8 +4533,8 @@ impl Interpreter {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => {
                                     // Route through try-stack
-                                    if let Some(try_info) = current_try_stack.last() {
-                                        if let Some(catch_state) = try_info.catch_state {
+                                    if let Some(try_info) = current_try_stack.last()
+                                        && let Some(catch_state) = try_info.catch_state {
                                             let new_try_stack = current_try_stack
                                                 [..current_try_stack.len() - 1]
                                                 .to_vec();
@@ -4586,7 +4559,6 @@ impl Interpreter {
                                                 JsValue::Undefined,
                                             );
                                         }
-                                    }
                                     return Completion::Throw(e);
                                 }
                                 _ => JsValue::Undefined,
@@ -4611,8 +4583,8 @@ impl Interpreter {
                             Ok(r) => r,
                             Err(e) => {
                                 // Propagate through generator's try-stack
-                                if let Some(try_info) = current_try_stack.last() {
-                                    if let Some(catch_state) = try_info.catch_state {
+                                if let Some(try_info) = current_try_stack.last()
+                                    && let Some(catch_state) = try_info.catch_state {
                                         pending_exception = Some(e);
                                         let new_try_stack = current_try_stack
                                             [..current_try_stack.len() - 1]
@@ -4638,7 +4610,6 @@ impl Interpreter {
                                             JsValue::Undefined,
                                         );
                                     }
-                                }
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineGenerator {
                                         state_machine,
@@ -4659,8 +4630,8 @@ impl Interpreter {
                         let done = match self.iterator_complete(&iter_result) {
                             Ok(d) => d,
                             Err(e) => {
-                                if let Some(try_info) = current_try_stack.last() {
-                                    if let Some(catch_state) = try_info.catch_state {
+                                if let Some(try_info) = current_try_stack.last()
+                                    && let Some(catch_state) = try_info.catch_state {
                                         let new_try_stack = current_try_stack
                                             [..current_try_stack.len() - 1]
                                             .to_vec();
@@ -4685,7 +4656,6 @@ impl Interpreter {
                                             JsValue::Undefined,
                                         );
                                     }
-                                }
                                 return Completion::Throw(e);
                             }
                         };
@@ -4694,8 +4664,8 @@ impl Interpreter {
                             let value = match self.iterator_value(&iter_result) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    if let Some(try_info) = current_try_stack.last() {
-                                        if let Some(catch_state) = try_info.catch_state {
+                                    if let Some(try_info) = current_try_stack.last()
+                                        && let Some(catch_state) = try_info.catch_state {
                                             let new_try_stack = current_try_stack
                                                 [..current_try_stack.len() - 1]
                                                 .to_vec();
@@ -4720,7 +4690,6 @@ impl Interpreter {
                                                 JsValue::Undefined,
                                             );
                                         }
-                                    }
                                     return Completion::Throw(e);
                                 }
                             };
@@ -4839,12 +4808,11 @@ impl Interpreter {
                         other => return other,
                     };
 
-                    if let Some(try_info) = current_try_stack.pop() {
-                        if let Some(catch_state) = try_info.catch_state {
+                    if let Some(try_info) = current_try_stack.pop()
+                        && let Some(catch_state) = try_info.catch_state {
                             current_id = catch_state;
                             continue;
                         }
-                    }
 
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineGenerator {
@@ -5173,9 +5141,9 @@ impl Interpreter {
                 }
             }
 
-            if let Some(try_info) = try_stack.last() {
-                if !try_info.entered_finally {
-                    if let Some(finally_state) = try_info.finally_state {
+            if let Some(try_info) = try_stack.last()
+                && !try_info.entered_finally
+                    && let Some(finally_state) = try_info.finally_state {
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineGenerator {
                                 state_machine,
@@ -5193,8 +5161,6 @@ impl Interpreter {
                             });
                         return self.generator_next_state_machine(this, JsValue::Undefined);
                     }
-                }
-            }
 
             obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
                 state_machine,
@@ -5375,8 +5341,8 @@ impl Interpreter {
             }
 
             if let Some(try_info) = try_stack.last() {
-                if !try_info.entered_catch && !try_info.entered_finally {
-                    if let Some(catch_state) = try_info.catch_state {
+                if !try_info.entered_catch && !try_info.entered_finally
+                    && let Some(catch_state) = try_info.catch_state {
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineGenerator {
                                 state_machine,
@@ -5394,9 +5360,8 @@ impl Interpreter {
                             });
                         return self.generator_next_state_machine(this, JsValue::Undefined);
                     }
-                }
-                if !try_info.entered_finally {
-                    if let Some(finally_state) = try_info.finally_state {
+                if !try_info.entered_finally
+                    && let Some(finally_state) = try_info.finally_state {
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineGenerator {
                                 state_machine,
@@ -5414,7 +5379,6 @@ impl Interpreter {
                             });
                         return self.generator_next_state_machine(this, JsValue::Undefined);
                     }
-                }
             }
 
             obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
@@ -6302,13 +6266,12 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(try_info) = current_try_stack.pop() {
-                        if let Some(catch_state) = try_info.catch_state {
+                    if let Some(try_info) = current_try_stack.pop()
+                        && let Some(catch_state) = try_info.catch_state {
                             pending_exception = Some(throw_val);
                             current_id = catch_state;
                             continue;
                         }
-                    }
 
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
@@ -6902,9 +6865,9 @@ impl Interpreter {
                 }
             }
 
-            if let Some(try_info) = try_stack.last() {
-                if !try_info.entered_finally {
-                    if let Some(finally_state) = try_info.finally_state {
+            if let Some(try_info) = try_stack.last()
+                && !try_info.entered_finally
+                    && let Some(finally_state) = try_info.finally_state {
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -6927,8 +6890,6 @@ impl Interpreter {
                         }
                         return result;
                     }
-                }
-            }
 
             obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
                 state_machine,
@@ -6977,13 +6938,13 @@ impl Interpreter {
                 let iter_result = self.create_iter_result_object(value, true);
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
                 self.drain_microtasks();
-                return Completion::Normal(promise);
+                Completion::Normal(promise)
             }
             GeneratorExecutionState::Executing => {
                 let err = self.create_type_error("AsyncGenerator is already executing");
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[err]);
                 self.drain_microtasks();
-                return Completion::Normal(promise);
+                Completion::Normal(promise)
             }
             GeneratorExecutionState::SuspendedYield { .. } => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
@@ -7084,8 +7045,8 @@ impl Interpreter {
                                 // execution context so try/catch can handle it.
                                 // Pop the try_stack and jump directly to the catch state.
                                 let mut ts = try_stack.clone();
-                                if let Some(try_info) = ts.pop() {
-                                    if let Some(catch_state) = try_info.catch_state {
+                                if let Some(try_info) = ts.pop()
+                                    && let Some(catch_state) = try_info.catch_state {
                                         obj_rc.borrow_mut().iterator_state =
                                             Some(IteratorState::StateMachineAsyncGenerator {
                                                 state_machine: state_machine.clone(),
@@ -7107,7 +7068,6 @@ impl Interpreter {
                                             JsValue::Undefined,
                                         );
                                     }
-                                }
                                 // No catch handler — reject the promise
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
@@ -7835,16 +7795,14 @@ impl Interpreter {
     fn is_builtin_eval(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
             && let Some(obj) = self.get_object(o.id)
-        {
-            if let Some(ref func) = obj.borrow().callable {
+            && let Some(ref func) = obj.borrow().callable {
                 return matches!(func, JsFunction::Native(name, _, _, _) if name == "eval");
             }
-        }
         false
     }
 
     fn stmts_contain_arguments(stmts: &[Statement]) -> bool {
-        stmts.iter().any(|s| Self::stmt_contains_arguments(s))
+        stmts.iter().any(Self::stmt_contains_arguments)
     }
 
     fn stmt_contains_arguments(stmt: &Statement) -> bool {
@@ -7968,7 +7926,7 @@ impl Interpreter {
     }
 
     fn stmts_contain_super_call(stmts: &[Statement]) -> bool {
-        stmts.iter().any(|s| Self::stmt_contains_super_call(s))
+        stmts.iter().any(Self::stmt_contains_super_call)
     }
 
     fn stmt_contains_super_call(stmt: &Statement) -> bool {
@@ -8211,33 +8169,30 @@ impl Interpreter {
             Statement::While(w) => Self::collect_eval_var_names_from_stmt(&w.body, names),
             Statement::DoWhile(d) => Self::collect_eval_var_names_from_stmt(&d.body, names),
             Statement::For(f) => {
-                if let Some(ForInit::Variable(decl)) = &f.init {
-                    if decl.kind == VarKind::Var {
+                if let Some(ForInit::Variable(decl)) = &f.init
+                    && decl.kind == VarKind::Var {
                         for d in &decl.declarations {
                             Self::collect_pattern_names(&d.pattern, names);
                         }
                     }
-                }
                 Self::collect_eval_var_names_from_stmt(&f.body, names);
             }
             Statement::ForIn(fi) => {
-                if let ForInOfLeft::Variable(decl) = &fi.left {
-                    if decl.kind == VarKind::Var {
+                if let ForInOfLeft::Variable(decl) = &fi.left
+                    && decl.kind == VarKind::Var {
                         for d in &decl.declarations {
                             Self::collect_pattern_names(&d.pattern, names);
                         }
                     }
-                }
                 Self::collect_eval_var_names_from_stmt(&fi.body, names);
             }
             Statement::ForOf(fo) => {
-                if let ForInOfLeft::Variable(decl) = &fo.left {
-                    if decl.kind == VarKind::Var {
+                if let ForInOfLeft::Variable(decl) = &fo.left
+                    && decl.kind == VarKind::Var {
                         for d in &decl.declarations {
                             Self::collect_pattern_names(&d.pattern, names);
                         }
                     }
-                }
                 Self::collect_eval_var_names_from_stmt(&fo.body, names);
             }
             Statement::Switch(sw) => {
@@ -8341,8 +8296,8 @@ impl Interpreter {
                 let env_b = var_env.borrow();
                 let global_obj = env_b.global_object.clone();
                 for name in &all_names {
-                    if let Some(binding) = env_b.bindings.get(name) {
-                        if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
+                    if let Some(binding) = env_b.bindings.get(name)
+                        && matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
                             let on_global_obj = global_obj
                                 .as_ref()
                                 .is_some_and(|g| g.borrow().properties.contains_key(name));
@@ -8353,7 +8308,6 @@ impl Interpreter {
                                 ));
                             }
                         }
-                    }
                 }
             }
             // Check for conflicts with lexical declarations in intermediate scopes
@@ -8968,11 +8922,10 @@ impl Interpreter {
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => JsValue::Undefined,
                 };
-                if let JsValue::Object(proto_obj) = proto {
-                    if let Some(proto_rc) = self.get_object(proto_obj.id) {
+                if let JsValue::Object(proto_obj) = proto
+                    && let Some(proto_rc) = self.get_object(proto_obj.id) {
                         new_obj.borrow_mut().prototype = Some(proto_rc);
                     }
-                }
             }
             let new_obj_id = new_obj.borrow().id.unwrap();
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
@@ -9002,8 +8955,8 @@ impl Interpreter {
         obj_id: u64,
         default_proto_id: Option<u64>,
     ) {
-        if let Some(ref nt) = self.new_target.clone() {
-            if let JsValue::Object(nt_o) = nt {
+        if let Some(ref nt) = self.new_target.clone()
+            && let JsValue::Object(nt_o) = nt {
                 let nt_proto_id = if let Some(nt_obj) = self.get_object(nt_o.id) {
                     nt_obj.borrow().id
                 } else {
@@ -9020,16 +8973,13 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         _ => return,
                     };
-                    if let JsValue::Object(po) = proto_val {
-                        if let Some(proto_rc) = self.get_object(po.id) {
-                            if let Some(obj_rc) = self.get_object(obj_id) {
+                    if let JsValue::Object(po) = proto_val
+                        && let Some(proto_rc) = self.get_object(po.id)
+                            && let Some(obj_rc) = self.get_object(obj_id) {
                                 obj_rc.borrow_mut().prototype = Some(proto_rc);
                             }
-                        }
-                    }
                 }
             }
-        }
     }
 
     fn get_proxy_info(&self, obj_id: u64) -> Option<(bool, Option<u64>, Option<u64>)> {
@@ -9226,13 +9176,11 @@ impl Interpreter {
 
     pub(crate) fn ordinary_has_instance(&mut self, ctor: &JsValue, obj: &JsValue) -> Completion {
         // Step 2: bound function → recurse with target
-        if let JsValue::Object(co) = ctor {
-            if let Some(obj_data) = self.get_object(co.id) {
-                if let Some(target) = obj_data.borrow().bound_target_function.clone() {
+        if let JsValue::Object(co) = ctor
+            && let Some(obj_data) = self.get_object(co.id)
+                && let Some(target) = obj_data.borrow().bound_target_function.clone() {
                     return self.eval_instanceof(obj, &target);
                 }
-            }
-        }
         if !self.is_callable(ctor) {
             return Completion::Normal(JsValue::Boolean(false));
         }
@@ -9293,8 +9241,8 @@ impl Interpreter {
                         && let Some(tobj) = self.get_object(t.id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
-                        if let Some(ref desc) = target_desc {
-                            if desc.configurable == Some(false) {
+                        if let Some(ref desc) = target_desc
+                            && desc.configurable == Some(false) {
                                 if desc.is_data_descriptor()
                                     && desc.writable == Some(false)
                                     && !same_value(
@@ -9318,7 +9266,6 @@ impl Interpreter {
                                     ));
                                 }
                             }
-                        }
                     }
                     return Completion::Normal(v);
                 }
@@ -9334,8 +9281,8 @@ impl Interpreter {
         }
 
         // Module namespace: look up live binding from environment
-        if let Some(obj) = self.get_object(obj_id) {
-            if let Some(ref ns_data) = obj.borrow().module_namespace.clone() {
+        if let Some(obj) = self.get_object(obj_id)
+            && let Some(ref ns_data) = obj.borrow().module_namespace.clone() {
                 // First try local binding lookup
                 if let Some(binding_name) = ns_data.export_to_binding.get(key) {
                     // Handle re-export binding format: *reexport:source:name
@@ -9345,22 +9292,19 @@ impl Interpreter {
                             let source = &rest[..colon_idx];
                             let export_name = &rest[colon_idx + 1..];
                             // Resolve the source module
-                            if let Some(ref module_path) = ns_data.module_path {
-                                if let Ok(resolved) =
+                            if let Some(ref module_path) = ns_data.module_path
+                                && let Ok(resolved) =
                                     self.resolve_module_specifier(source, Some(module_path))
-                                {
-                                    if let Ok(source_mod) = self.load_module(&resolved) {
+                                    && let Ok(source_mod) = self.load_module(&resolved) {
                                         // Get the source module's export binding to find the env variable
                                         let source_ref = source_mod.borrow();
                                         // Try environment lookup first for live bindings
                                         if let Some(binding) =
                                             source_ref.export_bindings.get(export_name)
-                                        {
-                                            if let Some(val) = source_ref.env.borrow().get(binding)
+                                            && let Some(val) = source_ref.env.borrow().get(binding)
                                             {
                                                 return Completion::Normal(val);
                                             }
-                                        }
                                         // Fallback: direct environment lookup
                                         if let Some(val) = source_ref.env.borrow().get(export_name)
                                         {
@@ -9371,8 +9315,6 @@ impl Interpreter {
                                             return Completion::Normal(val.clone());
                                         }
                                     }
-                                }
-                            }
                         }
                     } else {
                         let val = ns_data
@@ -9384,15 +9326,12 @@ impl Interpreter {
                     }
                 }
                 // Fallback: check module's exports directly (for re-exports)
-                if let Some(ref module_path) = ns_data.module_path {
-                    if let Some(module) = self.module_registry.get(module_path) {
-                        if let Some(val) = module.borrow().exports.get(key) {
+                if let Some(ref module_path) = ns_data.module_path
+                    && let Some(module) = self.module_registry.get(module_path)
+                        && let Some(val) = module.borrow().exports.get(key) {
                             return Completion::Normal(val.clone());
                         }
-                    }
-                }
             }
-        }
 
         // TypedArray [[Get]]: canonical numeric index strings MUST NOT walk prototype
         let is_typed_array_numeric = if let Some(obj) = self.get_object(obj_id) {
@@ -9445,8 +9384,8 @@ impl Interpreter {
             match self.invoke_proxy_trap(obj_id, "has", vec![target_val.clone(), key_val]) {
                 Ok(Some(v)) => {
                     let trap_result = to_boolean(&v);
-                    if !trap_result {
-                        if let JsValue::Object(ref t) = target_val
+                    if !trap_result
+                        && let JsValue::Object(ref t) = target_val
                             && let Some(tobj) = self.get_object(t.id)
                         {
                             let target_desc = tobj.borrow().get_own_property(key);
@@ -9463,7 +9402,6 @@ impl Interpreter {
                                 }
                             }
                         }
-                    }
                     Ok(trap_result)
                 }
                 Ok(None) => {
@@ -9707,14 +9645,13 @@ impl Interpreter {
                     .borrow()
                     .properties
                     .get(name)
-                    .map_or(false, |d| d.get.is_some());
-                if has_getter {
-                    if let Some(global_id) = global_obj_clone.borrow().id {
+                    .is_some_and(|d| d.get.is_some());
+                if has_getter
+                    && let Some(global_id) = global_obj_clone.borrow().id {
                         drop(env_borrow);
                         let this_val = JsValue::Object(crate::types::JsObject { id: global_id });
                         return Some(self.get_object_property(global_id, name, &this_val));
                     }
-                }
                 return None;
             }
             current = env_borrow.parent.clone();
@@ -9744,8 +9681,8 @@ impl Interpreter {
                             && let Some(tobj) = self.get_object(t.id)
                         {
                             let target_desc = tobj.borrow().get_own_property(key);
-                            if let Some(ref desc) = target_desc {
-                                if desc.configurable == Some(false) {
+                            if let Some(ref desc) = target_desc
+                                && desc.configurable == Some(false) {
                                     if desc.is_data_descriptor()
                                         && desc.writable == Some(false)
                                         && !same_value(
@@ -9768,7 +9705,6 @@ impl Interpreter {
                                         ));
                                     }
                                 }
-                            }
                         }
                         Ok(true)
                     } else {
@@ -9786,8 +9722,8 @@ impl Interpreter {
         } else if let Some(obj) = self.get_object(obj_id) {
             // TypedArray [[Set]]
             let is_ta = obj.borrow().typed_array_info.is_some();
-            if is_ta {
-                if let Some(index) = canonical_numeric_index_string(key) {
+            if is_ta
+                && let Some(index) = canonical_numeric_index_string(key) {
                     let is_bigint = obj
                         .borrow()
                         .typed_array_info
@@ -9808,14 +9744,13 @@ impl Interpreter {
                     }
                     return Ok(true);
                 }
-            }
             // OrdinarySetWithOwnDescriptor
             let own_desc = obj.borrow().get_own_property(key);
             if let Some(ref desc) = own_desc {
                 if desc.is_accessor_descriptor() {
                     // Call setter with receiver as this
-                    if let Some(ref setter) = desc.set {
-                        if !matches!(setter, JsValue::Undefined) {
+                    if let Some(ref setter) = desc.set
+                        && !matches!(setter, JsValue::Undefined) {
                             let setter = setter.clone();
                             match self.call_function(&setter, receiver, &[value]) {
                                 Completion::Normal(_) => return Ok(true),
@@ -9823,7 +9758,6 @@ impl Interpreter {
                                 _ => return Ok(true),
                             }
                         }
-                    }
                     return Ok(false);
                 }
                 // Data descriptor
@@ -9839,11 +9773,10 @@ impl Interpreter {
                 return self.proxy_set(proto_id, key, value, receiver);
             }
             // No prototype, create data property on receiver
-            if let JsValue::Object(recv_o) = receiver {
-                if let Some(recv_obj) = self.get_object(recv_o.id) {
+            if let JsValue::Object(recv_o) = receiver
+                && let Some(recv_obj) = self.get_object(recv_o.id) {
                     return Ok(recv_obj.borrow_mut().set_property_value(key, value));
                 }
-            }
             Ok(obj.borrow_mut().set_property_value(key, value))
         } else {
             Ok(false)
@@ -9854,13 +9787,11 @@ impl Interpreter {
         if self.get_proxy_info(obj_id).is_some() {
             return true;
         }
-        if let Some(obj) = self.get_object(obj_id) {
-            if let Some(ref proto) = obj.borrow().prototype {
-                if let Some(pid) = proto.borrow().id {
+        if let Some(obj) = self.get_object(obj_id)
+            && let Some(ref proto) = obj.borrow().prototype
+                && let Some(pid) = proto.borrow().id {
                     return self.has_proxy_in_prototype_chain(pid);
                 }
-            }
-        }
         false
     }
 
@@ -9880,8 +9811,8 @@ impl Interpreter {
             ) {
                 Ok(Some(v)) => {
                     let trap_result = to_boolean(&v);
-                    if trap_result {
-                        if let JsValue::Object(ref t) = target_val
+                    if trap_result
+                        && let JsValue::Object(ref t) = target_val
                             && let Some(tobj) = self.get_object(t.id)
                         {
                             let target_desc = tobj.borrow().get_own_property(key);
@@ -9898,7 +9829,6 @@ impl Interpreter {
                                 }
                             }
                         }
-                    }
                     Ok(trap_result)
                 }
                 Ok(None) => {
@@ -9938,11 +9868,10 @@ impl Interpreter {
                 return false;
             }
             // 3b: If Desc has [[Enumerable]] and it differs from current
-            if let Some(desc_enum) = desc.enumerable {
-                if current.enumerable != Some(desc_enum) {
+            if let Some(desc_enum) = desc.enumerable
+                && current.enumerable != Some(desc_enum) {
                     return false;
                 }
-            }
         }
         // Step 4: If IsGenericDescriptor(Desc) is true, return true
         let is_generic = !desc.is_data_descriptor() && !desc.is_accessor_descriptor();
@@ -10275,13 +10204,11 @@ impl Interpreter {
                     match self.proxy_get_own_property_descriptor(cid, &key_str) {
                         Ok(desc_val) => {
                             seen.insert(key_str.clone());
-                            if !matches!(desc_val, JsValue::Undefined) {
-                                if let Ok(desc) = self.to_property_descriptor(&desc_val) {
-                                    if desc.enumerable != Some(false) {
+                            if !matches!(desc_val, JsValue::Undefined)
+                                && let Ok(desc) = self.to_property_descriptor(&desc_val)
+                                    && desc.enumerable != Some(false) {
                                         keys.push(key_str);
                                     }
-                                }
-                            }
                         }
                         Err(e) => return Err(e),
                     }
@@ -10474,8 +10401,8 @@ impl Interpreter {
             match self.invoke_proxy_trap(obj_id, "preventExtensions", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
                     let trap_result = to_boolean(&v);
-                    if trap_result {
-                        if let JsValue::Object(ref t) = target_val
+                    if trap_result
+                        && let JsValue::Object(ref t) = target_val
                             && let Some(tobj) = self.get_object(t.id)
                             && tobj.borrow().extensible
                         {
@@ -10483,7 +10410,6 @@ impl Interpreter {
                                 "'preventExtensions' on proxy: trap returned truish but the proxy target is extensible",
                             ));
                         }
-                    }
                     Ok(trap_result)
                 }
                 Ok(None) => {
@@ -10583,14 +10509,13 @@ impl Interpreter {
                 )));
             }
             // Fallback: __super__.prototype for class super
-            if let JsValue::Object(ref o) = obj_val {
-                if let Some(sup_obj) = self.get_object(o.id) {
+            if let JsValue::Object(ref o) = obj_val
+                && let Some(sup_obj) = self.get_object(o.id) {
                     let proto_val = sup_obj.borrow().get_property("prototype");
                     if let JsValue::Object(ref p) = proto_val {
                         return self.get_object_property(p.id, &key, &this_val);
                     }
                 }
-            }
             return Completion::Normal(JsValue::Undefined);
         }
         match &obj_val {
@@ -10755,13 +10680,12 @@ impl Interpreter {
         };
 
         // Validate super class: must be null or a constructor
-        if let Some(ref sv) = super_val {
-            if !matches!(sv, JsValue::Null) && !self.is_constructor(sv) {
+        if let Some(ref sv) = super_val
+            && !matches!(sv, JsValue::Null) && !self.is_constructor(sv) {
                 return Completion::Throw(
                     self.create_type_error("Class extends value is not a constructor or null"),
                 );
             }
-        }
 
         // Create class environment with __super__ binding and private names
         let class_env = Environment::new(Some(env.clone()));
@@ -10823,8 +10747,8 @@ impl Interpreter {
         let ctor_val = self.create_function(ctor_func);
 
         // Mark derived class constructors and make .prototype writable:false
-        if let JsValue::Object(ref o) = ctor_val {
-            if let Some(func_obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = ctor_val
+            && let Some(func_obj) = self.get_object(o.id) {
                 func_obj.borrow_mut().is_class_constructor = true;
                 if super_val.is_some() {
                     func_obj.borrow_mut().is_derived_class_constructor = true;
@@ -10836,7 +10760,6 @@ impl Interpreter {
                     PropertyDescriptor::data(proto_val_for_desc, false, false, false),
                 );
             }
-        }
 
         // Bind class name as immutable binding in class_env (spec §15.7.14 step 2.e)
         if !name.is_empty() {
@@ -10874,19 +10797,17 @@ impl Interpreter {
                 proto.borrow_mut().prototype = Some(super_proto);
             }
             // Step 7.a: F.[[Prototype]] = superclass (for static method inheritance)
-            if let JsValue::Object(ref o) = ctor_val {
-                if let Some(ctor_obj) = self.get_object(o.id) {
+            if let JsValue::Object(ref o) = ctor_val
+                && let Some(ctor_obj) = self.get_object(o.id) {
                     ctor_obj.borrow_mut().prototype = Some(super_obj);
                 }
-            }
         }
 
         // Handle `extends null` — set prototype's [[Prototype]] to null
-        if let Some(JsValue::Null) = super_val {
-            if let Some(ref proto) = proto_obj {
+        if let Some(JsValue::Null) = super_val
+            && let Some(ref proto) = proto_obj {
                 proto.borrow_mut().prototype = None;
             }
-        }
 
         // Create environment for static field initializers with `this` = constructor
         let static_field_env = Environment::new_function_scope(Some(class_env.clone()));
@@ -11138,8 +11059,7 @@ impl Interpreter {
                     };
                     if let JsValue::Object(ref fo) = method_val
                         && let Some(func_obj) = self.get_object(fo.id)
-                    {
-                        if let Some(JsFunction::User { ref closure, .. }) =
+                        && let Some(JsFunction::User { ref closure, .. }) =
                             func_obj.borrow().callable
                         {
                             closure
@@ -11147,7 +11067,6 @@ impl Interpreter {
                                 .declare("__home_object__", BindingKind::Const);
                             let _ = closure.borrow_mut().set("__home_object__", home_target);
                         }
-                    }
 
                     let target = if m.is_static {
                         if let JsValue::Object(ref o) = ctor_val {
@@ -11394,16 +11313,14 @@ impl Interpreter {
                     }
                     Err(e) => return Err(e),
                 }
-            } else {
-                if let Some(obj) = self.get_object(src_id) {
-                    let desc = obj.borrow().get_own_property(&key_str);
-                    match desc {
-                        Some(d) => d.enumerable != Some(false),
-                        None => continue,
-                    }
-                } else {
-                    continue;
+            } else if let Some(obj) = self.get_object(src_id) {
+                let desc = obj.borrow().get_own_property(&key_str);
+                match desc {
+                    Some(d) => d.enumerable != Some(false),
+                    None => continue,
                 }
+            } else {
+                continue;
             };
             if !is_enumerable {
                 continue;

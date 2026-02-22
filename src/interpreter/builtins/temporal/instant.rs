@@ -41,7 +41,7 @@ impl Interpreter {
                 "get epochMilliseconds".to_string(),
                 0,
                 |interp, this, _args| {
-                    let ns = match get_instant_ns(interp, &this) {
+                    let ns = match get_instant_ns(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -68,7 +68,7 @@ impl Interpreter {
                 "get epochNanoseconds".to_string(),
                 0,
                 |interp, this, _args| {
-                    let ns = match get_instant_ns(interp, &this) {
+                    let ns = match get_instant_ns(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -93,7 +93,7 @@ impl Interpreter {
             "equals".to_string(),
             1,
             |interp, this, args| {
-                let ns = match get_instant_ns(interp, &this) {
+                let ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -116,7 +116,7 @@ impl Interpreter {
             "add".to_string(),
             1,
             |interp, this, args| {
-                let ns = match get_instant_ns(interp, &this) {
+                let ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -152,7 +152,7 @@ impl Interpreter {
             "subtract".to_string(),
             1,
             |interp, this, args| {
-                let ns = match get_instant_ns(interp, &this) {
+                let ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -191,7 +191,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let ns1 = match get_instant_ns(interp, &this) {
+                    let ns1 = match get_instant_ns(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -284,7 +284,7 @@ impl Interpreter {
             "round".to_string(),
             1,
             |interp, this, args| {
-                let ns = match get_instant_ns(interp, &this) {
+                let ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -389,7 +389,7 @@ impl Interpreter {
                     if unit_ns > 0 {
                         let total_ns = inc_raw as u64 * unit_ns;
                         let day_ns: u64 = 86_400_000_000_000;
-                        if day_ns % total_ns != 0 {
+                        if !day_ns.is_multiple_of(total_ns) {
                             return Completion::Throw(interp.create_range_error(&format!(
                                 "roundingIncrement {inc_raw} for {unit} does not divide evenly into a day"
                             )));
@@ -420,7 +420,7 @@ impl Interpreter {
             "toString".to_string(),
             0,
             |interp, this, args| {
-                let ns = match get_instant_ns(interp, &this) {
+                let ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -474,7 +474,7 @@ impl Interpreter {
             "toJSON".to_string(),
             0,
             |interp, this, _args| {
-                let ns = match get_instant_ns(interp, &this) {
+                let ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -491,7 +491,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, _args| {
-                let ns = match get_instant_ns(interp, &this) {
+                let ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -523,7 +523,7 @@ impl Interpreter {
             "toZonedDateTimeISO".to_string(),
             1,
             |interp, this, args| {
-                let ns = match get_instant_ns(interp, &this) {
+                let ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -569,8 +569,8 @@ impl Interpreter {
         ));
 
         // Constructor.prototype
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 let proto_val = JsValue::Object(crate::types::JsObject {
                     id: proto.borrow().id.unwrap(),
                 });
@@ -579,7 +579,6 @@ impl Interpreter {
                     PropertyDescriptor::data(proto_val, false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -598,11 +597,10 @@ impl Interpreter {
                 create_instant_result(interp, ns)
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
-        }
 
         // Instant.fromEpochMilliseconds(ms)
         let from_ms_fn = self.create_function(JsFunction::native(
@@ -626,12 +624,11 @@ impl Interpreter {
                 create_instant_result(interp, ns)
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut()
                     .insert_builtin("fromEpochMilliseconds".to_string(), from_ms_fn);
             }
-        }
 
         // Instant.fromEpochNanoseconds(ns)
         let from_ns_fn = self.create_function(JsFunction::native(
@@ -649,12 +646,11 @@ impl Interpreter {
                 create_instant_result(interp, ns)
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut()
                     .insert_builtin("fromEpochNanoseconds".to_string(), from_ns_fn);
             }
-        }
 
         // Instant.compare(one, two)
         let compare_fn = self.create_function(JsFunction::native(
@@ -685,12 +681,11 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut()
                     .insert_builtin("compare".to_string(), compare_fn);
             }
-        }
 
         temporal_obj.borrow_mut().insert_property(
             "Instant".to_string(),
@@ -1092,7 +1087,7 @@ fn instant_to_string_with_tz(
     let minute = ((day_ns / 60_000_000_000) % 60) as u8;
     let hour = ((day_ns / 3_600_000_000_000) % 24) as u8;
 
-    let year_str = if year >= 0 && year <= 9999 {
+    let year_str = if (0..=9999).contains(&year) {
         format!("{year:04}")
     } else if year >= 0 {
         format!("+{year:06}")
@@ -1197,7 +1192,7 @@ fn parse_to_string_options(
             )));
         }
         let floored = n.floor();
-        if floored < 0.0 || floored > 9.0 {
+        if !(0.0..=9.0).contains(&floored) {
             return Err(Completion::Throw(interp.create_range_error(
                 "fractionalSecondDigits must be 0-9 or 'auto'",
             )));
@@ -1279,10 +1274,7 @@ fn parse_to_string_options(
                 ));
             }
         };
-        let (id, offset) = match validate_timezone_string(interp, &tz_str) {
-            Ok(v) => v,
-            Err(c) => return Err(c),
-        };
+        let (id, offset) = validate_timezone_string(interp, &tz_str)?;
         (id, offset, true)
     };
 
@@ -1419,8 +1411,8 @@ fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
         return None;
     }
     // Look for [annotation] bracket — IANA name takes precedence
-    if let Some(bracket_start) = s.find('[') {
-        if let Some(bracket_end) = s[bracket_start..].find(']') {
+    if let Some(bracket_start) = s.find('[')
+        && let Some(bracket_end) = s[bracket_start..].find(']') {
             let annotation = &s[bracket_start + 1..bracket_start + bracket_end];
             // Skip non-timezone annotations like u-ca=iso8601
             if !annotation.contains('=') {
@@ -1441,11 +1433,10 @@ fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
                 return None; // Invalid annotation
             }
         }
-    }
     // Look for Z
     let _upper = s.to_uppercase();
     // Find time portion (after T)
-    let t_pos = s.find(|c: char| c == 'T' || c == 't')?;
+    let t_pos = s.find(['T', 't'])?;
     let time_part = &s[t_pos + 1..];
     // Strip calendar annotation if present
     let time_part = if let Some(b) = time_part.find('[') {
@@ -1463,7 +1454,7 @@ fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
     let offset_re_start = find_offset_in_time(time_part)?;
     let offset_str = &time_part[offset_re_start..];
     // Validate: must be exactly ±HH:MM (no sub-minute)
-    parse_plain_offset(offset_str).map(|v| v)
+    parse_plain_offset(offset_str)
 }
 
 /// Find the start of an offset (+ or -) in a time string portion.

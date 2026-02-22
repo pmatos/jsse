@@ -321,13 +321,12 @@ fn resolve_pdt_month(
         match super::plain_date::month_code_to_number_pub(mc) {
             Some(n) => {
                 let mc_n = n as f64;
-                if let Some(mn) = month_num {
-                    if mn as u8 != mc_n as u8 {
+                if let Some(mn) = month_num
+                    && mn as u8 != mc_n as u8 {
                         return Err(Completion::Throw(
                             interp.create_range_error("month and monthCode conflict"),
                         ));
                     }
-                }
                 mc_n
             }
             None => {
@@ -505,7 +504,7 @@ impl Interpreter {
                 "get calendarId".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (_, _, _, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                    let (_, _, _, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -531,7 +530,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (y, m, d, _, _, _, _, _, _, _) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, _) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -569,7 +568,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (_, _, _, h, mi, s, ms, us, ns, _) = match get_pdt_fields(interp, &this) {
+                    let (_, _, _, h, mi, s, ms, us, ns, _) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -603,7 +602,7 @@ impl Interpreter {
                 "get monthCode".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (_, m, _, _, _, _, _, _, _, _) = match get_pdt_fields(interp, &this) {
+                    let (_, m, _, _, _, _, _, _, _, _) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -639,7 +638,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (y, m, d, _, _, _, _, _, _, _) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, _) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -682,7 +681,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 |interp, this, _args| {
-                    let _ = match get_pdt_fields(interp, &this) {
+                    let _ = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -707,7 +706,7 @@ impl Interpreter {
             "with".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -844,7 +843,7 @@ impl Interpreter {
             "withPlainTime".to_string(),
             0,
             |interp, this, args| {
-                let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -874,7 +873,7 @@ impl Interpreter {
             "withCalendar".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, d, h, mi, s, ms, us, ns, _) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, h, mi, s, ms, us, ns, _) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -901,7 +900,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -973,7 +972,7 @@ impl Interpreter {
                 1,
                 move |interp, this, args| {
                     let (y1, m1, d1, h1, mi1, s1, ms1, us1, ns1, _) =
-                        match get_pdt_fields(interp, &this) {
+                        match get_pdt_fields(interp, this) {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
@@ -1270,7 +1269,7 @@ impl Interpreter {
             "round".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1410,7 +1409,7 @@ impl Interpreter {
             "equals".to_string(),
             1,
             |interp, this, args| {
-                let a = match get_pdt_fields(interp, &this) {
+                let a = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1441,7 +1440,7 @@ impl Interpreter {
             "toString".to_string(),
             0,
             |interp, this, args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1493,7 +1492,7 @@ impl Interpreter {
                                 ));
                             }
                             let floored = n.floor();
-                            if floored < 0.0 || floored > 9.0 {
+                            if !(0.0..=9.0).contains(&floored) {
                                 return Completion::Throw(interp.create_range_error(
                                     "fractionalSecondDigits must be 0-9 or 'auto'",
                                 ));
@@ -1630,7 +1629,7 @@ impl Interpreter {
             "toJSON".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1648,7 +1647,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1680,7 +1679,7 @@ impl Interpreter {
             "toPlainDate".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1696,7 +1695,7 @@ impl Interpreter {
             "toPlainTime".to_string(),
             0,
             |interp, this, _args| {
-                let (_, _, _, h, mi, s, ms, us, ns, _) = match get_pdt_fields(interp, &this) {
+                let (_, _, _, h, mi, s, ms, us, ns, _) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1712,7 +1711,7 @@ impl Interpreter {
             "toPlainYearMonth".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, _d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, _d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1728,7 +1727,7 @@ impl Interpreter {
             "toPlainMonthDay".to_string(),
             0,
             |interp, this, _args| {
-                let (_y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                let (_y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1745,7 +1744,7 @@ impl Interpreter {
             "getISOFields".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1808,7 +1807,7 @@ impl Interpreter {
             "toZonedDateTime".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, &this) {
+                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1888,7 +1887,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         let t = n.trunc();
-                        if t < 1.0 || t > 12.0 {
+                        if !(1.0..=12.0).contains(&t) {
                             return Completion::Throw(interp.create_range_error("Invalid month"));
                         }
                         t as u8
@@ -1902,7 +1901,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_range_error("Invalid day"));
                         }
                         let t = n.trunc();
-                        if t < 1.0 || t > 31.0 {
+                        if !(1.0..=31.0).contains(&t) {
                             return Completion::Throw(interp.create_range_error("Invalid day"));
                         }
                         t as u8
@@ -1951,8 +1950,8 @@ impl Interpreter {
         ));
 
         // Constructor.prototype
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 let proto_val = JsValue::Object(crate::types::JsObject {
                     id: proto.borrow().id.unwrap(),
                 });
@@ -1961,7 +1960,6 @@ impl Interpreter {
                     PropertyDescriptor::data(proto_val, false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -2047,11 +2045,10 @@ impl Interpreter {
                 }
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
-        }
 
         // PlainDateTime.compare(one, two)
         let compare_fn = self.create_function(JsFunction::native(
@@ -2082,12 +2079,11 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut()
                     .insert_builtin("compare".to_string(), compare_fn);
             }
-        }
 
         temporal_obj.borrow_mut().insert_property(
             "PlainDateTime".to_string(),

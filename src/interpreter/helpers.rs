@@ -331,12 +331,12 @@ pub(crate) fn abstract_equality(left: &JsValue, right: &JsValue) -> bool {
     if let JsValue::BigInt(b) = left
         && let JsValue::String(s) = right
     {
-        return string_to_bigint(&s.to_rust_string()).map_or(false, |parsed| parsed == b.value);
+        return string_to_bigint(&s.to_rust_string()).is_some_and(|parsed| parsed == b.value);
     }
     if let JsValue::String(s) = left
         && let JsValue::BigInt(b) = right
     {
-        return string_to_bigint(&s.to_rust_string()).map_or(false, |parsed| parsed == b.value);
+        return string_to_bigint(&s.to_rust_string()).is_some_and(|parsed| parsed == b.value);
     }
     // BigInt vs Number
     if let JsValue::BigInt(b) = left

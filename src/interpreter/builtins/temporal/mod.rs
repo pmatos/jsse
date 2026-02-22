@@ -370,7 +370,7 @@ pub(crate) fn coerce_rounding_increment(
         ));
     }
     let int_inc = n.trunc();
-    if int_inc < 1.0 || int_inc > 1e9 {
+    if !(1.0..=1e9).contains(&int_inc) {
         return Err(Completion::Throw(
             interp.create_range_error("roundingIncrement is out of range"),
         ));
@@ -387,7 +387,7 @@ fn check_day_divisibility(
     if unit_ns > 0 {
         let total_ns = int_inc as u64 * unit_ns;
         let day_ns: u64 = 86_400_000_000_000;
-        if day_ns % total_ns != 0 {
+        if !day_ns.is_multiple_of(total_ns) {
             return Err(Completion::Throw(interp.create_range_error(&format!(
                 "roundingIncrement {int_inc} for {unit} does not divide evenly into a day"
             ))));
@@ -420,7 +420,7 @@ pub(crate) fn validate_rounding_increment_raw(
         if unit_ns > 0 {
             let total_ns = int_inc as u64 * unit_ns;
             let day_ns: u64 = 86_400_000_000_000;
-            if day_ns % total_ns != 0 {
+            if !day_ns.is_multiple_of(total_ns) {
                 return Err(format!(
                     "roundingIncrement {int_inc} for {unit} does not divide evenly into a day"
                 ));
@@ -435,10 +435,7 @@ pub(crate) fn parse_overflow_option(
     interp: &mut Interpreter,
     options: &JsValue,
 ) -> Result<String, Completion> {
-    let has_options = match get_options_object(interp, options) {
-        Ok(v) => v,
-        Err(c) => return Err(c),
-    };
+    let has_options = get_options_object(interp, options)?;
     if !has_options {
         return Ok("constrain".to_string());
     }
@@ -533,7 +530,7 @@ pub(crate) fn iso_date_valid(year: i32, month: u8, day: u8) -> bool {
         return false;
     }
     // ISO year range: -271821 to 275760 (per spec)
-    if year < -271821 || year > 275760 {
+    if !(-271821..=275760).contains(&year) {
         return false;
     }
     true
@@ -565,18 +562,12 @@ pub(crate) fn iso_time_valid_f64(
     microsecond: f64,
     nanosecond: f64,
 ) -> bool {
-    hour >= 0.0
-        && hour <= 23.0
-        && minute >= 0.0
-        && minute <= 59.0
-        && second >= 0.0
-        && second <= 59.0
-        && millisecond >= 0.0
-        && millisecond <= 999.0
-        && microsecond >= 0.0
-        && microsecond <= 999.0
-        && nanosecond >= 0.0
-        && nanosecond <= 999.0
+    (0.0..=23.0).contains(&hour)
+        && (0.0..=59.0).contains(&minute)
+        && (0.0..=59.0).contains(&second)
+        && (0.0..=999.0).contains(&millisecond)
+        && (0.0..=999.0).contains(&microsecond)
+        && (0.0..=999.0).contains(&nanosecond)
 }
 
 pub(crate) fn iso_day_of_year(year: i32, month: u8, day: u8) -> u16 {
@@ -744,7 +735,7 @@ fn iso_date_surpasses(
         y0,
         base_m as i32,
         base_d as i32,
-        target_y as i32,
+        target_y,
         target_m as i32,
         target_d as i32,
     ) {
@@ -761,7 +752,7 @@ fn iso_date_surpasses(
         bal_y,
         bal_m,
         base_d as i32,
-        target_y as i32,
+        target_y,
         target_m as i32,
         target_d as i32,
     )
@@ -904,7 +895,7 @@ pub(crate) fn iso_date_time_within_limits(
 /// ISOYearMonthWithinLimits per spec:
 /// Simple hardcoded year/month boundary check.
 pub(crate) fn iso_year_month_within_limits(year: i32, month: u8) -> bool {
-    if year < -271821 || year > 275760 {
+    if !(-271821..=275760).contains(&year) {
         return false;
     }
     if year == -271821 && month < 4 {
@@ -1234,15 +1225,14 @@ pub(crate) fn parse_utc_offset_timezone(s: &str) -> Option<String> {
 
     let after_min = min_start + 2;
     // Sub-minute precision → reject
-    if rest.len() > after_min {
-        if rest[after_min] == b':'
+    if rest.len() > after_min
+        && (rest[after_min] == b':'
             || rest[after_min] == b'.'
             || rest[after_min] == b','
-            || rest[after_min].is_ascii_digit()
+            || rest[after_min].is_ascii_digit())
         {
             return None;
         }
-    }
 
     Some(format!("{}{:02}:{:02}", sign, hours, minutes))
 }
@@ -1498,9 +1488,7 @@ pub(crate) struct ParsedOffset {
 pub(crate) fn parse_temporal_instant_string(s: &str) -> Option<ParsedIsoDateTime> {
     let parsed = parse_temporal_date_time_string(s)?;
     // Instant requires a UTC offset (Z or ±HH:MM) and a time component
-    if parsed.offset.is_none() {
-        return None;
-    }
+    parsed.offset.as_ref()?;
     if !parsed.has_time {
         return None;
     }
@@ -1586,10 +1574,8 @@ pub(crate) fn parse_temporal_date_time_string(s: &str) -> Option<ParsedIsoDateTi
                 if calendar.is_none() {
                     calendar = Some(annotation[eq_pos + 1..].to_string());
                 }
-            } else {
-                if is_critical {
-                    return None;
-                }
+            } else if is_critical {
+                return None;
             }
         } else {
             if time_zone.is_some() {
@@ -1651,7 +1637,7 @@ fn is_ambiguous_time_string(bytes: &[u8]) -> bool {
             2 => 29,
             _ => return false,
         };
-        if mm >= 1 && mm <= 12 && dd >= 1 && dd <= max_dd {
+        if (1..=12).contains(&mm) && dd >= 1 && dd <= max_dd {
             return true;
         }
     }
@@ -1672,7 +1658,7 @@ fn is_ambiguous_time_string(bytes: &[u8]) -> bool {
             2 => 29,
             _ => return false,
         };
-        if mm >= 1 && mm <= 12 && dd >= 1 && dd <= max_dd {
+        if (1..=12).contains(&mm) && dd >= 1 && dd <= max_dd {
             return true;
         }
     }
@@ -1680,7 +1666,7 @@ fn is_ambiguous_time_string(bytes: &[u8]) -> bool {
     // 6 pure digits: could be YYYYMM
     if core.len() == 6 && core.iter().all(|b| b.is_ascii_digit()) {
         let mm = (core[4] - b'0') as u32 * 10 + (core[5] - b'0') as u32;
-        if mm >= 1 && mm <= 12 {
+        if (1..=12).contains(&mm) {
             return true;
         }
     }
@@ -1693,7 +1679,7 @@ fn is_ambiguous_time_string(bytes: &[u8]) -> bool {
         && core[6].is_ascii_digit()
     {
         let mm = (core[5] - b'0') as u32 * 10 + (core[6] - b'0') as u32;
-        if mm >= 1 && mm <= 12 {
+        if (1..=12).contains(&mm) {
             return true;
         }
     }
@@ -1722,8 +1708,8 @@ pub(crate) fn parse_temporal_time_string(s: &str) -> Option<(u8, u8, u8, u16, u1
                 p = np;
             }
         }
-        if let Some(np) = skip_annotations_validated(bytes, p) {
-            if np == bytes.len() {
+        if let Some(np) = skip_annotations_validated(bytes, p)
+            && np == bytes.len() {
                 // Without T prefix, check for ambiguity with date formats
                 if !has_t_prefix {
                     let could_be_date = parse_temporal_date_time_string(s).is_some()
@@ -1743,7 +1729,6 @@ pub(crate) fn parse_temporal_time_string(s: &str) -> Option<(u8, u8, u8, u16, u1
                     result.0, result.1, result.2, result.3, result.4, result.5, has_z,
                 ));
             }
-        }
     }
 
     // Try parsing as date-time and extract time part — must have time component
@@ -1773,8 +1758,8 @@ pub(crate) fn parse_temporal_year_month_string(
     if let Some((year, new_pos)) = parse_iso_year(bytes, 0) {
         let has_sep = new_pos < bytes.len() && bytes[new_pos] == b'-';
         let month_start = if has_sep { new_pos + 1 } else { new_pos };
-        if let Some((month, np)) = parse_two_digit(bytes, month_start) {
-            if (1..=12).contains(&month) {
+        if let Some((month, np)) = parse_two_digit(bytes, month_start)
+            && (1..=12).contains(&month) {
                 // Check it's not followed by more digits (which would make it a date)
                 let next_is_digit = np < bytes.len() && bytes[np].is_ascii_digit();
                 let next_is_dash = np < bytes.len() && bytes[np] == b'-';
@@ -1789,7 +1774,6 @@ pub(crate) fn parse_temporal_year_month_string(
                     }
                 }
             }
-        }
     }
     // Fall back to full date-time
     let parsed = parse_temporal_date_time_string(s)?;
@@ -1810,10 +1794,10 @@ pub(crate) fn parse_temporal_month_day_string(
     let s = s.trim();
     let bytes = s.as_bytes();
     // Try MM-DD first
-    if bytes.len() >= 5 && bytes[2] == b'-' {
-        if let Some((month, p1)) = parse_two_digit(bytes, 0) {
-            if bytes.get(p1) == Some(&b'-') {
-                if let Some((day, p2)) = parse_two_digit(bytes, p1 + 1) {
+    if bytes.len() >= 5 && bytes[2] == b'-'
+        && let Some((month, p1)) = parse_two_digit(bytes, 0)
+            && bytes.get(p1) == Some(&b'-')
+                && let Some((day, p2)) = parse_two_digit(bytes, p1 + 1) {
                     let mut p = p2;
                     let mut calendar = None;
                     p = parse_annotations_extract_calendar(bytes, p, &mut calendar)?;
@@ -1825,18 +1809,14 @@ pub(crate) fn parse_temporal_month_day_string(
                         return Some((month, day, None, calendar, false));
                     }
                 }
-            }
-        }
-    }
     // Try MMDD (4 digits, no dash)
     if bytes.len() >= 4
         && bytes[0].is_ascii_digit()
         && bytes[1].is_ascii_digit()
         && bytes[2].is_ascii_digit()
         && bytes[3].is_ascii_digit()
-    {
-        if let Some((month, p1)) = parse_two_digit(bytes, 0) {
-            if let Some((day, p2)) = parse_two_digit(bytes, p1) {
+        && let Some((month, p1)) = parse_two_digit(bytes, 0)
+            && let Some((day, p2)) = parse_two_digit(bytes, p1) {
                 // Must not be followed by more digits (that would be YYYYMM or YYYYMMDD)
                 if p2 == bytes.len() || !bytes[p2].is_ascii_digit() {
                     let mut p = p2;
@@ -1851,11 +1831,9 @@ pub(crate) fn parse_temporal_month_day_string(
                     }
                 }
             }
-        }
-    }
     // Try --MM-DD or --MMDD (ISO 8601 extended)
-    if bytes.len() >= 6 && bytes[0] == b'-' && bytes[1] == b'-' {
-        if let Some((month, p1)) = parse_two_digit(bytes, 2) {
+    if bytes.len() >= 6 && bytes[0] == b'-' && bytes[1] == b'-'
+        && let Some((month, p1)) = parse_two_digit(bytes, 2) {
             let sep = if bytes.get(p1) == Some(&b'-') {
                 p1 + 1
             } else {
@@ -1874,7 +1852,6 @@ pub(crate) fn parse_temporal_month_day_string(
                 }
             }
         }
-    }
     // Fall back to full date-time
     let parsed = parse_temporal_date_time_string(s)?;
     // Reject date-only strings with UTC offset (no time component)
@@ -2395,12 +2372,10 @@ pub(crate) fn round_number_to_increment(x: f64, increment: f64, rounding_mode: &
                 } else {
                     quotient.floor()
                 }
+            } else if f < -0.5 {
+                quotient.floor()
             } else {
-                if f < -0.5 {
-                    quotient.floor()
-                } else {
-                    quotient.ceil()
-                }
+                quotient.ceil()
             }
         }
         "halfCeil" => (quotient + 0.5).floor(),
@@ -2471,12 +2446,10 @@ pub(crate) fn round_i128_to_increment(x: i128, increment: i128, rounding_mode: &
                 } else {
                     truncated
                 }
+            } else if 2 * abs_rem > increment {
+                truncated - increment
             } else {
-                if 2 * abs_rem > increment {
-                    truncated - increment
-                } else {
-                    truncated
-                }
+                truncated
             }
         }
         "halfFloor" => {
@@ -2486,12 +2459,10 @@ pub(crate) fn round_i128_to_increment(x: i128, increment: i128, rounding_mode: &
                 } else {
                     truncated
                 }
+            } else if 2 * abs_rem >= increment {
+                truncated - increment
             } else {
-                if 2 * abs_rem >= increment {
-                    truncated - increment
-                } else {
-                    truncated
-                }
+                truncated
             }
         }
         "halfEven" => {
@@ -2500,12 +2471,10 @@ pub(crate) fn round_i128_to_increment(x: i128, increment: i128, rounding_mode: &
                 truncated + sign * increment
             } else if 2 * abs_rem < increment {
                 truncated
+            } else if q_trunc % 2 == 0 {
+                truncated
             } else {
-                if q_trunc % 2 == 0 {
-                    truncated
-                } else {
-                    truncated + sign * increment
-                }
+                truncated + sign * increment
             }
         }
         _ => truncated,
@@ -2635,13 +2604,12 @@ pub(crate) fn resolve_month_fields(
     if let Some(mc) = month_code {
         match plain_date::month_code_to_number_pub(&mc) {
             Some(n) => {
-                if let Some(explicit_m) = month {
-                    if explicit_m != n {
+                if let Some(explicit_m) = month
+                    && explicit_m != n {
                         return Err(Completion::Throw(
                             interp.create_range_error("month and monthCode conflict"),
                         ));
                     }
-                }
                 Ok(n)
             }
             None => Err(Completion::Throw(
@@ -2789,10 +2757,7 @@ pub(crate) fn parse_difference_options(
     let default_smallest = *allowed_units.last().unwrap_or(&"nanosecond");
 
     // GetOptionsObject per spec
-    let has_options = match get_options_object(interp, options) {
-        Ok(v) => v,
-        Err(c) => return Err(c),
-    };
+    let has_options = get_options_object(interp, options)?;
     if !has_options {
         return Ok((
             default_largest.to_string(),

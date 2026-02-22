@@ -37,7 +37,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let fields = match get_plain_time_fields(interp, &this) {
+                    let fields = match get_plain_time_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -71,7 +71,7 @@ impl Interpreter {
             "with".to_string(),
             1,
             |interp, this, args| {
-                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, &this) {
+                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -161,7 +161,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, &this) {
+                    let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -196,7 +196,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (h1, m1, s1, ms1, us1, ns1) = match get_plain_time_fields(interp, &this) {
+                    let (h1, m1, s1, ms1, us1, ns1) = match get_plain_time_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -262,7 +262,7 @@ impl Interpreter {
             "round".to_string(),
             1,
             |interp, this, args| {
-                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, &this) {
+                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -395,7 +395,7 @@ impl Interpreter {
             "equals".to_string(),
             1,
             |interp, this, args| {
-                let (h1, m1, s1, ms1, us1, ns1) = match get_plain_time_fields(interp, &this) {
+                let (h1, m1, s1, ms1, us1, ns1) = match get_plain_time_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -417,7 +417,7 @@ impl Interpreter {
             "toString".to_string(),
             0,
             |interp, this, args| {
-                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, &this) {
+                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -465,7 +465,7 @@ impl Interpreter {
             "toJSON".to_string(),
             0,
             |interp, this, _args| {
-                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, &this) {
+                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -482,7 +482,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, _args| {
-                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, &this) {
+                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -533,7 +533,7 @@ impl Interpreter {
                                     );
                                 }
                                 let t = n.trunc();
-                                if t < 0.0 || t > 23.0 {
+                                if !(0.0..=23.0).contains(&t) {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid hour"),
                                     );
@@ -558,7 +558,7 @@ impl Interpreter {
                                     );
                                 }
                                 let t = n.trunc();
-                                if t < 0.0 || t > 59.0 {
+                                if !(0.0..=59.0).contains(&t) {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid minute"),
                                     );
@@ -583,7 +583,7 @@ impl Interpreter {
                                     );
                                 }
                                 let t = n.trunc();
-                                if t < 0.0 || t > 59.0 {
+                                if !(0.0..=59.0).contains(&t) {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid second"),
                                     );
@@ -608,7 +608,7 @@ impl Interpreter {
                                     );
                                 }
                                 let t = n.trunc();
-                                if t < 0.0 || t > 999.0 {
+                                if !(0.0..=999.0).contains(&t) {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid millisecond"),
                                     );
@@ -633,7 +633,7 @@ impl Interpreter {
                                     );
                                 }
                                 let t = n.trunc();
-                                if t < 0.0 || t > 999.0 {
+                                if !(0.0..=999.0).contains(&t) {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid microsecond"),
                                     );
@@ -658,7 +658,7 @@ impl Interpreter {
                                     );
                                 }
                                 let t = n.trunc();
-                                if t < 0.0 || t > 999.0 {
+                                if !(0.0..=999.0).contains(&t) {
                                     return Completion::Throw(
                                         interp.create_range_error("Invalid nanosecond"),
                                     );
@@ -684,8 +684,8 @@ impl Interpreter {
         ));
 
         // Constructor.prototype
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 let proto_val = JsValue::Object(crate::types::JsObject {
                     id: proto.borrow().id.unwrap(),
                 });
@@ -694,7 +694,6 @@ impl Interpreter {
                     PropertyDescriptor::data(proto_val, false, false, false),
                 );
             }
-        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -747,11 +746,10 @@ impl Interpreter {
                 }
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
-        }
 
         // PlainTime.compare(one, two)
         let compare_fn = self.create_function(JsFunction::native(
@@ -784,12 +782,11 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor {
-            if let Some(obj) = self.get_object(o.id) {
+        if let JsValue::Object(ref o) = constructor
+            && let Some(obj) = self.get_object(o.id) {
                 obj.borrow_mut()
                     .insert_builtin("compare".to_string(), compare_fn);
             }
-        }
 
         temporal_obj.borrow_mut().insert_property(
             "PlainTime".to_string(),
@@ -1123,7 +1120,7 @@ pub(super) fn round_i128_to_increment(n: i128, increment: i128, mode: &str) -> i
             } else if doubled < abs_inc {
                 false
             } else {
-                quotient.unsigned_abs() % 2 != 0
+                !quotient.unsigned_abs().is_multiple_of(2)
             }
         }
         _ => false,
@@ -1146,10 +1143,7 @@ fn parse_time_diff_options<'a>(
     default_largest: &'a str,
 ) -> Result<(&'a str, &'a str, &'a str, f64), Completion> {
     // GetOptionsObject per spec
-    let has_options = match get_options_object(interp, options) {
-        Ok(v) => v,
-        Err(c) => return Err(c),
-    };
+    let has_options = get_options_object(interp, options)?;
     if !has_options {
         return Ok((default_largest, "nanosecond", "trunc", 1.0));
     }
@@ -1323,7 +1317,7 @@ fn parse_time_to_string_options(
                 )));
             }
             let floored = n.floor();
-            if floored < 0.0 || floored > 9.0 {
+            if !(0.0..=9.0).contains(&floored) {
                 return Err(Completion::Throw(interp.create_range_error(
                     "fractionalSecondDigits must be 0-9 or 'auto'",
                 )));

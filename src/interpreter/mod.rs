@@ -232,11 +232,10 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
-        if let JsValue::Object(o) = val {
-            if let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id) {
+        if let JsValue::Object(o) = val
+            && let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id) {
                 self.gc_temp_roots.remove(pos);
             }
-        }
     }
 
     pub(crate) fn can_be_held_weakly(&self, val: &JsValue) -> bool {
@@ -266,11 +265,10 @@ impl Interpreter {
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,
             };
-            if let JsValue::Object(po) = proto_val {
-                if let Some(proto_rc) = self.get_object(po.id) {
+            if let JsValue::Object(po) = proto_val
+                && let Some(proto_rc) = self.get_object(po.id) {
                     return Ok(Some(proto_rc));
                 }
-            }
         }
         Ok(default_proto.clone())
     }
@@ -744,24 +742,21 @@ impl Interpreter {
             // Extract the well-known name (e.g. "toStringTag" from "Symbol(Symbol.toStringTag)")
             let inner = &key[7..key.len() - 1]; // "Symbol.toStringTag"
             let name = &inner[7..]; // "toStringTag"
-            if let Some(sym_val) = self.global_env.borrow().get("Symbol") {
-                if let JsValue::Object(so) = sym_val {
-                    if let Some(sobj) = self.get_object(so.id) {
+            if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+                && let JsValue::Object(so) = sym_val
+                    && let Some(sobj) = self.get_object(so.id) {
                         let val = sobj.borrow().get_property(name);
                         if let JsValue::Symbol(s) = val {
                             return JsValue::Symbol(s);
                         }
                     }
-                }
-            }
         }
         // User symbols with id: "Symbol(desc)#id" or "Symbol()#id"
-        if let Some(hash_pos) = key.rfind('#') {
-            if let Ok(id) = key[hash_pos + 1..].parse::<u64>() {
+        if let Some(hash_pos) = key.rfind('#')
+            && let Ok(id) = key[hash_pos + 1..].parse::<u64>() {
                 let desc_part = &key[7..hash_pos]; // content between "Symbol(" and ")#id"
                 // desc_part should end with ')'
-                let desc = if desc_part.ends_with(')') {
-                    let inner = &desc_part[..desc_part.len() - 1];
+                let desc = if let Some(inner) = desc_part.strip_suffix(')') {
                     if inner.is_empty() {
                         None
                     } else {
@@ -771,7 +766,7 @@ impl Interpreter {
                     None
                 };
                 // Check global_symbol_registry for Symbol.for() symbols
-                for (_reg_key, sym) in &self.global_symbol_registry {
+                for sym in self.global_symbol_registry.values() {
                     if sym.id == id {
                         return JsValue::Symbol(sym.clone());
                     }
@@ -781,7 +776,6 @@ impl Interpreter {
                     description: desc,
                 });
             }
-        }
         // Fallback: return as string
         JsValue::String(JsString::from_str(key))
     }
