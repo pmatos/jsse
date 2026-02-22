@@ -2528,7 +2528,13 @@ fn format_to_parts_with_options_raw(
             parts.extend(date_parts);
         }
         let effective_ts = opts.time_style.as_ref().map(|ts| {
-            if opts.temporal_type.is_some() && opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
+            let is_plain_temporal = matches!(
+                opts.temporal_type,
+                Some(TemporalType::PlainTime) | Some(TemporalType::PlainDateTime)
+                    | Some(TemporalType::PlainDate) | Some(TemporalType::PlainYearMonth)
+                    | Some(TemporalType::PlainMonthDay)
+            );
+            if is_plain_temporal && opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
                 "medium".to_string()
             } else {
                 ts.clone()
