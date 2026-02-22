@@ -618,20 +618,19 @@ pub fn match_rtl(
                     flags,
                     full_input,
                     full_offset,
-                )
-                    && let Some(result) = match_rtl(
-                        rest,
-                        input,
-                        start,
-                        &mut alt_caps,
-                        ext_caps,
-                        flags,
-                        full_input,
-                        full_offset,
-                    ) {
-                        *captures = alt_caps;
-                        return Some(result);
-                    }
+                ) && let Some(result) = match_rtl(
+                    rest,
+                    input,
+                    start,
+                    &mut alt_caps,
+                    ext_caps,
+                    flags,
+                    full_input,
+                    full_offset,
+                ) {
+                    *captures = alt_caps;
+                    return Some(result);
+                }
             }
             None
         }
@@ -1095,10 +1094,10 @@ fn match_ltr(
                 if let Some(end) = match_ltr(alt, input, start_pos, &mut alt_caps, ext_caps, flags)
                     && let Some(result) =
                         match_ltr(rest, input, end, &mut alt_caps, ext_caps, flags)
-                    {
-                        *captures = alt_caps;
-                        return Some(result);
-                    }
+                {
+                    *captures = alt_caps;
+                    return Some(result);
+                }
             }
             None
         }
@@ -1272,9 +1271,10 @@ fn get_backref_text(
 ) -> String {
     // Try internal captures first (char-index based)
     if n < captures.len()
-        && let Some((start, end)) = captures[n] {
-            return input[start..end].iter().collect();
-        }
+        && let Some((start, end)) = captures[n]
+    {
+        return input[start..end].iter().collect();
+    }
     // Fall through to external captures (string-based) if internal is absent
     if n < ext_caps.len() {
         return ext_caps[n].clone().unwrap_or_default();
@@ -1289,9 +1289,10 @@ fn get_backref_text_ltr(
     input: &[char],
 ) -> String {
     if n < captures.len()
-        && let Some((start, end)) = captures[n] {
-            return input[start..end].iter().collect();
-        }
+        && let Some((start, end)) = captures[n]
+    {
+        return input[start..end].iter().collect();
+    }
     if n < ext_caps.len() {
         return ext_caps[n].clone().unwrap_or_default();
     }
@@ -1656,19 +1657,22 @@ pub fn match_with_lookbehind(
                         continue;
                     }
                     if orig_idx < result.len()
-                        && let Some(m) = caps.get(stripped_idx) {
-                            result[orig_idx] = Some((m.start(), m.end()));
-                        }
+                        && let Some(m) = caps.get(stripped_idx)
+                    {
+                        result[orig_idx] = Some((m.start(), m.end()));
+                    }
                     orig_idx += 1;
                 }
 
                 // Merge lookbehind captures (convert char offsets to byte offsets)
                 for lb_caps in &lb_cap_results {
                     for (idx, cap) in lb_caps.iter().enumerate() {
-                        if idx > 0 && idx < result.len()
-                            && let Some((cs, ce)) = cap {
-                                result[idx] = Some((char_to_byte[*cs], char_to_byte[*ce]));
-                            }
+                        if idx > 0
+                            && idx < result.len()
+                            && let Some((cs, ce)) = cap
+                        {
+                            result[idx] = Some((char_to_byte[*cs], char_to_byte[*ce]));
+                        }
                     }
                 }
 
@@ -1828,10 +1832,12 @@ pub fn match_with_lookbehind_no_backtrack(
             // Merge lookbehind captures
             for lb_caps in &lb_caps_all {
                 for (idx, cap) in lb_caps.iter().enumerate() {
-                    if idx > 0 && idx < result.len()
-                        && let Some((cs, ce)) = cap {
-                            result[idx] = Some((char_to_byte_fn(*cs), char_to_byte_fn(*ce)));
-                        }
+                    if idx > 0
+                        && idx < result.len()
+                        && let Some((cs, ce)) = cap
+                    {
+                        result[idx] = Some((char_to_byte_fn(*cs), char_to_byte_fn(*ce)));
+                    }
                 }
             }
 

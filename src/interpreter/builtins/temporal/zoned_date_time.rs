@@ -521,11 +521,12 @@ fn to_temporal_zoned_date_time_with_options(
                 match super::plain_date::month_code_to_number_pub(mc) {
                     Some(n) => {
                         if let Some(explicit_m) = month_coerced
-                            && explicit_m != n as i32 {
-                                return Completion::Throw(
-                                    interp.create_range_error("month and monthCode conflict"),
-                                );
-                            }
+                            && explicit_m != n as i32
+                        {
+                            return Completion::Throw(
+                                interp.create_range_error("month and monthCode conflict"),
+                            );
+                        }
                         n as i32
                     }
                     None => {
@@ -635,11 +636,12 @@ fn to_temporal_zoned_date_time_with_options(
                 "ignore" => tz_offset,
                 "reject" => {
                     if let Some(bag_ns) = bag_offset_ns
-                        && bag_ns as i128 != tz_offset {
-                            return Completion::Throw(
-                                interp.create_range_error("offset does not agree with time zone"),
-                            );
-                        }
+                        && bag_ns as i128 != tz_offset
+                    {
+                        return Completion::Throw(
+                            interp.create_range_error("offset does not agree with time zone"),
+                        );
+                    }
                     tz_offset
                 }
                 "prefer" => {
@@ -2326,15 +2328,16 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                let proto_val = JsValue::Object(crate::types::JsObject {
-                    id: proto.borrow().id.unwrap(),
-                });
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val, false, false, false),
-                );
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
+        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -2399,9 +2402,10 @@ impl Interpreter {
                 },
             ));
             if let JsValue::Object(ref o) = constructor
-                && let Some(obj) = self.get_object(o.id) {
-                    obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
-                }
+                && let Some(obj) = self.get_object(o.id)
+            {
+                obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
+            }
         }
 
         // ZonedDateTime.compare(one, two)
@@ -2439,10 +2443,11 @@ impl Interpreter {
                 },
             ));
             if let JsValue::Object(ref o) = constructor
-                && let Some(obj) = self.get_object(o.id) {
-                    obj.borrow_mut()
-                        .insert_builtin("compare".to_string(), compare_fn);
-                }
+                && let Some(obj) = self.get_object(o.id)
+            {
+                obj.borrow_mut()
+                    .insert_builtin("compare".to_string(), compare_fn);
+            }
         }
 
         temporal_obj.borrow_mut().insert_property(
@@ -2640,11 +2645,7 @@ fn zdt_until_since(
             let (ay, am, ad) = if day_correction == 0 {
                 (oy, om, od)
             } else {
-                super::balance_iso_date(
-                    oy,
-                    om as i32,
-                    od as i32 + day_correction * poly_sign,
-                )
+                super::balance_iso_date(oy, om as i32, od as i32 + day_correction * poly_sign)
             };
             let int_epoch = super::iso_date_to_epoch_days(ay, am, ad) as i128;
             let int_local = int_epoch * NS_PER_DAY + this_time_ns;

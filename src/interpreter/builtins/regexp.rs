@@ -182,7 +182,8 @@ pub(crate) fn pua_code_units_to_surrogates(code_units: &[u16]) -> Vec<u16> {
             && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
         {
             let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
-            if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START)).contains(&cp)
+            if (SURROGATE_PUA_BASE..=SURROGATE_PUA_BASE + (SURROGATE_END - SURROGATE_START))
+                .contains(&cp)
             {
                 let surrogate = (cp - SURROGATE_PUA_BASE + SURROGATE_START) as u16;
                 result.push(surrogate);
@@ -822,9 +823,10 @@ fn parse_v_class_operand(chars: &[char], i: &mut usize, flags: &str) -> Result<V
         }
         // Check for -- or && (set operation boundary)
         if *i + 1 < len
-            && ((c == '-' && chars[*i + 1] == '-') || (c == '&' && chars[*i + 1] == '&')) {
-                break;
-            }
+            && ((c == '-' && chars[*i + 1] == '-') || (c == '&' && chars[*i + 1] == '&'))
+        {
+            break;
+        }
         if c == '[' {
             // Nested class in union position
             *i += 1;
@@ -1040,9 +1042,10 @@ fn unescape_q_string(s: &str) -> String {
         if chars[i] == '\\' && i + 1 < chars.len() {
             i += 1;
             if let Some(cp) = parse_v_class_escape(&chars, &mut i)
-                && let Some(ch) = char::from_u32(cp) {
-                    result.push(ch);
-                }
+                && let Some(ch) = char::from_u32(cp)
+            {
+                result.push(ch);
+            }
         } else {
             result.push(chars[i]);
             i += 1;
@@ -1494,27 +1497,28 @@ pub(super) fn translate_js_pattern_ex(
                         validate_unicode_property_escape(&content)?;
                         let negated = next == 'P';
                         // Check for property-of-strings (v-flag only, outside char class)
-                        if flags.contains('v') && !in_char_class
+                        if flags.contains('v')
+                            && !in_char_class
                             && let Some((singles, multi_strs)) =
                                 crate::emoji_strings::lookup_string_property(&content)
-                            {
-                                if negated {
-                                    return Err(format!(
-                                        "Invalid property escape: \\P{{{}}} cannot negate a property of strings",
-                                        content
-                                    ));
-                                }
-                                let mut vset = VClassSet::new();
-                                for &cp in singles {
-                                    vset.add_codepoint(cp);
-                                }
-                                for s in multi_strs {
-                                    vset.add_string(s.to_string());
-                                }
-                                result.push_str(&vset.to_regex_pattern());
-                                i = start + end + 1;
-                                continue;
+                        {
+                            if negated {
+                                return Err(format!(
+                                    "Invalid property escape: \\P{{{}}} cannot negate a property of strings",
+                                    content
+                                ));
                             }
+                            let mut vset = VClassSet::new();
+                            for &cp in singles {
+                                vset.add_codepoint(cp);
+                            }
+                            for s in multi_strs {
+                                vset.add_string(s.to_string());
+                            }
+                            result.push_str(&vset.to_regex_pattern());
+                            i = start + end + 1;
+                            continue;
+                        }
                         if let Some(ranges) = crate::unicode_tables::lookup_property(&content) {
                             expand_property_to_char_class(
                                 &mut result,
@@ -3287,9 +3291,9 @@ fn build_regex_ex(
     if lookbehind_needs_custom_rtl(source)
         && let Some(result) =
             try_build_custom_lookbehind(source, flags, dup_map.clone(), name_order.clone())
-        {
-            return Ok(result);
-        }
+    {
+        return Ok(result);
+    }
 
     match fancy_regex::Regex::new(&tr.pattern) {
         Ok(r) => Ok((CompiledRegex::Fancy(r), dup_map, name_order)),
@@ -3298,9 +3302,9 @@ fn build_regex_ex(
             if (source.contains("(?<=") || source.contains("(?<!"))
                 && let Some(result) =
                     try_build_custom_lookbehind(source, flags, dup_map.clone(), name_order.clone())
-                {
-                    return Ok(result);
-                }
+            {
+                return Ok(result);
+            }
             regex::Regex::new(&tr.pattern)
                 .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
                 .map_err(|e| e.to_string())
@@ -3322,10 +3326,14 @@ fn count_capture_groups(source: &str) -> usize {
             }
             '(' if !in_cc => {
                 if i + 1 < chars.len() && chars[i + 1] == '?' {
-                    if i + 2 < chars.len() && chars[i + 2] == '<'
-                        && i + 3 < chars.len() && chars[i + 3] != '=' && chars[i + 3] != '!' {
-                            count += 1; // named group
-                        }
+                    if i + 2 < chars.len()
+                        && chars[i + 2] == '<'
+                        && i + 3 < chars.len()
+                        && chars[i + 3] != '='
+                        && chars[i + 3] != '!'
+                    {
+                        count += 1; // named group
+                    }
                 } else {
                     count += 1;
                 }

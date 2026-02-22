@@ -241,29 +241,32 @@ impl Interpreter {
             Statement::DoWhile(d) => self.hoist_vars_from_stmt(&d.body, var_scope, is_global),
             Statement::For(f) => {
                 if let Some(ForInit::Variable(decl)) = &f.init
-                    && decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            self.hoist_pattern(&d.pattern, var_scope, is_global);
-                        }
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        self.hoist_pattern(&d.pattern, var_scope, is_global);
                     }
+                }
                 self.hoist_vars_from_stmt(&f.body, var_scope, is_global);
             }
             Statement::ForIn(fi) => {
                 if let ForInOfLeft::Variable(decl) = &fi.left
-                    && decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            self.hoist_pattern(&d.pattern, var_scope, is_global);
-                        }
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        self.hoist_pattern(&d.pattern, var_scope, is_global);
                     }
+                }
                 self.hoist_vars_from_stmt(&fi.body, var_scope, is_global);
             }
             Statement::ForOf(fo) => {
                 if let ForInOfLeft::Variable(decl) = &fo.left
-                    && decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            self.hoist_pattern(&d.pattern, var_scope, is_global);
-                        }
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        self.hoist_pattern(&d.pattern, var_scope, is_global);
                     }
+                }
                 self.hoist_vars_from_stmt(&fo.body, var_scope, is_global);
             }
             Statement::Switch(sw) => {
@@ -361,29 +364,32 @@ impl Interpreter {
             Statement::DoWhile(d) => Self::collect_var_names_from_stmt(&d.body, out),
             Statement::For(f) => {
                 if let Some(ForInit::Variable(decl)) = &f.init
-                    && decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            Self::collect_var_names_from_pattern(&d.pattern, out);
-                        }
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        Self::collect_var_names_from_pattern(&d.pattern, out);
                     }
+                }
                 Self::collect_var_names_from_stmt(&f.body, out);
             }
             Statement::ForIn(fi) => {
                 if let ForInOfLeft::Variable(decl) = &fi.left
-                    && decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            Self::collect_var_names_from_pattern(&d.pattern, out);
-                        }
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        Self::collect_var_names_from_pattern(&d.pattern, out);
                     }
+                }
                 Self::collect_var_names_from_stmt(&fi.body, out);
             }
             Statement::ForOf(fo) => {
                 if let ForInOfLeft::Variable(decl) = &fo.left
-                    && decl.kind == VarKind::Var {
-                        for d in &decl.declarations {
-                            Self::collect_var_names_from_pattern(&d.pattern, out);
-                        }
+                    && decl.kind == VarKind::Var
+                {
+                    for d in &decl.declarations {
+                        Self::collect_var_names_from_pattern(&d.pattern, out);
                     }
+                }
                 Self::collect_var_names_from_stmt(&fo.body, out);
             }
             Statement::Switch(sw) => {
@@ -440,13 +446,13 @@ impl Interpreter {
                     for s in inner {
                         if let Statement::FunctionDeclaration(f) = s
                             && !f.is_generator
-                                && !f.is_async
-                                && !names.contains(&f.name)
-                                && !blocked.contains(&f.name)
-                                && !block_lexicals.contains(&f.name)
-                            {
-                                names.push(f.name.clone());
-                            }
+                            && !f.is_async
+                            && !names.contains(&f.name)
+                            && !blocked.contains(&f.name)
+                            && !block_lexicals.contains(&f.name)
+                        {
+                            names.push(f.name.clone());
+                        }
                     }
                     // Recurse with block lexicals added to blocked set
                     let prev_len = blocked.len();
@@ -485,11 +491,12 @@ impl Interpreter {
                 Statement::For(f) => {
                     let prev_len = blocked.len();
                     if let Some(ForInit::Variable(decl)) = &f.init
-                        && matches!(decl.kind, VarKind::Let | VarKind::Const) {
-                            for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, blocked);
-                            }
+                        && matches!(decl.kind, VarKind::Let | VarKind::Const)
+                    {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, blocked);
                         }
+                    }
                     Self::collect_annexb_function_names(
                         std::slice::from_ref(&*f.body),
                         names,
@@ -500,11 +507,12 @@ impl Interpreter {
                 Statement::ForIn(fi) => {
                     let prev_len = blocked.len();
                     if let ForInOfLeft::Variable(decl) = &fi.left
-                        && matches!(decl.kind, VarKind::Let | VarKind::Const) {
-                            for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, blocked);
-                            }
+                        && matches!(decl.kind, VarKind::Let | VarKind::Const)
+                    {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, blocked);
                         }
+                    }
                     Self::collect_annexb_function_names(
                         std::slice::from_ref(&*fi.body),
                         names,
@@ -515,11 +523,12 @@ impl Interpreter {
                 Statement::ForOf(fo) => {
                     let prev_len = blocked.len();
                     if let ForInOfLeft::Variable(decl) = &fo.left
-                        && matches!(decl.kind, VarKind::Let | VarKind::Const) {
-                            for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, blocked);
-                            }
+                        && matches!(decl.kind, VarKind::Let | VarKind::Const)
+                    {
+                        for d in &decl.declarations {
+                            Self::collect_pattern_names(&d.pattern, blocked);
                         }
+                    }
                     Self::collect_annexb_function_names(
                         std::slice::from_ref(&*fo.body),
                         names,
@@ -561,13 +570,13 @@ impl Interpreter {
                         for cs in &case.consequent {
                             if let Statement::FunctionDeclaration(f) = cs
                                 && !f.is_generator
-                                    && !f.is_async
-                                    && !names.contains(&f.name)
-                                    && !blocked.contains(&f.name)
-                                    && !switch_lexicals.contains(&f.name)
-                                {
-                                    names.push(f.name.clone());
-                                }
+                                && !f.is_async
+                                && !names.contains(&f.name)
+                                && !blocked.contains(&f.name)
+                                && !switch_lexicals.contains(&f.name)
+                            {
+                                names.push(f.name.clone());
+                            }
                         }
                     }
                     let prev_len = blocked.len();
@@ -780,9 +789,9 @@ impl Interpreter {
                 && d.init
                     .as_ref()
                     .is_some_and(|e| e.is_anonymous_function_definition())
-                {
-                    self.set_function_name(&val, name);
-                }
+            {
+                self.set_function_name(&val, name);
+            }
             if is_using {
                 let hint = if decl.kind == VarKind::AwaitUsing {
                     DisposeHint::Async
@@ -858,9 +867,10 @@ impl Interpreter {
                     val
                 };
                 if let Pattern::Identifier(ref name) = **inner
-                    && default.is_anonymous_function_definition() {
-                        self.set_function_name(&v, name);
-                    }
+                    && default.is_anonymous_function_definition()
+                {
+                    self.set_function_name(&v, name);
+                }
                 self.bind_pattern(inner, v, kind, env)
             }
             Pattern::Array(elements) => {
@@ -957,9 +967,10 @@ impl Interpreter {
                 }
                 let unroot_iter = |s: &mut Self| {
                     if let JsValue::Object(o) = &iterator
-                        && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id) {
-                            s.gc_temp_roots.remove(pos);
-                        }
+                        && let Some(pos) = s.gc_temp_roots.iter().rposition(|&id| id == o.id)
+                    {
+                        s.gc_temp_roots.remove(pos);
+                    }
                 };
                 if !done {
                     if let Some(err) = error {
@@ -1194,13 +1205,14 @@ impl Interpreter {
         let eval_env = if is_lexical {
             let tdz_env = Environment::new(Some(env.clone()));
             if let ForInOfLeft::Variable(decl) = &fi.left
-                && let Some(d) = decl.declarations.first() {
-                    let mut names = Vec::new();
-                    Self::collect_pattern_names(&d.pattern, &mut names);
-                    for name in &names {
-                        tdz_env.borrow_mut().declare(name, BindingKind::Let);
-                    }
+                && let Some(d) = decl.declarations.first()
+            {
+                let mut names = Vec::new();
+                Self::collect_pattern_names(&d.pattern, &mut names);
+                for name in &names {
+                    tdz_env.borrow_mut().declare(name, BindingKind::Let);
                 }
+            }
             tdz_env
         } else {
             env.clone()
@@ -1525,24 +1537,25 @@ impl Interpreter {
         for case in &s.cases {
             for stmt in &case.consequent {
                 if let Statement::FunctionDeclaration(f) = stmt
-                    && !f.is_generator && !f.is_async {
-                        switch_env.borrow_mut().declare(&f.name, BindingKind::Var);
-                        let func = JsFunction::User {
-                            name: Some(f.name.clone()),
-                            params: f.params.clone(),
-                            body: f.body.clone(),
-                            closure: switch_env.clone(),
-                            is_arrow: false,
-                            is_strict: Self::is_strict_mode_body(&f.body)
-                                || switch_env.borrow().strict,
-                            is_generator: f.is_generator,
-                            is_async: f.is_async,
-                            is_method: false,
-                            source_text: f.source_text.clone(),
-                        };
-                        let val = self.create_function(func);
-                        let _ = switch_env.borrow_mut().set(&f.name, val);
-                    }
+                    && !f.is_generator
+                    && !f.is_async
+                {
+                    switch_env.borrow_mut().declare(&f.name, BindingKind::Var);
+                    let func = JsFunction::User {
+                        name: Some(f.name.clone()),
+                        params: f.params.clone(),
+                        body: f.body.clone(),
+                        closure: switch_env.clone(),
+                        is_arrow: false,
+                        is_strict: Self::is_strict_mode_body(&f.body) || switch_env.borrow().strict,
+                        is_generator: f.is_generator,
+                        is_async: f.is_async,
+                        is_method: false,
+                        source_text: f.source_text.clone(),
+                    };
+                    let val = self.create_function(func);
+                    let _ = switch_env.borrow_mut().set(&f.name, val);
+                }
             }
         }
 
@@ -1568,9 +1581,10 @@ impl Interpreter {
                     return r;
                 }
                 if let Some(di) = default_idx
-                    && let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v) {
-                        return r;
-                    }
+                    && let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v)
+                {
+                    return r;
+                }
                 return Completion::Normal(v);
             }
         }
@@ -1650,22 +1664,25 @@ impl Interpreter {
 
         if let Some(ref key) = sym_key
             && let JsValue::Object(o) = value
-                && let Some(obj) = self.get_object(o.id) {
-                    let val = obj.borrow().get_property(key);
-                    if !matches!(val, JsValue::Undefined) {
-                        method = val;
-                    }
-                }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let val = obj.borrow().get_property(key);
+            if !matches!(val, JsValue::Undefined) {
+                method = val;
+            }
+        }
 
-        if matches!(method, JsValue::Undefined) && hint == DisposeHint::Async
+        if matches!(method, JsValue::Undefined)
+            && hint == DisposeHint::Async
             && let Some(sync_key) = self.get_symbol_key("dispose")
-                && let JsValue::Object(o) = value
-                    && let Some(obj) = self.get_object(o.id) {
-                        let val = obj.borrow().get_property(&sync_key);
-                        if !matches!(val, JsValue::Undefined) {
-                            method = val;
-                        }
-                    }
+            && let JsValue::Object(o) = value
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let val = obj.borrow().get_property(&sync_key);
+            if !matches!(val, JsValue::Undefined) {
+                method = val;
+            }
+        }
 
         if matches!(method, JsValue::Undefined) {
             return Err(

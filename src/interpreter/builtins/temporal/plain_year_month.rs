@@ -123,11 +123,12 @@ fn resolve_pym_month_from_raw(
         match super::plain_date::month_code_to_number_pub(mc) {
             Some(n) => {
                 if let Some(mn) = month_num
-                    && mn as u8 != n {
-                        return Err(Completion::Throw(
-                            interp.create_range_error("month and monthCode conflict"),
-                        ));
-                    }
+                    && mn as u8 != n
+                {
+                    return Err(Completion::Throw(
+                        interp.create_range_error("month and monthCode conflict"),
+                    ));
+                }
                 Ok(n)
             }
             None => Err(Completion::Throw(
@@ -226,11 +227,12 @@ fn to_temporal_plain_year_month(
                 match super::plain_date::month_code_to_number_pub(mc) {
                     Some(n) => {
                         if let Some(mn) = month_num
-                            && mn as u8 != n {
-                                return Err(Completion::Throw(
-                                    interp.create_range_error("month and monthCode conflict"),
-                                ));
-                            }
+                            && mn as u8 != n
+                        {
+                            return Err(Completion::Throw(
+                                interp.create_range_error("month and monthCode conflict"),
+                            ));
+                        }
                         n
                     }
                     None => {
@@ -753,11 +755,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 Completion::Normal(JsValue::String(JsString::from_str(&format_year_month(
-                    y,
-                    m,
-                    ref_day,
-                    &cal,
-                    "auto",
+                    y, m, ref_day, &cal, "auto",
                 ))))
             },
         ));
@@ -774,11 +772,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 Completion::Normal(JsValue::String(JsString::from_str(&format_year_month(
-                    y,
-                    m,
-                    ref_day,
-                    &cal,
-                    "auto",
+                    y, m, ref_day, &cal, "auto",
                 ))))
             },
         ));
@@ -922,15 +916,16 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                let proto_val = JsValue::Object(crate::types::JsObject {
-                    id: proto.borrow().id.unwrap(),
-                });
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val, false, false, false),
-                );
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
+        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -1014,9 +1009,10 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
+        }
 
         // compare
         let compare_fn = self.create_function(JsFunction::native(
@@ -1050,10 +1046,11 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("compare".to_string(), compare_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("compare".to_string(), compare_fn);
+        }
 
         temporal_obj.borrow_mut().insert_property(
             "PlainYearMonth".to_string(),

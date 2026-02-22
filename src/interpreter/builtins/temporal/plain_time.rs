@@ -685,15 +685,16 @@ impl Interpreter {
 
         // Constructor.prototype
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                let proto_val = JsValue::Object(crate::types::JsObject {
-                    id: proto.borrow().id.unwrap(),
-                });
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val, false, false, false),
-                );
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
+        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -747,9 +748,10 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
+        }
 
         // PlainTime.compare(one, two)
         let compare_fn = self.create_function(JsFunction::native(
@@ -783,10 +785,11 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("compare".to_string(), compare_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("compare".to_string(), compare_fn);
+        }
 
         temporal_obj.borrow_mut().insert_property(
             "PlainTime".to_string(),

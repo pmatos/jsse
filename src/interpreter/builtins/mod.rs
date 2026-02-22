@@ -2392,29 +2392,30 @@ impl Interpreter {
                                 .collect();
                             for pv in &level2_vals {
                                 if let JsValue::Object(po) = pv
-                                    && let Some(pobj) = self.get_object(po.id) {
-                                        // Don't set fp's own [[Prototype]] to itself
-                                        if Some(po.id) != fp_id {
-                                            fix_callable(&pobj, &fp);
-                                        }
-                                        // Level 3: always walk into properties (including fp's own)
-                                        let level3_vals: Vec<JsValue> = pobj
-                                            .borrow()
-                                            .properties
-                                            .values()
-                                            .flat_map(collect_pd_objects)
-                                            .collect();
-                                        for pv3 in &level3_vals {
-                                            if let JsValue::Object(po3) = pv3 {
-                                                if Some(po3.id) == fp_id {
-                                                    continue;
-                                                }
-                                                if let Some(pobj3) = self.get_object(po3.id) {
-                                                    fix_callable(&pobj3, &fp);
-                                                }
+                                    && let Some(pobj) = self.get_object(po.id)
+                                {
+                                    // Don't set fp's own [[Prototype]] to itself
+                                    if Some(po.id) != fp_id {
+                                        fix_callable(&pobj, &fp);
+                                    }
+                                    // Level 3: always walk into properties (including fp's own)
+                                    let level3_vals: Vec<JsValue> = pobj
+                                        .borrow()
+                                        .properties
+                                        .values()
+                                        .flat_map(collect_pd_objects)
+                                        .collect();
+                                    for pv3 in &level3_vals {
+                                        if let JsValue::Object(po3) = pv3 {
+                                            if Some(po3.id) == fp_id {
+                                                continue;
+                                            }
+                                            if let Some(pobj3) = self.get_object(po3.id) {
+                                                fix_callable(&pobj3, &fp);
                                             }
                                         }
                                     }
+                                }
                             }
                         }
                     }
@@ -4443,9 +4444,10 @@ impl Interpreter {
                                     continue;
                                 }
                                 if let Some(d) = b.properties.get(k)
-                                    && d.enumerable != Some(false) {
-                                        result.push(k.clone());
-                                    }
+                                    && d.enumerable != Some(false)
+                                {
+                                    result.push(k.clone());
+                                }
                             }
                             result
                         } else {
@@ -6005,13 +6007,14 @@ impl Interpreter {
                     {
                         let b = obj.borrow();
                         if b.class_name == "String"
-                            && let Some(JsValue::String(ref s)) = b.primitive_value {
-                                let slen = s.code_units.len();
-                                for i in 0..slen {
-                                    virtual_indices.push(i as u32);
-                                }
-                                has_virtual_length = true;
+                            && let Some(JsValue::String(ref s)) = b.primitive_value
+                        {
+                            let slen = s.code_units.len();
+                            for i in 0..slen {
+                                virtual_indices.push(i as u32);
                             }
+                            has_virtual_length = true;
+                        }
                     }
                     let property_order = obj.borrow().property_order.clone();
                     // Collect keys already in property_order into virtual_indices set for dedup
@@ -6266,9 +6269,10 @@ impl Interpreter {
                         return Completion::Normal(JsValue::Boolean(true));
                     }
                     if let (Some(new_id), Some(cur_id)) = (new_proto_id, current_proto_id)
-                        && new_id == cur_id {
-                            return Completion::Normal(JsValue::Boolean(true));
-                        }
+                        && new_id == cur_id
+                    {
+                        return Completion::Normal(JsValue::Boolean(true));
+                    }
                     // Step 5: If not extensible, return false
                     if !obj.borrow().extensible {
                         return Completion::Normal(JsValue::Boolean(false));

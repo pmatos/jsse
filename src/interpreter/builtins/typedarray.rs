@@ -270,12 +270,15 @@ impl Interpreter {
                         }
                     };
                     if let Some(max) = max_byte_length
-                        && new_len > max {
-                            return Completion::Throw(interp.create_error(
+                        && new_len > max
+                    {
+                        return Completion::Throw(
+                            interp.create_error(
                                 "RangeError",
                                 "new byte length exceeds maxByteLength",
-                            ));
-                        }
+                            ),
+                        );
+                    }
                     let old_data = {
                         let obj_ref = obj.borrow();
                         obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
@@ -658,9 +661,10 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.arraybuffer_is_shared
-                        && let Some(ref buf) = obj_ref.arraybuffer_data {
-                            return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
-                        }
+                        && let Some(ref buf) = obj_ref.arraybuffer_data
+                    {
+                        return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
+                    }
                 }
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
@@ -687,12 +691,13 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.arraybuffer_is_shared
-                        && let Some(ref buf) = obj_ref.arraybuffer_data {
-                            let max = obj_ref
-                                .arraybuffer_max_byte_length
-                                .unwrap_or_else(|| buf.borrow().len());
-                            return Completion::Normal(JsValue::Number(max as f64));
-                        }
+                        && let Some(ref buf) = obj_ref.arraybuffer_data
+                    {
+                        let max = obj_ref
+                            .arraybuffer_max_byte_length
+                            .unwrap_or_else(|| buf.borrow().len());
+                        return Completion::Normal(JsValue::Number(max as f64));
+                    }
                 }
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
@@ -3809,12 +3814,11 @@ impl Interpreter {
         };
 
         // ContentType compatibility check (only for single-length-arg case)
-        if args.len() == 1
-            && kind.is_bigint() != result_kind.is_bigint() {
-                return Err(self.create_type_error(
-                    "species constructor returned a TypedArray with incompatible content type",
-                ));
-            }
+        if args.len() == 1 && kind.is_bigint() != result_kind.is_bigint() {
+            return Err(self.create_type_error(
+                "species constructor returned a TypedArray with incompatible content type",
+            ));
+        }
 
         // Validate length >= requested
         if let Some(JsValue::Number(requested_len)) = args.first() {
@@ -3824,11 +3828,12 @@ impl Interpreter {
             {
                 let obj_ref = obj.borrow();
                 if let Some(ref ta) = obj_ref.typed_array_info
-                    && typed_array_length(ta) < requested {
-                        return Err(self.create_type_error(
-                            "species constructor returned a TypedArray that is too small",
-                        ));
-                    }
+                    && typed_array_length(ta) < requested
+                {
+                    return Err(self.create_type_error(
+                        "species constructor returned a TypedArray that is too small",
+                    ));
+                }
             }
         }
 

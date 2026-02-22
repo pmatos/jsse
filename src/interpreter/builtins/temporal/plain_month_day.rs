@@ -131,11 +131,12 @@ fn resolve_month_from_raw(
         match super::plain_date::month_code_to_number_pub(mc) {
             Some(n) => {
                 if let Some(mn) = month_num
-                    && mn as u8 != n {
-                        return Err(Completion::Throw(
-                            interp.create_range_error("month and monthCode conflict"),
-                        ));
-                    }
+                    && mn as u8 != n
+                {
+                    return Err(Completion::Throw(
+                        interp.create_range_error("month and monthCode conflict"),
+                    ));
+                }
                 Ok(n)
             }
             None => Err(Completion::Throw(
@@ -224,11 +225,12 @@ fn to_temporal_plain_month_day(
                 match super::plain_date::month_code_to_number_pub(mc) {
                     Some(n) => {
                         if let Some(mn) = month_num
-                            && mn as u8 != n {
-                                return Err(Completion::Throw(
-                                    interp.create_range_error("month and monthCode conflict"),
-                                ));
-                            }
+                            && mn as u8 != n
+                        {
+                            return Err(Completion::Throw(
+                                interp.create_range_error("month and monthCode conflict"),
+                            ));
+                        }
                         n
                     }
                     None => {
@@ -697,15 +699,16 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                let proto_val = JsValue::Object(crate::types::JsObject {
-                    id: proto.borrow().id.unwrap(),
-                });
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val, false, false, false),
-                );
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
+        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -798,9 +801,10 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
+        }
 
         temporal_obj.borrow_mut().insert_property(
             "PlainMonthDay".to_string(),

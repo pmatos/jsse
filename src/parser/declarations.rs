@@ -364,11 +364,11 @@ impl<'a> Parser<'a> {
                         }
                         // If there's a setter, staticness must match
                         if let Some(setter_is_static) = setter_static
-                            && setter_is_static != is_static {
-                                return Err(self.error(format!(
-                                    "Identifier '#{name}' has already been declared"
-                                )));
-                            }
+                            && setter_is_static != is_static
+                        {
+                            return Err(self
+                                .error(format!("Identifier '#{name}' has already been declared")));
+                        }
                         entry.0 = Some(is_static);
                     }
                     PrivateNameKind::Setter => {
@@ -378,11 +378,11 @@ impl<'a> Parser<'a> {
                         }
                         // If there's a getter, staticness must match
                         if let Some(getter_is_static) = getter_static
-                            && getter_is_static != is_static {
-                                return Err(self.error(format!(
-                                    "Identifier '#{name}' has already been declared"
-                                )));
-                            }
+                            && getter_is_static != is_static
+                        {
+                            return Err(self
+                                .error(format!("Identifier '#{name}' has already been declared")));
+                        }
                         entry.1 = Some(is_static);
                     }
                     PrivateNameKind::Other => {
@@ -418,11 +418,12 @@ impl<'a> Parser<'a> {
         for elem in body {
             if let ClassElement::Method(m) = elem
                 && m.kind == ClassMethodKind::Constructor
-                    && Self::stmts_has_direct_super(&m.value.body) {
-                        return Err(ParseError {
-                            message: "'super' keyword unexpected here".to_string(),
-                        });
-                    }
+                && Self::stmts_has_direct_super(&m.value.body)
+            {
+                return Err(ParseError {
+                    message: "'super' keyword unexpected here".to_string(),
+                });
+            }
         }
         Ok(())
     }

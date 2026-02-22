@@ -86,35 +86,31 @@ fn to_relative_to_date(
                 // This is a ZonedDateTime string
                 if let Some(parsed) = super::parse_temporal_date_time_string(&raw) {
                     if let Some(ref offset) = parsed.offset
-                        && !parsed.has_utc_designator {
-                            let tz_end = after.find(']').unwrap_or(after.len());
-                            let tz_name = &after[..tz_end];
-                            if let Some(canonical_tz) = super::parse_utc_offset_timezone(tz_name) {
-                                let offset_sign = if offset.sign < 0 { '-' } else { '+' };
-                                let iso_truncated = format!(
-                                    "{}{:02}:{:02}",
-                                    offset_sign, offset.hours, offset.minutes
-                                );
-                                if iso_truncated != canonical_tz {
-                                    return Err(Completion::Throw(interp.create_range_error(
-                                        "UTC offset mismatch in ZonedDateTime string",
-                                    )));
-                                }
-                            } else if tz_name == "UTC"
-                                || tz_name == "Etc/UTC"
-                                || tz_name == "Etc/GMT"
-                            {
-                                let is_zero = offset.hours == 0
-                                    && offset.minutes == 0
-                                    && offset.seconds == 0
-                                    && offset.nanoseconds == 0;
-                                if !is_zero {
-                                    return Err(Completion::Throw(interp.create_range_error(
-                                        "UTC offset mismatch in ZonedDateTime string",
-                                    )));
-                                }
+                        && !parsed.has_utc_designator
+                    {
+                        let tz_end = after.find(']').unwrap_or(after.len());
+                        let tz_name = &after[..tz_end];
+                        if let Some(canonical_tz) = super::parse_utc_offset_timezone(tz_name) {
+                            let offset_sign = if offset.sign < 0 { '-' } else { '+' };
+                            let iso_truncated =
+                                format!("{}{:02}:{:02}", offset_sign, offset.hours, offset.minutes);
+                            if iso_truncated != canonical_tz {
+                                return Err(Completion::Throw(interp.create_range_error(
+                                    "UTC offset mismatch in ZonedDateTime string",
+                                )));
+                            }
+                        } else if tz_name == "UTC" || tz_name == "Etc/UTC" || tz_name == "Etc/GMT" {
+                            let is_zero = offset.hours == 0
+                                && offset.minutes == 0
+                                && offset.seconds == 0
+                                && offset.nanoseconds == 0;
+                            if !is_zero {
+                                return Err(Completion::Throw(interp.create_range_error(
+                                    "UTC offset mismatch in ZonedDateTime string",
+                                )));
                             }
                         }
+                    }
                     // CheckISODaysRange + epoch_ns validation for ZDT relativeTo
                     let zdt_epoch_ns = if let Some(ref offset) = parsed.offset {
                         let wall_epoch_days =
@@ -160,38 +156,39 @@ fn to_relative_to_date(
     }
     // If the value is a Temporal object, handle directly (no property bag reading)
     if let JsValue::Object(obj_ref) = val
-        && let Some(obj) = interp.get_object(obj_ref.id) {
-            let td = obj.borrow().temporal_data.clone();
-            if let Some(super::TemporalData::ZonedDateTime {
-                epoch_nanoseconds,
-                time_zone,
-                ..
-            }) = &td
-            {
-                let ns: i128 = epoch_nanoseconds.try_into().unwrap_or(0);
-                let (y, m, d, _, _, _, _, _, _) =
-                    super::zoned_date_time::epoch_ns_to_components(epoch_nanoseconds, time_zone);
-                return Ok(Some((y, m, d, Some(ns))));
-            }
-            if let Some(super::TemporalData::PlainDate {
-                iso_year,
-                iso_month,
-                iso_day,
-                ..
-            }) = &td
-            {
-                return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
-            }
-            if let Some(super::TemporalData::PlainDateTime {
-                iso_year,
-                iso_month,
-                iso_day,
-                ..
-            }) = &td
-            {
-                return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
-            }
+        && let Some(obj) = interp.get_object(obj_ref.id)
+    {
+        let td = obj.borrow().temporal_data.clone();
+        if let Some(super::TemporalData::ZonedDateTime {
+            epoch_nanoseconds,
+            time_zone,
+            ..
+        }) = &td
+        {
+            let ns: i128 = epoch_nanoseconds.try_into().unwrap_or(0);
+            let (y, m, d, _, _, _, _, _, _) =
+                super::zoned_date_time::epoch_ns_to_components(epoch_nanoseconds, time_zone);
+            return Ok(Some((y, m, d, Some(ns))));
         }
+        if let Some(super::TemporalData::PlainDate {
+            iso_year,
+            iso_month,
+            iso_day,
+            ..
+        }) = &td
+        {
+            return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
+        }
+        if let Some(super::TemporalData::PlainDateTime {
+            iso_year,
+            iso_month,
+            iso_day,
+            ..
+        }) = &td
+        {
+            return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
+        }
+    }
 
     // Property bag: read ALL fields in alphabetical order per spec PrepareTemporalFields.
     if let JsValue::Object(_) = val {
@@ -351,11 +348,12 @@ fn to_relative_to_date(
             match super::plain_date::month_code_to_number_pub(mc) {
                 Some(n) => {
                     if let Some(explicit_m) = month_coerced
-                        && explicit_m != n as i32 {
-                            return Err(Completion::Throw(
-                                interp.create_range_error("month and monthCode conflict"),
-                            ));
-                        }
+                        && explicit_m != n as i32
+                    {
+                        return Err(Completion::Throw(
+                            interp.create_range_error("month and monthCode conflict"),
+                        ));
+                    }
                     n
                 }
                 None => {
@@ -1589,15 +1587,16 @@ impl Interpreter {
 
         // Constructor.prototype
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                let proto_val = JsValue::Object(crate::types::JsObject {
-                    id: proto.borrow().id.unwrap(),
-                });
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val, false, false, false),
-                );
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
+        }
 
         // prototype.constructor
         proto.borrow_mut().insert_property(
@@ -1620,9 +1619,10 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
+        }
 
         // Duration.compare(one, two)
         let compare_fn = self.create_function(JsFunction::native(
@@ -1744,10 +1744,11 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("compare".to_string(), compare_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("compare".to_string(), compare_fn);
+        }
 
         // Register Duration on Temporal namespace
         temporal_obj.borrow_mut().insert_property(
@@ -1905,35 +1906,36 @@ pub(crate) fn to_temporal_duration_record(
     }
     // Check for existing Duration instance
     if let JsValue::Object(o) = &item
-        && let Some(obj) = interp.get_object(o.id) {
-            let data = obj.borrow();
-            if let Some(TemporalData::Duration {
-                years,
-                months,
-                weeks,
-                days,
-                hours,
-                minutes,
-                seconds,
-                milliseconds,
-                microseconds,
-                nanoseconds,
-            }) = &data.temporal_data
-            {
-                return Ok((
-                    *years,
-                    *months,
-                    *weeks,
-                    *days,
-                    *hours,
-                    *minutes,
-                    *seconds,
-                    *milliseconds,
-                    *microseconds,
-                    *nanoseconds,
-                ));
-            }
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let data = obj.borrow();
+        if let Some(TemporalData::Duration {
+            years,
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+            microseconds,
+            nanoseconds,
+        }) = &data.temporal_data
+        {
+            return Ok((
+                *years,
+                *months,
+                *weeks,
+                *days,
+                *hours,
+                *minutes,
+                *seconds,
+                *milliseconds,
+                *microseconds,
+                *nanoseconds,
+            ));
         }
+    }
     // Property bag — read all plural fields
     let obj_val = item.clone();
     macro_rules! get_dur_field {
@@ -2527,9 +2529,10 @@ fn format_duration_iso(
         days.abs() as i128
     };
     if precision.is_some()
-        && (balanced_s > MAX_SAFE || ami > MAX_SAFE || ah > MAX_SAFE || total_days > MAX_SAFE) {
-            return Err("Rounded duration is out of range".to_string());
-        }
+        && (balanced_s > MAX_SAFE || ami > MAX_SAFE || ah > MAX_SAFE || total_days > MAX_SAFE)
+    {
+        return Err("Rounded duration is out of range".to_string());
+    }
 
     let mut result = String::new();
     if sign < 0 {

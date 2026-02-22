@@ -571,15 +571,16 @@ impl Interpreter {
 
         // Constructor.prototype
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                let proto_val = JsValue::Object(crate::types::JsObject {
-                    id: proto.borrow().id.unwrap(),
-                });
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val, false, false, false),
-                );
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let proto_val = JsValue::Object(crate::types::JsObject {
+                id: proto.borrow().id.unwrap(),
+            });
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val, false, false, false),
+            );
+        }
         proto.borrow_mut().insert_property(
             "constructor".to_string(),
             PropertyDescriptor::data(constructor.clone(), true, false, true),
@@ -599,9 +600,10 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
+        }
 
         // Instant.fromEpochMilliseconds(ms)
         let from_ms_fn = self.create_function(JsFunction::native(
@@ -626,10 +628,11 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("fromEpochMilliseconds".to_string(), from_ms_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("fromEpochMilliseconds".to_string(), from_ms_fn);
+        }
 
         // Instant.fromEpochNanoseconds(ns)
         let from_ns_fn = self.create_function(JsFunction::native(
@@ -648,10 +651,11 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("fromEpochNanoseconds".to_string(), from_ns_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("fromEpochNanoseconds".to_string(), from_ns_fn);
+        }
 
         // Instant.compare(one, two)
         let compare_fn = self.create_function(JsFunction::native(
@@ -683,10 +687,11 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut()
-                    .insert_builtin("compare".to_string(), compare_fn);
-            }
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut()
+                .insert_builtin("compare".to_string(), compare_fn);
+        }
 
         temporal_obj.borrow_mut().insert_property(
             "Instant".to_string(),
@@ -1411,27 +1416,28 @@ fn extract_timezone_from_iso_string(s: &str) -> Option<(String, i64)> {
     }
     // Look for [annotation] bracket — IANA name takes precedence
     if let Some(bracket_start) = s.find('[')
-        && let Some(bracket_end) = s[bracket_start..].find(']') {
-            let annotation = &s[bracket_start + 1..bracket_start + bracket_end];
-            // Skip non-timezone annotations like u-ca=iso8601
-            if !annotation.contains('=') {
-                if annotation.eq_ignore_ascii_case("UTC") || annotation == "Etc/UTC" {
-                    return Some(("UTC".to_string(), 0));
-                }
-                // Validate: annotation must be a valid TZ identifier
-                // (either IANA name or ±HH:MM offset — no sub-minute)
-                if annotation.starts_with('+') || annotation.starts_with('-') {
-                    // Must be a valid offset with no sub-minute
-                    return parse_plain_offset(annotation);
-                }
-                // IANA name: must contain '/' and be alphanumeric
-                if annotation.contains('/') {
-                    return Some((annotation.to_string(), 0));
-                }
-                // Other plain names (e.g. just "UTC" was handled above)
-                return None; // Invalid annotation
+        && let Some(bracket_end) = s[bracket_start..].find(']')
+    {
+        let annotation = &s[bracket_start + 1..bracket_start + bracket_end];
+        // Skip non-timezone annotations like u-ca=iso8601
+        if !annotation.contains('=') {
+            if annotation.eq_ignore_ascii_case("UTC") || annotation == "Etc/UTC" {
+                return Some(("UTC".to_string(), 0));
             }
+            // Validate: annotation must be a valid TZ identifier
+            // (either IANA name or ±HH:MM offset — no sub-minute)
+            if annotation.starts_with('+') || annotation.starts_with('-') {
+                // Must be a valid offset with no sub-minute
+                return parse_plain_offset(annotation);
+            }
+            // IANA name: must contain '/' and be alphanumeric
+            if annotation.contains('/') {
+                return Some((annotation.to_string(), 0));
+            }
+            // Other plain names (e.g. just "UTC" was handled above)
+            return None; // Invalid annotation
         }
+    }
     // Look for Z
     let _upper = s.to_uppercase();
     // Find time portion (after T)

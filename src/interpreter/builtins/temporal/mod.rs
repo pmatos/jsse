@@ -1233,9 +1233,9 @@ pub(crate) fn parse_utc_offset_timezone(s: &str) -> Option<String> {
             || rest[after_min] == b'.'
             || rest[after_min] == b','
             || rest[after_min].is_ascii_digit())
-        {
-            return None;
-        }
+    {
+        return None;
+    }
 
     Some(format!("{}{:02}:{:02}", sign, hours, minutes))
 }
@@ -1712,26 +1712,27 @@ pub(crate) fn parse_temporal_time_string(s: &str) -> Option<(u8, u8, u8, u16, u1
             }
         }
         if let Some(np) = skip_annotations_validated(bytes, p)
-            && np == bytes.len() {
-                // Without T prefix, check for ambiguity with date formats
-                if !has_t_prefix {
-                    let could_be_date = parse_temporal_date_time_string(s).is_some()
-                        || parse_temporal_year_month_string(s).is_some()
-                        || parse_temporal_month_day_string(s).is_some();
-                    if could_be_date {
-                        return None; // ambiguous → require T prefix
-                    }
-                    // Check for ambiguous forms: MMDD (4-digit), YYYYMM (6-digit),
-                    // HH-UU (MM-DD), YYYY-MM (with annotations/offsets).
-                    // Find the "numeric prefix" before any annotation or offset.
-                    if is_ambiguous_time_string(bytes) {
-                        return None;
-                    }
+            && np == bytes.len()
+        {
+            // Without T prefix, check for ambiguity with date formats
+            if !has_t_prefix {
+                let could_be_date = parse_temporal_date_time_string(s).is_some()
+                    || parse_temporal_year_month_string(s).is_some()
+                    || parse_temporal_month_day_string(s).is_some();
+                if could_be_date {
+                    return None; // ambiguous → require T prefix
                 }
-                return Some((
-                    result.0, result.1, result.2, result.3, result.4, result.5, has_z,
-                ));
+                // Check for ambiguous forms: MMDD (4-digit), YYYYMM (6-digit),
+                // HH-UU (MM-DD), YYYY-MM (with annotations/offsets).
+                // Find the "numeric prefix" before any annotation or offset.
+                if is_ambiguous_time_string(bytes) {
+                    return None;
+                }
             }
+            return Some((
+                result.0, result.1, result.2, result.3, result.4, result.5, has_z,
+            ));
+        }
     }
 
     // Try parsing as date-time and extract time part — must have time component
@@ -1762,21 +1763,22 @@ pub(crate) fn parse_temporal_year_month_string(
         let has_sep = new_pos < bytes.len() && bytes[new_pos] == b'-';
         let month_start = if has_sep { new_pos + 1 } else { new_pos };
         if let Some((month, np)) = parse_two_digit(bytes, month_start)
-            && (1..=12).contains(&month) {
-                // Check it's not followed by more digits (which would make it a date)
-                let next_is_digit = np < bytes.len() && bytes[np].is_ascii_digit();
-                let next_is_dash = np < bytes.len() && bytes[np] == b'-';
-                let next_is_t = np < bytes.len()
-                    && (bytes[np] == b'T' || bytes[np] == b't' || bytes[np] == b' ');
-                if !(next_is_digit || next_is_t || has_sep && next_is_dash) {
-                    let mut pos = np;
-                    let mut calendar = None;
-                    pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
-                    if pos == bytes.len() {
-                        return Some((year, month, calendar, false, false));
-                    }
+            && (1..=12).contains(&month)
+        {
+            // Check it's not followed by more digits (which would make it a date)
+            let next_is_digit = np < bytes.len() && bytes[np].is_ascii_digit();
+            let next_is_dash = np < bytes.len() && bytes[np] == b'-';
+            let next_is_t =
+                np < bytes.len() && (bytes[np] == b'T' || bytes[np] == b't' || bytes[np] == b' ');
+            if !(next_is_digit || next_is_t || has_sep && next_is_dash) {
+                let mut pos = np;
+                let mut calendar = None;
+                pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
+                if pos == bytes.len() {
+                    return Some((year, month, calendar, false, false));
                 }
             }
+        }
     }
     // Fall back to full date-time
     let parsed = parse_temporal_date_time_string(s)?;
@@ -1797,21 +1799,23 @@ pub(crate) fn parse_temporal_month_day_string(
     let s = s.trim();
     let bytes = s.as_bytes();
     // Try MM-DD first
-    if bytes.len() >= 5 && bytes[2] == b'-'
+    if bytes.len() >= 5
+        && bytes[2] == b'-'
         && let Some((month, p1)) = parse_two_digit(bytes, 0)
-            && bytes.get(p1) == Some(&b'-')
-                && let Some((day, p2)) = parse_two_digit(bytes, p1 + 1) {
-                    let mut p = p2;
-                    let mut calendar = None;
-                    p = parse_annotations_extract_calendar(bytes, p, &mut calendar)?;
-                    if p == bytes.len()
-                        && (1..=12).contains(&month)
-                        && day >= 1
-                        && day <= iso_days_in_month(1972, month)
-                    {
-                        return Some((month, day, None, calendar, false));
-                    }
-                }
+        && bytes.get(p1) == Some(&b'-')
+        && let Some((day, p2)) = parse_two_digit(bytes, p1 + 1)
+    {
+        let mut p = p2;
+        let mut calendar = None;
+        p = parse_annotations_extract_calendar(bytes, p, &mut calendar)?;
+        if p == bytes.len()
+            && (1..=12).contains(&month)
+            && day >= 1
+            && day <= iso_days_in_month(1972, month)
+        {
+            return Some((month, day, None, calendar, false));
+        }
+    }
     // Try MMDD (4 digits, no dash)
     if bytes.len() >= 4
         && bytes[0].is_ascii_digit()
@@ -1819,42 +1823,46 @@ pub(crate) fn parse_temporal_month_day_string(
         && bytes[2].is_ascii_digit()
         && bytes[3].is_ascii_digit()
         && let Some((month, p1)) = parse_two_digit(bytes, 0)
-            && let Some((day, p2)) = parse_two_digit(bytes, p1) {
-                // Must not be followed by more digits (that would be YYYYMM or YYYYMMDD)
-                if p2 == bytes.len() || !bytes[p2].is_ascii_digit() {
-                    let mut p = p2;
-                    let mut calendar = None;
-                    p = parse_annotations_extract_calendar(bytes, p, &mut calendar)?;
-                    if p == bytes.len()
-                        && (1..=12).contains(&month)
-                        && day >= 1
-                        && day <= iso_days_in_month(1972, month)
-                    {
-                        return Some((month, day, None, calendar, false));
-                    }
-                }
-            }
-    // Try --MM-DD or --MMDD (ISO 8601 extended)
-    if bytes.len() >= 6 && bytes[0] == b'-' && bytes[1] == b'-'
-        && let Some((month, p1)) = parse_two_digit(bytes, 2) {
-            let sep = if bytes.get(p1) == Some(&b'-') {
-                p1 + 1
-            } else {
-                p1
-            };
-            if let Some((day, p2)) = parse_two_digit(bytes, sep) {
-                let mut p = p2;
-                let mut calendar = None;
-                p = parse_annotations_extract_calendar(bytes, p, &mut calendar)?;
-                if p == bytes.len()
-                    && (1..=12).contains(&month)
-                    && day >= 1
-                    && day <= iso_days_in_month(1972, month)
-                {
-                    return Some((month, day, None, calendar, false));
-                }
+        && let Some((day, p2)) = parse_two_digit(bytes, p1)
+    {
+        // Must not be followed by more digits (that would be YYYYMM or YYYYMMDD)
+        if p2 == bytes.len() || !bytes[p2].is_ascii_digit() {
+            let mut p = p2;
+            let mut calendar = None;
+            p = parse_annotations_extract_calendar(bytes, p, &mut calendar)?;
+            if p == bytes.len()
+                && (1..=12).contains(&month)
+                && day >= 1
+                && day <= iso_days_in_month(1972, month)
+            {
+                return Some((month, day, None, calendar, false));
             }
         }
+    }
+    // Try --MM-DD or --MMDD (ISO 8601 extended)
+    if bytes.len() >= 6
+        && bytes[0] == b'-'
+        && bytes[1] == b'-'
+        && let Some((month, p1)) = parse_two_digit(bytes, 2)
+    {
+        let sep = if bytes.get(p1) == Some(&b'-') {
+            p1 + 1
+        } else {
+            p1
+        };
+        if let Some((day, p2)) = parse_two_digit(bytes, sep) {
+            let mut p = p2;
+            let mut calendar = None;
+            p = parse_annotations_extract_calendar(bytes, p, &mut calendar)?;
+            if p == bytes.len()
+                && (1..=12).contains(&month)
+                && day >= 1
+                && day <= iso_days_in_month(1972, month)
+            {
+                return Some((month, day, None, calendar, false));
+            }
+        }
+    }
     // Fall back to full date-time
     let parsed = parse_temporal_date_time_string(s)?;
     // Reject date-only strings with UTC offset (no time component)
@@ -2154,7 +2162,8 @@ fn parse_iso_offset(bytes: &[u8], start: usize) -> Option<(ParsedOffset, usize)>
                 if frac_len > 0 {
                     let mut frac_digits = [b'0'; 9];
                     let copy_len = 9.min(frac_len);
-                    frac_digits[..copy_len].copy_from_slice(&bytes[frac_start..frac_start + copy_len]);
+                    frac_digits[..copy_len]
+                        .copy_from_slice(&bytes[frac_start..frac_start + copy_len]);
                     let ns_str = std::str::from_utf8(&frac_digits[..9]).ok()?;
                     nanoseconds = ns_str.parse().ok()?;
                 }
@@ -2608,11 +2617,12 @@ pub(crate) fn resolve_month_fields(
         match plain_date::month_code_to_number_pub(&mc) {
             Some(n) => {
                 if let Some(explicit_m) = month
-                    && explicit_m != n {
-                        return Err(Completion::Throw(
-                            interp.create_range_error("month and monthCode conflict"),
-                        ));
-                    }
+                    && explicit_m != n
+                {
+                    return Err(Completion::Throw(
+                        interp.create_range_error("month and monthCode conflict"),
+                    ));
+                }
                 Ok(n)
             }
             None => Err(Completion::Throw(
