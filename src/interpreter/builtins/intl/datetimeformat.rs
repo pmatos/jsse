@@ -984,7 +984,13 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         };
 
         let effective_time_style = opts.time_style.as_ref().map(|ts| {
-            if opts.temporal_type.is_some() && opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
+            let is_plain_temporal = matches!(
+                opts.temporal_type,
+                Some(TemporalType::PlainTime) | Some(TemporalType::PlainDateTime)
+                    | Some(TemporalType::PlainDate) | Some(TemporalType::PlainYearMonth)
+                    | Some(TemporalType::PlainMonthDay)
+            );
+            if is_plain_temporal && opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
                 "medium".to_string()
             } else {
                 ts.clone()
@@ -3288,6 +3294,20 @@ impl Interpreter {
 
                 let start_tt = detect_temporal_type(interp, &start_arg);
                 let end_tt = detect_temporal_type(interp, &end_arg);
+                // Per spec: ToNumberToDateTimeFormattable calls ToNumber for
+                // non-Temporal args before checking SameTemporalType.
+                // Only call ToNumber here (not TimeClip) since the type
+                // mismatch check must happen before HandleDateTimeOthers.
+                if start_tt.is_none() {
+                    if let Err(e) = interp.to_number_value(&start_arg) {
+                        return Completion::Throw(e);
+                    }
+                }
+                if end_tt.is_none() {
+                    if let Err(e) = interp.to_number_value(&end_arg) {
+                        return Completion::Throw(e);
+                    }
+                }
                 if matches!(start_tt, Some(TemporalType::ZonedDateTime))
                     || matches!(end_tt, Some(TemporalType::ZonedDateTime))
                 {
@@ -3295,13 +3315,21 @@ impl Interpreter {
                         "Temporal.ZonedDateTime is not supported in DateTimeFormat formatRange()",
                     ));
                 }
-                // Both args must be same Temporal type (or both non-Temporal)
-                if let (Some(stt), Some(ett)) = (start_tt, end_tt) {
-                    if std::mem::discriminant(&stt) != std::mem::discriminant(&ett) {
+                // Both args must be same type (both Temporal of same kind, or both non-Temporal)
+                match (start_tt, end_tt) {
+                    (Some(stt), Some(ett)) => {
+                        if std::mem::discriminant(&stt) != std::mem::discriminant(&ett) {
+                            return Completion::Throw(interp.create_type_error(
+                                "formatRange requires both arguments to be the same type",
+                            ));
+                        }
+                    }
+                    (Some(_), None) | (None, Some(_)) => {
                         return Completion::Throw(interp.create_type_error(
-                            "formatRange requires both arguments to be the same Temporal type",
+                            "formatRange requires both arguments to be the same type",
                         ));
                     }
+                    (None, None) => {}
                 }
                 if let Some(tt) = start_tt.or(end_tt) {
                     if !check_temporal_overlap(&opts, tt) {
@@ -3363,6 +3391,16 @@ impl Interpreter {
 
                 let start_tt = detect_temporal_type(interp, &start_arg);
                 let end_tt = detect_temporal_type(interp, &end_arg);
+                if start_tt.is_none() {
+                    if let Err(e) = interp.to_number_value(&start_arg) {
+                        return Completion::Throw(e);
+                    }
+                }
+                if end_tt.is_none() {
+                    if let Err(e) = interp.to_number_value(&end_arg) {
+                        return Completion::Throw(e);
+                    }
+                }
                 if matches!(start_tt, Some(TemporalType::ZonedDateTime))
                     || matches!(end_tt, Some(TemporalType::ZonedDateTime))
                 {
@@ -3370,12 +3408,20 @@ impl Interpreter {
                         "Temporal.ZonedDateTime is not supported in DateTimeFormat formatRangeToParts()",
                     ));
                 }
-                if let (Some(stt), Some(ett)) = (start_tt, end_tt) {
-                    if std::mem::discriminant(&stt) != std::mem::discriminant(&ett) {
+                match (start_tt, end_tt) {
+                    (Some(stt), Some(ett)) => {
+                        if std::mem::discriminant(&stt) != std::mem::discriminant(&ett) {
+                            return Completion::Throw(interp.create_type_error(
+                                "formatRangeToParts requires both arguments to be the same type",
+                            ));
+                        }
+                    }
+                    (Some(_), None) | (None, Some(_)) => {
                         return Completion::Throw(interp.create_type_error(
-                            "formatRangeToParts requires both arguments to be the same Temporal type",
+                            "formatRangeToParts requires both arguments to be the same type",
                         ));
                     }
+                    (None, None) => {}
                 }
                 if let Some(tt) = start_tt.or(end_tt) {
                     if !check_temporal_overlap(&opts, tt) {
