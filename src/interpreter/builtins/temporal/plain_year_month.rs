@@ -1029,6 +1029,10 @@ impl Interpreter {
                 };
                 let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                // PlainYearMonth has date but not time
+                if let Err(e) = super::check_locale_string_style_conflict(interp, &options_arg, true, false) {
+                    return Completion::Throw(e);
+                }
                 let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),

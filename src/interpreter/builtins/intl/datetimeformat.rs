@@ -2967,15 +2967,11 @@ fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
     let type_has_date = matches!(tt, TemporalType::PlainDate | TemporalType::PlainYearMonth | TemporalType::PlainMonthDay);
     let type_has_time = matches!(tt, TemporalType::PlainTime);
 
-    // Style-based overlap
+    // Style-based overlap: at least one style must overlap with the type
     if opts.date_style.is_some() || opts.time_style.is_some() {
-        if opts.date_style.is_some() && type_has_date {
-            return true;
-        }
-        if opts.time_style.is_some() && type_has_time {
-            return true;
-        }
-        return false;
+        let date_overlaps = opts.date_style.is_some() && type_has_date;
+        let time_overlaps = opts.time_style.is_some() && type_has_time;
+        return date_overlaps || time_overlaps;
     }
 
     // Check explicit component options

@@ -118,6 +118,44 @@ pub(crate) fn temporal_construct_dtf(
     interp.construct(dtf_ctor, &[locales.clone(), opts_val])
 }
 
+/// Check if options object has a style that conflicts with the temporal type.
+/// In toLocaleString, each style must overlap with the type's data model:
+/// - dateStyle requires date data (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay)
+/// - timeStyle requires time data (PlainTime, PlainDateTime)
+/// Returns Err with TypeError if conflict detected.
+pub(crate) fn check_locale_string_style_conflict(
+    interp: &mut Interpreter,
+    options: &JsValue,
+    has_date: bool,
+    has_time: bool,
+) -> Result<(), JsValue> {
+    if let JsValue::Object(o) = options {
+        let ds = match interp.get_object_property(o.id, "dateStyle", options) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => JsValue::Undefined,
+        };
+        let ts = match interp.get_object_property(o.id, "timeStyle", options) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => JsValue::Undefined,
+        };
+        let has_ds = !matches!(ds, JsValue::Undefined);
+        let has_ts = !matches!(ts, JsValue::Undefined);
+        if has_ds && !has_date {
+            return Err(interp.create_type_error(
+                "dateStyle does not overlap with this Temporal type",
+            ));
+        }
+        if has_ts && !has_time {
+            return Err(interp.create_type_error(
+                "timeStyle does not overlap with this Temporal type",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Call DTF.format(temporal_value) on a constructed DTF instance
 pub(crate) fn temporal_format_with_dtf(
     interp: &mut Interpreter,
