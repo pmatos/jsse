@@ -1053,8 +1053,8 @@ fn unescape_q_string(s: &str) -> String {
     result
 }
 
-struct TranslationResult {
-    pattern: String,
+pub(super) struct TranslationResult {
+    pub(super) pattern: String,
     dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>>,
     group_name_order: Vec<String>,
 }
@@ -1063,7 +1063,10 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     translate_js_pattern_ex(source, flags).map(|r| r.pattern)
 }
 
-fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResult, String> {
+pub(super) fn translate_js_pattern_ex(
+    source: &str,
+    flags: &str,
+) -> Result<TranslationResult, String> {
     let mut result = String::new();
     if flags.contains('i') {
         result.push_str("(?i)");
@@ -1077,6 +1080,12 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
     let mut i = 0;
     let mut in_char_class = false;
     let mut groups_seen: u32 = 0;
+    let mut open_groups: Vec<u32> = Vec::new();
+    let mut group_is_capturing: Vec<bool> = Vec::new();
+    let mut lookbehind_depth: u32 = 0;
+    let mut is_lookbehind_group: Vec<bool> = Vec::new();
+    // For capturing groups inside lookbehinds, track the position of '(' in result
+    let mut group_result_start: Vec<Option<usize>> = Vec::new();
     let dot_all_base = flags.contains('s');
     // Stack for tracking dotAll state through modifier groups.
     // Each entry is Some(previous_dotall) for modifier groups that change s,
@@ -1169,8 +1178,7 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
     let mut dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>> =
         std::collections::HashMap::new();
     let mut group_name_order: Vec<String> = Vec::new();
-    let mut group_name_seen: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut group_name_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     while i < len {
         let c = chars[i];
@@ -1411,8 +1419,10 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
                     }
                     let ref_str: String = chars[ref_start..ref_end].iter().collect();
                     let ref_num: u32 = ref_str.parse().unwrap_or(0);
-                    if ref_num <= total_groups && ref_num > groups_seen {
-                        // Forward reference: group exists but not yet captured, matches empty string
+                    if ref_num <= total_groups
+                        && (ref_num > groups_seen || open_groups.contains(&ref_num))
+                    {
+                        // Forward or self-referential backref: matches empty string
                         result.push_str("(?:)");
                         i = ref_end;
                     } else if ref_num <= total_groups {
@@ -1550,13 +1560,25 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
             // Check it's not (?<=...) or (?<!...)
             if i + 3 < len && (chars[i + 3] == '=' || chars[i + 3] == '!') {
                 // Lookbehind - pass through
+                lookbehind_depth += 1;
                 dotall_stack.push(None);
+                group_is_capturing.push(false);
+                is_lookbehind_group.push(true);
+                group_result_start.push(None);
                 result.push_str("(?<");
                 result.push(chars[i + 3]);
                 i += 4;
             } else {
                 // Named group (capturing)
                 groups_seen += 1;
+                open_groups.push(groups_seen);
+                group_is_capturing.push(true);
+                is_lookbehind_group.push(false);
+                group_result_start.push(if lookbehind_depth > 0 {
+                    Some(result.len())
+                } else {
+                    None
+                });
                 dotall_stack.push(None);
                 // Extract the group name to check if it's duplicated
                 let name_start = i + 3;
@@ -1639,6 +1661,9 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
                     dot_all = false;
                 }
                 dotall_stack.push(Some(prev_dot_all));
+                group_is_capturing.push(false);
+                is_lookbehind_group.push(false);
+                group_result_start.push(None);
 
                 // Emit the group with s stripped from flags
                 result.push_str("(?");
@@ -1675,6 +1700,49 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
             if let Some(Some(prev)) = dotall_stack.pop() {
                 dot_all = prev;
             }
+            let was_capturing = matches!(group_is_capturing.pop(), Some(true));
+            let was_lookbehind = matches!(is_lookbehind_group.pop(), Some(true));
+            let grp_start = group_result_start.pop().flatten();
+            if was_capturing {
+                open_groups.pop();
+            }
+            if was_lookbehind {
+                lookbehind_depth -= 1;
+            }
+
+            // RTL capture fix: if this is a capturing group inside a lookbehind
+            // followed by {N} (exact repeat), rewrite (content){N} to (content)(?:content){N-1}
+            if let Some(start_pos) = grp_start {
+                result.push(')');
+                // Check if next chars are {N} with exact count
+                let mut j = i + 1;
+                if j < len && chars[j] == '{' {
+                    let brace_start = j;
+                    j += 1;
+                    let num_start = j;
+                    while j < len && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    if j > num_start && j < len && chars[j] == '}' {
+                        let n: u32 = chars[num_start..j]
+                            .iter()
+                            .collect::<String>()
+                            .parse()
+                            .unwrap_or(0);
+                        if n > 1 {
+                            // Extract the group content from result (between '(' and ')')
+                            let group_content = result[start_pos + 1..result.len() - 1].to_string();
+                            // Rewrite: append (?:content){N-1}
+                            result.push_str(&format!("(?:{}){{{}}}", group_content, n - 1));
+                            i = j + 1; // skip past {N}
+                            continue;
+                        }
+                    }
+                }
+                i += 1;
+                continue;
+            }
+
             result.push(')');
             i += 1;
             continue;
@@ -1685,6 +1753,18 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
             dotall_stack.push(None);
             if i + 1 >= len || chars[i + 1] != '?' {
                 groups_seen += 1;
+                open_groups.push(groups_seen);
+                group_is_capturing.push(true);
+                is_lookbehind_group.push(false);
+                if lookbehind_depth > 0 {
+                    group_result_start.push(Some(result.len()));
+                } else {
+                    group_result_start.push(None);
+                }
+            } else {
+                group_is_capturing.push(false);
+                is_lookbehind_group.push(false);
+                group_result_start.push(None);
             }
         }
 
@@ -1692,16 +1772,18 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
         if c == '.' && !in_char_class {
             if unicode {
                 if dot_all {
-                    result.push_str("[^\\u{F0000}-\\u{F07FF}]");
+                    result.push_str("(?s:.)");
                 } else {
-                    result.push_str("[^\\n\\r\\u{2028}\\u{2029}\\u{F0000}-\\u{F07FF}]");
+                    result.push_str("[^\\n\\r\\u{2028}\\u{2029}]");
                 }
             } else {
                 // Non-unicode: . matches one UTF-16 code unit (BMP + PUA-mapped lone surrogates)
                 if dot_all {
                     result.push_str("[\\x00-\\u{FFFF}\\u{F0000}-\\u{F07FF}]");
                 } else {
-                    result.push_str("[^\\n\\r\\u{2028}\\u{2029}\\u{10000}-\\u{EFFFF}\\u{F0800}-\\u{10FFFF}]");
+                    result.push_str(
+                        "[^\\n\\r\\u{2028}\\u{2029}\\u{10000}-\\u{EFFFF}\\u{F0800}-\\u{10FFFF}]",
+                    );
                 }
             }
             i += 1;
@@ -2234,8 +2316,24 @@ fn is_v_flag_reserved_double_punctuator(a: char, b: char) -> bool {
     a == b
         && matches!(
             a,
-            '!' | '#' | '$' | '%' | '*' | '+' | ',' | '.' | ':' | ';' | '<' | '=' | '>' | '?'
-                | '@' | '`' | '~' | '^' | '&'
+            '!' | '#'
+                | '$'
+                | '%'
+                | '*'
+                | '+'
+                | ','
+                | '.'
+                | ':'
+                | ';'
+                | '<'
+                | '='
+                | '>'
+                | '?'
+                | '@'
+                | '`'
+                | '~'
+                | '^'
+                | '&'
         )
 }
 
@@ -2247,7 +2345,10 @@ fn validate_v_flag_class_inner(
 ) -> Result<(), String> {
     let len = chars.len();
     let err = |msg: &str| -> Result<(), String> {
-        Err(format!("Invalid regular expression: /{}/ : {}", source, msg))
+        Err(format!(
+            "Invalid regular expression: /{}/ : {}",
+            source, msg
+        ))
     };
 
     let mut has_operand = false;
@@ -2885,6 +2986,17 @@ fn build_fancy_regex(source: &str, flags: &str) -> Result<fancy_regex::Regex, St
 enum CompiledRegex {
     Fancy(fancy_regex::Regex),
     Standard(regex::Regex),
+    FancyWithCustomLookbehind {
+        outer_regex: fancy_regex::Regex,
+        lookbehinds: Vec<super::regexp_lookbehind::LookbehindInfo>,
+        flags: String,
+        total_groups: usize,
+        /// When lookbehind captures are referenced by external backrefs,
+        /// store the remaining pattern source and backref-to-lb-capture mapping
+        /// so match_with_lookbehind can do position-iteration matching.
+        external_lb_backrefs: Vec<(u32, u32)>,
+        remaining_source: Option<String>,
+    },
 }
 
 struct RegexMatch {
@@ -2913,6 +3025,259 @@ fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
     build_regex_ex(source, flags).map(|(re, _, _)| re)
 }
 
+fn lookbehind_needs_custom_rtl(source: &str) -> bool {
+    let chars: Vec<char> = source.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+    let mut in_cc = false;
+
+    while i < len {
+        if chars[i] == '[' && !in_cc {
+            in_cc = true;
+            i += 1;
+            continue;
+        }
+        if chars[i] == ']' && in_cc {
+            in_cc = false;
+            i += 1;
+            continue;
+        }
+        if chars[i] == '\\' && i + 1 < len {
+            i += 2;
+            continue;
+        }
+
+        // Detect lookbehind
+        if !in_cc
+            && chars[i] == '('
+            && i + 3 < len
+            && chars[i + 1] == '?'
+            && chars[i + 2] == '<'
+            && (chars[i + 3] == '=' || chars[i + 3] == '!')
+        {
+            let content_start = i + 4;
+            let mut depth = 1;
+            let mut j = content_start;
+            let mut has_backref = false;
+            let mut in_cc2 = false;
+            while j < len && depth > 0 {
+                if chars[j] == '[' && !in_cc2 {
+                    in_cc2 = true;
+                } else if chars[j] == ']' && in_cc2 {
+                    in_cc2 = false;
+                } else if chars[j] == '\\' && j + 1 < len {
+                    j += 1;
+                    if chars[j].is_ascii_digit() && chars[j] != '0' {
+                        has_backref = true;
+                    }
+                } else if chars[j] == '(' && !in_cc2 {
+                    depth += 1;
+                } else if chars[j] == ')' && !in_cc2 {
+                    depth -= 1;
+                }
+                if depth > 0 {
+                    j += 1;
+                }
+            }
+
+            // Only force custom RTL for backrefs in lookbehinds.
+            // Lookaheads inside lookbehinds are handled by fancy-regex for
+            // fixed-length lookbehinds; variable-length ones fail compilation
+            // and fall back to the custom path via build_regex_ex.
+            if has_backref {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Detect patterns where lookbehind captures are referenced by backrefs outside
+/// the lookbehind. Returns verify info if so, None otherwise.
+fn lookbehind_captures_with_external_backrefs(
+    source: &str,
+    flags: &str,
+) -> Option<Vec<super::regexp_lookbehind::LookbehindVerifyInfo>> {
+    let chars: Vec<char> = source.chars().collect();
+    let len = chars.len();
+    let mut in_cc = false;
+    let mut group_count: u32 = 0;
+    let mut lb_capture_groups: Vec<(u32, u32, String, bool)> = Vec::new(); // (offset, num_caps, content, positive)
+    let mut external_backrefs: Vec<u32> = Vec::new();
+    let mut i = 0;
+
+    while i < len {
+        if chars[i] == '[' && !in_cc {
+            in_cc = true;
+            i += 1;
+            continue;
+        }
+        if chars[i] == ']' && in_cc {
+            in_cc = false;
+            i += 1;
+            continue;
+        }
+        if chars[i] == '\\' && i + 1 < len {
+            if !in_cc && chars[i + 1].is_ascii_digit() && chars[i + 1] != '0' {
+                let mut num_str = String::new();
+                let mut k = i + 1;
+                while k < len && chars[k].is_ascii_digit() {
+                    num_str.push(chars[k]);
+                    k += 1;
+                }
+                if let Ok(n) = num_str.parse::<u32>() {
+                    external_backrefs.push(n);
+                }
+            }
+            i += 2;
+            continue;
+        }
+
+        if !in_cc
+            && chars[i] == '('
+            && i + 3 < len
+            && chars[i + 1] == '?'
+            && chars[i + 2] == '<'
+            && (chars[i + 3] == '=' || chars[i + 3] == '!')
+        {
+            let positive = chars[i + 3] == '=';
+            let capture_offset = group_count;
+            let content_start = i + 4;
+            let mut depth = 1;
+            let mut j = content_start;
+            let mut in_cc2 = false;
+            let mut num_caps: u32 = 0;
+            while j < len && depth > 0 {
+                if chars[j] == '[' && !in_cc2 {
+                    in_cc2 = true;
+                } else if chars[j] == ']' && in_cc2 {
+                    in_cc2 = false;
+                } else if chars[j] == '\\' && j + 1 < len {
+                    j += 1;
+                } else if chars[j] == '(' && !in_cc2 {
+                    depth += 1;
+                    if j + 1 < len && chars[j + 1] == '?' {
+                        if j + 2 < len
+                            && chars[j + 2] == '<'
+                            && j + 3 < len
+                            && chars[j + 3] != '='
+                            && chars[j + 3] != '!'
+                        {
+                            num_caps += 1;
+                            group_count += 1;
+                        }
+                    } else {
+                        num_caps += 1;
+                        group_count += 1;
+                    }
+                } else if chars[j] == ')' && !in_cc2 {
+                    depth -= 1;
+                }
+                if depth > 0 {
+                    j += 1;
+                }
+            }
+            let content: String = chars[content_start..j].iter().collect();
+            if num_caps > 0 {
+                lb_capture_groups.push((capture_offset, num_caps, content, positive));
+            }
+            i = j + 1;
+            continue;
+        }
+
+        if !in_cc && chars[i] == '(' {
+            if i + 1 < len && chars[i + 1] == '?' {
+                if i + 2 < len
+                    && chars[i + 2] == '<'
+                    && i + 3 < len
+                    && chars[i + 3] != '='
+                    && chars[i + 3] != '!'
+                {
+                    group_count += 1;
+                }
+            } else {
+                group_count += 1;
+            }
+        }
+
+        i += 1;
+    }
+
+    // Check if any external backref references a lookbehind capture group
+    let mut verify_infos = Vec::new();
+    for (offset, num_caps, content, positive) in &lb_capture_groups {
+        let mut referenced_groups = Vec::new();
+        for group_num in (*offset + 1)..=(*offset + num_caps) {
+            if external_backrefs.contains(&group_num) {
+                referenced_groups.push(group_num);
+            }
+        }
+        if !referenced_groups.is_empty() {
+            verify_infos.push(super::regexp_lookbehind::LookbehindVerifyInfo {
+                positive: *positive,
+                content: content.clone(),
+                capture_groups: referenced_groups,
+                capture_offset: *offset,
+                flags: super::regexp_lookbehind::LbFlags {
+                    ignore_case: flags.contains('i'),
+                    multiline: flags.contains('m'),
+                    dot_all: flags.contains('s'),
+                },
+            });
+        }
+    }
+
+    if verify_infos.is_empty() {
+        None
+    } else {
+        Some(verify_infos)
+    }
+}
+
+fn try_build_custom_lookbehind(
+    source: &str,
+    flags: &str,
+    dup_map: DupGroupMap,
+    name_order: Vec<String>,
+) -> Option<(CompiledRegex, DupGroupMap, Vec<String>)> {
+    let (lookbehinds, stripped) = super::regexp_lookbehind::extract_lookbehinds(source);
+    if lookbehinds.is_empty() {
+        return None;
+    }
+
+    // Detect if lookbehind captures are referenced by external backrefs
+    let mut external_lb_backrefs: Vec<(u32, u32)> = Vec::new();
+    let mut remaining_source: Option<String> = None;
+
+    if let Some(verify_infos) = lookbehind_captures_with_external_backrefs(source, flags) {
+        for vi in &verify_infos {
+            for &g in &vi.capture_groups {
+                external_lb_backrefs.push((g, g));
+            }
+        }
+        // Build remaining pattern: source with lookbehinds removed (no markers)
+        let (_, rem) = super::regexp_lookbehind::extract_lookbehinds_remaining(source);
+        remaining_source = Some(rem);
+    }
+
+    let stripped_tr = translate_js_pattern_ex(&stripped, flags).ok()?;
+    let outer = fancy_regex::Regex::new(&stripped_tr.pattern).ok()?;
+    let total = count_capture_groups(source);
+    Some((
+        CompiledRegex::FancyWithCustomLookbehind {
+            outer_regex: outer,
+            lookbehinds,
+            flags: flags.to_string(),
+            total_groups: total,
+            external_lb_backrefs,
+            remaining_source,
+        },
+        dup_map,
+        name_order,
+    ))
+}
+
 fn build_regex_ex(
     source: &str,
     flags: &str,
@@ -2920,12 +3285,62 @@ fn build_regex_ex(
     let tr = translate_js_pattern_ex(source, flags)?;
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
+
+    // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
+    if lookbehind_needs_custom_rtl(source) {
+        if let Some(result) =
+            try_build_custom_lookbehind(source, flags, dup_map.clone(), name_order.clone())
+        {
+            return Ok(result);
+        }
+    }
+
     match fancy_regex::Regex::new(&tr.pattern) {
         Ok(r) => Ok((CompiledRegex::Fancy(r), dup_map, name_order)),
-        Err(_) => regex::Regex::new(&tr.pattern)
-            .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
-            .map_err(|e| e.to_string()),
+        Err(_) => {
+            // If fancy-regex fails and the pattern has lookbehinds, try custom path
+            if source.contains("(?<=") || source.contains("(?<!") {
+                if let Some(result) =
+                    try_build_custom_lookbehind(source, flags, dup_map.clone(), name_order.clone())
+                {
+                    return Ok(result);
+                }
+            }
+            regex::Regex::new(&tr.pattern)
+                .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
+                .map_err(|e| e.to_string())
+        }
     }
+}
+
+fn count_capture_groups(source: &str) -> usize {
+    let chars: Vec<char> = source.chars().collect();
+    let mut count = 0;
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < chars.len() {
+        match chars[i] {
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '\\' if i + 1 < chars.len() => {
+                i += 1;
+            }
+            '(' if !in_cc => {
+                if i + 1 < chars.len() && chars[i + 1] == '?' {
+                    if i + 2 < chars.len() && chars[i + 2] == '<' {
+                        if i + 3 < chars.len() && chars[i + 3] != '=' && chars[i + 3] != '!' {
+                            count += 1; // named group
+                        }
+                    }
+                } else {
+                    count += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    count
 }
 
 fn regex_captures(re: &CompiledRegex, text: &str) -> Option<RegexCaptures> {
@@ -2970,6 +3385,75 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
             }
             Some(RegexCaptures { groups, names })
         }
+        CompiledRegex::FancyWithCustomLookbehind {
+            outer_regex,
+            lookbehinds,
+            flags,
+            total_groups,
+            external_lb_backrefs,
+            remaining_source,
+        } => {
+            let result = if !external_lb_backrefs.is_empty() {
+                if let Some(rem) = remaining_source {
+                    super::regexp_lookbehind::match_with_lookbehind_no_backtrack(
+                        lookbehinds,
+                        rem,
+                        flags,
+                        text,
+                        pos,
+                        *total_groups,
+                        external_lb_backrefs,
+                    )?
+                } else {
+                    super::regexp_lookbehind::match_with_lookbehind(
+                        outer_regex,
+                        lookbehinds,
+                        text,
+                        flags,
+                        pos,
+                        *total_groups,
+                    )?
+                }
+            } else {
+                super::regexp_lookbehind::match_with_lookbehind(
+                    outer_regex,
+                    lookbehinds,
+                    text,
+                    flags,
+                    pos,
+                    *total_groups,
+                )?
+            };
+
+            let names: Vec<Option<String>> = outer_regex
+                .capture_names()
+                .map(|n| n.map(|s| s.to_string()))
+                .collect();
+
+            let mut groups: Vec<Option<RegexMatch>> = Vec::new();
+            for cap in &result {
+                groups.push(cap.map(|(start, end)| RegexMatch {
+                    start,
+                    end,
+                    text: text[start..end].to_string(),
+                }));
+            }
+
+            // Ensure we have at least total_groups + 1 entries
+            while groups.len() <= *total_groups {
+                groups.push(None);
+            }
+
+            let mut padded_names = names;
+            while padded_names.len() < groups.len() {
+                padded_names.push(None);
+            }
+
+            Some(RegexCaptures {
+                groups,
+                names: padded_names,
+            })
+        }
     }
 }
 
@@ -2978,6 +3462,7 @@ fn regex_is_match(re: &CompiledRegex, text: &str) -> bool {
     match re {
         CompiledRegex::Fancy(r) => r.is_match(text).unwrap_or(false),
         CompiledRegex::Standard(r) => r.is_match(text),
+        CompiledRegex::FancyWithCustomLookbehind { .. } => regex_captures_at(re, text, 0).is_some(),
     }
 }
 
@@ -3392,10 +3877,8 @@ fn regexp_exec_raw(
         }
         interp.regexp_legacy_last_paren = last_paren;
         for p in 0..9 {
-            interp.regexp_legacy_parens[p] = caps
-                .get(p + 1)
-                .map(|m| m.text.clone())
-                .unwrap_or_default();
+            interp.regexp_legacy_parens[p] =
+                caps.get(p + 1).map(|m| m.text.clone()).unwrap_or_default();
         }
     }
 
@@ -3438,7 +3921,9 @@ fn regexp_exec_raw(
                 // Non-duplicate: find by exact name match in caps.names
                 let mut val = JsValue::Undefined;
                 for (i, name_opt) in caps.names.iter().enumerate() {
-                    if let Some(n) = name_opt && n == orig_name {
+                    if let Some(n) = name_opt
+                        && n == orig_name
+                    {
                         val = match caps.get(i) {
                             Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
                             None => JsValue::Undefined,
@@ -3446,9 +3931,7 @@ fn regexp_exec_raw(
                         break;
                     }
                 }
-                groups_obj
-                    .borrow_mut()
-                    .insert_value(orig_name.clone(), val);
+                groups_obj.borrow_mut().insert_value(orig_name.clone(), val);
             }
         }
         let id = groups_obj.borrow().id.unwrap();
@@ -3520,7 +4003,9 @@ fn regexp_exec_raw(
                     } else {
                         let mut val = JsValue::Undefined;
                         for (i, name_opt) in caps.names.iter().enumerate() {
-                            if let Some(n) = name_opt && n == orig_name {
+                            if let Some(n) = name_opt
+                                && n == orig_name
+                            {
                                 val = match caps.get(i) {
                                     Some(m) => {
                                         let cap_start = byte_offset_to_utf16(input, m.start);
@@ -3535,9 +4020,7 @@ fn regexp_exec_raw(
                                 break;
                             }
                         }
-                        idx_groups
-                            .borrow_mut()
-                            .insert_value(orig_name.clone(), val);
+                        idx_groups.borrow_mut().insert_value(orig_name.clone(), val);
                     }
                 }
                 let idx_groups_id = idx_groups.borrow().id.unwrap();
@@ -3763,12 +4246,12 @@ impl Interpreter {
                             } else {
                                 "(?:)".to_string()
                             };
-                        flags_str =
-                            if let JsValue::String(s) = b.get_property("__original_flags__") {
-                                s.to_rust_string()
-                            } else {
-                                String::new()
-                            };
+                        flags_str = if let JsValue::String(s) = b.get_property("__original_flags__")
+                        {
+                            s.to_rust_string()
+                        } else {
+                            String::new()
+                        };
                     } else {
                         pattern_str = "(?:)".to_string();
                         flags_str = String::new();
@@ -5429,30 +5912,29 @@ impl Interpreter {
             // $1..$9 — get-only
             for idx in 1u8..=9 {
                 let prop_name = format!("${}", idx);
-                let getter = self.create_function(JsFunction::native(
-                    format!("get ${}", idx),
-                    0,
-                    move |interp, this_val, _args| {
-                        let ctor_id = match interp.regexp_constructor_id {
-                            Some(id) => id,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
-                                )
+                let getter =
+                    self.create_function(JsFunction::native(
+                        format!("get ${}", idx),
+                        0,
+                        move |interp, this_val, _args| {
+                            let ctor_id = match interp.regexp_constructor_id {
+                                Some(id) => id,
+                                None => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "RegExp legacy accessor requires RegExp constructor",
+                                    ));
+                                }
+                            };
+                            match this_val {
+                                JsValue::Object(o) if o.id == ctor_id => {}
+                                _ => return Completion::Throw(interp.create_type_error(
+                                    "RegExp legacy accessor requires RegExp constructor as this",
+                                )),
                             }
-                        };
-                        match this_val {
-                            JsValue::Object(o) if o.id == ctor_id => {}
-                            _ => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
-                                )
-                            }
-                        }
-                        let val = interp.regexp_legacy_parens[(idx - 1) as usize].clone();
-                        Completion::Normal(JsValue::String(JsString::from_str(&val)))
-                    },
-                ));
+                            let val = interp.regexp_legacy_parens[(idx - 1) as usize].clone();
+                            Completion::Normal(JsValue::String(JsString::from_str(&val)))
+                        },
+                    ));
                 obj.borrow_mut().insert_property(
                     prop_name,
                     PropertyDescriptor {
@@ -5469,60 +5951,58 @@ impl Interpreter {
             // input / $_ — get/set
             for prop_name in &["input", "$_"] {
                 let pn = prop_name.to_string();
-                let getter = self.create_function(JsFunction::native(
-                    format!("get {}", pn),
-                    0,
-                    |interp, this_val, _args| {
-                        let ctor_id = match interp.regexp_constructor_id {
-                            Some(id) => id,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
-                                )
+                let getter =
+                    self.create_function(JsFunction::native(
+                        format!("get {}", pn),
+                        0,
+                        |interp, this_val, _args| {
+                            let ctor_id = match interp.regexp_constructor_id {
+                                Some(id) => id,
+                                None => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "RegExp legacy accessor requires RegExp constructor",
+                                    ));
+                                }
+                            };
+                            match this_val {
+                                JsValue::Object(o) if o.id == ctor_id => {}
+                                _ => return Completion::Throw(interp.create_type_error(
+                                    "RegExp legacy accessor requires RegExp constructor as this",
+                                )),
                             }
-                        };
-                        match this_val {
-                            JsValue::Object(o) if o.id == ctor_id => {}
-                            _ => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
-                                )
+                            Completion::Normal(JsValue::String(JsString::from_str(
+                                &interp.regexp_legacy_input,
+                            )))
+                        },
+                    ));
+                let setter =
+                    self.create_function(JsFunction::native(
+                        format!("set {}", pn),
+                        1,
+                        |interp, this_val, args| {
+                            let ctor_id = match interp.regexp_constructor_id {
+                                Some(id) => id,
+                                None => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "RegExp legacy accessor requires RegExp constructor",
+                                    ));
+                                }
+                            };
+                            match this_val {
+                                JsValue::Object(o) if o.id == ctor_id => {}
+                                _ => return Completion::Throw(interp.create_type_error(
+                                    "RegExp legacy accessor requires RegExp constructor as this",
+                                )),
                             }
-                        }
-                        Completion::Normal(JsValue::String(JsString::from_str(
-                            &interp.regexp_legacy_input,
-                        )))
-                    },
-                ));
-                let setter = self.create_function(JsFunction::native(
-                    format!("set {}", pn),
-                    1,
-                    |interp, this_val, args| {
-                        let ctor_id = match interp.regexp_constructor_id {
-                            Some(id) => id,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
-                                )
-                            }
-                        };
-                        match this_val {
-                            JsValue::Object(o) if o.id == ctor_id => {}
-                            _ => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
-                                )
-                            }
-                        }
-                        let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let s = match interp.to_string_value(&val) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        interp.regexp_legacy_input = s;
-                        Completion::Normal(JsValue::Undefined)
-                    },
-                ));
+                            let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            let s = match interp.to_string_value(&val) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            interp.regexp_legacy_input = s;
+                            Completion::Normal(JsValue::Undefined)
+                        },
+                    ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
@@ -5539,31 +6019,30 @@ impl Interpreter {
             // lastMatch / $& — get-only
             for prop_name in &["lastMatch", "$&"] {
                 let pn = prop_name.to_string();
-                let getter = self.create_function(JsFunction::native(
-                    format!("get {}", pn),
-                    0,
-                    |interp, this_val, _args| {
-                        let ctor_id = match interp.regexp_constructor_id {
-                            Some(id) => id,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
-                                )
+                let getter =
+                    self.create_function(JsFunction::native(
+                        format!("get {}", pn),
+                        0,
+                        |interp, this_val, _args| {
+                            let ctor_id = match interp.regexp_constructor_id {
+                                Some(id) => id,
+                                None => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "RegExp legacy accessor requires RegExp constructor",
+                                    ));
+                                }
+                            };
+                            match this_val {
+                                JsValue::Object(o) if o.id == ctor_id => {}
+                                _ => return Completion::Throw(interp.create_type_error(
+                                    "RegExp legacy accessor requires RegExp constructor as this",
+                                )),
                             }
-                        };
-                        match this_val {
-                            JsValue::Object(o) if o.id == ctor_id => {}
-                            _ => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
-                                )
-                            }
-                        }
-                        Completion::Normal(JsValue::String(JsString::from_str(
-                            &interp.regexp_legacy_last_match,
-                        )))
-                    },
-                ));
+                            Completion::Normal(JsValue::String(JsString::from_str(
+                                &interp.regexp_legacy_last_match,
+                            )))
+                        },
+                    ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
@@ -5580,31 +6059,30 @@ impl Interpreter {
             // lastParen / $+ — get-only
             for prop_name in &["lastParen", "$+"] {
                 let pn = prop_name.to_string();
-                let getter = self.create_function(JsFunction::native(
-                    format!("get {}", pn),
-                    0,
-                    |interp, this_val, _args| {
-                        let ctor_id = match interp.regexp_constructor_id {
-                            Some(id) => id,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
-                                )
+                let getter =
+                    self.create_function(JsFunction::native(
+                        format!("get {}", pn),
+                        0,
+                        |interp, this_val, _args| {
+                            let ctor_id = match interp.regexp_constructor_id {
+                                Some(id) => id,
+                                None => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "RegExp legacy accessor requires RegExp constructor",
+                                    ));
+                                }
+                            };
+                            match this_val {
+                                JsValue::Object(o) if o.id == ctor_id => {}
+                                _ => return Completion::Throw(interp.create_type_error(
+                                    "RegExp legacy accessor requires RegExp constructor as this",
+                                )),
                             }
-                        };
-                        match this_val {
-                            JsValue::Object(o) if o.id == ctor_id => {}
-                            _ => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
-                                )
-                            }
-                        }
-                        Completion::Normal(JsValue::String(JsString::from_str(
-                            &interp.regexp_legacy_last_paren,
-                        )))
-                    },
-                ));
+                            Completion::Normal(JsValue::String(JsString::from_str(
+                                &interp.regexp_legacy_last_paren,
+                            )))
+                        },
+                    ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
@@ -5621,31 +6099,30 @@ impl Interpreter {
             // leftContext / $` — get-only
             for prop_name in &["leftContext", "$`"] {
                 let pn = prop_name.to_string();
-                let getter = self.create_function(JsFunction::native(
-                    format!("get {}", pn),
-                    0,
-                    |interp, this_val, _args| {
-                        let ctor_id = match interp.regexp_constructor_id {
-                            Some(id) => id,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
-                                )
+                let getter =
+                    self.create_function(JsFunction::native(
+                        format!("get {}", pn),
+                        0,
+                        |interp, this_val, _args| {
+                            let ctor_id = match interp.regexp_constructor_id {
+                                Some(id) => id,
+                                None => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "RegExp legacy accessor requires RegExp constructor",
+                                    ));
+                                }
+                            };
+                            match this_val {
+                                JsValue::Object(o) if o.id == ctor_id => {}
+                                _ => return Completion::Throw(interp.create_type_error(
+                                    "RegExp legacy accessor requires RegExp constructor as this",
+                                )),
                             }
-                        };
-                        match this_val {
-                            JsValue::Object(o) if o.id == ctor_id => {}
-                            _ => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
-                                )
-                            }
-                        }
-                        Completion::Normal(JsValue::String(JsString::from_str(
-                            &interp.regexp_legacy_left_context,
-                        )))
-                    },
-                ));
+                            Completion::Normal(JsValue::String(JsString::from_str(
+                                &interp.regexp_legacy_left_context,
+                            )))
+                        },
+                    ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {
@@ -5662,31 +6139,30 @@ impl Interpreter {
             // rightContext / $' — get-only
             for prop_name in &["rightContext", "$'"] {
                 let pn = prop_name.to_string();
-                let getter = self.create_function(JsFunction::native(
-                    format!("get {}", pn),
-                    0,
-                    |interp, this_val, _args| {
-                        let ctor_id = match interp.regexp_constructor_id {
-                            Some(id) => id,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
-                                )
+                let getter =
+                    self.create_function(JsFunction::native(
+                        format!("get {}", pn),
+                        0,
+                        |interp, this_val, _args| {
+                            let ctor_id = match interp.regexp_constructor_id {
+                                Some(id) => id,
+                                None => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "RegExp legacy accessor requires RegExp constructor",
+                                    ));
+                                }
+                            };
+                            match this_val {
+                                JsValue::Object(o) if o.id == ctor_id => {}
+                                _ => return Completion::Throw(interp.create_type_error(
+                                    "RegExp legacy accessor requires RegExp constructor as this",
+                                )),
                             }
-                        };
-                        match this_val {
-                            JsValue::Object(o) if o.id == ctor_id => {}
-                            _ => {
-                                return Completion::Throw(
-                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
-                                )
-                            }
-                        }
-                        Completion::Normal(JsValue::String(JsString::from_str(
-                            &interp.regexp_legacy_right_context,
-                        )))
-                    },
-                ));
+                            Completion::Normal(JsValue::String(JsString::from_str(
+                                &interp.regexp_legacy_right_context,
+                            )))
+                        },
+                    ));
                 obj.borrow_mut().insert_property(
                     pn,
                     PropertyDescriptor {

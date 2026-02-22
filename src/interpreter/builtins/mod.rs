@@ -7,6 +7,7 @@ mod iterators;
 mod number;
 mod promise;
 pub(crate) mod regexp;
+mod regexp_lookbehind;
 mod string;
 mod temporal;
 mod typedarray;
