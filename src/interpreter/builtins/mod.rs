@@ -1,4 +1,5 @@
 pub(crate) mod array;
+mod atomics;
 mod bigint;
 mod collections;
 mod date;
@@ -3123,6 +3124,9 @@ impl Interpreter {
         // TypedArray, ArrayBuffer, DataView built-ins
         self.setup_typedarray_builtins();
 
+        // Atomics built-in
+        self.setup_atomics();
+
         // Promise built-in
         self.setup_promise();
 
@@ -3208,6 +3212,8 @@ impl Interpreter {
             "BigUint64Array",
             "BigInt",
             "AggregateError",
+            "SharedArrayBuffer",
+            "Atomics",
             "Temporal",
         ];
         let vals: Vec<(String, JsValue)> = {

@@ -20,6 +20,7 @@ fn to_int32_modular(n: f64) -> i32 {
 impl Interpreter {
     pub(crate) fn setup_typedarray_builtins(&mut self) {
         self.setup_arraybuffer();
+        self.setup_shared_arraybuffer();
         self.setup_typed_array_base_prototype();
         self.setup_typed_array_constructors();
         self.setup_uint8array_base64_hex();
@@ -609,6 +610,11 @@ impl Interpreter {
         {
             let mut obj_ref = obj.borrow_mut();
             if obj_ref.arraybuffer_data.is_some() {
+                if obj_ref.arraybuffer_is_shared {
+                    return Completion::Throw(
+                        self.create_type_error("Cannot detach a SharedArrayBuffer"),
+                    );
+                }
                 if let Some(ref det) = obj_ref.arraybuffer_detached {
                     det.set(true);
                 }
@@ -617,6 +623,383 @@ impl Interpreter {
             }
         }
         Completion::Throw(self.create_type_error("not an ArrayBuffer"))
+    }
+
+    pub(crate) fn create_shared_arraybuffer(
+        &mut self,
+        data: Vec<u8>,
+        max_byte_length: Option<usize>,
+    ) -> Rc<RefCell<JsObjectData>> {
+        let buf_rc = Rc::new(RefCell::new(data));
+        let obj = self.create_object();
+        {
+            let mut o = obj.borrow_mut();
+            o.class_name = "SharedArrayBuffer".to_string();
+            o.prototype = self.shared_arraybuffer_prototype.clone();
+            o.arraybuffer_data = Some(buf_rc);
+            o.arraybuffer_detached = None;
+            o.arraybuffer_max_byte_length = max_byte_length;
+            o.arraybuffer_is_shared = true;
+        }
+        obj
+    }
+
+    fn setup_shared_arraybuffer(&mut self) {
+        let sab_proto = self.create_object();
+        sab_proto.borrow_mut().class_name = "SharedArrayBuffer".to_string();
+        self.shared_arraybuffer_prototype = Some(sab_proto.clone());
+
+        // byteLength getter
+        let byte_length_getter = self.create_function(JsFunction::native(
+            "get byteLength".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if obj_ref.arraybuffer_is_shared {
+                        if let Some(ref buf) = obj_ref.arraybuffer_data {
+                            return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
+                        }
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
+            },
+        ));
+        sab_proto.borrow_mut().insert_property(
+            "byteLength".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(byte_length_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
+        // maxByteLength getter
+        let max_byte_length_getter = self.create_function(JsFunction::native(
+            "get maxByteLength".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if obj_ref.arraybuffer_is_shared {
+                        if let Some(ref buf) = obj_ref.arraybuffer_data {
+                            let max = obj_ref
+                                .arraybuffer_max_byte_length
+                                .unwrap_or_else(|| buf.borrow().len());
+                            return Completion::Normal(JsValue::Number(max as f64));
+                        }
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
+            },
+        ));
+        sab_proto.borrow_mut().insert_property(
+            "maxByteLength".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(max_byte_length_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
+        // growable getter
+        let growable_getter = self.create_function(JsFunction::native(
+            "get growable".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if obj_ref.arraybuffer_is_shared {
+                        return Completion::Normal(JsValue::Boolean(
+                            obj_ref.arraybuffer_max_byte_length.is_some(),
+                        ));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
+            },
+        ));
+        sab_proto.borrow_mut().insert_property(
+            "growable".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(growable_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
+        // grow(newLength)
+        let grow_fn = self.create_function(JsFunction::native(
+            "grow".to_string(),
+            1,
+            |interp, this_val, args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let (is_shared, max_byte_length) = {
+                        let obj_ref = obj.borrow();
+                        (
+                            obj_ref.arraybuffer_is_shared,
+                            obj_ref.arraybuffer_max_byte_length,
+                        )
+                    };
+                    if !is_shared {
+                        return Completion::Throw(
+                            interp.create_type_error("not a SharedArrayBuffer"),
+                        );
+                    }
+                    if max_byte_length.is_none() {
+                        return Completion::Throw(
+                            interp.create_type_error("SharedArrayBuffer is not growable"),
+                        );
+                    }
+                    let new_len_val = args.first().unwrap_or(&JsValue::Undefined);
+                    let new_len = match interp.to_index(new_len_val) {
+                        Completion::Normal(JsValue::Number(n)) => n as usize,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => 0,
+                    };
+                    if new_len > max_byte_length.unwrap() {
+                        return Completion::Throw(
+                            interp.create_error(
+                                "RangeError",
+                                "new byte length exceeds maxByteLength",
+                            ),
+                        );
+                    }
+                    let obj_ref = obj.borrow();
+                    let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
+                    let current_len = buf.borrow().len();
+                    if new_len < current_len {
+                        return Completion::Throw(
+                            interp.create_error("RangeError", "SharedArrayBuffer cannot shrink"),
+                        );
+                    }
+                    buf.borrow_mut().resize(new_len, 0u8);
+                    return Completion::Normal(JsValue::Undefined);
+                }
+                Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
+            },
+        ));
+        sab_proto
+            .borrow_mut()
+            .insert_builtin("grow".to_string(), grow_fn);
+
+        // slice(start, end)
+        let slice_fn = self.create_function(JsFunction::native(
+            "slice".to_string(),
+            2,
+            |interp, this_val, args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let (is_shared, buf_len, buf_data) = {
+                        let obj_ref = obj.borrow();
+                        if !obj_ref.arraybuffer_is_shared {
+                            return Completion::Throw(
+                                interp.create_type_error("not a SharedArrayBuffer"),
+                            );
+                        }
+                        if let Some(ref buf) = obj_ref.arraybuffer_data {
+                            let b = buf.borrow();
+                            (true, b.len(), b.clone())
+                        } else {
+                            return Completion::Throw(
+                                interp.create_type_error("not a SharedArrayBuffer"),
+                            );
+                        }
+                    };
+                    let _ = is_shared;
+                    let len = buf_len as f64;
+                    let start_arg = if let Some(a) = args.first() {
+                        match interp.to_number_value(a) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        0.0
+                    };
+                    let start = if start_arg.is_nan() {
+                        0
+                    } else if start_arg < 0.0 {
+                        ((len + start_arg) as isize).max(0) as usize
+                    } else {
+                        (start_arg as usize).min(buf_len)
+                    };
+                    let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
+                        match interp.to_number_value(&args[1]) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        len
+                    };
+                    let end = if end_arg.is_nan() {
+                        0
+                    } else if end_arg < 0.0 {
+                        ((len + end_arg) as isize).max(0) as usize
+                    } else {
+                        (end_arg as usize).min(buf_len)
+                    };
+                    let new_len = end.saturating_sub(start);
+                    let new_buf: Vec<u8> = buf_data[start..start + new_len].to_vec();
+                    let new_sab = interp.create_shared_arraybuffer(new_buf, None);
+                    let id = new_sab.borrow().id.unwrap();
+                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                }
+                Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
+            },
+        ));
+        sab_proto
+            .borrow_mut()
+            .insert_builtin("slice".to_string(), slice_fn);
+
+        // @@toStringTag
+        {
+            let tag = JsValue::String(JsString::from_str("SharedArrayBuffer"));
+            let sym_key = "Symbol(Symbol.toStringTag)".to_string();
+            let desc = PropertyDescriptor::data(tag, false, false, true);
+            sab_proto.borrow_mut().property_order.push(sym_key.clone());
+            sab_proto.borrow_mut().properties.insert(sym_key, desc);
+        }
+
+        // SharedArrayBuffer constructor
+        let sab_proto_clone = sab_proto.clone();
+        let ctor = self.create_function(JsFunction::constructor(
+            "SharedArrayBuffer".to_string(),
+            1,
+            move |interp, _this, args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("Constructor SharedArrayBuffer requires 'new'"),
+                    );
+                }
+                let len_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let len = match interp.to_index(&len_val) {
+                    Completion::Normal(JsValue::Number(n)) => n as usize,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => 0,
+                };
+                let max_byte_length = if args.len() > 1 {
+                    if let JsValue::Object(opts_o) = &args[1] {
+                        if let Some(opts_obj) = interp.get_object(opts_o.id) {
+                            let max_val = opts_obj.borrow().get_property("maxByteLength");
+                            if !matches!(max_val, JsValue::Undefined) {
+                                let max = match interp.to_index(&max_val) {
+                                    Completion::Normal(JsValue::Number(n)) => n as usize,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => 0,
+                                };
+                                if max < len {
+                                    return Completion::Throw(interp.create_error(
+                                        "RangeError",
+                                        "maxByteLength must be at least as large as byteLength",
+                                    ));
+                                }
+                                Some(max)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let buf = vec![0u8; len];
+                let buf_rc = Rc::new(RefCell::new(buf));
+                let proto = if let Some(ref nt) = interp.new_target {
+                    if let JsValue::Object(o) = nt
+                        && let Some(nt_obj) = interp.get_object(o.id)
+                    {
+                        let proto_val = nt_obj.borrow().get_property("prototype");
+                        if let JsValue::Object(po) = &proto_val {
+                            if let Some(p) = interp.get_object(po.id) {
+                                Some(p.clone())
+                            } else {
+                                Some(sab_proto_clone.clone())
+                            }
+                        } else {
+                            Some(sab_proto_clone.clone())
+                        }
+                    } else {
+                        Some(sab_proto_clone.clone())
+                    }
+                } else {
+                    Some(sab_proto_clone.clone())
+                };
+                let obj = interp.create_object();
+                {
+                    let mut o = obj.borrow_mut();
+                    o.class_name = "SharedArrayBuffer".to_string();
+                    o.prototype = proto;
+                    o.arraybuffer_data = Some(buf_rc);
+                    o.arraybuffer_detached = None;
+                    o.arraybuffer_max_byte_length = max_byte_length;
+                    o.arraybuffer_is_shared = true;
+                }
+                let id = obj.borrow().id.unwrap();
+                Completion::Normal(JsValue::Object(JsObject { id }))
+            },
+        ));
+
+        // Wire SharedArrayBuffer.prototype
+        let sab_proto_val = {
+            let id = sab_proto.borrow().id.unwrap();
+            JsValue::Object(crate::types::JsObject { id })
+        };
+        if let JsValue::Object(o) = &ctor
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(sab_proto_val, false, false, false),
+            );
+
+            // SharedArrayBuffer[Symbol.species] getter
+            let species_getter = self.create_function(JsFunction::native(
+                "get [Symbol.species]".to_string(),
+                0,
+                |_interp, this_val, _args| Completion::Normal(this_val.clone()),
+            ));
+            obj.borrow_mut().insert_property(
+                "Symbol(Symbol.species)".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(species_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
+        }
+        sab_proto.borrow_mut().insert_property(
+            "constructor".to_string(),
+            PropertyDescriptor::data(ctor.clone(), true, false, true),
+        );
+
+        self.global_env
+            .borrow_mut()
+            .declare("SharedArrayBuffer", BindingKind::Var);
+        let _ = self.global_env.borrow_mut().set("SharedArrayBuffer", ctor);
     }
 
     fn setup_typed_array_base_prototype(&mut self) {

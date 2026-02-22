@@ -55,6 +55,7 @@ impl Interpreter {
             &self.bigint_prototype,
             &self.symbol_prototype,
             &self.arraybuffer_prototype,
+            &self.shared_arraybuffer_prototype,
             &self.typed_array_prototype,
             &self.int8array_prototype,
             &self.uint8array_prototype,
