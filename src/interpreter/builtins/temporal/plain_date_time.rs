@@ -349,12 +349,32 @@ fn read_pdt_property_bag(
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let y_f = if is_undefined(&y_val) {
-        return Err(Completion::Throw(
-            interp.create_type_error("year is required"),
-        ));
-    } else {
+    let has_year = !is_undefined(&y_val);
+    let y_f = if has_year {
         to_integer_with_truncation(interp, &y_val)?
+    } else {
+        // year can be omitted for non-ISO calendars with era+eraYear
+        if cal != "iso8601" && super::calendar_has_eras(&cal) {
+            let era_val = match get_prop(interp, item, "era") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            let era_year_val = match get_prop(interp, item, "eraYear") {
+                Completion::Normal(v) => v,
+                other => return Err(other),
+            };
+            if !super::is_undefined(&era_val) && !super::is_undefined(&era_year_val) {
+                0.0 // placeholder — will be overridden by era+eraYear later
+            } else {
+                return Err(Completion::Throw(
+                    interp.create_type_error("year is required"),
+                ));
+            }
+        } else {
+            return Err(Completion::Throw(
+                interp.create_type_error("year is required"),
+            ));
+        }
     };
     Ok((y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal))
 }
@@ -934,13 +954,22 @@ impl Interpreter {
                                 (None, new_y_cal)
                             };
 
-                        match super::calendar_fields_to_iso(
+                        let overflow = match parse_overflow_option(
+                            interp,
+                            &args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                        ) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+
+                        match super::calendar_fields_to_iso_overflow(
                             icu_era.as_deref(),
                             icu_year,
                             mc_for_icu.as_deref(),
                             mo_for_icu,
                             new_d,
                             &cal,
+                            &overflow,
                         ) {
                             Some((iso_y, iso_m, iso_d)) => {
                                 if !iso_time_valid_f64(new_h, new_mi, new_s, new_ms, new_us, new_ns_f)

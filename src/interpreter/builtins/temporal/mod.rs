@@ -341,6 +341,48 @@ pub(crate) fn calendar_fields_to_iso(
     ))
 }
 
+/// Like `calendar_fields_to_iso`, but with overflow handling.
+/// When overflow is "constrain", clamps the day to the calendar month's maximum.
+/// When overflow is "reject", returns None for invalid dates.
+pub(crate) fn calendar_fields_to_iso_overflow(
+    era: Option<&str>,
+    year: i32,
+    month_code: Option<&str>,
+    month_ordinal: Option<u8>,
+    day: u8,
+    calendar_id: &str,
+    overflow: &str,
+) -> Option<(i32, u8, u8)> {
+    // Try exact first
+    if let Some(result) = calendar_fields_to_iso(era, year, month_code, month_ordinal, day, calendar_id) {
+        return Some(result);
+    }
+    if overflow == "reject" {
+        return None;
+    }
+    // Constrain: find the max valid day for this month
+    let kind = calendar_id_to_icu_kind(calendar_id)?;
+    let cal = AnyCalendar::new(kind);
+    let mut fields = IcuDateFields::default();
+    if let Some(e) = era {
+        fields.era = Some(e.as_bytes());
+        fields.era_year = Some(year);
+    } else {
+        fields.extended_year = Some(year);
+    }
+    if let Some(mc) = month_code {
+        fields.month_code = Some(mc.as_bytes());
+    }
+    if let Some(mo) = month_ordinal {
+        fields.ordinal_month = Some(mo);
+    }
+    fields.day = Some(1);
+    let d = IcuDate::try_from_fields(fields, Default::default(), cal).ok()?;
+    let max_day = d.days_in_month();
+    let clamped = day.min(max_day).max(1);
+    calendar_fields_to_iso(era, year, month_code, month_ordinal, clamped, calendar_id)
+}
+
 /// Convert a calendar month code + day into an ISO date for PlainMonthDay.
 ///
 /// The reference ISO year is chosen as the latest ISO year ≤ 1972 where the

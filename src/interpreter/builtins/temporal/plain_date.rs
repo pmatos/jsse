@@ -550,13 +550,22 @@ impl Interpreter {
                                 (None, new_y)
                             };
 
-                        match super::calendar_fields_to_iso(
+                        let overflow = match parse_overflow_option(
+                            interp,
+                            &args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                        ) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+
+                        match super::calendar_fields_to_iso_overflow(
                             icu_era.as_deref(),
                             icu_year,
                             mc_for_icu.as_deref(),
                             mo_for_icu,
                             new_d,
                             &cal,
+                            &overflow,
                         ) {
                             Some((iso_y, iso_m, iso_d)) => {
                                 if !super::iso_date_within_limits(iso_y, iso_m, iso_d) {

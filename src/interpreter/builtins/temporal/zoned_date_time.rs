@@ -482,17 +482,33 @@ fn to_temporal_zoned_date_time_with_options(
                 Err(c) => return c,
             };
 
-            // 13. year (required)
+            // 13. year (required, unless era+eraYear provided for era calendars)
             let y_val = match get_prop(interp, item, "year") {
                 Completion::Normal(v) => v,
                 c => return c,
             };
-            if is_undefined(&y_val) {
+            let year = if !is_undefined(&y_val) {
+                match to_integer_with_truncation(interp, &y_val) {
+                    Ok(n) => n as i32,
+                    Err(c) => return c,
+                }
+            } else if calendar != "iso8601" && super::calendar_has_eras(&calendar) {
+                // Check for era+eraYear
+                let era_check = match get_prop(interp, item, "era") {
+                    Completion::Normal(v) => v,
+                    c => return c,
+                };
+                let era_year_check = match get_prop(interp, item, "eraYear") {
+                    Completion::Normal(v) => v,
+                    c => return c,
+                };
+                if !is_undefined(&era_check) && !is_undefined(&era_year_check) {
+                    0 // placeholder — will be overridden by era+eraYear later
+                } else {
+                    return Completion::Throw(interp.create_type_error("year is required"));
+                }
+            } else {
                 return Completion::Throw(interp.create_type_error("year is required"));
-            }
-            let year = match to_integer_with_truncation(interp, &y_val) {
-                Ok(n) => n as i32,
-                Err(c) => return c,
             };
 
             // If deferred options, read them now (after all bag field reads)

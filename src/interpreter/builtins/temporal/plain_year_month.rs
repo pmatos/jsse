@@ -104,12 +104,29 @@ fn read_pym_property_bag_raw(
         Completion::Normal(v) => v,
         other => return Err(other),
     };
-    let y = if is_undefined(&y_val) {
+    let has_year = !is_undefined(&y_val);
+    let y = if has_year {
+        to_integer_with_truncation(interp, &y_val)? as i32
+    } else if cal != "iso8601" && super::calendar_has_eras(&cal) {
+        let era_val = match get_prop(interp, item, "era") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let era_year_val = match get_prop(interp, item, "eraYear") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        if !is_undefined(&era_val) && !is_undefined(&era_year_val) {
+            0 // placeholder — will be overridden by era+eraYear later
+        } else {
+            return Err(Completion::Throw(
+                interp.create_type_error("year is required"),
+            ));
+        }
+    } else {
         return Err(Completion::Throw(
             interp.create_type_error("year is required"),
         ));
-    } else {
-        to_integer_with_truncation(interp, &y_val)? as i32
     };
     Ok((y, month_num, mc_str, cal))
 }
@@ -215,13 +232,8 @@ fn to_temporal_plain_year_month(
                 Completion::Normal(v) => v,
                 other => return Err(other),
             };
-            let y = if is_undefined(&y_val) {
-                return Err(Completion::Throw(
-                    interp.create_type_error("year is required"),
-                ));
-            } else {
-                to_integer_with_truncation(interp, &y_val)? as i32
-            };
+            let has_year = !is_undefined(&y_val);
+
             // Non-ISO calendar: convert via ICU
             if cal != "iso8601" {
                 let era_val = match get_prop(interp, &item, "era") {
@@ -235,6 +247,24 @@ fn to_temporal_plain_year_month(
                 let has_era = !is_undefined(&era_val);
                 let has_era_year = !is_undefined(&era_year_val);
 
+                if super::calendar_has_eras(&cal) && (has_era != has_era_year) {
+                    return Err(Completion::Throw(
+                        interp.create_type_error(
+                            "era and eraYear must both be present or both be absent",
+                        ),
+                    ));
+                }
+
+                let y = if has_year {
+                    to_integer_with_truncation(interp, &y_val)? as i32
+                } else if super::calendar_has_eras(&cal) && has_era && has_era_year {
+                    0 // placeholder — overridden by era+eraYear
+                } else {
+                    return Err(Completion::Throw(
+                        interp.create_type_error("year is required"),
+                    ));
+                };
+
                 let (icu_era, icu_year) =
                     if super::calendar_has_eras(&cal) && has_era && has_era_year {
                         let era_str =
@@ -242,12 +272,6 @@ fn to_temporal_plain_year_month(
                         let ey =
                             super::to_integer_with_truncation(interp, &era_year_val)? as i32;
                         (Some(era_str), ey)
-                    } else if super::calendar_has_eras(&cal) && (has_era != has_era_year) {
-                        return Err(Completion::Throw(
-                            interp.create_type_error(
-                                "era and eraYear must both be present or both be absent",
-                            ),
-                        ));
                     } else {
                         (None, y)
                     };
@@ -263,6 +287,14 @@ fn to_temporal_plain_year_month(
                     return Ok((iso_y, iso_m, iso_d, cal));
                 }
             }
+            // ISO path: year is required
+            let y = if has_year {
+                to_integer_with_truncation(interp, &y_val)? as i32
+            } else {
+                return Err(Completion::Throw(
+                    interp.create_type_error("year is required"),
+                ));
+            };
 
             // ISO: resolve month from month/monthCode
             let m = if let Some(ref mc) = mc_str {
@@ -593,13 +625,22 @@ impl Interpreter {
                                 (None, new_y_cal)
                             };
 
-                        match super::calendar_fields_to_iso(
+                        let overflow = match parse_overflow_option(
+                            interp,
+                            &args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                        ) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+
+                        match super::calendar_fields_to_iso_overflow(
                             icu_era.as_deref(),
                             icu_year,
                             mc_for_icu.as_deref(),
                             mo_for_icu,
                             1, // day=1 for year-month
                             &cal,
+                            &overflow,
                         ) {
                             Some((iso_y, iso_m, iso_d)) => {
                                 return create_plain_year_month_result(
@@ -1006,7 +1047,7 @@ impl Interpreter {
             "toPlainDate".to_string(),
             1,
             |interp, this, args| {
-                let (y, m, _, cal) = match get_ym_fields(interp, &this) {
+                let (y, m, rd, cal) = match get_ym_fields(interp, &this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1027,7 +1068,33 @@ impl Interpreter {
                     Ok(n) => n as u8,
                     Err(c) => return c,
                 };
-                // Constrain day to valid range for the given year/month
+
+                if cal != "iso8601" {
+                    // For non-ISO calendars, convert through calendar space
+                    if let Some(cf) = super::iso_to_calendar_fields(y, m, rd, &cal) {
+                        match super::calendar_fields_to_iso_overflow(
+                            None, cf.year, Some(cf.month_code.as_str()), None, d, &cal, "reject",
+                        ) {
+                            Some((iso_y, iso_m, iso_d)) => {
+                                if !super::iso_date_within_limits(iso_y, iso_m, iso_d) {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Date outside valid ISO range"),
+                                    );
+                                }
+                                return super::plain_date::create_plain_date_result(
+                                    interp, iso_y, iso_m, iso_d, &cal,
+                                );
+                            }
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_range_error("Invalid day for this calendar month"),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // ISO path
                 let max_day = iso_days_in_month(y, m);
                 let cd = d.min(max_day);
                 if !super::iso_date_within_limits(y, m, cd) {
