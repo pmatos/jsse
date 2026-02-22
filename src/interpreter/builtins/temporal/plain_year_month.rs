@@ -347,10 +347,17 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _| {
-                    let (y, m, _, _) = match get_ym_fields(interp, &this) {
+                    let (y, m, rd, cal) = match get_ym_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(y, m, rd, &cal) {
+                            return Completion::Normal(JsValue::Number(
+                                if idx == 0 { cf.year as f64 } else { cf.month_ordinal as f64 },
+                            ));
+                        }
+                    }
                     Completion::Normal(JsValue::Number(if idx == 0 { y as f64 } else { m as f64 }))
                 },
             ));
@@ -371,10 +378,17 @@ impl Interpreter {
                 "get monthCode".to_string(),
                 0,
                 |interp, this, _| {
-                    let (_, m, _, _) = match get_ym_fields(interp, &this) {
+                    let (y, m, rd, cal) = match get_ym_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(y, m, rd, &cal) {
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                &cf.month_code,
+                            )));
+                        }
+                    }
                     Completion::Normal(JsValue::String(JsString::from_str(&iso_month_code(m))))
                 },
             ));
@@ -404,10 +418,28 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _| {
-                    let (y, m, _, _) = match get_ym_fields(interp, &this) {
+                    let (y, m, rd, cal) = match get_ym_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(y, m, rd, &cal) {
+                            return match which {
+                                0 => Completion::Normal(JsValue::Number(cf.days_in_month as f64)),
+                                1 => Completion::Normal(JsValue::Number(cf.days_in_year as f64)),
+                                2 => Completion::Normal(JsValue::Number(cf.months_in_year as f64)),
+                                3 => Completion::Normal(JsValue::Boolean(cf.in_leap_year)),
+                                4 => Completion::Normal(match cf.era {
+                                    Some(e) => JsValue::String(JsString::from_str(&e)),
+                                    None => JsValue::Undefined,
+                                }),
+                                _ => Completion::Normal(match cf.era_year {
+                                    Some(ey) => JsValue::Number(ey as f64),
+                                    None => JsValue::Undefined,
+                                }),
+                            };
+                        }
+                    }
                     match which {
                         0 => Completion::Normal(JsValue::Number(iso_days_in_month(y, m) as f64)),
                         1 => Completion::Normal(JsValue::Number(iso_days_in_year(y) as f64)),

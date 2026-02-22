@@ -159,43 +159,186 @@ pub(crate) fn ascii_lowercase(s: &str) -> String {
 ///   - "iso8601" (case-insensitive, ASCII only)
 ///   - An ISO 8601 date string (extracts calendar annotation, defaults to "iso8601")
 /// Returns the normalized calendar ID, or None if invalid.
+const SUPPORTED_CALENDARS: &[&str] = &[
+    "iso8601", "buddhist", "chinese", "coptic", "dangi", "ethioaa", "ethiopic",
+    "gregory", "hebrew", "indian", "islamic-civil",
+    "islamic-tbla", "islamic-umalqura", "japanese", "persian", "roc",
+];
+
+fn canonicalize_temporal_calendar(cal: &str) -> String {
+    let lower = ascii_lowercase(cal);
+    match lower.as_str() {
+        "islamicc" => "islamic-civil".to_string(),
+        "ethiopic-amete-alem" => "ethioaa".to_string(),
+        other => other.to_string(),
+    }
+}
+
+pub(crate) fn is_supported_temporal_calendar(cal: &str) -> bool {
+    SUPPORTED_CALENDARS.contains(&cal)
+}
+
+pub(crate) fn calendar_has_eras(cal: &str) -> bool {
+    matches!(
+        cal,
+        "buddhist"
+            | "coptic"
+            | "ethioaa"
+            | "ethiopic"
+            | "gregory"
+            | "hebrew"
+            | "indian"
+            | "islamic-civil"
+            | "islamic-tbla"
+            | "islamic-umalqura"
+            | "japanese"
+            | "persian"
+            | "roc"
+    )
+}
+
 pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
-    // Must be ASCII-only (no non-ASCII chars)
     if !cal.bytes().all(|b| b.is_ascii()) {
         return None;
     }
-    let normalized = ascii_lowercase(cal);
-    if normalized == "iso8601" {
+    let normalized = canonicalize_temporal_calendar(cal);
+    if is_supported_temporal_calendar(&normalized) {
         return Some(normalized);
     }
-    // Try parsing as an ISO date/time string and extract calendar
     if let Some(parsed) = parse_temporal_date_time_string(cal) {
         let c = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
-        let cn = ascii_lowercase(&c);
-        if cn == "iso8601" {
+        let cn = canonicalize_temporal_calendar(&c);
+        if is_supported_temporal_calendar(&cn) {
             return Some(cn);
         }
     }
-    // Try parsing as a time-only string (e.g. "15:23", "T15:23:30")
     if parse_temporal_time_string(cal).is_some() {
         return Some("iso8601".to_string());
     }
-    // Try parsing as month-day (MM-DD) or year-month (YYYY-MM)
     if let Some(parsed) = parse_temporal_month_day_string(cal) {
         let c = parsed.3.unwrap_or_else(|| "iso8601".to_string());
-        let cn = ascii_lowercase(&c);
-        if cn == "iso8601" {
+        let cn = canonicalize_temporal_calendar(&c);
+        if is_supported_temporal_calendar(&cn) {
             return Some(cn);
         }
     }
     if let Some(parsed) = parse_temporal_year_month_string(cal) {
         let c = parsed.2.unwrap_or_else(|| "iso8601".to_string());
-        let cn = ascii_lowercase(&c);
-        if cn == "iso8601" {
+        let cn = canonicalize_temporal_calendar(&c);
+        if is_supported_temporal_calendar(&cn) {
             return Some(cn);
         }
     }
     None
+}
+
+use icu::calendar::{AnyCalendar, AnyCalendarKind, Date as IcuDate};
+use icu::calendar::types::MonthCode as IcuMonthCode;
+use icu_calendar::types::DateFields as IcuDateFields;
+use tinystr::TinyAsciiStr;
+
+fn calendar_id_to_icu_kind(cal: &str) -> Option<AnyCalendarKind> {
+    match cal {
+        "buddhist" => Some(AnyCalendarKind::Buddhist),
+        "chinese" => Some(AnyCalendarKind::Chinese),
+        "coptic" => Some(AnyCalendarKind::Coptic),
+        "dangi" => Some(AnyCalendarKind::Dangi),
+        "ethioaa" => Some(AnyCalendarKind::EthiopianAmeteAlem),
+        "ethiopic" => Some(AnyCalendarKind::Ethiopian),
+        "gregory" => Some(AnyCalendarKind::Gregorian),
+        "hebrew" => Some(AnyCalendarKind::Hebrew),
+        "indian" => Some(AnyCalendarKind::Indian),
+        "islamic" | "islamic-civil" => Some(AnyCalendarKind::HijriTabularTypeIIFriday),
+        "islamic-rgsa" => Some(AnyCalendarKind::HijriSimulatedMecca),
+        "islamic-tbla" => Some(AnyCalendarKind::HijriTabularTypeIIThursday),
+        "islamic-umalqura" => Some(AnyCalendarKind::HijriUmmAlQura),
+        "japanese" => Some(AnyCalendarKind::Japanese),
+        "persian" => Some(AnyCalendarKind::Persian),
+        "roc" => Some(AnyCalendarKind::Roc),
+        _ => None,
+    }
+}
+
+pub(crate) struct CalendarFields {
+    pub year: i32,
+    pub era: Option<String>,
+    pub era_year: Option<i32>,
+    pub month_ordinal: u8,
+    pub month_code: String,
+    pub day: u8,
+    pub day_of_year: u16,
+    pub days_in_month: u8,
+    pub days_in_year: u16,
+    pub months_in_year: u8,
+    pub in_leap_year: bool,
+}
+
+pub(crate) fn iso_to_calendar_fields(
+    iso_year: i32,
+    iso_month: u8,
+    iso_day: u8,
+    calendar_id: &str,
+) -> Option<CalendarFields> {
+    let kind = calendar_id_to_icu_kind(calendar_id)?;
+    let iso_date = IcuDate::try_new_iso(iso_year, iso_month, iso_day).ok()?;
+    let cal = AnyCalendar::new(kind);
+    let d = iso_date.to_any().to_calendar(cal);
+
+    let yi = d.year();
+    let (year, era, era_year) = if let Some(e) = yi.era() {
+        (yi.extended_year(), Some(e.era.to_string()), Some(e.year))
+    } else {
+        (yi.era_year_or_related_iso(), None, None)
+    };
+
+    Some(CalendarFields {
+        year,
+        era,
+        era_year,
+        month_ordinal: d.month().ordinal,
+        month_code: d.month().standard_code.0.to_string(),
+        day: d.day_of_month().0,
+        day_of_year: d.day_of_year().0,
+        days_in_month: d.days_in_month(),
+        days_in_year: d.days_in_year(),
+        months_in_year: d.months_in_year(),
+        in_leap_year: d.is_in_leap_year(),
+    })
+}
+
+pub(crate) fn calendar_fields_to_iso(
+    era: Option<&str>,
+    year: i32,
+    month_code: Option<&str>,
+    month_ordinal: Option<u8>,
+    day: u8,
+    calendar_id: &str,
+) -> Option<(i32, u8, u8)> {
+    let kind = calendar_id_to_icu_kind(calendar_id)?;
+    let cal = AnyCalendar::new(kind);
+
+    let mut fields = IcuDateFields::default();
+    if let Some(e) = era {
+        fields.era = Some(e.as_bytes());
+        fields.era_year = Some(year);
+    } else {
+        fields.extended_year = Some(year);
+    }
+    if let Some(mc) = month_code {
+        fields.month_code = Some(mc.as_bytes());
+    }
+    if let Some(mo) = month_ordinal {
+        fields.ordinal_month = Some(mo);
+    }
+    fields.day = Some(day);
+
+    let d = IcuDate::try_from_fields(fields, Default::default(), cal).ok()?;
+    let iso = d.to_iso();
+    Some((
+        iso.year().extended_year(),
+        iso.month().ordinal,
+        iso.day_of_month().0,
+    ))
 }
 
 /// Per spec ToTemporalCalendarSlotValue:
@@ -1542,8 +1685,8 @@ pub(super) fn validate_calendar_strict(
                     interp.create_range_error(&format!("Invalid calendar: {raw}")),
                 ));
             }
-            let normalized = ascii_lowercase(&raw);
-            if normalized == "iso8601" {
+            let normalized = canonicalize_temporal_calendar(&raw);
+            if is_supported_temporal_calendar(&normalized) {
                 Ok(normalized)
             } else {
                 Err(Completion::Throw(

@@ -711,9 +711,11 @@ dependencies = [
  "fixed_decimal",
  "iana-time-zone",
  "icu",
+ "icu_calendar",
  "num-bigint",
  "regex",
  "ryu-js",
+ "tinystr",
  "unicode-ident",
 ]
 

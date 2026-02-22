@@ -1197,23 +1197,43 @@ impl Interpreter {
             }))
         });
 
-        zdt_getter!("year", |ns, tz, _cal| {
-            let (y, _, _, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+        zdt_getter!("year", |ns, tz, cal| {
+            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::Number(cf.year as f64));
+                }
+            }
             Completion::Normal(JsValue::Number(y as f64))
         });
 
-        zdt_getter!("month", |ns, tz, _cal| {
-            let (_, m, _, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+        zdt_getter!("month", |ns, tz, cal| {
+            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::Number(cf.month_ordinal as f64));
+                }
+            }
             Completion::Normal(JsValue::Number(m as f64))
         });
 
-        zdt_getter!("monthCode", |ns, tz, _cal| {
-            let (_, m, _, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+        zdt_getter!("monthCode", |ns, tz, cal| {
+            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::String(JsString::from_str(&cf.month_code)));
+                }
+            }
             Completion::Normal(JsValue::String(JsString::from_str(&format!("M{m:02}"))))
         });
 
-        zdt_getter!("day", |ns, tz, _cal| {
-            let (_, _, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+        zdt_getter!("day", |ns, tz, cal| {
+            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::Number(cf.day as f64));
+                }
+            }
             Completion::Normal(JsValue::Number(d as f64))
         });
 
@@ -1252,8 +1272,13 @@ impl Interpreter {
             Completion::Normal(JsValue::Number(super::iso_day_of_week(y, m, d) as f64))
         });
 
-        zdt_getter!("dayOfYear", |ns, tz, _cal| {
+        zdt_getter!("dayOfYear", |ns, tz, cal| {
             let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::Number(cf.day_of_year as f64));
+                }
+            }
             Completion::Normal(JsValue::Number(super::iso_day_of_year(y, m, d) as f64))
         });
 
@@ -1273,23 +1298,44 @@ impl Interpreter {
             Completion::Normal(JsValue::Number(7.0))
         });
 
-        zdt_getter!("daysInMonth", |ns, tz, _cal| {
-            let (y, m, _, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+        zdt_getter!("daysInMonth", |ns, tz, cal| {
+            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::Number(cf.days_in_month as f64));
+                }
+            }
             Completion::Normal(JsValue::Number(super::iso_days_in_month(y, m) as f64))
         });
 
-        zdt_getter!("daysInYear", |ns, tz, _cal| {
-            let (y, _, _, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+        zdt_getter!("daysInYear", |ns, tz, cal| {
+            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::Number(cf.days_in_year as f64));
+                }
+            }
             let days = if super::iso_is_leap_year(y) { 366 } else { 365 };
             Completion::Normal(JsValue::Number(days as f64))
         });
 
-        zdt_getter!("monthsInYear", |_ns, _tz, _cal| {
+        zdt_getter!("monthsInYear", |ns, tz, cal| {
+            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::Number(cf.months_in_year as f64));
+                }
+            }
             Completion::Normal(JsValue::Number(12.0))
         });
 
-        zdt_getter!("inLeapYear", |ns, tz, _cal| {
-            let (y, _, _, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+        zdt_getter!("inLeapYear", |ns, tz, cal| {
+            let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+            if cal != "iso8601" {
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(JsValue::Boolean(cf.in_leap_year));
+                }
+            }
             Completion::Normal(JsValue::Boolean(super::iso_is_leap_year(y)))
         });
 
@@ -1372,20 +1418,30 @@ impl Interpreter {
             );
         }
 
-        zdt_getter!("era", |_ns, _tz, cal| {
-            if cal == "iso8601" {
-                Completion::Normal(JsValue::Undefined)
-            } else {
-                Completion::Normal(JsValue::Undefined)
+        zdt_getter!("era", |ns, tz, cal| {
+            if cal != "iso8601" {
+                let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(match cf.era {
+                        Some(e) => JsValue::String(JsString::from_str(&e)),
+                        None => JsValue::Undefined,
+                    });
+                }
             }
+            Completion::Normal(JsValue::Undefined)
         });
 
-        zdt_getter!("eraYear", |_ns, _tz, cal| {
-            if cal == "iso8601" {
-                Completion::Normal(JsValue::Undefined)
-            } else {
-                Completion::Normal(JsValue::Undefined)
+        zdt_getter!("eraYear", |ns, tz, cal| {
+            if cal != "iso8601" {
+                let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
+                    return Completion::Normal(match cf.era_year {
+                        Some(ey) => JsValue::Number(ey as f64),
+                        None => JsValue::Undefined,
+                    });
+                }
             }
+            Completion::Normal(JsValue::Undefined)
         });
 
         self.temporal_zoned_date_time_prototype = Some(proto.clone());

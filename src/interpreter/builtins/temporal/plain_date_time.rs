@@ -531,10 +531,20 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (y, m, d, _, _, _, _, _, _, _) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
+                            let val = match idx {
+                                0 => cf.year as f64,
+                                1 => cf.month_ordinal as f64,
+                                _ => cf.day as f64,
+                            };
+                            return Completion::Normal(JsValue::Number(val));
+                        }
+                    }
                     let val = match idx {
                         0 => y as f64,
                         1 => m as f64,
@@ -603,10 +613,17 @@ impl Interpreter {
                 "get monthCode".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (_, m, _, _, _, _, _, _, _, _) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                &cf.month_code,
+                            )));
+                        }
+                    }
                     Completion::Normal(JsValue::String(JsString::from_str(&iso_month_code(m))))
                 },
             ));
@@ -639,10 +656,32 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (y, m, d, _, _, _, _, _, _, _) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
+                            let val = match which {
+                                0 => JsValue::Number(iso_day_of_week(y, m, d) as f64),
+                                1 => JsValue::Number(cf.day_of_year as f64),
+                                2 => {
+                                    let (w, _) = iso_week_of_year(y, m, d);
+                                    JsValue::Number(w as f64)
+                                }
+                                3 => {
+                                    let (_, yw) = iso_week_of_year(y, m, d);
+                                    JsValue::Number(yw as f64)
+                                }
+                                4 => JsValue::Number(7.0),
+                                5 => JsValue::Number(cf.days_in_month as f64),
+                                6 => JsValue::Number(cf.days_in_year as f64),
+                                7 => JsValue::Number(cf.months_in_year as f64),
+                                _ => JsValue::Boolean(cf.in_leap_year),
+                            };
+                            return Completion::Normal(val);
+                        }
+                    }
                     let val = match which {
                         0 => JsValue::Number(iso_day_of_week(y, m, d) as f64),
                         1 => JsValue::Number(iso_day_of_year(y, m, d) as f64),
@@ -676,16 +715,31 @@ impl Interpreter {
             );
         }
 
-        // era / eraYear — undefined for iso8601
-        for name in &["era", "eraYear"] {
+        // era / eraYear
+        for &(name, is_era) in &[("era", true), ("eraYear", false)] {
             let getter = self.create_function(JsFunction::native(
                 format!("get {name}"),
                 0,
-                |interp, this, _args| {
-                    let _ = match get_pdt_fields(interp, &this) {
+                move |interp, this, _args| {
+                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
+                            if is_era {
+                                return Completion::Normal(match cf.era {
+                                    Some(e) => JsValue::String(JsString::from_str(&e)),
+                                    None => JsValue::Undefined,
+                                });
+                            } else {
+                                return Completion::Normal(match cf.era_year {
+                                    Some(ey) => JsValue::Number(ey as f64),
+                                    None => JsValue::Undefined,
+                                });
+                            }
+                        }
+                    }
                     Completion::Normal(JsValue::Undefined)
                 },
             ));

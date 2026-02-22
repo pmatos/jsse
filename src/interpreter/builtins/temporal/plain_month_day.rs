@@ -346,10 +346,17 @@ impl Interpreter {
                 "get monthCode".to_string(),
                 0,
                 |interp, this, _| {
-                    let (m, _, _, _) = match get_md_fields(interp, &this) {
+                    let (m, d, ry, cal) = match get_md_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(ry, m, d, &cal) {
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                &cf.month_code,
+                            )));
+                        }
+                    }
                     Completion::Normal(JsValue::String(JsString::from_str(&iso_month_code(m))))
                 },
             ));
@@ -370,10 +377,15 @@ impl Interpreter {
                 "get day".to_string(),
                 0,
                 |interp, this, _| {
-                    let (_, d, _, _) = match get_md_fields(interp, &this) {
+                    let (m, d, ry, cal) = match get_md_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    if cal != "iso8601" {
+                        if let Some(cf) = super::iso_to_calendar_fields(ry, m, d, &cal) {
+                            return Completion::Normal(JsValue::Number(cf.day as f64));
+                        }
+                    }
                     Completion::Normal(JsValue::Number(d as f64))
                 },
             ));
