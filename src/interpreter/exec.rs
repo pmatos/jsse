@@ -693,20 +693,6 @@ impl Interpreter {
                 };
                 if let JsValue::Object(obj_ref) = &obj_val {
                     if let Some(obj_data) = self.get_object(obj_ref.id) {
-                        let unscopables = {
-                            let obj = obj_data.borrow();
-                            let v = obj.get_property("Symbol(Symbol.unscopables)");
-                            if matches!(v, JsValue::Undefined) {
-                                obj.get_property("[Symbol.unscopables]")
-                            } else {
-                                v
-                            }
-                        };
-                        let unscopables_data = if let JsValue::Object(u) = &unscopables {
-                            self.get_object(u.id)
-                        } else {
-                            None
-                        };
                         let with_env = Rc::new(RefCell::new(Environment {
                             bindings: HashMap::new(),
                             parent: Some(env.clone()),
@@ -716,7 +702,6 @@ impl Interpreter {
                             with_object: Some(WithObject {
                                 object: obj_data,
                                 obj_id: obj_ref.id,
-                                unscopables: unscopables_data,
                             }),
                             dispose_stack: None,
                             global_object: None,
@@ -841,11 +826,19 @@ impl Interpreter {
                     if !var_scope.borrow().bindings.contains_key(name) {
                         var_scope.borrow_mut().declare(name, kind);
                     }
+                    // For var initializers inside with-scopes, write through with-object
+                    match self.resolve_with_has_binding(name, env) {
+                        Ok(Some(obj_id)) => {
+                            let strict = env.borrow().strict;
+                            self.with_set_mutable_binding(obj_id, name, val, strict)
+                        }
+                        Ok(None) => env.borrow_mut().set(name, val),
+                        Err(e) => Err(e),
+                    }
                 } else {
                     env.borrow_mut().declare(name, kind);
+                    env.borrow_mut().set(name, val)
                 }
-                // Set through normal scope chain (handles with-objects, etc.)
-                env.borrow_mut().set(name, val)
             }
             Pattern::Assign(inner, default) => {
                 let v = if val.is_undefined() {

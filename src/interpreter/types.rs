@@ -122,7 +122,6 @@ impl std::fmt::Debug for Environment {
 pub(crate) struct WithObject {
     pub(crate) object: Rc<RefCell<JsObjectData>>,
     pub(crate) obj_id: u64,
-    pub(crate) unscopables: Option<Rc<RefCell<JsObjectData>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -315,14 +314,6 @@ impl Environment {
     }
 
     pub fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
-        if let Some(ref with_obj) = self.with_object {
-            let obj = with_obj.object.borrow();
-            if obj.has_property(name) && !Self::is_unscopable(with_obj, name) {
-                drop(obj);
-                with_obj.object.borrow_mut().set_property_value(name, value);
-                return Ok(());
-            }
-        }
         if let Some(binding) = self.bindings.get_mut(name) {
             if binding.kind == BindingKind::Const && binding.initialized {
                 return Err(JsValue::String(JsString::from_str(
@@ -364,31 +355,7 @@ impl Environment {
         }
     }
 
-    fn is_unscopable(with: &WithObject, name: &str) -> bool {
-        if let Some(ref unscopables) = with.unscopables {
-            let u = unscopables.borrow();
-            if let Some(desc) = u.properties.get(name)
-                && let Some(ref val) = desc.value
-            {
-                return match val {
-                    JsValue::Undefined | JsValue::Null => false,
-                    JsValue::Boolean(b) => *b,
-                    JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
-                    JsValue::String(s) => !s.is_empty(),
-                    _ => true,
-                };
-            }
-        }
-        false
-    }
-
     pub fn get(&self, name: &str) -> Option<JsValue> {
-        if let Some(ref with) = self.with_object {
-            let obj = with.object.borrow();
-            if obj.has_property(name) && !Self::is_unscopable(with, name) {
-                return Some(obj.get_property(name));
-            }
-        }
         if let Some(binding) = self.bindings.get(name) {
             if !binding.initialized {
                 return None; // TDZ
@@ -446,12 +413,6 @@ impl Environment {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        if let Some(ref with) = self.with_object {
-            let obj = with.object.borrow();
-            if obj.has_property(name) && !Self::is_unscopable(with, name) {
-                return true;
-            }
-        }
         if self.bindings.contains_key(name) {
             true
         } else if let Some(parent) = &self.parent {

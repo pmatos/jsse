@@ -1,5 +1,10 @@
 use super::*;
 
+enum IdentifierRef {
+    WithObject(u64),
+    Binding,
+}
+
 impl Interpreter {
     fn resolve_private_name(&self, source_name: &str, env: &EnvRef) -> String {
         let mut current = Some(env.clone());
@@ -216,8 +221,13 @@ impl Interpreter {
         match expr {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
             Expression::Identifier(name) => {
-                if let Some(result) = self.resolve_with_get(name, env) {
-                    return result;
+                let strict = env.borrow().strict;
+                match self.resolve_with_has_binding(name, env) {
+                    Ok(Some(obj_id)) => {
+                        return self.with_get_binding_value(obj_id, name, strict);
+                    }
+                    Ok(None) => {}
+                    Err(e) => return Completion::Throw(e),
                 }
                 if let Some(result) = self.resolve_global_getter(name, env) {
                     return result;
@@ -328,7 +338,7 @@ impl Interpreter {
                         is_arrow_scope: false,
                         with_object: None,
                         dispose_stack: None,
-                        global_object: env.borrow().global_object.clone(),
+                        global_object: None,
                         annexb_function_names: None,
                         class_private_names: None,
                         is_field_initializer: false,
@@ -392,13 +402,18 @@ impl Interpreter {
             }
             Expression::Typeof(operand) => {
                 if let Expression::Identifier(name) = operand.as_ref() {
-                    if let Some(result) = self.resolve_with_get(name, env) {
-                        return match result {
-                            Completion::Normal(val) => Completion::Normal(JsValue::String(
-                                JsString::from_str(typeof_val(&val, &self.objects)),
-                            )),
-                            other => other,
-                        };
+                    let strict = env.borrow().strict;
+                    match self.resolve_with_has_binding(name, env) {
+                        Ok(Some(obj_id)) => {
+                            return match self.with_get_binding_value(obj_id, name, strict) {
+                                Completion::Normal(val) => Completion::Normal(JsValue::String(
+                                    JsString::from_str(typeof_val(&val, &self.objects)),
+                                )),
+                                other => other,
+                            };
+                        }
+                        Ok(None) => {}
+                        Err(e) => return Completion::Throw(e),
                     }
                     if let Some(result) = self.resolve_global_getter(name, env) {
                         return match result {
@@ -557,12 +572,17 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(true))
                 }
                 Expression::Identifier(name) => {
-                    // Per §13.5.1.2: delete on a resolved binding reference
-                    // In strict mode, this is a SyntaxError (handled at parse time)
-                    // In sloppy mode:
-                    //   - var/let/const bindings are non-configurable → return false
-                    //   - global object configurable properties → delete and return true
-                    //   - unresolvable → return true
+                    // Check with-scopes first (Bug C fix)
+                    match self.resolve_with_has_binding(name, env) {
+                        Ok(Some(obj_id)) => {
+                            return match self.proxy_delete_property(obj_id, name) {
+                                Ok(b) => Completion::Normal(JsValue::Boolean(b)),
+                                Err(e) => Completion::Throw(e),
+                            };
+                        }
+                        Ok(None) => {}
+                        Err(e) => return Completion::Throw(e),
+                    }
 
                     let mut current = Some(env.clone());
                     let global_env = self.global_env.clone();
@@ -571,6 +591,12 @@ impl Interpreter {
                             break;
                         }
                         let eb = e.borrow();
+                        if eb.with_object.is_some() {
+                            let next = eb.parent.clone();
+                            drop(eb);
+                            current = next;
+                            continue;
+                        }
                         if let Some(binding) = eb.bindings.get(name) {
                             if binding.deletable {
                                 drop(eb);
@@ -2057,18 +2083,33 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         if let Expression::Identifier(name) = arg {
-            // Proxy-aware with-scope: get
-            let raw_val = if let Some(result) = self.resolve_with_get(name, env) {
-                match result {
-                    Completion::Normal(v) => v,
-                    other => return other,
+            let strict = env.borrow().strict;
+            let id_ref = match self.resolve_identifier_ref(name, env) {
+                Ok(r) => r,
+                Err(e) => return Completion::Throw(e),
+            };
+            let raw_val = match &id_ref {
+                IdentifierRef::WithObject(obj_id) => {
+                    match self.with_get_binding_value(*obj_id, name, strict) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
                 }
-            } else {
-                match env.borrow().get(name) {
-                    Some(v) => v,
-                    None => {
-                        let err = self.create_reference_error(&format!("{name} is not defined"));
-                        return Completion::Throw(err);
+                IdentifierRef::Binding => {
+                    if let Some(result) = self.resolve_global_getter(name, env) {
+                        match result {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        match env.borrow().get(name) {
+                            Some(v) => v,
+                            None => {
+                                let err =
+                                    self.create_reference_error(&format!("{name} is not defined"));
+                                return Completion::Throw(err);
+                            }
+                        }
                     }
                 }
             };
@@ -2076,17 +2117,9 @@ impl Interpreter {
                 Ok(pair) => pair,
                 Err(e) => return Completion::Throw(e),
             };
-            // Proxy-aware with-scope: set
-            match self.resolve_with_set(name, new_val.clone(), env) {
-                Ok(Some(())) => {}
-                Ok(None) => {
-                    if let Err(_e) = env.borrow_mut().set(name, new_val.clone()) {
-                        return Completion::Throw(
-                            self.create_type_error("Assignment to constant variable."),
-                        );
-                    }
-                }
-                Err(e) => return Completion::Throw(e),
+            match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
+                Completion::Normal(_) => {}
+                other => return other,
             }
             Completion::Normal(if prefix { new_val } else { old_val })
         } else if let Expression::Member(obj_expr, prop) = arg {
@@ -2266,71 +2299,35 @@ impl Interpreter {
         match left {
             Expression::Identifier(name) => {
                 if op == AssignOp::Assign {
+                    // Capture reference BEFORE evaluating RHS (Bug B fix)
+                    let id_ref = match self.resolve_identifier_ref(name, env) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
                     let rval = match self.eval_expr(right, env) {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    let final_val = {
-                        if right.is_anonymous_function_definition() {
-                            self.set_function_name(&rval, name);
-                        }
-                        rval
-                    };
-                    match self.resolve_with_set(name, final_val.clone(), env) {
-                        Ok(Some(())) => return Completion::Normal(final_val),
-                        Ok(None) => {}
-                        Err(e) => return Completion::Throw(e),
+                    if right.is_anonymous_function_definition() {
+                        self.set_function_name(&rval, name);
                     }
-                    match Environment::check_set_binding(env, name) {
-                        SetBindingCheck::TdzError => {
-                            return Completion::Throw(self.create_reference_error(&format!(
-                                "Cannot access '{}' before initialization",
-                                name
-                            )));
-                        }
-                        SetBindingCheck::ConstAssign => {
-                            return Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            );
-                        }
-                        SetBindingCheck::FunctionNameAssign => {
-                            if env.borrow().strict {
-                                return Completion::Throw(
-                                    self.create_type_error("Assignment to constant variable."),
-                                );
-                            }
-                        }
-                        SetBindingCheck::Unresolvable => {
-                            if env.borrow().strict {
-                                return Completion::Throw(
-                                    self.create_reference_error(&format!("{name} is not defined")),
-                                );
-                            }
-                            let var_scope = Environment::find_var_scope(env);
-                            if !var_scope.borrow().bindings.contains_key(name) {
-                                var_scope.borrow_mut().declare(name, BindingKind::Var);
-                            }
-                            if let Err(_e) = var_scope.borrow_mut().set(name, final_val.clone()) {
-                                return Completion::Throw(
-                                    self.create_type_error("Assignment to constant variable."),
-                                );
-                            }
-                        }
-                        SetBindingCheck::Ok => {
-                            env.borrow_mut().set(name, final_val.clone()).ok();
-                        }
-                    }
-                    return Completion::Normal(final_val);
+                    return self.put_value_by_ref(name, rval, &id_ref, env);
                 }
-                // Compound assignment: evaluate LHS first per spec, save Reference
-                let (lval, with_obj_id) =
-                    if let Some((result, obj_id)) = self.resolve_with_get_ref(name, env) {
-                        match result {
-                            Completion::Normal(v) => (v, obj_id),
+                // Compound assignment: capture reference, read, eval RHS, write
+                let id_ref = match self.resolve_identifier_ref(name, env) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let strict = env.borrow().strict;
+                let lval = match &id_ref {
+                    IdentifierRef::WithObject(obj_id) => {
+                        match self.with_get_binding_value(*obj_id, name, strict) {
+                            Completion::Normal(v) => v,
                             other => return other,
                         }
-                    } else {
-                        let lval = if let Some(result) = self.resolve_global_getter(name, env) {
+                    }
+                    IdentifierRef::Binding => {
+                        if let Some(result) = self.resolve_global_getter(name, env) {
                             match result {
                                 Completion::Normal(v) => v,
                                 other => return other,
@@ -2344,9 +2341,9 @@ impl Interpreter {
                                     ));
                                 }
                             }
-                        };
-                        (lval, None)
-                    };
+                        }
+                    }
+                };
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -2355,79 +2352,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // PutValue: if we saved a with-object reference, set directly on it
-                if let Some(obj_id) = with_obj_id {
-                    // Per §9.1.1.2.5 SetMutableBinding: check if property still exists
-                    let is_strict = env.borrow().strict;
-                    if is_strict {
-                        match self.proxy_has_property(obj_id, name) {
-                            Ok(false) => {
-                                return Completion::Throw(
-                                    self.create_reference_error(&format!("{name} is not defined")),
-                                );
-                            }
-                            Err(e) => return Completion::Throw(e),
-                            _ => {}
-                        }
-                    }
-                    let receiver = JsValue::Object(crate::types::JsObject { id: obj_id });
-                    match self.proxy_set(obj_id, name, final_val.clone(), &receiver) {
-                        Ok(_) => return Completion::Normal(final_val),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                }
-                match self.resolve_with_set(name, final_val.clone(), env) {
-                    Ok(Some(())) => Completion::Normal(final_val),
-                    Ok(None) => {
-                        match Environment::check_set_binding(env, name) {
-                            SetBindingCheck::TdzError => {
-                                return Completion::Throw(self.create_reference_error(&format!(
-                                    "Cannot access '{}' before initialization",
-                                    name
-                                )));
-                            }
-                            SetBindingCheck::ConstAssign => {
-                                return Completion::Throw(
-                                    self.create_type_error("Assignment to constant variable."),
-                                );
-                            }
-                            SetBindingCheck::FunctionNameAssign => {
-                                if env.borrow().strict {
-                                    return Completion::Throw(
-                                        self.create_type_error("Assignment to constant variable."),
-                                    );
-                                }
-                                // Sloppy mode: silently ignore, return the assigned value
-                            }
-                            SetBindingCheck::Unresolvable => {
-                                if env.borrow().strict {
-                                    return Completion::Throw(self.create_reference_error(
-                                        &format!("{name} is not defined"),
-                                    ));
-                                }
-                                let var_scope = Environment::find_var_scope(env);
-                                if !var_scope.borrow().bindings.contains_key(name) {
-                                    var_scope.borrow_mut().declare(name, BindingKind::Var);
-                                }
-                                if let Err(_e) = var_scope.borrow_mut().set(name, final_val.clone())
-                                {
-                                    return Completion::Throw(
-                                        self.create_type_error("Assignment to constant variable."),
-                                    );
-                                }
-                            }
-                            SetBindingCheck::Ok => {
-                                if let Err(_e) = env.borrow_mut().set(name, final_val.clone()) {
-                                    return Completion::Throw(
-                                        self.create_type_error("Assignment to constant variable."),
-                                    );
-                                }
-                            }
-                        }
-                        Completion::Normal(final_val)
-                    }
-                    Err(e) => Completion::Throw(e),
-                }
+                self.put_value_by_ref(name, final_val, &id_ref, env)
             }
             Expression::Member(obj_expr, prop) => {
                 let obj_val = match self.eval_expr(obj_expr, env) {
@@ -2837,18 +2762,33 @@ impl Interpreter {
     ) -> Completion {
         match left {
             Expression::Identifier(name) => {
-                let lval = if let Some(result) = self.resolve_with_get(name, env) {
-                    match result {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                let id_ref = match self.resolve_identifier_ref(name, env) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let strict = env.borrow().strict;
+                let lval = match &id_ref {
+                    IdentifierRef::WithObject(obj_id) => {
+                        match self.with_get_binding_value(*obj_id, name, strict) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
                     }
-                } else {
-                    match env.borrow().get(name) {
-                        Some(v) => v,
-                        None => {
-                            return Completion::Throw(
-                                self.create_reference_error(&format!("{name} is not defined")),
-                            );
+                    IdentifierRef::Binding => {
+                        if let Some(result) = self.resolve_global_getter(name, env) {
+                            match result {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            match env.borrow().get(name) {
+                                Some(v) => v,
+                                None => {
+                                    return Completion::Throw(self.create_reference_error(
+                                        &format!("{name} is not defined"),
+                                    ));
+                                }
+                            }
                         }
                     }
                 };
@@ -2868,18 +2808,7 @@ impl Interpreter {
                 if right.is_anonymous_function_definition() {
                     self.set_function_name(&rval, name);
                 }
-                match self.resolve_with_set(name, rval.clone(), env) {
-                    Ok(Some(())) => {}
-                    Ok(None) => {
-                        if let Err(_e) = env.borrow_mut().set(name, rval.clone()) {
-                            return Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            );
-                        }
-                    }
-                    Err(e) => return Completion::Throw(e),
-                }
-                Completion::Normal(rval)
+                self.put_value_by_ref(name, rval, &id_ref, env)
             }
             Expression::Member(obj_expr, MemberProperty::Private(name)) => {
                 let branded = self.resolve_private_name(name, env);
@@ -3464,51 +3393,16 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         let result = match target {
-            Expression::Identifier(name) => match self.resolve_with_set(name, val.clone(), env) {
-                Ok(Some(())) => Completion::Normal(JsValue::Undefined),
-                Ok(None) => match Environment::check_set_binding(env, name) {
-                    SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
-                        &format!("Cannot access '{}' before initialization", name),
-                    )),
-                    SetBindingCheck::ConstAssign => Completion::Throw(
-                        self.create_type_error("Assignment to constant variable."),
-                    ),
-                    SetBindingCheck::FunctionNameAssign => {
-                        if env.borrow().strict {
-                            Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            )
-                        } else {
-                            Completion::Normal(JsValue::Undefined)
-                        }
-                    }
-                    SetBindingCheck::Unresolvable => {
-                        if env.borrow().strict {
-                            Completion::Throw(
-                                self.create_reference_error(&format!("{name} is not defined")),
-                            )
-                        } else {
-                            let var_scope = Environment::find_var_scope(env);
-                            if !var_scope.borrow().bindings.contains_key(name) {
-                                var_scope.borrow_mut().declare(name, BindingKind::Var);
-                            }
-                            match var_scope.borrow_mut().set(name, val) {
-                                Ok(()) => Completion::Normal(JsValue::Undefined),
-                                Err(_) => Completion::Throw(
-                                    self.create_type_error("Assignment to constant variable."),
-                                ),
-                            }
-                        }
-                    }
-                    SetBindingCheck::Ok => match env.borrow_mut().set(name, val) {
-                        Ok(()) => Completion::Normal(JsValue::Undefined),
-                        Err(_) => Completion::Throw(
-                            self.create_type_error("Assignment to constant variable."),
-                        ),
-                    },
-                },
-                Err(e) => Completion::Throw(e),
-            },
+            Expression::Identifier(name) => {
+                let id_ref = match self.resolve_identifier_ref(name, env) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                match self.put_value_by_ref(name, val, &id_ref, env) {
+                    Completion::Normal(_) => Completion::Normal(JsValue::Undefined),
+                    other => other,
+                }
+            }
             Expression::Member(obj_expr, prop) => {
                 match self.set_member_property(obj_expr, prop, val, env) {
                     Ok(()) => Completion::Normal(JsValue::Undefined),
@@ -9596,56 +9490,200 @@ impl Interpreter {
         }
     }
 
-    /// Proxy-aware identifier resolution for with-scope environments.
-    /// Walks the env chain; for with-scopes, uses proxy_has_property/get_object_property.
-    /// Returns Completion::Normal(value) if found, Completion::Throw on error,
-    /// or None if the name is not found in any with-scope (caller should fall back).
-    fn resolve_with_get(&mut self, name: &str, env: &EnvRef) -> Option<Completion> {
-        self.resolve_with_get_ref(name, env).map(|(c, _)| c)
+    // === New with-scope reference semantics (spec-compliant) ===
+
+    /// Dynamically fetch @@unscopables from `obj_id` and check if `name` is blocked.
+    fn check_unscopables_dynamic(&mut self, obj_id: u64, name: &str) -> Result<bool, JsValue> {
+        let unscopables_val = {
+            let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+            let key = "Symbol(Symbol.unscopables)";
+            match self.get_object_property(obj_id, key, &this_val) {
+                Completion::Normal(v) => {
+                    if matches!(v, JsValue::Undefined) {
+                        let key2 = "[Symbol.unscopables]";
+                        match self.get_object_property(obj_id, key2, &this_val) {
+                            Completion::Normal(v2) => v2,
+                            Completion::Throw(e) => return Err(e),
+                            _ => JsValue::Undefined,
+                        }
+                    } else {
+                        v
+                    }
+                }
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            }
+        };
+        if let JsValue::Object(u_ref) = &unscopables_val {
+            let u_this = unscopables_val.clone();
+            match self.get_object_property(u_ref.id, name, &u_this) {
+                Completion::Normal(v) => Ok(to_boolean(&v)),
+                Completion::Throw(e) => Err(e),
+                _ => Ok(false),
+            }
+        } else {
+            Ok(false)
+        }
     }
 
-    /// Like resolve_with_get but also returns the with-object id where the binding was found.
-    /// Returns Some((completion, Some(obj_id))) if found in a with-scope,
-    /// Some((completion, None)) if found in a regular scope (shouldn't happen - returns None),
-    /// None if not found in any with-scope.
-    fn resolve_with_get_ref(
+    /// HasBinding for with-scopes: walks env chain, for each with-scope checks
+    /// proxy_has_property + check_unscopables_dynamic. Returns Ok(Some(obj_id)) if
+    /// the name resolves to a with-object, Ok(None) if found in a regular binding
+    /// or not found at all, Err on trap error.
+    pub(crate) fn resolve_with_has_binding(
         &mut self,
         name: &str,
         env: &EnvRef,
-    ) -> Option<(Completion, Option<u64>)> {
+    ) -> Result<Option<u64>, JsValue> {
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
             let env_borrow = env_ref.borrow();
             if let Some(ref with) = env_borrow.with_object {
                 let obj_id = with.obj_id;
-                let unscopables = with.unscopables.clone();
                 drop(env_borrow);
                 match self.proxy_has_property(obj_id, name) {
                     Ok(true) => {
-                        if !Self::is_unscopable_check(&unscopables, name) {
-                            let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
-                            return Some((
-                                self.get_object_property(obj_id, name, &this_val),
-                                Some(obj_id),
-                            ));
+                        if !self.check_unscopables_dynamic(obj_id, name)? {
+                            return Ok(Some(obj_id));
                         }
                     }
                     Ok(false) => {}
-                    Err(e) => return Some((Completion::Throw(e), None)),
+                    Err(e) => return Err(e),
                 }
                 let env_borrow = env_ref.borrow();
                 current = env_borrow.parent.clone();
                 continue;
             }
             if env_borrow.bindings.contains_key(name) {
-                return None;
+                return Ok(None);
             }
             if env_borrow.global_object.is_some() {
-                return None;
+                return Ok(None);
             }
             current = env_borrow.parent.clone();
         }
-        None
+        Ok(None)
+    }
+
+    /// GetBindingValue for a known with-object: checks HasProperty(stillExists) + Get.
+    /// No unscopables check (already done in HasBinding).
+    fn with_get_binding_value(&mut self, obj_id: u64, name: &str, strict: bool) -> Completion {
+        match self.proxy_has_property(obj_id, name) {
+            Ok(true) => {
+                let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+                self.get_object_property(obj_id, name, &this_val)
+            }
+            Ok(false) => {
+                if strict {
+                    Completion::Throw(
+                        self.create_reference_error(&format!("{name} is not defined")),
+                    )
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
+            Err(e) => Completion::Throw(e),
+        }
+    }
+
+    /// SetMutableBinding for a known with-object: checks HasProperty(stillExists) + Set.
+    /// No unscopables check (already done in HasBinding).
+    pub(crate) fn with_set_mutable_binding(
+        &mut self,
+        obj_id: u64,
+        name: &str,
+        value: JsValue,
+        strict: bool,
+    ) -> Result<(), JsValue> {
+        match self.proxy_has_property(obj_id, name) {
+            Ok(true) => {
+                let receiver = JsValue::Object(crate::types::JsObject { id: obj_id });
+                self.proxy_set(obj_id, name, value, &receiver)?;
+                Ok(())
+            }
+            Ok(false) => {
+                if strict {
+                    Err(self.create_reference_error(&format!("{name} is not defined")))
+                } else {
+                    let receiver = JsValue::Object(crate::types::JsObject { id: obj_id });
+                    self.proxy_set(obj_id, name, value, &receiver)?;
+                    Ok(())
+                }
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Resolve an identifier to a reference (for capturing before RHS evaluation).
+    fn resolve_identifier_ref(
+        &mut self,
+        name: &str,
+        env: &EnvRef,
+    ) -> Result<IdentifierRef, JsValue> {
+        match self.resolve_with_has_binding(name, env)? {
+            Some(obj_id) => Ok(IdentifierRef::WithObject(obj_id)),
+            None => Ok(IdentifierRef::Binding),
+        }
+    }
+
+    /// Write a value through a captured identifier reference.
+    fn put_value_by_ref(
+        &mut self,
+        name: &str,
+        value: JsValue,
+        id_ref: &IdentifierRef,
+        env: &EnvRef,
+    ) -> Completion {
+        match id_ref {
+            IdentifierRef::WithObject(obj_id) => {
+                let strict = env.borrow().strict;
+                match self.with_set_mutable_binding(*obj_id, name, value.clone(), strict) {
+                    Ok(()) => Completion::Normal(value),
+                    Err(e) => Completion::Throw(e),
+                }
+            }
+            IdentifierRef::Binding => match Environment::check_set_binding(env, name) {
+                SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
+                    &format!("Cannot access '{}' before initialization", name),
+                )),
+                SetBindingCheck::ConstAssign => {
+                    Completion::Throw(self.create_type_error("Assignment to constant variable."))
+                }
+                SetBindingCheck::FunctionNameAssign => {
+                    if env.borrow().strict {
+                        Completion::Throw(
+                            self.create_type_error("Assignment to constant variable."),
+                        )
+                    } else {
+                        Completion::Normal(value)
+                    }
+                }
+                SetBindingCheck::Unresolvable => {
+                    if env.borrow().strict {
+                        Completion::Throw(
+                            self.create_reference_error(&format!("{name} is not defined")),
+                        )
+                    } else {
+                        let var_scope = Environment::find_var_scope(env);
+                        if !var_scope.borrow().bindings.contains_key(name) {
+                            var_scope.borrow_mut().declare(name, BindingKind::Var);
+                        }
+                        match var_scope.borrow_mut().set(name, value.clone()) {
+                            Ok(()) => Completion::Normal(value),
+                            Err(_) => Completion::Throw(
+                                self.create_type_error("Assignment to constant variable."),
+                            ),
+                        }
+                    }
+                }
+                SetBindingCheck::Ok => match env.borrow_mut().set(name, value.clone()) {
+                    Ok(()) => Completion::Normal(value),
+                    Err(_) => Completion::Throw(
+                        self.create_type_error("Assignment to constant variable."),
+                    ),
+                },
+            },
+        }
     }
 
     /// Check if a global object property has a getter and needs special handling.
@@ -9682,101 +9720,6 @@ impl Interpreter {
             current = env_borrow.parent.clone();
         }
         None
-    }
-
-    /// Proxy-aware has-binding check for with-scope environments.
-    /// Returns Ok(Some(true/false)) if resolved by a with-scope, Ok(None) if no with-scope handles it,
-    /// or Err on proxy trap error.
-    fn resolve_with_has(&mut self, name: &str, env: &EnvRef) -> Result<Option<bool>, JsValue> {
-        let mut current = Some(env.clone());
-        while let Some(env_ref) = current {
-            let env_borrow = env_ref.borrow();
-            if let Some(ref with) = env_borrow.with_object {
-                let obj_id = with.obj_id;
-                let unscopables = with.unscopables.clone();
-                drop(env_borrow);
-                match self.proxy_has_property(obj_id, name) {
-                    Ok(true) => {
-                        if !Self::is_unscopable_check(&unscopables, name) {
-                            return Ok(Some(true));
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(e) => return Err(e),
-                }
-                let env_borrow = env_ref.borrow();
-                current = env_borrow.parent.clone();
-                continue;
-            }
-            if env_borrow.bindings.contains_key(name) {
-                return Ok(None);
-            }
-            if env_borrow.global_object.is_some() {
-                return Ok(None);
-            }
-            current = env_borrow.parent.clone();
-        }
-        Ok(None)
-    }
-
-    /// Proxy-aware set for with-scope environments.
-    /// Returns Ok(Some(())) if handled by a with-scope, Ok(None) if not,
-    /// or Err on proxy trap error.
-    fn resolve_with_set(
-        &mut self,
-        name: &str,
-        value: JsValue,
-        env: &EnvRef,
-    ) -> Result<Option<()>, JsValue> {
-        let mut current = Some(env.clone());
-        while let Some(env_ref) = current {
-            let env_borrow = env_ref.borrow();
-            if let Some(ref with) = env_borrow.with_object {
-                let obj_id = with.obj_id;
-                let unscopables = with.unscopables.clone();
-                drop(env_borrow);
-                match self.proxy_has_property(obj_id, name) {
-                    Ok(true) => {
-                        if !Self::is_unscopable_check(&unscopables, name) {
-                            let receiver = JsValue::Object(crate::types::JsObject { id: obj_id });
-                            self.proxy_set(obj_id, name, value, &receiver)?;
-                            return Ok(Some(()));
-                        }
-                    }
-                    Ok(false) => {}
-                    Err(e) => return Err(e),
-                }
-                let env_borrow = env_ref.borrow();
-                current = env_borrow.parent.clone();
-                continue;
-            }
-            if env_borrow.bindings.contains_key(name) {
-                return Ok(None);
-            }
-            if env_borrow.global_object.is_some() {
-                return Ok(None);
-            }
-            current = env_borrow.parent.clone();
-        }
-        Ok(None)
-    }
-
-    fn is_unscopable_check(unscopables: &Option<Rc<RefCell<JsObjectData>>>, name: &str) -> bool {
-        if let Some(u) = unscopables {
-            let u = u.borrow();
-            if let Some(desc) = u.properties.get(name)
-                && let Some(ref val) = desc.value
-            {
-                return match val {
-                    JsValue::Undefined | JsValue::Null => false,
-                    JsValue::Boolean(b) => *b,
-                    JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
-                    JsValue::String(s) => !s.is_empty(),
-                    _ => true,
-                };
-            }
-        }
-        false
     }
 
     /// Proxy-aware [[Set]] - checks proxy `set` trap, recurses on target if no trap.
