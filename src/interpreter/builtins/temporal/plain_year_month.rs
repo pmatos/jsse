@@ -477,7 +477,104 @@ impl Interpreter {
                 if let Err(c) = is_partial_temporal_object(interp, &item) {
                     return c;
                 }
-                // PrepareCalendarFields in alphabetical order: month, monthCode, year
+
+                // Non-ISO calendar path
+                if cal != "iso8601" {
+                    if let Some(cf) = super::iso_to_calendar_fields(y, m, rd, &cal) {
+                        let mut has_any = false;
+                        let (raw_month, has_m) = match read_field_positive_int(
+                            interp, &item, "month", cf.month_ordinal,
+                        ) {
+                            Ok(v) => (Some(v.0), v.1),
+                            Err(c) => return c,
+                        };
+                        let raw_month = if has_m { raw_month } else { None };
+                        has_any |= has_m;
+                        let (raw_month_code, has_mc) =
+                            match read_month_code_field(interp, &item) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_mc;
+                        let (new_y_cal, has_y) =
+                            match read_field_i32(interp, &item, "year", cf.year) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_y;
+                        let era_val = match super::get_prop(interp, &item, "era") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let has_era = !super::is_undefined(&era_val);
+                        has_any |= has_era;
+                        let era_year_val = match super::get_prop(interp, &item, "eraYear") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let has_era_year = !super::is_undefined(&era_year_val);
+                        has_any |= has_era_year;
+
+                        if !has_any {
+                            return Completion::Throw(
+                                interp.create_type_error(
+                                    "with() requires at least one recognized property",
+                                ),
+                            );
+                        }
+
+                        let mc_for_icu = if has_mc {
+                            raw_month_code.clone()
+                        } else if !has_m {
+                            Some(cf.month_code.clone())
+                        } else {
+                            None
+                        };
+                        let mo_for_icu = if has_m { raw_month } else { None };
+
+                        let (icu_era, icu_year) =
+                            if super::calendar_has_eras(&cal) && has_era && has_era_year {
+                                let era_str = match super::to_primitive_and_require_string(
+                                    interp, &era_val, "era",
+                                ) {
+                                    Ok(v) => v,
+                                    Err(c) => return c,
+                                };
+                                let ey = match super::to_integer_with_truncation(
+                                    interp, &era_year_val,
+                                ) {
+                                    Ok(v) => v as i32,
+                                    Err(c) => return c,
+                                };
+                                (Some(era_str), ey)
+                            } else {
+                                (None, new_y_cal)
+                            };
+
+                        match super::calendar_fields_to_iso(
+                            icu_era.as_deref(),
+                            icu_year,
+                            mc_for_icu.as_deref(),
+                            mo_for_icu,
+                            1, // day=1 for year-month
+                            &cal,
+                        ) {
+                            Some((iso_y, iso_m, _)) => {
+                                let final_rd = rd.min(super::iso_days_in_month(iso_y, iso_m));
+                                return create_plain_year_month_result(
+                                    interp, iso_y, iso_m, final_rd, &cal,
+                                );
+                            }
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_range_error("Invalid calendar date"),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // ISO path
                 let mut has_any = false;
                 let (raw_month, has_m) = match read_field_positive_int(interp, &item, "month", m) {
                     Ok(v) => (Some(v.0), v.1),
@@ -571,16 +668,28 @@ impl Interpreter {
                             "Duration weeks must be zero for PlainYearMonth arithmetic",
                         ));
                     }
-                    let (ry, rm, _) =
-                        add_iso_date(y, m, rd, (dur.0 as i32) * sign, (dur.1 as i32) * sign, 0, 0);
-                    let cm = rm.max(1).min(12);
-                    let final_rd = rd.min(iso_days_in_month(ry, cm));
-                    if !super::iso_date_within_limits(ry, cm, final_rd) {
+                    let years = (dur.0 as i32) * sign;
+                    let months = (dur.1 as i32) * sign;
+                    let (ry, rm, final_rd) = if cal != "iso8601" && (years != 0 || months != 0) {
+                        match super::add_calendar_date(y, m, rd, years, months, 0, 0, &cal, "constrain") {
+                            Some((ny, nm, nd)) => (ny, nm, nd),
+                            None => {
+                                let (iy, im, _) = add_iso_date(y, m, rd, years, months, 0, 0);
+                                let cm = im.max(1).min(12);
+                                (iy, cm, rd.min(iso_days_in_month(iy, cm)))
+                            }
+                        }
+                    } else {
+                        let (iy, im, _) = add_iso_date(y, m, rd, years, months, 0, 0);
+                        let cm = im.max(1).min(12);
+                        (iy, cm, rd.min(iso_days_in_month(iy, cm)))
+                    };
+                    if !super::iso_date_within_limits(ry, rm, final_rd) {
                         return Completion::Throw(
                             interp.create_range_error("Result year-month outside valid ISO range"),
                         );
                     }
-                    create_plain_year_month_result(interp, ry, cm, final_rd, &cal)
+                    create_plain_year_month_result(interp, ry, rm, final_rd, &cal)
                 },
             ));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
@@ -592,7 +701,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (y1, m1, rd1, _) = match get_ym_fields(interp, &this) {
+                    let (y1, m1, rd1, cal) = match get_ym_fields(interp, &this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -623,8 +732,16 @@ impl Interpreter {
                             Err(c) => return c,
                         };
 
-                    let (mut dy, mut dm, _, _) =
-                        difference_iso_date(y1, m1, rd1, y2, m2, rd1, &largest_unit);
+                    let (mut dy, mut dm, _, _) = if cal != "iso8601" {
+                        match super::difference_calendar_date(
+                            y1, m1, rd1, y2, m2, rd1, &largest_unit, &cal,
+                        ) {
+                            Some(v) => v,
+                            None => difference_iso_date(y1, m1, rd1, y2, m2, rd1, &largest_unit),
+                        }
+                    } else {
+                        difference_iso_date(y1, m1, rd1, y2, m2, rd1, &largest_unit)
+                    };
 
                     let effective_mode = if sign == -1 {
                         negate_rounding_mode(&rounding_mode)

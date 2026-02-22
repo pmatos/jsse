@@ -463,13 +463,6 @@ impl Interpreter {
                 if let Err(c) = is_partial_temporal_object(interp, &item) {
                     return c;
                 }
-                let overflow = match parse_overflow_option(
-                    interp,
-                    &args.get(1).cloned().unwrap_or(JsValue::Undefined),
-                ) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
 
                 // For non-ISO calendars, work in calendar-relative space
                 if cal != "iso8601" {
@@ -615,6 +608,14 @@ impl Interpreter {
                             .create_type_error("with() requires at least one recognized property"),
                     );
                 }
+                // GetTemporalOverflowOption (after fields, before algorithmic validation)
+                let overflow = match parse_overflow_option(
+                    interp,
+                    &args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                ) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 let new_m = match resolve_month_fields(interp, raw_month, raw_month_code, m) {
                     Ok(v) => v,
                     Err(c) => return c,

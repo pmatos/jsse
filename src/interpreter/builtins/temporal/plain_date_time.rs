@@ -770,8 +770,162 @@ impl Interpreter {
                 if let Err(c) = is_partial_temporal_object(interp, &item) {
                     return c;
                 }
-                // PrepareCalendarFields in alphabetical order:
-                // day, hour, microsecond, millisecond, minute, month, monthCode, nanosecond, second, year
+
+                // Non-ISO calendar path (reads fields in its own order)
+                if cal != "iso8601" {
+                    if let Some(cf) = super::iso_to_calendar_fields(y as i32, m, d, &cal) {
+                        let mut has_any = false;
+                        let (new_d, has_d) =
+                            match read_field_positive_int(interp, &item, "day", cf.day) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_d;
+                        let (new_h, has_h) = match read_time_field_new(interp, &item, "hour", h as f64) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        has_any |= has_h;
+                        let (new_us, has_us) =
+                            match read_time_field_new(interp, &item, "microsecond", us as f64) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_us;
+                        let (new_ms, has_ms) =
+                            match read_time_field_new(interp, &item, "millisecond", ms as f64) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_ms;
+                        let (new_mi, has_mi) =
+                            match read_time_field_new(interp, &item, "minute", mi as f64) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_mi;
+                        let (raw_month, has_m) = match read_field_positive_int(
+                            interp, &item, "month", cf.month_ordinal,
+                        ) {
+                            Ok(v) => (Some(v.0), v.1),
+                            Err(c) => return c,
+                        };
+                        let raw_month = if has_m { raw_month } else { None };
+                        has_any |= has_m;
+                        let (raw_month_code, has_mc) =
+                            match read_month_code_field(interp, &item) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_mc;
+                        let (new_ns_f, has_ns) =
+                            match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_ns;
+                        let (new_s, has_s) =
+                            match read_time_field_new(interp, &item, "second", s as f64) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_s;
+                        let (new_y_cal, has_y) =
+                            match read_field_i32(interp, &item, "year", cf.year) {
+                                Ok(v) => v,
+                                Err(c) => return c,
+                            };
+                        has_any |= has_y;
+                        let era_val = match super::get_prop(interp, &item, "era") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let has_era = !super::is_undefined(&era_val);
+                        has_any |= has_era;
+                        let era_year_val = match super::get_prop(interp, &item, "eraYear") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let has_era_year = !super::is_undefined(&era_year_val);
+                        has_any |= has_era_year;
+
+                        if !has_any {
+                            return Completion::Throw(
+                                interp.create_type_error(
+                                    "with() requires at least one recognized property",
+                                ),
+                            );
+                        }
+
+                        let mc_for_icu = if has_mc {
+                            raw_month_code.clone()
+                        } else if !has_m {
+                            Some(cf.month_code.clone())
+                        } else {
+                            None
+                        };
+                        let mo_for_icu = if has_m { raw_month } else { None };
+
+                        let (icu_era, icu_year) =
+                            if super::calendar_has_eras(&cal) && has_era && has_era_year {
+                                let era_str = match super::to_primitive_and_require_string(
+                                    interp, &era_val, "era",
+                                ) {
+                                    Ok(v) => v,
+                                    Err(c) => return c,
+                                };
+                                let ey = match super::to_integer_with_truncation(
+                                    interp,
+                                    &era_year_val,
+                                ) {
+                                    Ok(v) => v as i32,
+                                    Err(c) => return c,
+                                };
+                                (Some(era_str), ey)
+                            } else {
+                                (None, new_y_cal)
+                            };
+
+                        match super::calendar_fields_to_iso(
+                            icu_era.as_deref(),
+                            icu_year,
+                            mc_for_icu.as_deref(),
+                            mo_for_icu,
+                            new_d,
+                            &cal,
+                        ) {
+                            Some((iso_y, iso_m, iso_d)) => {
+                                if !iso_time_valid_f64(new_h, new_mi, new_s, new_ms, new_us, new_ns_f)
+                                {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid time"),
+                                    );
+                                }
+                                let (ch, cmi, cs, cms, cus, cns) = (
+                                    new_h as u8, new_mi as u8, new_s as u8,
+                                    new_ms as u16, new_us as u16, new_ns_f as u16,
+                                );
+                                if !iso_date_time_within_limits(
+                                    iso_y, iso_m, iso_d, ch, cmi, cs, cms, cus, cns,
+                                ) {
+                                    return Completion::Throw(
+                                        interp.create_range_error("DateTime outside valid range"),
+                                    );
+                                }
+                                return create_plain_date_time_result(
+                                    interp, iso_y, iso_m, iso_d, ch, cmi, cs, cms, cus, cns, &cal,
+                                );
+                            }
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_range_error("Invalid calendar date"),
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // ISO path - fields read in alphabetical order per spec
                 let mut has_any = false;
                 let (new_d, has_d) = match read_field_positive_int(interp, &item, "day", d) {
                     Ok(v) => v,
@@ -812,7 +966,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 has_any |= has_mc;
-                let (new_ns, has_ns) =
+                let (new_ns_f, has_ns) =
                     match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -849,7 +1003,7 @@ impl Interpreter {
                     if !iso_date_valid(new_y, new_m, new_d) {
                         return Completion::Throw(interp.create_range_error("Invalid date"));
                     }
-                    if !iso_time_valid_f64(new_h, new_mi, new_s, new_ms, new_us, new_ns) {
+                    if !iso_time_valid_f64(new_h, new_mi, new_s, new_ms, new_us, new_ns_f) {
                         return Completion::Throw(interp.create_range_error("Invalid time"));
                     }
                     let (ch, cmi, cs, cms, cus, cns) = (
@@ -858,7 +1012,7 @@ impl Interpreter {
                         new_s as u8,
                         new_ms as u16,
                         new_us as u16,
-                        new_ns as u16,
+                        new_ns_f as u16,
                     );
                     if !iso_date_time_within_limits(new_y, new_m, new_d, ch, cmi, cs, cms, cus, cns)
                     {
@@ -877,7 +1031,7 @@ impl Interpreter {
                     let cs = (new_s.max(0.0).min(59.0)) as u8;
                     let cms = (new_ms.max(0.0).min(999.0)) as u16;
                     let cus = (new_us.max(0.0).min(999.0)) as u16;
-                    let cns = (new_ns.max(0.0).min(999.0)) as u16;
+                    let cns = (new_ns_f.max(0.0).min(999.0)) as u16;
                     if !iso_date_time_within_limits(new_y, cm, cd, ch, cmi, cs, cms, cus, cns) {
                         return Completion::Throw(
                             interp.create_range_error("DateTime outside valid range"),
@@ -989,21 +1143,30 @@ impl Interpreter {
                     let rem_ns = ((total_ns % ns_per_day) + ns_per_day) % ns_per_day;
                     let (nh, nmi, nse, nms, nus, nns) = nanoseconds_to_time(rem_ns);
                     let total_days = (dur.3 as i32) * sign + extra_days;
-                    let (ry, rm, rd) = match super::add_iso_date_with_overflow(
-                        y,
-                        m,
-                        d,
-                        (dur.0 as i32) * sign,
-                        (dur.1 as i32) * sign,
-                        (dur.2 as i32) * sign,
-                        total_days,
-                        &overflow,
-                    ) {
-                        Ok(v) => v,
-                        Err(()) => {
-                            return Completion::Throw(interp.create_range_error(
-                                "Ambiguous date in add/subtract with reject overflow",
-                            ));
+                    let years = (dur.0 as i32) * sign;
+                    let months = (dur.1 as i32) * sign;
+                    let weeks = (dur.2 as i32) * sign;
+                    let (ry, rm, rd) = if cal != "iso8601" && (years != 0 || months != 0) {
+                        match super::add_calendar_date(
+                            y, m, d, years, months, weeks, total_days, &cal, &overflow,
+                        ) {
+                            Some(v) => v,
+                            None => {
+                                return Completion::Throw(interp.create_range_error(
+                                    "Date out of range",
+                                ));
+                            }
+                        }
+                    } else {
+                        match super::add_iso_date_with_overflow(
+                            y, m, d, years, months, weeks, total_days, &overflow,
+                        ) {
+                            Ok(v) => v,
+                            Err(()) => {
+                                return Completion::Throw(interp.create_range_error(
+                                    "Ambiguous date in add/subtract with reject overflow",
+                                ));
+                            }
                         }
                     };
                     if !super::iso_date_time_within_limits(ry, rm, rd, nh, nmi, nse, nms, nus, nns)
@@ -1026,7 +1189,7 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, this, args| {
-                    let (y1, m1, d1, h1, mi1, s1, ms1, us1, ns1, _) =
+                    let (y1, m1, d1, h1, mi1, s1, ms1, us1, ns1, cal) =
                         match get_pdt_fields(interp, &this) {
                             Ok(v) => v,
                             Err(c) => return c,
@@ -1070,7 +1233,7 @@ impl Interpreter {
                         mut dms,
                         mut dus,
                         mut dns,
-                    ) = diff_date_time(y1, m1, d1, ns1_total, y2, m2, d2, ns2_total, &largest_unit);
+                    ) = diff_date_time(y1, m1, d1, ns1_total, y2, m2, d2, ns2_total, &largest_unit, &cal);
 
                     // Per spec: for since, negate rounding mode, round signed values, then negate result
                     let effective_mode = if sign == -1 {
@@ -2283,6 +2446,7 @@ fn diff_date_time(
     d2: u8,
     ns2: i128,
     largest_unit: &str,
+    calendar: &str,
 ) -> (i32, i32, i32, i32, i64, i64, i64, i64, i64, i64) {
     let time_units = matches!(
         largest_unit,
@@ -2394,15 +2558,41 @@ fn diff_date_time(
             ((y2, m2, d2), time_diff_ns)
         };
 
-        let (dy, dm, dw, dd) = difference_iso_date(
-            y1,
-            m1,
-            d1,
-            adjusted_end.0,
-            adjusted_end.1,
-            adjusted_end.2,
-            largest_unit,
-        );
+        let (dy, dm, dw, dd) = if calendar != "iso8601"
+            && matches!(largest_unit, "year" | "month")
+        {
+            match super::difference_calendar_date(
+                y1,
+                m1,
+                d1,
+                adjusted_end.0,
+                adjusted_end.1,
+                adjusted_end.2,
+                largest_unit,
+                calendar,
+            ) {
+                Some(v) => v,
+                None => difference_iso_date(
+                    y1,
+                    m1,
+                    d1,
+                    adjusted_end.0,
+                    adjusted_end.1,
+                    adjusted_end.2,
+                    largest_unit,
+                ),
+            }
+        } else {
+            difference_iso_date(
+                y1,
+                m1,
+                d1,
+                adjusted_end.0,
+                adjusted_end.1,
+                adjusted_end.2,
+                largest_unit,
+            )
+        };
 
         // Decompose time_ns (may be negative)
         let h = time_ns / 3_600_000_000_000;

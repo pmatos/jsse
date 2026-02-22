@@ -2575,22 +2575,33 @@ fn zdt_add_subtract(
     // Date part: add years/months/weeks/days relative to local date
     let (y, m, d, h, mi, s, ms, us, nanos) = epoch_ns_to_components(&ns, &tz);
 
+    let sy = (years * sign as f64) as i32;
+    let sm = (months * sign as f64) as i32;
+    let sw = (weeks * sign as f64) as i32;
+    let sd = (days * sign as f64) as i32;
     let (ny, nm, nd) = if years != 0.0 || months != 0.0 || weeks != 0.0 || days != 0.0 {
-        match super::add_iso_date_with_overflow(
-            y,
-            m,
-            d,
-            (years * sign as f64) as i32,
-            (months * sign as f64) as i32,
-            (weeks * sign as f64) as i32,
-            (days * sign as f64) as i32,
-            &overflow,
-        ) {
-            Ok(v) => v,
-            Err(()) => {
-                return Completion::Throw(
-                    interp.create_range_error("day is out of range for the resulting month"),
-                );
+        if cal != "iso8601" && (sy != 0 || sm != 0) {
+            match super::add_calendar_date(y, m, d, sy, sm, sw, sd, &cal, &overflow) {
+                Some(v) => v,
+                None => match super::add_iso_date_with_overflow(y, m, d, sy, sm, sw, sd, &overflow)
+                {
+                    Ok(v) => v,
+                    Err(()) => {
+                        return Completion::Throw(
+                            interp
+                                .create_range_error("day is out of range for the resulting month"),
+                        );
+                    }
+                },
+            }
+        } else {
+            match super::add_iso_date_with_overflow(y, m, d, sy, sm, sw, sd, &overflow) {
+                Ok(v) => v,
+                Err(()) => {
+                    return Completion::Throw(
+                        interp.create_range_error("day is out of range for the resulting month"),
+                    );
+                }
             }
         }
     } else {
@@ -2628,7 +2639,7 @@ fn zdt_until_since(
     args: &[JsValue],
     sign: i32,
 ) -> Completion {
-    let (ns1, tz, _cal) = match get_zdt_fields(interp, this) {
+    let (ns1, tz, cal) = match get_zdt_fields(interp, this) {
         Ok(v) => v,
         Err(c) => return c,
     };
@@ -2758,7 +2769,18 @@ fn zdt_until_since(
 
         // dateUntil from this's perspective (asymmetric)
         let (mut dy, mut dm, mut dw, dd) =
-            super::difference_iso_date(ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit);
+            if cal != "iso8601" && matches!(largest_unit.as_str(), "year" | "month") {
+                match super::difference_calendar_date(
+                    ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit, &cal,
+                ) {
+                    Some(v) => v,
+                    None => super::difference_iso_date(
+                        ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit,
+                    ),
+                }
+            } else {
+                super::difference_iso_date(ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit)
+            };
         let mut dd = dd as i64;
 
         // Decompose time remainder (already signed, same direction as date components)
