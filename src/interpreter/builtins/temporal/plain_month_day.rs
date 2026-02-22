@@ -809,6 +809,7 @@ impl Interpreter {
     }
 }
 
+#[allow(dead_code)]
 fn get_opt_u8(
     interp: &mut Interpreter,
     obj: &JsValue,

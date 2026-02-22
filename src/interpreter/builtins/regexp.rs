@@ -206,6 +206,7 @@ fn to_regex_input(interp: &mut Interpreter, val: &JsValue) -> Result<String, JsV
     }
 }
 
+#[allow(dead_code)]
 fn escape_regexp_pattern(source: &str) -> String {
     if source.is_empty() {
         return "(?:)".to_string();

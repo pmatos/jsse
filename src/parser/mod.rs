@@ -203,6 +203,7 @@ impl<'a> Parser<'a> {
         self.allow_super_property = true;
     }
 
+    #[allow(dead_code)]
     pub fn set_eval_allow_super_call(&mut self) {
         self.allow_super_call = true;
     }

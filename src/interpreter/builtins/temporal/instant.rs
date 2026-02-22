@@ -7,6 +7,7 @@ use num_bigint::BigInt;
 
 const NS_MAX: i128 = 8_640_000_000_000_000_000_000; // ±8.64×10²¹
 const NS_PER_MS: i128 = 1_000_000;
+#[allow(dead_code)]
 const NS_PER_US: i128 = 1_000;
 
 pub(super) fn is_valid_epoch_ns(ns: &BigInt) -> bool {
@@ -1492,6 +1493,7 @@ fn find_offset_in_time(time: &str) -> Option<usize> {
 }
 
 /// Legacy wrapper for non-validated timezone parsing (used by ZDT etc.)
+#[allow(dead_code)]
 fn parse_timezone_offset(s: &str) -> (String, i64) {
     if s == "UTC" {
         return ("UTC".to_string(), 0);

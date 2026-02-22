@@ -2663,6 +2663,7 @@ fn format_number(v: f64) -> String {
     }
 }
 
+#[allow(dead_code)]
 pub(super) fn unbalance_time_ns(
     total_ns: f64,
     largest_unit: &str,
@@ -2751,6 +2752,7 @@ fn unbalance_time_ns_i128(
 // Balance time portion of a duration after add/subtract.
 // Per spec: AddDurations converts day+time to total nanoseconds,
 // then re-balances up to the largest unit present in either operand.
+#[allow(dead_code)]
 pub(crate) fn balance_duration_relative(
     years: f64,
     months: f64,

@@ -1055,6 +1055,7 @@ fn parse_time_string(
     }
 }
 
+#[allow(dead_code)]
 fn get_time_field(
     interp: &mut Interpreter,
     obj: &JsValue,

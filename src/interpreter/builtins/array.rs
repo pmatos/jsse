@@ -145,6 +145,7 @@ fn obj_set_throw(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_data_property(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
     let _ = create_data_property_or_throw(interp, o, key, value);
 }

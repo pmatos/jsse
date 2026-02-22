@@ -5347,6 +5347,7 @@ impl Interpreter {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn iterator_next_with_value(
         &mut self,
         iterator: &JsValue,

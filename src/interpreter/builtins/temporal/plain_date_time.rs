@@ -2152,6 +2152,7 @@ fn get_constructor_field_u16(
     }
 }
 
+#[allow(dead_code)]
 fn get_date_field_i32(
     interp: &mut Interpreter,
     obj: &JsValue,
@@ -2169,6 +2170,7 @@ fn get_date_field_i32(
     }
 }
 
+#[allow(dead_code)]
 fn get_date_field_u8(
     interp: &mut Interpreter,
     obj: &JsValue,
@@ -2186,6 +2188,7 @@ fn get_date_field_u8(
     }
 }
 
+#[allow(dead_code)]
 fn get_date_field_u16(
     interp: &mut Interpreter,
     obj: &JsValue,

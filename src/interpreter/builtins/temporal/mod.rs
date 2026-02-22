@@ -316,6 +316,7 @@ pub(crate) fn max_rounding_increment(unit: &str) -> Option<u64> {
 /// Coerce and validate a rounding increment value.
 /// For since/until and PlainTime/PlainDateTime.round: uses max_rounding_increment (exclusive).
 /// `is_difference`: true for since/until, false for round.
+#[allow(dead_code)]
 pub(crate) fn validate_rounding_increment(
     interp: &mut Interpreter,
     inc_val: &JsValue,
@@ -343,6 +344,7 @@ pub(crate) fn validate_rounding_increment(
 }
 
 /// For Instant.round: only requires increment to divide evenly into a solar day.
+#[allow(dead_code)]
 pub(crate) fn validate_rounding_increment_day_divisible(
     interp: &mut Interpreter,
     inc_val: &JsValue,
@@ -378,6 +380,7 @@ pub(crate) fn coerce_rounding_increment(
     Ok(int_inc)
 }
 
+#[allow(dead_code)]
 fn check_day_divisibility(
     interp: &mut Interpreter,
     int_inc: f64,
@@ -625,6 +628,7 @@ pub(crate) fn iso_week_of_year(year: i32, month: u8, day: u8) -> (u8, i32) {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn balance_time(
     hour: i64,
     minute: i64,
@@ -2510,6 +2514,7 @@ pub(crate) fn to_integer_if_integral(v: f64) -> Option<f64> {
 }
 
 // Format fractional seconds for toString
+#[allow(dead_code)]
 pub(crate) fn format_fractional_seconds(
     seconds: u8,
     millisecond: u16,
@@ -2624,6 +2629,7 @@ pub(crate) fn resolve_month_fields(
 }
 
 /// Convenience: read + resolve in one step (for callers where ordering doesn't matter).
+#[allow(dead_code)]
 pub(crate) fn resolve_month_with_code(
     interp: &mut Interpreter,
     obj: &JsValue,
@@ -2707,6 +2713,7 @@ pub(crate) fn default_largest_unit_for_duration(
 
 // Larger temporal unit ordering
 /// DateDurationSign: returns the sign of a date duration's components.
+#[allow(dead_code)]
 pub(crate) fn duration_date_sign(years: i32, months: i32, weeks: i32, days: i32) -> i32 {
     for &v in &[years, months, weeks, days] {
         if v > 0 {

@@ -2635,9 +2635,13 @@ fn zdt_until_since(
         let mut day_correction: i32 = if time_diff_sign == poly_sign { 1 } else { 0 };
         let max_correction = if poly_sign == -1 { 2 } else { 1 };
 
+        #[allow(unused_assignments)]
         let mut time_remainder: i128 = 0;
+        #[allow(unused_assignments)]
         let mut adj_oy = oy;
+        #[allow(unused_assignments)]
         let mut adj_om = om;
+        #[allow(unused_assignments)]
         let mut adj_od = od;
 
         loop {

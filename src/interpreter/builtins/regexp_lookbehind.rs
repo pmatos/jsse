@@ -1877,6 +1877,7 @@ fn regex_escape_for_js(s: &str) -> String {
 /// Used when lookbehind captures are referenced by external backrefs,
 /// which means fancy-regex might backtrack into the lookbehind (violating spec).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LookbehindVerifyInfo {
     pub positive: bool,
     pub content: String,

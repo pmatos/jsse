@@ -2706,6 +2706,7 @@ impl Interpreter {
             .insert_builtin("keys".to_string(), keys_fn);
     }
 
+    #[allow(dead_code)]
     fn create_array_from_ta(&mut self, ta: &TypedArrayInfo) -> Rc<RefCell<JsObjectData>> {
         let elems: Vec<JsValue> = (0..typed_array_length(ta))
             .map(|i| typed_array_get_index(ta, i))
@@ -3836,6 +3837,7 @@ impl Interpreter {
 
     /// TypedArrayCreateSameType(exemplar, argumentList) — §23.2.4.3
     /// Creates a new TypedArray of the same kind, without using @@species.
+    #[allow(dead_code)]
     fn typed_array_create_same_type(
         &mut self,
         exemplar_kind: TypedArrayKind,

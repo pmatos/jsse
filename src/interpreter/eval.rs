@@ -976,7 +976,6 @@ impl Interpreter {
 
                 self.call_function(&func_val, &this_val, &call_args)
             }
-            _ => Completion::Normal(JsValue::Undefined),
         }
     }
 
@@ -1018,6 +1017,7 @@ impl Interpreter {
         }
     }
 
+    #[allow(dead_code)]
     fn eval_optional_chain_tail(
         &mut self,
         base_val: &JsValue,
@@ -1388,6 +1388,7 @@ impl Interpreter {
         }
     }
 
+    #[allow(dead_code)]
     fn is_regexp(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
             && let Some(obj) = self.get_object(o.id)
