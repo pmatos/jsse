@@ -2113,16 +2113,238 @@ pub(crate) fn offset_string_to_ns(s: &str) -> i128 {
     sign * (hours * 3_600_000_000_000 + minutes * 60_000_000_000)
 }
 
-/// Check if a string is a valid IANA timezone name (simplified).
-/// Resolve an IANA timezone name, returning the canonical name if valid.
+/// Return the primary/canonical IANA timezone identifier for a given timezone name.
+/// Link names are resolved to their primary zone (e.g., US/Pacific → America/Los_Angeles).
+pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
+    static LINK_MAP: &[(&str, &str)] = &[
+        // UTC aliases
+        ("Etc/GMT", "UTC"), ("Etc/UTC", "UTC"), ("Etc/GMT+0", "UTC"),
+        ("Etc/GMT-0", "UTC"), ("Etc/GMT0", "UTC"), ("Etc/Greenwich", "UTC"),
+        ("Etc/UCT", "UTC"), ("Etc/Universal", "UTC"), ("Etc/Zulu", "UTC"),
+        ("GMT", "UTC"), ("GMT+0", "UTC"), ("GMT-0", "UTC"), ("GMT0", "UTC"),
+        ("Greenwich", "UTC"), ("UCT", "UTC"), ("Universal", "UTC"), ("Zulu", "UTC"),
+        // Africa
+        ("Africa/Asmera", "Africa/Asmara"), ("Africa/Timbuktu", "Africa/Bamako"),
+        ("Africa/Accra", "Africa/Abidjan"), ("Africa/Bamako", "Africa/Abidjan"),
+        ("Africa/Banjul", "Africa/Abidjan"), ("Africa/Conakry", "Africa/Abidjan"),
+        ("Africa/Dakar", "Africa/Abidjan"), ("Africa/Freetown", "Africa/Abidjan"),
+        ("Africa/Lome", "Africa/Abidjan"), ("Africa/Nouakchott", "Africa/Abidjan"),
+        ("Africa/Ouagadougou", "Africa/Abidjan"), ("Atlantic/St_Helena", "Africa/Abidjan"),
+        ("Africa/Addis_Ababa", "Africa/Nairobi"), ("Africa/Asmara", "Africa/Nairobi"),
+        ("Africa/Dar_es_Salaam", "Africa/Nairobi"), ("Africa/Djibouti", "Africa/Nairobi"),
+        ("Africa/Kampala", "Africa/Nairobi"), ("Africa/Mogadishu", "Africa/Nairobi"),
+        ("Indian/Antananarivo", "Africa/Nairobi"), ("Indian/Comoro", "Africa/Nairobi"),
+        ("Indian/Mayotte", "Africa/Nairobi"),
+        ("Africa/Blantyre", "Africa/Maputo"), ("Africa/Bujumbura", "Africa/Maputo"),
+        ("Africa/Gaborone", "Africa/Maputo"), ("Africa/Harare", "Africa/Maputo"),
+        ("Africa/Kigali", "Africa/Maputo"), ("Africa/Lubumbashi", "Africa/Maputo"),
+        ("Africa/Lusaka", "Africa/Maputo"),
+        ("Africa/Bangui", "Africa/Lagos"), ("Africa/Brazzaville", "Africa/Lagos"),
+        ("Africa/Douala", "Africa/Lagos"), ("Africa/Kinshasa", "Africa/Lagos"),
+        ("Africa/Libreville", "Africa/Lagos"), ("Africa/Luanda", "Africa/Lagos"),
+        ("Africa/Malabo", "Africa/Lagos"), ("Africa/Niamey", "Africa/Lagos"),
+        ("Africa/Porto-Novo", "Africa/Lagos"),
+        ("Africa/Maseru", "Africa/Johannesburg"), ("Africa/Mbabane", "Africa/Johannesburg"),
+        // Americas
+        ("America/Argentina/ComodRivadavia", "America/Argentina/Catamarca"),
+        ("America/Atka", "America/Adak"),
+        ("America/Buenos_Aires", "America/Argentina/Buenos_Aires"),
+        ("America/Catamarca", "America/Argentina/Catamarca"),
+        ("America/Coral_Harbour", "America/Atikokan"),
+        ("America/Cordoba", "America/Argentina/Cordoba"),
+        ("America/Ensenada", "America/Tijuana"),
+        ("America/Fort_Wayne", "America/Indiana/Indianapolis"),
+        ("America/Godthab", "America/Nuuk"),
+        ("America/Indianapolis", "America/Indiana/Indianapolis"),
+        ("America/Jujuy", "America/Argentina/Jujuy"),
+        ("America/Knox_IN", "America/Indiana/Knox"),
+        ("America/Louisville", "America/Kentucky/Louisville"),
+        ("America/Mendoza", "America/Argentina/Mendoza"),
+        ("America/Montreal", "America/Toronto"), ("America/Nipigon", "America/Toronto"),
+        ("America/Pangnirtung", "America/Iqaluit"),
+        ("America/Porto_Acre", "America/Rio_Branco"),
+        ("America/Rainy_River", "America/Winnipeg"),
+        ("America/Rosario", "America/Argentina/Cordoba"),
+        ("America/Santa_Isabel", "America/Tijuana"),
+        ("America/Shiprock", "America/Denver"),
+        ("America/Thunder_Bay", "America/Toronto"),
+        ("America/Virgin", "America/St_Thomas"),
+        ("America/Yellowknife", "America/Edmonton"),
+        ("America/Creston", "America/Phoenix"),
+        ("America/Nassau", "America/Toronto"),
+        ("America/Atikokan", "America/Panama"),
+        ("America/Cayman", "America/Panama"),
+        ("America/Anguilla", "America/Puerto_Rico"),
+        ("America/Antigua", "America/Puerto_Rico"),
+        ("America/Aruba", "America/Puerto_Rico"),
+        ("America/Curacao", "America/Puerto_Rico"),
+        ("America/Blanc-Sablon", "America/Puerto_Rico"),
+        ("America/Dominica", "America/Puerto_Rico"),
+        ("America/Grenada", "America/Puerto_Rico"),
+        ("America/Guadeloupe", "America/Puerto_Rico"),
+        ("America/Kralendijk", "America/Puerto_Rico"),
+        ("America/Lower_Princes", "America/Puerto_Rico"),
+        ("America/Marigot", "America/Puerto_Rico"),
+        ("America/Montserrat", "America/Puerto_Rico"),
+        ("America/Port_of_Spain", "America/Puerto_Rico"),
+        ("America/St_Barthelemy", "America/Puerto_Rico"),
+        ("America/St_Kitts", "America/Puerto_Rico"),
+        ("America/St_Lucia", "America/Puerto_Rico"),
+        ("America/St_Thomas", "America/Puerto_Rico"),
+        ("America/St_Vincent", "America/Puerto_Rico"),
+        ("America/Tortola", "America/Puerto_Rico"),
+        // US
+        ("US/Alaska", "America/Anchorage"), ("US/Aleutian", "America/Adak"),
+        ("US/Arizona", "America/Phoenix"), ("US/Central", "America/Chicago"),
+        ("US/East-Indiana", "America/Indiana/Indianapolis"),
+        ("US/Eastern", "America/New_York"), ("US/Hawaii", "Pacific/Honolulu"),
+        ("US/Indiana-Starke", "America/Indiana/Knox"),
+        ("US/Michigan", "America/Detroit"), ("US/Mountain", "America/Denver"),
+        ("US/Pacific", "America/Los_Angeles"), ("US/Samoa", "Pacific/Pago_Pago"),
+        // Asia
+        ("Asia/Ashkhabad", "Asia/Ashgabat"), ("Asia/Calcutta", "Asia/Kolkata"),
+        ("Asia/Choibalsan", "Asia/Ulaanbaatar"),
+        ("Asia/Chongqing", "Asia/Shanghai"), ("Asia/Chungking", "Asia/Shanghai"),
+        ("Asia/Dacca", "Asia/Dhaka"), ("Asia/Harbin", "Asia/Shanghai"),
+        ("Asia/Istanbul", "Europe/Istanbul"), ("Asia/Kashgar", "Asia/Urumqi"),
+        ("Asia/Katmandu", "Asia/Kathmandu"), ("Asia/Macao", "Asia/Macau"),
+        ("Asia/Rangoon", "Asia/Yangon"), ("Asia/Saigon", "Asia/Ho_Chi_Minh"),
+        ("Asia/Tel_Aviv", "Asia/Jerusalem"), ("Asia/Thimbu", "Asia/Thimphu"),
+        ("Asia/Ujung_Pandang", "Asia/Makassar"), ("Asia/Ulan_Bator", "Asia/Ulaanbaatar"),
+        ("Antarctica/Syowa", "Asia/Riyadh"), ("Asia/Aden", "Asia/Riyadh"),
+        ("Asia/Bahrain", "Asia/Qatar"), ("Asia/Kuwait", "Asia/Riyadh"),
+        ("Asia/Phnom_Penh", "Asia/Bangkok"), ("Asia/Vientiane", "Asia/Bangkok"),
+        ("Asia/Muscat", "Asia/Dubai"),
+        ("Asia/Brunei", "Asia/Kuching"),
+        ("Asia/Kuala_Lumpur", "Asia/Singapore"),
+        // Europe
+        ("Europe/Belfast", "Europe/London"),
+        ("Europe/Kiev", "Europe/Kyiv"),
+        ("Europe/Nicosia", "Asia/Nicosia"),
+        ("Europe/Tiraspol", "Europe/Chisinau"),
+        ("Europe/Uzhgorod", "Europe/Kyiv"),
+        ("Europe/Zaporozhye", "Europe/Kyiv"),
+        ("Europe/Jersey", "Europe/London"), ("Europe/Guernsey", "Europe/London"),
+        ("Europe/Isle_of_Man", "Europe/London"),
+        ("Europe/Mariehamn", "Europe/Helsinki"),
+        ("Europe/Busingen", "Europe/Zurich"),
+        ("Europe/Vatican", "Europe/Rome"), ("Europe/San_Marino", "Europe/Rome"),
+        ("Europe/Vaduz", "Europe/Zurich"),
+        ("Arctic/Longyearbyen", "Europe/Oslo"),
+        ("Europe/Ljubljana", "Europe/Belgrade"),
+        ("Europe/Podgorica", "Europe/Belgrade"),
+        ("Europe/Sarajevo", "Europe/Belgrade"),
+        ("Europe/Skopje", "Europe/Belgrade"),
+        ("Europe/Zagreb", "Europe/Belgrade"),
+        ("Europe/Bratislava", "Europe/Prague"),
+        ("Europe/Amsterdam", "Europe/Brussels"),
+        ("Europe/Copenhagen", "Europe/Berlin"),
+        ("Europe/Luxembourg", "Europe/Brussels"),
+        ("Europe/Monaco", "Europe/Paris"),
+        ("Europe/Oslo", "Europe/Berlin"),
+        ("Europe/Stockholm", "Europe/Berlin"),
+        // Australia
+        ("Antarctica/South_Pole", "Antarctica/McMurdo"),
+        ("Australia/ACT", "Australia/Sydney"), ("Australia/Canberra", "Australia/Sydney"),
+        ("Australia/Currie", "Australia/Hobart"),
+        ("Australia/LHI", "Australia/Lord_Howe"),
+        ("Australia/NSW", "Australia/Sydney"), ("Australia/North", "Australia/Darwin"),
+        ("Australia/Queensland", "Australia/Brisbane"),
+        ("Australia/South", "Australia/Adelaide"),
+        ("Australia/Tasmania", "Australia/Hobart"),
+        ("Australia/Victoria", "Australia/Melbourne"),
+        ("Australia/West", "Australia/Perth"),
+        ("Australia/Yancowinna", "Australia/Broken_Hill"),
+        ("Antarctica/McMurdo", "Pacific/Auckland"),
+        ("Antarctica/DumontDUrville", "Pacific/Port_Moresby"),
+        // Pacific
+        ("Pacific/Enderbury", "Pacific/Kanton"),
+        ("Pacific/Johnston", "Pacific/Honolulu"),
+        ("Pacific/Ponape", "Pacific/Pohnpei"),
+        ("Pacific/Samoa", "Pacific/Pago_Pago"),
+        ("Pacific/Truk", "Pacific/Chuuk"), ("Pacific/Yap", "Pacific/Chuuk"),
+        ("Pacific/Saipan", "Pacific/Guam"),
+        ("Pacific/Midway", "Pacific/Pago_Pago"),
+        ("Pacific/Chuuk", "Pacific/Port_Moresby"),
+        ("Pacific/Funafuti", "Pacific/Tarawa"),
+        ("Pacific/Majuro", "Pacific/Tarawa"),
+        ("Pacific/Pohnpei", "Pacific/Guadalcanal"),
+        ("Pacific/Wake", "Pacific/Tarawa"),
+        ("Pacific/Wallis", "Pacific/Tarawa"),
+        // Brazil / Canada / Chile / Mexico
+        ("Brazil/Acre", "America/Rio_Branco"), ("Brazil/DeNoronha", "America/Noronha"),
+        ("Brazil/East", "America/Sao_Paulo"), ("Brazil/West", "America/Manaus"),
+        ("Canada/Atlantic", "America/Halifax"), ("Canada/Central", "America/Winnipeg"),
+        ("Canada/Eastern", "America/Toronto"), ("Canada/Mountain", "America/Edmonton"),
+        ("Canada/Newfoundland", "America/St_Johns"),
+        ("Canada/Pacific", "America/Vancouver"),
+        ("Canada/Saskatchewan", "America/Regina"),
+        ("Canada/Yukon", "America/Whitehorse"),
+        ("Chile/Continental", "America/Santiago"),
+        ("Chile/EasterIsland", "Pacific/Easter"),
+        ("Mexico/BajaNorte", "America/Tijuana"),
+        ("Mexico/BajaSur", "America/Mazatlan"),
+        ("Mexico/General", "America/Mexico_City"),
+        // Country names
+        ("Cuba", "America/Havana"), ("Egypt", "Africa/Cairo"),
+        ("Eire", "Europe/Dublin"), ("Hongkong", "Asia/Hong_Kong"),
+        ("Iceland", "Atlantic/Reykjavik"), ("Iran", "Asia/Tehran"),
+        ("Israel", "Asia/Jerusalem"), ("Jamaica", "America/Jamaica"),
+        ("Japan", "Asia/Tokyo"), ("Kwajalein", "Pacific/Kwajalein"),
+        ("Libya", "Africa/Tripoli"), ("NZ", "Pacific/Auckland"),
+        ("NZ-CHAT", "Pacific/Chatham"), ("Navajo", "America/Denver"),
+        ("PRC", "Asia/Shanghai"), ("Poland", "Europe/Warsaw"),
+        ("Portugal", "Europe/Lisbon"), ("ROC", "Asia/Taipei"),
+        ("ROK", "Asia/Seoul"), ("Singapore", "Asia/Singapore"),
+        ("Turkey", "Europe/Istanbul"), ("W-SU", "Europe/Moscow"),
+        ("GB", "Europe/London"), ("GB-Eire", "Europe/London"),
+        // POSIX-style
+        ("CET", "Europe/Brussels"), ("CST6CDT", "America/Chicago"),
+        ("EET", "Europe/Athens"), ("EST", "America/Panama"),
+        ("EST5EDT", "America/New_York"), ("HST", "Pacific/Honolulu"),
+        ("MET", "Europe/Brussels"), ("MST", "America/Phoenix"),
+        ("MST7MDT", "America/Denver"), ("PST8PDT", "America/Los_Angeles"),
+        ("WET", "Europe/Lisbon"),
+        // Indian
+        ("Indian/Christmas", "Asia/Bangkok"), ("Indian/Cocos", "Asia/Yangon"),
+        ("Indian/Kerguelen", "Indian/Maldives"),
+        ("Indian/Mahe", "Asia/Dubai"), ("Indian/Reunion", "Asia/Dubai"),
+        // Antarctica
+        ("Antarctica/Davis", "Asia/Bangkok"),
+        ("Antarctica/Mawson", "Indian/Maldives"),
+        ("Antarctica/Rothera", "America/Noronha"),
+        ("Antarctica/Vostok", "Asia/Urumqi"),
+        ("Atlantic/Jan_Mayen", "Arctic/Longyearbyen"),
+        ("Atlantic/Faeroe", "Atlantic/Faroe"),
+        ("Atlantic/Reykjavik", "Africa/Abidjan"),
+    ];
+    let mut current = s.to_string();
+    for _ in 0..5 {
+        let lower = current.to_ascii_lowercase();
+        let mut found = false;
+        for &(link, primary) in LINK_MAP {
+            if link.eq_ignore_ascii_case(&lower) {
+                current = primary.to_string();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+    if current != s {
+        return current;
+    }
+    // Not a link name — return the properly-cased version
+    resolve_iana_timezone(s).unwrap_or_else(|| s.to_string())
+}
+
+/// Resolve an IANA timezone name, returning the properly-cased name if valid.
 /// Uses chrono-tz's database for case-insensitive matching.
 fn resolve_iana_timezone(s: &str) -> Option<String> {
     if s.is_empty() {
         return None;
-    }
-    let lower = s.to_ascii_lowercase();
-    if lower == "utc" || lower == "etc/utc" || lower == "etc/gmt" {
-        return Some("UTC".to_string());
     }
     // Fast path: try exact parse (case-sensitive hash lookup)
     use chrono_tz::Tz;

@@ -1776,7 +1776,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let tz_equal = tz.eq_ignore_ascii_case(&otz)
-                        || super::normalize_tz_id(&tz) == super::normalize_tz_id(&otz);
+                        || super::canonicalize_iana_tz(&tz) == super::canonicalize_iana_tz(&otz);
                     Completion::Normal(JsValue::Boolean(ns == ons && tz_equal && cal == ocal))
                 },
             ));
@@ -3132,7 +3132,7 @@ fn zdt_until_since(
         Completion::Normal(v) => v,
         c => return c,
     };
-    let (ns2, _tz2, _cal2) = match get_zdt_fields(interp, &other_val) {
+    let (ns2, tz2, _cal2) = match get_zdt_fields(interp, &other_val) {
         Ok(v) => v,
         Err(c) => return c,
     };
@@ -3155,6 +3155,18 @@ fn zdt_until_since(
             Ok(v) => v,
             Err(c) => return c,
         };
+
+    // Per spec: TimeZoneEquals check only when largestUnit is day or larger
+    if matches!(largest_unit.as_str(), "year" | "month" | "week" | "day") {
+        let tz_match = tz.eq_ignore_ascii_case(&tz2)
+            || super::canonicalize_iana_tz(&tz) == super::canonicalize_iana_tz(&tz2);
+        if !tz_match {
+            return Completion::Throw(interp.create_range_error(&format!(
+                "Time zones '{}' and '{}' are not equal",
+                tz, tz2
+            )));
+        }
+    }
 
     let diff_ns: i128 = {
         let n1: i128 = (&ns1).try_into().unwrap_or(0);
