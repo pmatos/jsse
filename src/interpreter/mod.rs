@@ -1877,9 +1877,7 @@ impl Interpreter {
                 .filter_map(|k| {
                     k.parse::<u32>()
                         .ok()
-                        .filter(|&idx| {
-                            idx.to_string() == *k && idx >= new_len && idx < old_len
-                        })
+                        .filter(|&idx| idx.to_string() == *k && idx >= new_len && idx < old_len)
                         .map(|idx| (idx, k.clone()))
                 })
                 .collect();
