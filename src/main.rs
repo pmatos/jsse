@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
 mod ast;
 pub(crate) mod emoji_strings;
 mod interpreter;
