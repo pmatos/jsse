@@ -1574,6 +1574,15 @@ impl JsObjectData {
         }
         // ArraySetLength (spec §10.4.2.1): reducing length deletes configurable properties
         if self.class_name == "Array" && key == "length" {
+            // Check if length is writable before allowing set
+            let len_writable = self
+                .properties
+                .get("length")
+                .map(|d| d.writable != Some(false))
+                .unwrap_or(true);
+            if !len_writable {
+                return false;
+            }
             if let JsValue::Number(new_len_f) = &value {
                 let new_len_u32 = *new_len_f as u32;
                 if (new_len_u32 as f64) == *new_len_f {
