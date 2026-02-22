@@ -341,6 +341,145 @@ pub(crate) fn calendar_fields_to_iso(
     ))
 }
 
+/// Convert a calendar month code + day into an ISO date for PlainMonthDay.
+///
+/// The reference ISO year is chosen as the latest ISO year ≤ 1972 where the
+/// calendar date (month_code, day) exists. This matches the spec behavior for
+/// Temporal.PlainMonthDay.
+///
+/// When `year_hint` is provided (from the property bag's `year` field), it's used
+/// for validation: in reject mode, the day must be valid in that specific year;
+/// in constrain mode, the day is clamped to valid range for that year. Either way,
+/// the stored reference year uses the 1972-or-earlier rule.
+///
+/// Returns (iso_year, iso_month, iso_day) or None if invalid.
+pub(crate) fn calendar_month_day_to_iso(
+    month_code: &str,
+    day: u8,
+    year_hint: Option<i32>,
+    calendar_id: &str,
+    overflow: &str,
+) -> Option<(i32, u8, u8)> {
+    let kind = calendar_id_to_icu_kind(calendar_id)?;
+
+    // If a year_hint is provided, validate/constrain against it first
+    let actual_day = if let Some(hint_year) = year_hint {
+        let cal = AnyCalendar::new(kind);
+        let mut f = IcuDateFields::default();
+        f.extended_year = Some(hint_year);
+        f.month_code = Some(month_code.as_bytes());
+        f.day = Some(day);
+        if IcuDate::try_from_fields(f, Default::default(), cal).is_ok() {
+            // Day is valid in hint year
+            day
+        } else {
+            // Day doesn't fit in hint year
+            if overflow == "reject" {
+                return None;
+            }
+            // Constrain: find max days in this month for the hint year
+            let cal = AnyCalendar::new(kind);
+            let mut f = IcuDateFields::default();
+            f.extended_year = Some(hint_year);
+            f.month_code = Some(month_code.as_bytes());
+            f.day = Some(1);
+            if let Ok(temp) = IcuDate::try_from_fields(f, Default::default(), cal) {
+                day.min(temp.days_in_month()).max(1)
+            } else {
+                // Month code doesn't exist in hint year (e.g., M05L in non-leap)
+                if overflow == "reject" {
+                    return None;
+                }
+                day // will be further constrained below
+            }
+        }
+    } else {
+        day
+    };
+
+    // Now find the reference ISO year: latest ISO year ≤ 1972 where month_code+actual_day exists.
+    // Convert ISO 1972-07-01 to the calendar, then try multiple calendar years that could
+    // map to ISO years ≤ 1972.
+    let cal_1972 = AnyCalendar::new(kind);
+    let iso_ref = IcuDate::try_new_iso(1972, 7, 1).ok()?;
+    let cal_ref = iso_ref.to_any().to_calendar(cal_1972);
+    let base_cal_year = cal_ref.year().extended_year();
+
+    // Collect candidates: try calendar years from base+1 down to base-30
+    // For each, check if the month_code+day is valid and maps to ISO year ≤ 1972
+    let mut best: Option<(i32, u8, u8)> = None;
+    for cy in (base_cal_year - 30..=base_cal_year + 1).rev() {
+        let cal = AnyCalendar::new(kind);
+        let mut f = IcuDateFields::default();
+        f.extended_year = Some(cy);
+        f.month_code = Some(month_code.as_bytes());
+        f.day = Some(actual_day);
+        if let Ok(d) = IcuDate::try_from_fields(f, Default::default(), cal) {
+            let iso = d.to_iso();
+            let iso_result_year = iso.year().extended_year();
+            if iso_result_year <= 1972 {
+                let candidate = (iso_result_year, iso.month().ordinal, iso.day_of_month().0);
+                // Keep the latest (largest ISO year)
+                if best.is_none() || candidate.0 > best.unwrap().0
+                    || (candidate.0 == best.unwrap().0 && candidate > best.unwrap()) {
+                    best = Some(candidate);
+                }
+                // Once we have a result from iso_year=1972, we won't find better
+                if iso_result_year == 1972 {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    if best.is_some() {
+        return best;
+    }
+
+    // If no year_hint was given and we couldn't find anything in 1940-1972 range,
+    // try a broader search (needed for unusual month codes in lunisolar calendars)
+    if year_hint.is_none() && overflow == "constrain" {
+        // Find the maximum day for this month code across years near 1972
+        let cal_base = AnyCalendar::new(kind);
+        let iso_ref = IcuDate::try_new_iso(1972, 7, 1).ok()?;
+        let cal_date = iso_ref.to_any().to_calendar(cal_base);
+        let base_year = cal_date.year().extended_year();
+
+        let mut best_max = 0u8;
+        let mut best_year = base_year;
+        for offset in 0i32..=20 {
+            let years: Vec<i32> = if offset == 0 { vec![base_year] } else { vec![base_year + offset, base_year - offset] };
+            for &y in &years {
+                let cal = AnyCalendar::new(kind);
+                let mut f = IcuDateFields::default();
+                f.extended_year = Some(y);
+                f.month_code = Some(month_code.as_bytes());
+                f.day = Some(1);
+                if let Ok(temp) = IcuDate::try_from_fields(f, Default::default(), cal) {
+                    let md = temp.days_in_month();
+                    if md > best_max {
+                        best_max = md;
+                        best_year = y;
+                    }
+                }
+            }
+        }
+        if best_max > 0 {
+            let clamped = actual_day.min(best_max).max(1);
+            let cal = AnyCalendar::new(kind);
+            let mut fields = IcuDateFields::default();
+            fields.extended_year = Some(best_year);
+            fields.month_code = Some(month_code.as_bytes());
+            fields.day = Some(clamped);
+            if let Ok(d) = IcuDate::try_from_fields(fields, Default::default(), cal) {
+                let iso = d.to_iso();
+                return Some((iso.year().extended_year(), iso.month().ordinal, iso.day_of_month().0));
+            }
+        }
+    }
+
+    None
+}
+
 /// Add years/months/weeks/days to an ISO date using a non-ISO calendar for year/month arithmetic.
 /// Returns the resulting ISO date (y, m, d).
 pub(crate) fn add_calendar_date(

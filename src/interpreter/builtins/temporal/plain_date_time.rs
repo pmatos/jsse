@@ -120,6 +120,54 @@ pub(super) fn to_temporal_plain_date_time_with_overflow(
             }
             let (y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal) =
                 read_pdt_property_bag(interp, &item)?;
+
+            // Non-ISO calendar: convert calendar fields to ISO
+            if cal != "iso8601" {
+                let era_val = match super::get_prop(interp, &item, "era") {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                };
+                let era_year_val = match super::get_prop(interp, &item, "eraYear") {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                };
+                let has_era = !super::is_undefined(&era_val);
+                let has_era_year = !super::is_undefined(&era_year_val);
+
+                let (icu_era, icu_year) =
+                    if super::calendar_has_eras(&cal) && has_era && has_era_year {
+                        let era_str =
+                            super::to_primitive_and_require_string(interp, &era_val, "era")?;
+                        let ey =
+                            super::to_integer_with_truncation(interp, &era_year_val)? as i32;
+                        (Some(era_str), ey)
+                    } else if super::calendar_has_eras(&cal) && (has_era != has_era_year) {
+                        return Err(Completion::Throw(
+                            interp.create_type_error(
+                                "era and eraYear must both be present or both be absent",
+                            ),
+                        ));
+                    } else {
+                        (None, y_f as i32)
+                    };
+
+                if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso(
+                    icu_era.as_deref(),
+                    icu_year,
+                    mc_str.as_deref(),
+                    month_num.map(|v| v as u8),
+                    d_f as u8,
+                    &cal,
+                ) {
+                    return Ok((iso_y, iso_m, iso_d, h, mi, s, ms, us, ns, cal));
+                }
+                if overflow == "reject" {
+                    return Err(Completion::Throw(
+                        interp.create_range_error("Invalid calendar date"),
+                    ));
+                }
+            }
+
             apply_pdt_overflow(
                 interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, overflow,
             )
@@ -2261,6 +2309,76 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+
+                    // Non-ISO calendar: read era/eraYear and convert via ICU
+                    if cal != "iso8601" {
+                        let era_val = match super::get_prop(interp, &item, "era") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let era_year_val = match super::get_prop(interp, &item, "eraYear") {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let has_era = !super::is_undefined(&era_val);
+                        let has_era_year = !super::is_undefined(&era_year_val);
+
+                        let (icu_era, icu_year) =
+                            if super::calendar_has_eras(&cal) && has_era && has_era_year {
+                                let era_str = match super::to_primitive_and_require_string(
+                                    interp, &era_val, "era",
+                                ) {
+                                    Ok(v) => v,
+                                    Err(c) => return c,
+                                };
+                                let ey = match super::to_integer_with_truncation(
+                                    interp, &era_year_val,
+                                ) {
+                                    Ok(v) => v as i32,
+                                    Err(c) => return c,
+                                };
+                                (Some(era_str), ey)
+                            } else if super::calendar_has_eras(&cal) && (has_era != has_era_year) {
+                                return Completion::Throw(
+                                    interp.create_type_error(
+                                        "era and eraYear must both be present or both be absent",
+                                    ),
+                                );
+                            } else {
+                                (None, y_f as i32)
+                            };
+
+                        match super::calendar_fields_to_iso(
+                            icu_era.as_deref(),
+                            icu_year,
+                            mc_str.as_deref(),
+                            month_num.map(|v| v as u8),
+                            d_f as u8,
+                            &cal,
+                        ) {
+                            Some((iso_y, iso_m, iso_d)) => {
+                                if !super::iso_date_time_within_limits(
+                                    iso_y, iso_m, iso_d, h, mi, s, ms, us, ns,
+                                ) {
+                                    return Completion::Throw(
+                                        interp.create_range_error("DateTime outside valid ISO range"),
+                                    );
+                                }
+                                return create_plain_date_time_result(
+                                    interp, iso_y, iso_m, iso_d, h, mi, s, ms, us, ns, &cal,
+                                );
+                            }
+                            None => {
+                                if overflow == "reject" {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid calendar date"),
+                                    );
+                                }
+                                // Fall through to ISO path as constrain fallback
+                            }
+                        }
+                    }
+
                     let (y, m, d, h, mi, s, ms, us, ns, cal) = match apply_pdt_overflow(
                         interp, y_f, month_num, mc_str, d_f, h, mi, s, ms, us, ns, cal, &overflow,
                     ) {
