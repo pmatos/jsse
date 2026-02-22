@@ -703,8 +703,9 @@ struct DtfOptions {
     time_zone_name: Option<String>,
     date_style: Option<String>,
     time_style: Option<String>,
-    // True if user explicitly set any date/time component options (not DTF defaults)
     has_explicit_components: bool,
+    // Set when formatting a Temporal object to indicate reduced output
+    temporal_type: Option<TemporalType>,
 }
 
 fn locale_default_hour12(locale: &str) -> &'static str {
@@ -807,6 +808,28 @@ fn format_date_style(c: &DateComponents, style: &str, tz: &str) -> String {
         "medium" => format!("{} {}, {}", month_name_short(c.month), c.day, c.year),
         "short" => format!("{}/{}/{}", c.month, c.day, c.year % 100),
         _ => format!("{}/{}/{}", c.month, c.day, c.year),
+    }
+}
+
+fn format_reduced_date_style(c: &DateComponents, style: &str, has_year: bool, has_month: bool, has_day: bool) -> String {
+    if has_year && has_month && !has_day {
+        // PlainYearMonth: year + month, no day
+        match style {
+            "full" | "long" => format!("{} {}", month_name_long(c.month), c.year),
+            "medium" => format!("{} {}", month_name_short(c.month), c.year),
+            "short" => format!("{}/{}", c.month, c.year % 100),
+            _ => format!("{}/{}", c.month, c.year),
+        }
+    } else if !has_year && has_month && has_day {
+        // PlainMonthDay: month + day, no year
+        match style {
+            "full" | "long" => format!("{} {}", month_name_long(c.month), c.day),
+            "medium" => format!("{} {}", month_name_short(c.month), c.day),
+            "short" => format!("{}/{}", c.month, c.day),
+            _ => format!("{}/{}", c.month, c.day),
+        }
+    } else {
+        format_date_style(c, style, "")
     }
 }
 
@@ -948,14 +971,38 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
 
     // dateStyle/timeStyle shorthand
     if opts.date_style.is_some() || opts.time_style.is_some() {
-        let date_part = opts
-            .date_style
-            .as_ref()
-            .map(|ds| format_date_style(&c, ds, &opts.time_zone));
-        let time_part = opts
-            .time_style
+        // Check if Temporal type requires reduced date formatting
+        let need_reduced_date = opts.date_style.is_some()
+            && matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth) | Some(TemporalType::PlainMonthDay));
+
+        let date_part = if need_reduced_date {
+            None
+        } else {
+            opts.date_style
+                .as_ref()
+                .map(|ds| format_date_style(&c, ds, &opts.time_zone))
+        };
+
+        let effective_time_style = opts.time_style.as_ref().map(|ts| {
+            if opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
+                "medium".to_string()
+            } else {
+                ts.clone()
+            }
+        });
+        let time_part = effective_time_style
             .as_ref()
             .map(|ts| format_time_style(&c, ts, hc, &opts.time_zone));
+
+        if need_reduced_date {
+            let ds = opts.date_style.as_deref().unwrap_or("short");
+            let is_ym = matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth));
+            let reduced = format_reduced_date_style(&c, ds, is_ym || opts.year.is_some(), true, !is_ym);
+            return match time_part {
+                Some(t) => format!("{}, {}", reduced, t),
+                None => reduced,
+            };
+        }
 
         return match (date_part, time_part) {
             (Some(d), Some(t)) => format!("{}, {}", d, t),
@@ -2206,6 +2253,50 @@ fn format_date_style_to_parts(c: &DateComponents, style: &str) -> Vec<(String, S
     parts
 }
 
+fn format_reduced_date_style_to_parts(c: &DateComponents, style: &str, has_year: bool, has_month: bool, has_day: bool) -> Vec<(String, String)> {
+    let mut parts: Vec<(String, String)> = Vec::new();
+    if has_year && has_month && !has_day {
+        // PlainYearMonth: month + year
+        match style {
+            "full" | "long" => {
+                parts.push(("month".to_string(), month_name_long(c.month).to_string()));
+                parts.push(("literal".to_string(), " ".to_string()));
+                parts.push(("year".to_string(), c.year.to_string()));
+            }
+            "medium" => {
+                parts.push(("month".to_string(), month_name_short(c.month).to_string()));
+                parts.push(("literal".to_string(), " ".to_string()));
+                parts.push(("year".to_string(), c.year.to_string()));
+            }
+            _ => {
+                parts.push(("month".to_string(), c.month.to_string()));
+                parts.push(("literal".to_string(), "/".to_string()));
+                parts.push(("year".to_string(), format!("{}", c.year % 100)));
+            }
+        }
+    } else if !has_year && has_month && has_day {
+        // PlainMonthDay: month + day
+        match style {
+            "full" | "long" => {
+                parts.push(("month".to_string(), month_name_long(c.month).to_string()));
+                parts.push(("literal".to_string(), " ".to_string()));
+                parts.push(("day".to_string(), c.day.to_string()));
+            }
+            "medium" => {
+                parts.push(("month".to_string(), month_name_short(c.month).to_string()));
+                parts.push(("literal".to_string(), " ".to_string()));
+                parts.push(("day".to_string(), c.day.to_string()));
+            }
+            _ => {
+                parts.push(("month".to_string(), c.month.to_string()));
+                parts.push(("literal".to_string(), "/".to_string()));
+                parts.push(("day".to_string(), c.day.to_string()));
+            }
+        }
+    }
+    parts
+}
+
 fn format_time_style_to_parts(c: &DateComponents, style: &str, hc: &str, tz: &str) -> Vec<(String, String)> {
     let mut parts: Vec<(String, String)> = Vec::new();
     let (hour_str, period) = format_hour(c.hour, hc);
@@ -2308,14 +2399,28 @@ fn format_to_parts_with_options_raw(
     let mut parts: Vec<(String, String)> = Vec::new();
 
     if opts.date_style.is_some() || opts.time_style.is_some() {
-        if let Some(ref ds) = opts.date_style {
+        let need_reduced = opts.date_style.is_some()
+            && matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth) | Some(TemporalType::PlainMonthDay));
+        if need_reduced {
+            let ds = opts.date_style.as_deref().unwrap_or("short");
+            let is_ym = matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth));
+            let rp = format_reduced_date_style_to_parts(&c, ds, is_ym || opts.year.is_some(), true, !is_ym);
+            parts.extend(rp);
+        } else if let Some(ref ds) = opts.date_style {
             let date_parts = format_date_style_to_parts(&c, ds);
             parts.extend(date_parts);
         }
-        if opts.date_style.is_some() && opts.time_style.is_some() {
+        let effective_ts = opts.time_style.as_ref().map(|ts| {
+            if opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
+                "medium".to_string()
+            } else {
+                ts.clone()
+            }
+        });
+        if (opts.date_style.is_some() || need_reduced) && effective_ts.is_some() {
             parts.push(("literal".to_string(), ", ".to_string()));
         }
-        if let Some(ref ts) = opts.time_style {
+        if let Some(ref ts) = effective_ts {
             let time_parts = format_time_style_to_parts(&c, ts, hc, &opts.time_zone);
             parts.extend(time_parts);
         }
@@ -2587,6 +2692,7 @@ fn extract_dtf_data(
                     date_style: date_style.clone(),
                     time_style: time_style.clone(),
                     has_explicit_components,
+                    temporal_type: None,
                 });
             }
         }
@@ -2667,10 +2773,70 @@ fn has_explicit_date_time_opts(opts: &DtfOptions) -> bool {
 }
 
 fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
-    if has_explicit_date_time_opts(opts) {
-        return opts.clone();
-    }
     let mut adjusted = opts.clone();
+    adjusted.temporal_type = Some(tt);
+
+    // When explicit components are set, filter out non-overlapping ones
+    if has_explicit_date_time_opts(opts) || opts.date_style.is_some() || opts.time_style.is_some() {
+        match tt {
+            TemporalType::PlainDate => {
+                // Remove time components
+                adjusted.hour = None;
+                adjusted.minute = None;
+                adjusted.second = None;
+                adjusted.fractional_second_digits = None;
+                adjusted.day_period = None;
+                adjusted.time_zone_name = None;
+                adjusted.time_style = None;
+            }
+            TemporalType::PlainTime => {
+                // Remove date components
+                adjusted.year = None;
+                adjusted.month = None;
+                adjusted.day = None;
+                adjusted.weekday = None;
+                adjusted.era = None;
+                adjusted.time_zone_name = None;
+                adjusted.date_style = None;
+            }
+            TemporalType::PlainYearMonth => {
+                // Keep only year, month, era
+                adjusted.day = None;
+                adjusted.weekday = None;
+                adjusted.hour = None;
+                adjusted.minute = None;
+                adjusted.second = None;
+                adjusted.fractional_second_digits = None;
+                adjusted.day_period = None;
+                adjusted.time_zone_name = None;
+                adjusted.time_style = None;
+            }
+            TemporalType::PlainMonthDay => {
+                // Keep only month, day
+                adjusted.year = None;
+                adjusted.era = None;
+                adjusted.weekday = None;
+                adjusted.hour = None;
+                adjusted.minute = None;
+                adjusted.second = None;
+                adjusted.fractional_second_digits = None;
+                adjusted.day_period = None;
+                adjusted.time_zone_name = None;
+                adjusted.time_style = None;
+            }
+            TemporalType::PlainDateTime => {
+                // Remove timeZoneName only
+                adjusted.time_zone_name = None;
+            }
+            TemporalType::Instant => {
+                // Instant formats like a full date/time, keep timeZoneName
+            }
+            TemporalType::ZonedDateTime => {}
+        }
+        return adjusted;
+    }
+
+    // No explicit components: set defaults based on Temporal type
     match tt {
         TemporalType::Instant | TemporalType::PlainDateTime | TemporalType::ZonedDateTime => {
             adjusted.year = Some("numeric".to_string());
@@ -2700,6 +2866,77 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
         }
     }
     adjusted
+}
+
+fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
+    // Returns true if there IS overlap (i.e., formatting is allowed).
+    // Instant and PlainDateTime overlap with everything.
+    if matches!(tt, TemporalType::Instant | TemporalType::PlainDateTime | TemporalType::ZonedDateTime) {
+        return true;
+    }
+
+    let type_has_date = matches!(tt, TemporalType::PlainDate | TemporalType::PlainYearMonth | TemporalType::PlainMonthDay);
+    let type_has_time = matches!(tt, TemporalType::PlainTime);
+
+    // Style-based overlap: any overlap with the type's field set is sufficient
+    if opts.date_style.is_some() || opts.time_style.is_some() {
+        // If dateStyle is present and type has date fields → overlap
+        if opts.date_style.is_some() && type_has_date {
+            return true;
+        }
+        // If timeStyle is present and type has time fields → overlap
+        if opts.time_style.is_some() && type_has_time {
+            return true;
+        }
+        // No style matches the type's fields
+        return false;
+    }
+
+    // Check explicit component options
+    let has_any_date_opt = opts.year.is_some() || opts.month.is_some() || opts.day.is_some()
+        || opts.weekday.is_some() || opts.era.is_some();
+    let has_any_time_opt = opts.hour.is_some() || opts.minute.is_some() || opts.second.is_some()
+        || opts.day_period.is_some() || opts.fractional_second_digits.is_some();
+
+    match tt {
+        TemporalType::PlainDate => {
+            if has_any_date_opt { return true; }
+            if has_any_time_opt && !has_any_date_opt { return false; }
+            true
+        }
+        TemporalType::PlainTime => {
+            if has_any_time_opt { return true; }
+            if has_any_date_opt && !has_any_time_opt { return false; }
+            true
+        }
+        TemporalType::PlainYearMonth => {
+            if opts.year.is_some() || opts.month.is_some() || opts.era.is_some() { return true; }
+            if opts.day.is_some() || opts.weekday.is_some() { return false; }
+            if has_any_time_opt { return false; }
+            true
+        }
+        TemporalType::PlainMonthDay => {
+            if opts.month.is_some() || opts.day.is_some() { return true; }
+            if opts.year.is_some() || opts.era.is_some() || opts.weekday.is_some() { return false; }
+            if has_any_time_opt { return false; }
+            true
+        }
+        _ => true,
+    }
+}
+
+fn adjust_plain_temporal_ms(ms: f64, tz: &str, tt: TemporalType) -> f64 {
+    // Plain temporal types have no timezone — their ISO fields represent local date/time.
+    // The formatter applies tz_offset_ms(tz) to convert from UTC to local.
+    // We counteract that by subtracting the offset so the result is the original fields.
+    match tt {
+        TemporalType::PlainDate | TemporalType::PlainTime | TemporalType::PlainDateTime
+        | TemporalType::PlainYearMonth | TemporalType::PlainMonthDay => {
+            ms - tz_offset_ms(tz)
+        }
+        // Instant and ZonedDateTime already encode a real UTC instant
+        TemporalType::Instant | TemporalType::ZonedDateTime => ms,
+    }
 }
 
 fn bigint_to_epoch_ms(epoch_nanoseconds: &num_bigint::BigInt) -> f64 {
@@ -2866,6 +3103,7 @@ impl Interpreter {
                                     date_style: date_style.clone(),
                                     time_style: time_style.clone(),
                                     has_explicit_components,
+                                    temporal_type: None,
                                 }
                             } else {
                                 return Completion::Throw(interp.create_type_error(
@@ -2891,6 +3129,13 @@ impl Interpreter {
                                     "Temporal.ZonedDateTime is not supported in DateTimeFormat format()",
                                 ));
                             }
+                            if let Some(tt) = temporal_type {
+                                if !check_temporal_overlap(&opts, tt) {
+                                    return Completion::Throw(interp2.create_type_error(
+                                        "Temporal object does not overlap with DateTimeFormat options",
+                                    ));
+                                }
+                            }
                             let ms = match resolve_date_value(interp2, &date_arg) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
@@ -2899,6 +3144,11 @@ impl Interpreter {
                                 adjust_opts_for_temporal(&opts, tt)
                             } else {
                                 opts.clone()
+                            };
+                            let ms = if let Some(tt) = temporal_type {
+                                adjust_plain_temporal_ms(ms, &effective_opts.time_zone, tt)
+                            } else {
+                                ms
                             };
                             let result = format_with_options(ms, &effective_opts);
                             Completion::Normal(JsValue::String(JsString::from_str(&result)))
@@ -2941,6 +3191,13 @@ impl Interpreter {
                         "Temporal.ZonedDateTime is not supported in DateTimeFormat formatToParts()",
                     ));
                 }
+                if let Some(tt) = temporal_type {
+                    if !check_temporal_overlap(&opts, tt) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Temporal object does not overlap with DateTimeFormat options",
+                        ));
+                    }
+                }
                 let ms = match resolve_date_value(interp, &date_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -2949,6 +3206,11 @@ impl Interpreter {
                     adjust_opts_for_temporal(&opts, tt)
                 } else {
                     opts
+                };
+                let ms = if let Some(tt) = temporal_type {
+                    adjust_plain_temporal_ms(ms, &effective_opts.time_zone, tt)
+                } else {
+                    ms
                 };
 
                 let parts = format_to_parts_with_options(ms, &effective_opts);
@@ -3018,6 +3280,21 @@ impl Interpreter {
                         "Temporal.ZonedDateTime is not supported in DateTimeFormat formatRange()",
                     ));
                 }
+                // Both args must be same Temporal type (or both non-Temporal)
+                if let (Some(stt), Some(ett)) = (start_tt, end_tt) {
+                    if std::mem::discriminant(&stt) != std::mem::discriminant(&ett) {
+                        return Completion::Throw(interp.create_type_error(
+                            "formatRange requires both arguments to be the same Temporal type",
+                        ));
+                    }
+                }
+                if let Some(tt) = start_tt.or(end_tt) {
+                    if !check_temporal_overlap(&opts, tt) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Temporal object does not overlap with DateTimeFormat options",
+                        ));
+                    }
+                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -3031,6 +3308,16 @@ impl Interpreter {
                     adjust_opts_for_temporal(&opts, tt)
                 } else {
                     opts
+                };
+                let start_ms = if let Some(tt) = start_tt {
+                    adjust_plain_temporal_ms(start_ms, &effective_opts.time_zone, tt)
+                } else {
+                    start_ms
+                };
+                let end_ms = if let Some(tt) = end_tt {
+                    adjust_plain_temporal_ms(end_ms, &effective_opts.time_zone, tt)
+                } else {
+                    end_ms
                 };
                 let result = format_range_with_options(start_ms, end_ms, &effective_opts);
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
@@ -3068,6 +3355,20 @@ impl Interpreter {
                         "Temporal.ZonedDateTime is not supported in DateTimeFormat formatRangeToParts()",
                     ));
                 }
+                if let (Some(stt), Some(ett)) = (start_tt, end_tt) {
+                    if std::mem::discriminant(&stt) != std::mem::discriminant(&ett) {
+                        return Completion::Throw(interp.create_type_error(
+                            "formatRangeToParts requires both arguments to be the same Temporal type",
+                        ));
+                    }
+                }
+                if let Some(tt) = start_tt.or(end_tt) {
+                    if !check_temporal_overlap(&opts, tt) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Temporal object does not overlap with DateTimeFormat options",
+                        ));
+                    }
+                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -3081,6 +3382,16 @@ impl Interpreter {
                     adjust_opts_for_temporal(&opts, tt)
                 } else {
                     opts
+                };
+                let start_ms = if let Some(tt) = start_tt {
+                    adjust_plain_temporal_ms(start_ms, &effective_opts.time_zone, tt)
+                } else {
+                    start_ms
+                };
+                let end_ms = if let Some(tt) = end_tt {
+                    adjust_plain_temporal_ms(end_ms, &effective_opts.time_zone, tt)
+                } else {
+                    end_ms
                 };
                 let all_parts = format_range_to_parts_with_options(start_ms, end_ms, &effective_opts);
 
@@ -3500,7 +3811,7 @@ impl Interpreter {
 
                 // Step 41: dateStyle/timeStyle conflict with component options
                 let has_style = date_style.is_some() || time_style.is_some();
-                let has_component = weekday.is_some()
+                let has_date_time_component = weekday.is_some()
                     || era.is_some()
                     || year_opt.is_some()
                     || month_opt.is_some()
@@ -3509,8 +3820,8 @@ impl Interpreter {
                     || hour_opt.is_some()
                     || minute_opt.is_some()
                     || second_opt.is_some()
-                    || fsd_opt.is_some()
-                    || tz_name.is_some();
+                    || fsd_opt.is_some();
+                let has_component = has_date_time_component || tz_name.is_some();
 
                 if has_style && has_component {
                     return Completion::Throw(interp.create_type_error(
@@ -3518,9 +3829,10 @@ impl Interpreter {
                     ));
                 }
 
-                // Default behavior: if no components and no style, default to date
+                // Default behavior: if no date/time components and no style, default to date
+                // Per spec, timeZoneName alone does NOT prevent defaults
                 let (year, month, day) = if !has_style
-                    && !has_component
+                    && !has_date_time_component
                 {
                     (
                         Some("numeric".to_string()),
