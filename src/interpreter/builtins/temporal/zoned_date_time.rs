@@ -213,6 +213,105 @@ fn get_tz_offset_ns(tz: &str, epoch_ns: &BigInt) -> i64 {
     0
 }
 
+/// Return all possible epoch nanoseconds for a given wall-clock time in a timezone.
+/// For normal times there is one result; for DST overlaps there are two (sorted chronologically).
+/// For DST gaps the result is empty.
+fn get_possible_epoch_ns(tz: &str, local_ns: i128) -> Vec<i128> {
+    if tz == "UTC" || tz == "Etc/UTC" || tz == "Etc/GMT" {
+        return vec![local_ns];
+    }
+    if tz.starts_with('+') || tz.starts_with('-') {
+        let off = parse_offset_to_ns(tz) as i128;
+        return vec![local_ns - off];
+    }
+
+    use chrono::{NaiveDateTime, TimeZone, Offset, MappedLocalTime};
+    use chrono_tz::Tz;
+
+    let tz_parsed = match tz.parse::<Tz>() {
+        Ok(t) => t,
+        Err(_) => {
+            let off = get_tz_offset_ns(tz, &BigInt::from(local_ns)) as i128;
+            return vec![local_ns - off];
+        }
+    };
+
+    let epoch_secs = local_ns.div_euclid(NS_PER_SEC) as i64;
+    let sub_sec_ns = local_ns.rem_euclid(NS_PER_SEC);
+    let nanos = sub_sec_ns as u32;
+
+    let naive = match NaiveDateTime::from_timestamp_opt(epoch_secs, nanos) {
+        Some(dt) => dt,
+        None => {
+            let off = get_tz_offset_ns(tz, &BigInt::from(local_ns)) as i128;
+            return vec![local_ns - off];
+        }
+    };
+
+    match tz_parsed.from_local_datetime(&naive) {
+        MappedLocalTime::Single(dt) => {
+            let off = dt.offset().fix().local_minus_utc() as i128 * NS_PER_SEC as i128;
+            vec![local_ns - off]
+        }
+        MappedLocalTime::Ambiguous(dt1, dt2) => {
+            let off1 = dt1.offset().fix().local_minus_utc() as i128 * NS_PER_SEC as i128;
+            let off2 = dt2.offset().fix().local_minus_utc() as i128 * NS_PER_SEC as i128;
+            let e1 = local_ns - off1;
+            let e2 = local_ns - off2;
+            let mut results = vec![e1, e2];
+            results.sort();
+            results.dedup();
+            results
+        }
+        MappedLocalTime::None => {
+            vec![]
+        }
+    }
+}
+
+/// Check if a parsed offset matches an actual offset, with optional minute-rounding.
+fn is_offset_match(parsed_ns: i128, actual_ns: i128, sub_minute: bool) -> bool {
+    if sub_minute {
+        parsed_ns == actual_ns
+    } else {
+        let round_min = |ns: i128| -> i128 {
+            let sign = if ns < 0 { -1 } else { 1 };
+            let abs = ns.unsigned_abs();
+            sign * ((abs + NS_PER_MIN as u128 / 2) / NS_PER_MIN as u128) as i128
+        };
+        round_min(parsed_ns) == round_min(actual_ns)
+    }
+}
+
+/// Find the first possible epoch ns whose tz offset fuzzy-matches the parsed offset.
+/// Returns None if no candidate matches.
+fn offset_match_candidates(tz: &str, local_ns: i128, off_ns: i128, sub_minute: bool) -> Option<BigInt> {
+    let candidates = get_possible_epoch_ns(tz, local_ns);
+    for candidate in &candidates {
+        let actual_off = get_tz_offset_ns(tz, &BigInt::from(*candidate)) as i128;
+        if is_offset_match(off_ns, actual_off, sub_minute) {
+            return Some(BigInt::from(*candidate));
+        }
+    }
+    None
+}
+
+/// Find the first matching candidate or throw RangeError.
+fn offset_match_or_reject(
+    interp: &mut Interpreter,
+    tz: &str,
+    local_ns: i128,
+    off_ns: i128,
+    sub_minute: bool,
+) -> Result<BigInt, Completion> {
+    match offset_match_candidates(tz, local_ns, off_ns, sub_minute) {
+        Some(ns) => Ok(ns),
+        None => Err(Completion::Throw(
+            interp.create_range_error("UTC offset mismatch with time zone"),
+        )),
+    }
+}
+
 fn parse_offset_to_ns(s: &str) -> i64 {
     let bytes = s.as_bytes();
     if bytes.is_empty() {
@@ -847,21 +946,19 @@ fn to_temporal_zoned_date_time_with_options(
 
                         match offset_option {
                             "reject" => {
-                                // CheckISODaysRange: wall-clock date must be in representable range
                                 if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
                                     return Completion::Throw(interp.create_range_error(
                                         "ZonedDateTime is outside the representable range",
                                     ));
                                 }
-                                // Skip validation for Z designator — Z means "use exact time"
-                                if !parsed.has_utc_designator && off_ns != tz_off {
-                                    return Completion::Throw(
-                                        interp.create_range_error(
-                                            "UTC offset mismatch with time zone",
-                                        ),
-                                    );
+                                if parsed.has_utc_designator {
+                                    BigInt::from(exact_ns)
+                                } else {
+                                    match offset_match_or_reject(interp, &tz, local_ns, off_ns, off.has_sub_minute) {
+                                        Ok(ns) => ns,
+                                        Err(c) => return c,
+                                    }
                                 }
-                                BigInt::from(exact_ns)
                             }
                             "use" => {
                                 // Use the offset from the string
@@ -872,17 +969,22 @@ fn to_temporal_zoned_date_time_with_options(
                                 BigInt::from(local_ns - tz_off)
                             }
                             "prefer" => {
-                                // CheckISODaysRange: wall-clock date must be in representable range
                                 if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
                                     return Completion::Throw(interp.create_range_error(
                                         "ZonedDateTime is outside the representable range",
                                     ));
                                 }
-                                // Use offset if it matches, otherwise use tz
-                                if off_ns == tz_off || parsed.has_utc_designator {
+                                if parsed.has_utc_designator {
                                     BigInt::from(exact_ns)
                                 } else {
-                                    BigInt::from(local_ns - tz_off)
+                                    // Try fuzzy match first; fall back to compatible disambiguation
+                                    match offset_match_candidates(&tz, local_ns, off_ns, off.has_sub_minute) {
+                                        Some(ns) => ns,
+                                        None => {
+                                            // No match — use "compatible" disambiguation
+                                            BigInt::from(local_ns - tz_off)
+                                        }
+                                    }
                                 }
                             }
                             _ => BigInt::from(exact_ns),
@@ -1007,32 +1109,35 @@ fn from_string_with_options(
 
             match offset_opt.as_str() {
                 "reject" => {
-                    // CheckISODaysRange: wall-clock date must be in representable range
                     if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
                         return Completion::Throw(interp.create_range_error(
                             "ZonedDateTime is outside the representable range",
                         ));
                     }
-                    if !parsed.has_utc_designator && off_ns != tz_off {
-                        return Completion::Throw(
-                            interp.create_range_error("UTC offset mismatch with time zone"),
-                        );
+                    if parsed.has_utc_designator {
+                        BigInt::from(exact_ns)
+                    } else {
+                        match offset_match_or_reject(interp, &tz, local_ns, off_ns, off.has_sub_minute) {
+                                        Ok(ns) => ns,
+                                        Err(c) => return c,
+                                    }
                     }
-                    BigInt::from(exact_ns)
                 }
                 "use" => BigInt::from(exact_ns),
                 "ignore" => BigInt::from(local_ns - tz_off),
                 "prefer" => {
-                    // CheckISODaysRange: wall-clock date must be in representable range
                     if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
                         return Completion::Throw(interp.create_range_error(
                             "ZonedDateTime is outside the representable range",
                         ));
                     }
-                    if off_ns == tz_off || parsed.has_utc_designator {
+                    if parsed.has_utc_designator {
                         BigInt::from(exact_ns)
                     } else {
-                        BigInt::from(local_ns - tz_off)
+                        match offset_match_candidates(&tz, local_ns, off_ns, off.has_sub_minute) {
+                            Some(ns) => ns,
+                            None => BigInt::from(local_ns - tz_off),
+                        }
                     }
                 }
                 _ => BigInt::from(exact_ns),

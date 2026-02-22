@@ -131,9 +131,7 @@ fn is_supported_calendar(cal: &str) -> bool {
             | "gregory"
             | "hebrew"
             | "indian"
-            | "islamic"
             | "islamic-civil"
-            | "islamic-rgsa"
             | "islamic-tbla"
             | "islamic-umalqura"
             | "iso8601"
@@ -146,7 +144,7 @@ fn is_supported_calendar(cal: &str) -> bool {
 fn canonicalize_calendar(cal: &str) -> String {
     let lower = cal.to_ascii_lowercase();
     match lower.as_str() {
-        "islamicc" => "islamic-civil".to_string(),
+        "islamicc" | "islamic" | "islamic-rgsa" => "islamic-civil".to_string(),
         "ethiopic-amete-alem" => "ethioaa".to_string(),
         _ => lower,
     }
@@ -1377,6 +1375,46 @@ fn format_range_with_options(
         // Different year: full "Jan 3, 2019 – Mar 4, 2020"
     }
 
+    // Same-day collapsing: if date parts are the same, show "date, time1 – time2"
+    let start_parts = format_to_parts_with_options(start_ms, opts);
+    let end_parts = format_to_parts_with_options(end_ms, opts);
+    let date_types = ["year", "month", "day", "weekday", "era", "relatedYear"];
+    let time_types = ["hour", "minute", "second", "fractionalSecond", "dayPeriod"];
+    let start_date: Vec<_> = start_parts.iter()
+        .filter(|(t, _)| date_types.contains(&t.as_str()))
+        .collect();
+    let end_date: Vec<_> = end_parts.iter()
+        .filter(|(t, _)| date_types.contains(&t.as_str()))
+        .collect();
+    let has_time = start_parts.iter().any(|(t, _)| time_types.contains(&t.as_str()));
+
+    if has_time && start_date == end_date && start_parts != end_parts {
+        if let Some(time_start) = start_parts.iter().position(|(t, _)| time_types.contains(&t.as_str())) {
+            let shared_end = if time_start > 0 && start_parts[time_start - 1].0 == "literal" {
+                time_start - 1
+            } else {
+                time_start
+            };
+            let mut result = String::new();
+            for (_, v) in &start_parts[..shared_end] {
+                result.push_str(v);
+            }
+            if shared_end < time_start {
+                result.push_str(&start_parts[shared_end].1);
+            }
+            for (_, v) in &start_parts[time_start..] {
+                result.push_str(v);
+            }
+            result.push_str(RANGE_SEP);
+            let end_time_start = end_parts.iter().position(|(t, _)| time_types.contains(&t.as_str()))
+                .unwrap_or(0);
+            for (_, v) in &end_parts[end_time_start..] {
+                result.push_str(v);
+            }
+            return result;
+        }
+    }
+
     format!("{}{}{}", start_str, RANGE_SEP, end_str)
 }
 
@@ -1449,6 +1487,60 @@ fn format_range_to_parts_with_options(
             return all;
         }
         // Different years: fall through to default (no collapsing)
+    }
+
+    // Check if date fields are the same but time fields differ (same-day range collapsing)
+    let date_types = ["year", "month", "day", "weekday", "era", "relatedYear"];
+    let time_types = ["hour", "minute", "second", "fractionalSecond", "dayPeriod"];
+
+    let start_date: Vec<_> = start_parts.iter()
+        .filter(|(t, _)| date_types.contains(&t.as_str()))
+        .collect();
+    let end_date: Vec<_> = end_parts.iter()
+        .filter(|(t, _)| date_types.contains(&t.as_str()))
+        .collect();
+    let has_time = start_parts.iter().any(|(t, _)| time_types.contains(&t.as_str()));
+
+    if has_time && start_date == end_date && start_parts != end_parts {
+        // Find where time parts begin in the start_parts list
+        let first_time_idx = start_parts.iter().position(|(t, _)| time_types.contains(&t.as_str()));
+        if let Some(time_start) = first_time_idx {
+            // Walk back to include the preceding literal separator (e.g. ", ")
+            let shared_end = if time_start > 0 && start_parts[time_start - 1].0 == "literal" {
+                time_start - 1
+            } else {
+                time_start
+            };
+
+            let mut all: Vec<(String, String, String)> = Vec::new();
+
+            // Emit shared date prefix
+            for (t, v) in &start_parts[..shared_end] {
+                all.push((t.clone(), v.clone(), "shared".to_string()));
+            }
+            // Emit the literal separator before time as shared
+            if shared_end < time_start {
+                let (t, v) = &start_parts[shared_end];
+                all.push((t.clone(), v.clone(), "shared".to_string()));
+            }
+
+            // Emit startRange time parts
+            for (t, v) in &start_parts[time_start..] {
+                all.push((t.clone(), v.clone(), "startRange".to_string()));
+            }
+
+            // Range separator
+            all.push(("literal".to_string(), RANGE_SEP.to_string(), "shared".to_string()));
+
+            // Find where time parts begin in end_parts
+            let end_time_start = end_parts.iter().position(|(t, _)| time_types.contains(&t.as_str()))
+                .unwrap_or(0);
+            for (t, v) in &end_parts[end_time_start..] {
+                all.push((t.clone(), v.clone(), "endRange".to_string()));
+            }
+
+            return all;
+        }
     }
 
     // Default: startRange parts, separator, endRange parts

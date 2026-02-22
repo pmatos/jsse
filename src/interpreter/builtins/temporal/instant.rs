@@ -1139,25 +1139,16 @@ fn instant_to_string_with_tz(
         _ => format!("{hour:02}:{minute:02}:{second:02}"),
     };
 
-    // Format offset: Z only when no explicit timeZone; otherwise numeric offset
+    // Format offset rounded to minutes (FormatUTCOffsetRounded)
     let offset_str = if !tz_explicit && tz_offset_ns == 0 {
         "Z".to_string()
     } else {
-        let abs_offset = tz_offset_ns.unsigned_abs() as i64;
         let sign_ch = if tz_offset_ns >= 0 { '+' } else { '-' };
-        let oh = abs_offset / 3_600_000_000_000;
-        let om = (abs_offset / 60_000_000_000) % 60;
-        let os = (abs_offset / 1_000_000_000) % 60;
-        let ons = abs_offset % 1_000_000_000;
-        if ons != 0 {
-            let frac = format!("{ons:09}");
-            let trimmed = frac.trim_end_matches('0');
-            format!("{sign_ch}{oh:02}:{om:02}:{os:02}.{trimmed}")
-        } else if os != 0 {
-            format!("{sign_ch}{oh:02}:{om:02}:{os:02}")
-        } else {
-            format!("{sign_ch}{oh:02}:{om:02}")
-        }
+        let abs_ns = tz_offset_ns.unsigned_abs() as i64;
+        let total_minutes = (abs_ns + 30_000_000_000) / 60_000_000_000;
+        let oh = total_minutes / 60;
+        let om = total_minutes % 60;
+        format!("{sign_ch}{oh:02}:{om:02}")
     };
 
     let result = format!("{year_str}-{month:02}-{day:02}T{time_str}{offset_str}");
