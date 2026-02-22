@@ -96,6 +96,13 @@ pub struct Interpreter {
     pub(crate) microtask_roots: Vec<JsValue>,
     pub(crate) class_private_names: Vec<std::collections::HashMap<String, String>>,
     next_class_brand_id: u64,
+    pub(crate) regexp_legacy_input: String,
+    pub(crate) regexp_legacy_last_match: String,
+    pub(crate) regexp_legacy_last_paren: String,
+    pub(crate) regexp_legacy_left_context: String,
+    pub(crate) regexp_legacy_right_context: String,
+    pub(crate) regexp_legacy_parens: [String; 9],
+    pub(crate) regexp_constructor_id: Option<u64>,
 }
 
 pub struct LoadedModule {
@@ -204,6 +211,13 @@ impl Interpreter {
             microtask_roots: Vec::new(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
+            regexp_legacy_input: String::new(),
+            regexp_legacy_last_match: String::new(),
+            regexp_legacy_last_paren: String::new(),
+            regexp_legacy_left_context: String::new(),
+            regexp_legacy_right_context: String::new(),
+            regexp_legacy_parens: Default::default(),
+            regexp_constructor_id: None,
         };
         interp.setup_globals();
         interp

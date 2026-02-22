@@ -1056,6 +1056,7 @@ fn unescape_q_string(s: &str) -> String {
 struct TranslationResult {
     pattern: String,
     dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>>,
+    group_name_order: Vec<String>,
 }
 
 fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
@@ -1082,6 +1083,7 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
     // or None for regular groups.
     let mut dotall_stack: Vec<Option<bool>> = Vec::new();
     let mut dot_all = dot_all_base;
+    let unicode = flags.contains('u') || flags.contains('v');
 
     // Pre-count total capturing groups in the pattern
     let total_groups = {
@@ -1166,6 +1168,9 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
         std::collections::HashMap::new();
     let mut dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>> =
         std::collections::HashMap::new();
+    let mut group_name_order: Vec<String> = Vec::new();
+    let mut group_name_seen: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     while i < len {
         let c = chars[i];
@@ -1210,31 +1215,33 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
             match next {
                 // Named backreference: \k<name> → (?P=name) or alternation for duplicates
                 'k' if !in_char_class && i + 2 < len && chars[i + 2] == '<' => {
-                    let start = i + 3;
-                    if let Some(end) = chars[start..].iter().position(|&c| c == '>') {
-                        let name: String = chars[start..start + end].iter().collect();
-                        if duplicated_names.contains(&name) {
-                            // For duplicate named groups, emit alternation of all variants
-                            // plus empty-match fallback (when no variant captured)
-                            if let Some(variants) = dup_group_map.get(&name) {
-                                let parts: Vec<String> = variants
-                                    .iter()
-                                    .map(|(iname, _)| format!("(?P={})", iname))
-                                    .collect();
-                                // (?=) is zero-width always-succeed for when neither captured
-                                result.push_str(&format!("(?:{}|(?=))", parts.join("|")));
+                    if !unicode && all_group_names.is_empty() {
+                        // Annex B: \k without named groups is identity escape
+                        push_literal_char(&mut result, 'k', false);
+                        i += 2;
+                    } else {
+                        let start = i + 3;
+                        if let Some(end) = chars[start..].iter().position(|&c| c == '>') {
+                            let name: String = chars[start..start + end].iter().collect();
+                            if duplicated_names.contains(&name) {
+                                if let Some(variants) = dup_group_map.get(&name) {
+                                    let parts: Vec<String> = variants
+                                        .iter()
+                                        .map(|(iname, _)| format!("(?P={})", iname))
+                                        .collect();
+                                    result.push_str(&format!("(?:{}|(?=))", parts.join("|")));
+                                } else {
+                                    result.push_str(&format!("(?P={})", name));
+                                }
                             } else {
-                                // Haven't seen the groups yet (forward ref) — use deferred
                                 result.push_str(&format!("(?P={})", name));
                             }
-                        } else {
-                            result.push_str(&format!("(?P={})", name));
+                            i = start + end + 1;
+                            continue;
                         }
-                        i = start + end + 1;
-                        continue;
+                        result.push_str("\\k");
+                        i += 2;
                     }
-                    result.push_str("\\k");
-                    i += 2;
                 }
                 // \0 → null character (if not followed by digit)
                 // \0NN → octal escape (Annex B, non-Unicode only)
@@ -1271,6 +1278,12 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
                     let ctrl = (chars[i + 2] as u8 % 32) as char;
                     result.push(ctrl);
                     i += 3;
+                }
+                // Annex B: \c + non-letter → match literal backslash + c
+                'c' if !unicode => {
+                    push_literal_char(&mut result, '\\', in_char_class);
+                    push_literal_char(&mut result, 'c', in_char_class);
+                    i += 2;
                 }
                 // \xHH → hex escape
                 'x' if i + 3 < len
@@ -1323,6 +1336,10 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
                             }
                         }
                         i += 6;
+                    } else if !unicode {
+                        // Annex B: incomplete \u is identity escape in non-unicode mode
+                        push_literal_char(&mut result, 'u', in_char_class);
+                        i += 2;
                     } else {
                         result.push_str("\\u");
                         i += 2;
@@ -1548,6 +1565,9 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
                     k += 1;
                 }
                 let name: String = chars[name_start..k].iter().collect();
+                if group_name_seen.insert(name.clone()) {
+                    group_name_order.push(name.clone());
+                }
                 if duplicated_names.contains(&name) {
                     let seq = dup_seen_count.entry(name.clone()).or_insert(0);
                     *seq += 1;
@@ -1668,12 +1688,21 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
             }
         }
 
-        // Dot handling: expand based on dotAll state
+        // Dot handling: expand based on dotAll state and unicode mode
         if c == '.' && !in_char_class {
-            if dot_all {
-                result.push_str("(?s:.)");
+            if unicode {
+                if dot_all {
+                    result.push_str("[^\\u{F0000}-\\u{F07FF}]");
+                } else {
+                    result.push_str("[^\\n\\r\\u{2028}\\u{2029}\\u{F0000}-\\u{F07FF}]");
+                }
             } else {
-                result.push_str("[^\\n\\r\\u{2028}\\u{2029}]");
+                // Non-unicode: . matches one UTF-16 code unit (BMP + PUA-mapped lone surrogates)
+                if dot_all {
+                    result.push_str("[\\x00-\\u{FFFF}\\u{F0000}-\\u{F07FF}]");
+                } else {
+                    result.push_str("[^\\n\\r\\u{2028}\\u{2029}\\u{10000}-\\u{EFFFF}\\u{F0800}-\\u{10FFFF}]");
+                }
             }
             i += 1;
             continue;
@@ -1686,6 +1715,7 @@ fn translate_js_pattern_ex(source: &str, flags: &str) -> Result<TranslationResul
     Ok(TranslationResult {
         pattern: result,
         dup_group_map,
+        group_name_order,
     })
 }
 
@@ -2200,6 +2230,159 @@ fn parse_unicode_escape_in_name(
     }
 }
 
+fn is_v_flag_reserved_double_punctuator(a: char, b: char) -> bool {
+    a == b
+        && matches!(
+            a,
+            '!' | '#' | '$' | '%' | '*' | '+' | ',' | '.' | ':' | ';' | '<' | '=' | '>' | '?'
+                | '@' | '`' | '~' | '^' | '&'
+        )
+}
+
+fn validate_v_flag_class_inner(
+    chars: &[char],
+    i: &mut usize,
+    source: &str,
+    negated: bool,
+) -> Result<(), String> {
+    let len = chars.len();
+    let err = |msg: &str| -> Result<(), String> {
+        Err(format!("Invalid regular expression: /{}/ : {}", source, msg))
+    };
+
+    let mut has_operand = false;
+
+    while *i < len {
+        let c = chars[*i];
+
+        if c == ']' {
+            *i += 1;
+            return Ok(());
+        }
+
+        // Check for reserved double punctuators
+        if *i + 1 < len {
+            let next = chars[*i + 1];
+            if c == '-' && next == '-' {
+                if !has_operand {
+                    return err("Invalid set operation");
+                }
+                *i += 2;
+                has_operand = false;
+                continue;
+            }
+            if c == '&' && next == '&' {
+                if !has_operand {
+                    return err("Invalid set operation");
+                }
+                *i += 2;
+                has_operand = false;
+                continue;
+            }
+            if is_v_flag_reserved_double_punctuator(c, next) {
+                return err("Invalid character in character class");
+            }
+        }
+
+        if matches!(c, '(' | ')' | '{' | '}' | '/' | '|') {
+            return err("Invalid character in character class");
+        }
+        if c == '[' {
+            *i += 1;
+            let nested_negated = if *i < len && chars[*i] == '^' {
+                *i += 1;
+                true
+            } else {
+                false
+            };
+            validate_v_flag_class_inner(chars, i, source, nested_negated)?;
+            has_operand = true;
+            continue;
+        }
+        if c == '-' {
+            // In v-flag mode, a single `-` is only valid as a range separator (e.g. a-z).
+            // It must appear between two class atoms (has_operand) and be followed by a valid char.
+            if has_operand && *i + 1 < len && chars[*i + 1] != ']' && chars[*i + 1] != '-' {
+                *i += 1;
+                // The next character is the range end - it will be consumed in the next iteration
+                continue;
+            }
+            return err("Invalid character in character class");
+        }
+
+        if c == '\\' {
+            if *i + 1 >= len {
+                return err("Invalid escape at end of pattern");
+            }
+            let after = chars[*i + 1];
+            *i += 2;
+            if after == 'u' {
+                if *i < len && chars[*i] == '{' {
+                    *i += 1;
+                    while *i < len && chars[*i] != '}' {
+                        *i += 1;
+                    }
+                    if *i < len {
+                        *i += 1;
+                    }
+                } else {
+                    let mut count = 0;
+                    while count < 4 && *i < len && chars[*i].is_ascii_hexdigit() {
+                        *i += 1;
+                        count += 1;
+                    }
+                }
+            } else if after == 'x' {
+                let mut count = 0;
+                while count < 2 && *i < len && chars[*i].is_ascii_hexdigit() {
+                    *i += 1;
+                    count += 1;
+                }
+            } else if (after == 'p' || after == 'P') && *i < len && chars[*i] == '{' {
+                let prop_start = *i + 1;
+                *i += 1;
+                while *i < len && chars[*i] != '}' {
+                    *i += 1;
+                }
+                if *i < len {
+                    let prop_content: String = chars[prop_start..*i].iter().collect();
+                    *i += 1;
+                    let prop_name = if let Some(eq_pos) = prop_content.find('=') {
+                        &prop_content[eq_pos + 1..]
+                    } else {
+                        &prop_content
+                    };
+                    let is_string_prop =
+                        crate::emoji_strings::lookup_string_property(prop_name).is_some();
+                    if is_string_prop && negated && after == 'p' {
+                        return err("Invalid property name");
+                    }
+                }
+            } else if after == 'q' && *i < len && chars[*i] == '{' {
+                *i += 1;
+                while *i < len && chars[*i] != '}' {
+                    *i += 1;
+                }
+                if *i < len {
+                    *i += 1;
+                }
+            } else if after == 'c' && *i < len && chars[*i].is_ascii_alphabetic() {
+                *i += 1;
+            }
+            has_operand = true;
+            continue;
+        }
+
+        if c == '^' && *i + 1 < len && chars[*i + 1] == '^' {
+            return err("Invalid character in character class");
+        }
+        *i += 1;
+        has_operand = true;
+    }
+
+    err("Unterminated character class")
+}
+
 pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), String> {
     let _unicode = _flags.contains('u') || _flags.contains('v');
     let v_flag = _flags.contains('v');
@@ -2302,6 +2485,30 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                                 source
                             )
                         })?;
+                        // Check if this is a property-of-strings
+                        let prop_name = if let Some(eq_pos) = content.find('=') {
+                            &content[eq_pos + 1..]
+                        } else {
+                            &content
+                        };
+                        let is_string_prop =
+                            crate::emoji_strings::lookup_string_property(prop_name).is_some();
+                        if is_string_prop {
+                            if !v_flag {
+                                // \p{StringProp}/u — only valid with v flag
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid property name",
+                                    source
+                                ));
+                            }
+                            if after_escape == 'P' {
+                                // \P{StringProp}/v — negation of string property forbidden
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid property name",
+                                    source
+                                ));
+                            }
+                        }
                     }
                     i = end + 1;
                 } else {
@@ -2359,23 +2566,15 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
         if c == '[' {
             i += 1;
-            if i < len && chars[i] == '^' {
+            let class_negated = if i < len && chars[i] == '^' {
                 i += 1;
-            }
+                true
+            } else {
+                false
+            };
 
             if v_flag {
-                let mut depth = 1;
-                while i < len && depth > 0 {
-                    match chars[i] {
-                        '[' => depth += 1,
-                        ']' => depth -= 1,
-                        '\\' if i + 1 < len => {
-                            i += 1;
-                        }
-                        _ => {}
-                    }
-                    i += 1;
-                }
+                validate_v_flag_class_inner(&chars, &mut i, source, class_negated)?;
             } else {
                 let mut prev_value: Option<u32> = None;
                 let mut expecting_range_end = false;
@@ -2711,16 +2910,20 @@ impl RegexCaptures {
 type DupGroupMap = std::collections::HashMap<String, Vec<(String, u32)>>;
 
 fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
-    build_regex_ex(source, flags).map(|(re, _)| re)
+    build_regex_ex(source, flags).map(|(re, _, _)| re)
 }
 
-fn build_regex_ex(source: &str, flags: &str) -> Result<(CompiledRegex, DupGroupMap), String> {
+fn build_regex_ex(
+    source: &str,
+    flags: &str,
+) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
     let tr = translate_js_pattern_ex(source, flags)?;
     let dup_map = tr.dup_group_map;
+    let name_order = tr.group_name_order;
     match fancy_regex::Regex::new(&tr.pattern) {
-        Ok(r) => Ok((CompiledRegex::Fancy(r), dup_map)),
+        Ok(r) => Ok((CompiledRegex::Fancy(r), dup_map, name_order)),
         Err(_) => regex::Regex::new(&tr.pattern)
-            .map(|r| (CompiledRegex::Standard(r), dup_map))
+            .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
             .map_err(|e| e.to_string()),
     }
 }
@@ -3139,7 +3342,7 @@ fn regexp_exec_raw(
     };
     let last_index_byte = utf16_to_byte_offset(input, last_index_utf16);
 
-    let (re, dup_map) = match build_regex_ex(source, flags) {
+    let (re, dup_map, name_order) = match build_regex_ex(source, flags) {
         Ok(r) => r,
         Err(_) => return Completion::Normal(JsValue::Null),
     };
@@ -3174,6 +3377,28 @@ fn regexp_exec_raw(
         return Completion::Throw(e);
     }
 
+    // Update Annex B legacy static properties (B.2.4)
+    {
+        interp.regexp_legacy_input = input.to_string();
+        interp.regexp_legacy_last_match = full_match.text.clone();
+        interp.regexp_legacy_left_context = input[..full_match.start].to_string();
+        interp.regexp_legacy_right_context = input[full_match.end..].to_string();
+        let mut last_paren = String::new();
+        for idx in (1..caps.len()).rev() {
+            if let Some(m) = caps.get(idx) {
+                last_paren = m.text.clone();
+                break;
+            }
+        }
+        interp.regexp_legacy_last_paren = last_paren;
+        for p in 0..9 {
+            interp.regexp_legacy_parens[p] = caps
+                .get(p + 1)
+                .map(|m| m.text.clone())
+                .unwrap_or_default();
+        }
+    }
+
     let mut elements: Vec<JsValue> = Vec::new();
     elements.push(JsValue::String(regex_output_to_js_string(&full_match.text)));
     for i in 1..caps.len() {
@@ -3187,51 +3412,12 @@ fn regexp_exec_raw(
     let groups_val = if has_named {
         let groups_obj = interp.create_object();
         groups_obj.borrow_mut().prototype = None;
-        if dup_map.is_empty() {
-            for (i, name_opt) in caps.names.iter().enumerate() {
-                if let Some(name) = name_opt {
-                    let val = match caps.get(i) {
-                        Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
-                        None => JsValue::Undefined,
-                    };
-                    groups_obj.borrow_mut().insert_value(name.to_string(), val);
-                }
-            }
-        } else {
-            // Build a set of internal names that belong to duplicate groups
-            let mut internal_to_original: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
-            for (orig_name, variants) in &dup_map {
-                for (internal_name, _) in variants {
-                    internal_to_original.insert(internal_name.clone(), orig_name.clone());
-                }
-            }
-            // Track which original dup names we've already set
-            let mut dup_names_set: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            // First pass: handle non-duplicate named groups normally
-            for (i, name_opt) in caps.names.iter().enumerate() {
-                if let Some(name) = name_opt {
-                    if internal_to_original.contains_key(name) {
-                        // This is a duplicate group variant — skip for now
-                        continue;
-                    }
-                    let val = match caps.get(i) {
-                        Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
-                        None => JsValue::Undefined,
-                    };
-                    groups_obj.borrow_mut().insert_value(name.to_string(), val);
-                }
-            }
-            // Second pass: for each duplicate group name, find which variant matched
-            for (orig_name, variants) in &dup_map {
-                if dup_names_set.contains(orig_name) {
-                    continue;
-                }
-                dup_names_set.insert(orig_name.clone());
+        // Insert properties in source order using name_order
+        for orig_name in &name_order {
+            if let Some(variants) = dup_map.get(orig_name) {
+                // Duplicate named group: find which variant matched
                 let mut matched_val = JsValue::Undefined;
                 for (internal_name, _) in variants {
-                    // Find the index of this internal name in caps.names
                     for (i, name_opt) in caps.names.iter().enumerate() {
                         if let Some(n) = name_opt
                             && n == internal_name
@@ -3247,7 +3433,22 @@ fn regexp_exec_raw(
                 }
                 groups_obj
                     .borrow_mut()
-                    .insert_value(orig_name.to_string(), matched_val);
+                    .insert_value(orig_name.clone(), matched_val);
+            } else {
+                // Non-duplicate: find by exact name match in caps.names
+                let mut val = JsValue::Undefined;
+                for (i, name_opt) in caps.names.iter().enumerate() {
+                    if let Some(n) = name_opt && n == orig_name {
+                        val = match caps.get(i) {
+                            Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
+                            None => JsValue::Undefined,
+                        };
+                        break;
+                    }
+                }
+                groups_obj
+                    .borrow_mut()
+                    .insert_value(orig_name.clone(), val);
             }
         }
         let id = groups_obj.borrow().id.unwrap();
@@ -3291,20 +3492,52 @@ fn regexp_exec_raw(
             if has_named {
                 let idx_groups = interp.create_object();
                 idx_groups.borrow_mut().prototype = None;
-                for (i, name_opt) in caps.names.iter().enumerate() {
-                    if let Some(name) = name_opt {
-                        let val = match caps.get(i) {
-                            Some(m) => {
-                                let cap_start = byte_offset_to_utf16(input, m.start);
-                                let cap_end = byte_offset_to_utf16(input, m.end);
-                                interp.create_array(vec![
-                                    JsValue::Number(cap_start as f64),
-                                    JsValue::Number(cap_end as f64),
-                                ])
+                for orig_name in &name_order {
+                    if let Some(variants) = dup_map.get(orig_name) {
+                        let mut matched_val = JsValue::Undefined;
+                        for (internal_name, _) in variants {
+                            for (i, name_opt) in caps.names.iter().enumerate() {
+                                if let Some(n) = name_opt
+                                    && n == internal_name
+                                    && let Some(m) = caps.get(i)
+                                {
+                                    let cap_start = byte_offset_to_utf16(input, m.start);
+                                    let cap_end = byte_offset_to_utf16(input, m.end);
+                                    matched_val = interp.create_array(vec![
+                                        JsValue::Number(cap_start as f64),
+                                        JsValue::Number(cap_end as f64),
+                                    ]);
+                                    break;
+                                }
                             }
-                            None => JsValue::Undefined,
-                        };
-                        idx_groups.borrow_mut().insert_value(name.to_string(), val);
+                            if !matches!(matched_val, JsValue::Undefined) {
+                                break;
+                            }
+                        }
+                        idx_groups
+                            .borrow_mut()
+                            .insert_value(orig_name.clone(), matched_val);
+                    } else {
+                        let mut val = JsValue::Undefined;
+                        for (i, name_opt) in caps.names.iter().enumerate() {
+                            if let Some(n) = name_opt && n == orig_name {
+                                val = match caps.get(i) {
+                                    Some(m) => {
+                                        let cap_start = byte_offset_to_utf16(input, m.start);
+                                        let cap_end = byte_offset_to_utf16(input, m.end);
+                                        interp.create_array(vec![
+                                            JsValue::Number(cap_start as f64),
+                                            JsValue::Number(cap_end as f64),
+                                        ])
+                                    }
+                                    None => JsValue::Undefined,
+                                };
+                                break;
+                            }
+                        }
+                        idx_groups
+                            .borrow_mut()
+                            .insert_value(orig_name.clone(), val);
                     }
                 }
                 let idx_groups_id = idx_groups.borrow().id.unwrap();
@@ -3452,6 +3685,182 @@ impl Interpreter {
         regexp_proto
             .borrow_mut()
             .insert_builtin("toString".to_string(), tostring_fn);
+
+        // RegExp.prototype.compile (Annex B §B.2.5.1)
+        let compile_proto_id = regexp_proto.borrow().id.unwrap();
+        let compile_fn = self.create_function(JsFunction::native(
+            "compile".to_string(),
+            2,
+            move |interp, this_val, args| {
+                // 1. Let O be the this value.
+                let obj_id = match this_val {
+                    JsValue::Object(o) => o.id,
+                    _ => {
+                        return Completion::Throw(interp.create_type_error(
+                            "RegExp.prototype.compile requires that 'this' be an Object",
+                        ));
+                    }
+                };
+                // 2. Perform ? RequireInternalSlot(O, [[RegExpMatcher]]).
+                if let Some(obj) = interp.get_object(obj_id) {
+                    if obj.borrow().class_name != "RegExp" {
+                        return Completion::Throw(interp.create_type_error(
+                            "RegExp.prototype.compile requires that 'this' be a RegExp object",
+                        ));
+                    }
+                    // B.2.5.1 step 3: throw TypeError for subclass instances
+                    let proto_matches = obj
+                        .borrow()
+                        .prototype
+                        .as_ref()
+                        .map(|p| p.borrow().id == Some(compile_proto_id))
+                        .unwrap_or(false);
+                    if !proto_matches {
+                        return Completion::Throw(interp.create_type_error(
+                            "RegExp.prototype.compile cannot be used on RegExp subclass instances",
+                        ));
+                    }
+                } else {
+                    return Completion::Throw(interp.create_type_error(
+                        "RegExp.prototype.compile requires that 'this' be a RegExp object",
+                    ));
+                }
+
+                let pattern_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let flags_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+
+                let (pattern_str, flags_str);
+
+                // 3. If pattern is a RegExp object
+                let pattern_is_regexp = if let JsValue::Object(po) = &pattern_arg {
+                    interp
+                        .get_object(po.id)
+                        .map(|o| o.borrow().class_name == "RegExp")
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if pattern_is_regexp {
+                    // a. If flags is not undefined, throw a TypeError exception.
+                    if !matches!(flags_arg, JsValue::Undefined) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Cannot supply flags when constructing one RegExp from another",
+                        ));
+                    }
+                    // b. Let P be pattern.[[OriginalSource]].
+                    // c. Let F be pattern.[[OriginalFlags]].
+                    let po_id = if let JsValue::Object(po) = &pattern_arg {
+                        po.id
+                    } else {
+                        unreachable!()
+                    };
+                    if let Some(pobj) = interp.get_object(po_id) {
+                        let b = pobj.borrow();
+                        pattern_str =
+                            if let JsValue::String(s) = b.get_property("__original_source__") {
+                                s.to_rust_string()
+                            } else {
+                                "(?:)".to_string()
+                            };
+                        flags_str =
+                            if let JsValue::String(s) = b.get_property("__original_flags__") {
+                                s.to_rust_string()
+                            } else {
+                                String::new()
+                            };
+                    } else {
+                        pattern_str = "(?:)".to_string();
+                        flags_str = String::new();
+                    }
+                } else {
+                    // 4. Let P be pattern, let F be flags.
+                    pattern_str = if matches!(pattern_arg, JsValue::Undefined) {
+                        String::new()
+                    } else {
+                        match interp.to_string_value(&pattern_arg) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    };
+                    flags_str = if matches!(flags_arg, JsValue::Undefined) {
+                        String::new()
+                    } else {
+                        match interp.to_string_value(&flags_arg) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    };
+                }
+
+                // Validate flags: no invalid chars and no duplicates
+                {
+                    let mut seen = std::collections::HashSet::new();
+                    for c in flags_str.chars() {
+                        if !matches!(c, 'g' | 'i' | 'm' | 's' | 'u' | 'v' | 'y' | 'd') {
+                            return Completion::Throw(interp.create_error(
+                                "SyntaxError",
+                                &format!("Invalid regular expression flags: {}", flags_str),
+                            ));
+                        }
+                        if !seen.insert(c) {
+                            return Completion::Throw(interp.create_error(
+                                "SyntaxError",
+                                &format!("Invalid regular expression flags: {}", flags_str),
+                            ));
+                        }
+                    }
+                }
+
+                // Validate pattern
+                if let Err(msg) = validate_js_pattern(&pattern_str, &flags_str) {
+                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                }
+
+                // Build the regex to validate it compiles
+                if let Err(msg) = build_regex_ex(&pattern_str, &flags_str) {
+                    return Completion::Throw(interp.create_error("SyntaxError", &msg));
+                }
+
+                let source_str = if pattern_str.is_empty() {
+                    "(?:)".to_string()
+                } else {
+                    pattern_str
+                };
+
+                // 5. Return ? RegExpInitialize(O, P, F).
+                if let Some(obj) = interp.get_object(obj_id) {
+                    let mut b = obj.borrow_mut();
+                    b.insert_property(
+                        "__original_source__".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&source_str)),
+                            false,
+                            false,
+                            false,
+                        ),
+                    );
+                    b.insert_property(
+                        "__original_flags__".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&flags_str)),
+                            false,
+                            false,
+                            false,
+                        ),
+                    );
+                }
+                // Set lastIndex to 0 with strict mode (throws TypeError if non-writable)
+                if let Err(e) = set_last_index_strict(interp, obj_id, 0.0) {
+                    return Completion::Throw(e);
+                }
+
+                Completion::Normal(this_val.clone())
+            },
+        ));
+        regexp_proto
+            .borrow_mut()
+            .insert_builtin("compile".to_string(), compile_fn);
 
         // [@@match] (§22.2.5.6)
         let match_fn = self.create_function(JsFunction::native(
@@ -5011,6 +5420,285 @@ impl Interpreter {
                     configurable: Some(true),
                 },
             );
+
+            // Annex B legacy static accessor properties (B.2.4)
+            let ctor_id = o.id;
+            self.regexp_constructor_id = Some(ctor_id);
+
+            // Helper macro for legacy accessor property getters/setters
+            // $1..$9 — get-only
+            for idx in 1u8..=9 {
+                let prop_name = format!("${}", idx);
+                let getter = self.create_function(JsFunction::native(
+                    format!("get ${}", idx),
+                    0,
+                    move |interp, this_val, _args| {
+                        let ctor_id = match interp.regexp_constructor_id {
+                            Some(id) => id,
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
+                                )
+                            }
+                        };
+                        match this_val {
+                            JsValue::Object(o) if o.id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
+                                )
+                            }
+                        }
+                        let val = interp.regexp_legacy_parens[(idx - 1) as usize].clone();
+                        Completion::Normal(JsValue::String(JsString::from_str(&val)))
+                    },
+                ));
+                obj.borrow_mut().insert_property(
+                    prop_name,
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
+            }
+
+            // input / $_ — get/set
+            for prop_name in &["input", "$_"] {
+                let pn = prop_name.to_string();
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    |interp, this_val, _args| {
+                        let ctor_id = match interp.regexp_constructor_id {
+                            Some(id) => id,
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
+                                )
+                            }
+                        };
+                        match this_val {
+                            JsValue::Object(o) if o.id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
+                                )
+                            }
+                        }
+                        Completion::Normal(JsValue::String(JsString::from_str(
+                            &interp.regexp_legacy_input,
+                        )))
+                    },
+                ));
+                let setter = self.create_function(JsFunction::native(
+                    format!("set {}", pn),
+                    1,
+                    |interp, this_val, args| {
+                        let ctor_id = match interp.regexp_constructor_id {
+                            Some(id) => id,
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
+                                )
+                            }
+                        };
+                        match this_val {
+                            JsValue::Object(o) if o.id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
+                                )
+                            }
+                        }
+                        let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let s = match interp.to_string_value(&val) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        interp.regexp_legacy_input = s;
+                        Completion::Normal(JsValue::Undefined)
+                    },
+                ));
+                obj.borrow_mut().insert_property(
+                    pn,
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(getter),
+                        set: Some(setter),
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
+            }
+
+            // lastMatch / $& — get-only
+            for prop_name in &["lastMatch", "$&"] {
+                let pn = prop_name.to_string();
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    |interp, this_val, _args| {
+                        let ctor_id = match interp.regexp_constructor_id {
+                            Some(id) => id,
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
+                                )
+                            }
+                        };
+                        match this_val {
+                            JsValue::Object(o) if o.id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
+                                )
+                            }
+                        }
+                        Completion::Normal(JsValue::String(JsString::from_str(
+                            &interp.regexp_legacy_last_match,
+                        )))
+                    },
+                ));
+                obj.borrow_mut().insert_property(
+                    pn,
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
+            }
+
+            // lastParen / $+ — get-only
+            for prop_name in &["lastParen", "$+"] {
+                let pn = prop_name.to_string();
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    |interp, this_val, _args| {
+                        let ctor_id = match interp.regexp_constructor_id {
+                            Some(id) => id,
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
+                                )
+                            }
+                        };
+                        match this_val {
+                            JsValue::Object(o) if o.id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
+                                )
+                            }
+                        }
+                        Completion::Normal(JsValue::String(JsString::from_str(
+                            &interp.regexp_legacy_last_paren,
+                        )))
+                    },
+                ));
+                obj.borrow_mut().insert_property(
+                    pn,
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
+            }
+
+            // leftContext / $` — get-only
+            for prop_name in &["leftContext", "$`"] {
+                let pn = prop_name.to_string();
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    |interp, this_val, _args| {
+                        let ctor_id = match interp.regexp_constructor_id {
+                            Some(id) => id,
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
+                                )
+                            }
+                        };
+                        match this_val {
+                            JsValue::Object(o) if o.id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
+                                )
+                            }
+                        }
+                        Completion::Normal(JsValue::String(JsString::from_str(
+                            &interp.regexp_legacy_left_context,
+                        )))
+                    },
+                ));
+                obj.borrow_mut().insert_property(
+                    pn,
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
+            }
+
+            // rightContext / $' — get-only
+            for prop_name in &["rightContext", "$'"] {
+                let pn = prop_name.to_string();
+                let getter = self.create_function(JsFunction::native(
+                    format!("get {}", pn),
+                    0,
+                    |interp, this_val, _args| {
+                        let ctor_id = match interp.regexp_constructor_id {
+                            Some(id) => id,
+                            None => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor"),
+                                )
+                            }
+                        };
+                        match this_val {
+                            JsValue::Object(o) if o.id == ctor_id => {}
+                            _ => {
+                                return Completion::Throw(
+                                    interp.create_type_error("RegExp legacy accessor requires RegExp constructor as this"),
+                                )
+                            }
+                        }
+                        Completion::Normal(JsValue::String(JsString::from_str(
+                            &interp.regexp_legacy_right_context,
+                        )))
+                    },
+                ));
+                obj.borrow_mut().insert_property(
+                    pn,
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
+            }
 
             regexp_proto
                 .borrow_mut()

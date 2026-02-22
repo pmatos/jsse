@@ -178,7 +178,7 @@ These are tracked across all phases:
 - [x] **Unicode** — full Unicode support in lexer, identifiers, strings
 - [x] **Unicode RegExp property escapes** — Generated Unicode 17.0.0 tables, expand `\p{...}`/`\P{...}` inline (+292 passes, 88.34% → 88.52%). RegExp property-escapes: 722→1,012/1,074 (94.23%).
 - [x] **RegExp modifiers + dotAll** — Modifier syntax validation (`(?i:...)`, `(?s-m:...)`), dot line terminator fix (`.` no longer matches `\r`/`\u2028`/`\u2029`), modifier dotAll handling (+154 passes). RegExp: 3,240/3,892 (83.2%).
-- [ ] **Unicode RegExp v flag** — `v` flag (unicodeSets) support
+- [x] **Unicode RegExp v flag** — `v` flag (unicodeSets) support: parser, set operations, character class parsing, `\p{...}` string properties
 - [ ] **Error reporting** — quality error messages with source locations
 - [ ] **Spec compliance annotations** — link code to spec section IDs
 - [x] **Garbage collection** — mark-and-sweep GC with ephemeron support for WeakMap/WeakSet
@@ -214,7 +214,7 @@ These are tracked across all phases:
 | `built-ins/Temporal` | 8,964 | 8,964 (100%) |
 | `built-ins/Object` | 6,802 | 6,407 (94.2%) |
 | `built-ins/Array` | 6,111 | 5,567 (91.1%) |
-| `built-ins/RegExp` | 3,756 | 3,481 (92.7%) |
+| `built-ins/RegExp` | 4,012 | 3,846 (95.9%) |
 | `built-ins/TypedArray` | 2,860 | 2,558 (89.4%) |
 | `built-ins/TypedArrayConstructors` | 1,442 | 1,122 (77.8%) |
 | `built-ins/String` | 2,427 | 2,312 (95.3%) |
