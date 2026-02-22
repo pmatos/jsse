@@ -46,6 +46,7 @@ pub(crate) struct GeneratorContext {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum GeneratorExecutionState {
     SuspendedStart,
     SuspendedYield { target_yield: usize },
@@ -65,7 +66,7 @@ pub enum StateMachineExecutionState {
 pub struct TryContextInfo {
     pub catch_state: Option<usize>,
     pub finally_state: Option<usize>,
-    pub after_state: usize,
+    pub _after_state: usize,
     pub entered_catch: bool,
     pub entered_finally: bool,
 }
@@ -120,7 +121,7 @@ impl std::fmt::Debug for Environment {
 }
 
 pub(crate) struct WithObject {
-    pub(crate) object: Rc<RefCell<JsObjectData>>,
+    pub(crate) _object: Rc<RefCell<JsObjectData>>,
     pub(crate) obj_id: u64,
 }
 
@@ -628,7 +629,7 @@ pub enum IteratorState {
         func_env: EnvRef,
         is_strict: bool,
         execution_state: StateMachineExecutionState,
-        sent_value: JsValue,
+        _sent_value: JsValue,
         try_stack: Vec<TryContextInfo>,
         pending_binding: Option<SentValueBinding>,
         delegated_iterator: Option<DelegatedIteratorInfo>,
@@ -646,7 +647,7 @@ pub enum IteratorState {
         func_env: EnvRef,
         is_strict: bool,
         execution_state: StateMachineExecutionState,
-        sent_value: JsValue,
+        _sent_value: JsValue,
         try_stack: Vec<TryContextInfo>,
         pending_binding: Option<SentValueBinding>,
         delegated_iterator: Option<DelegatedIteratorInfo>,
@@ -2008,65 +2009,3 @@ pub(crate) struct SetRecord {
     pub(crate) size: f64,
 }
 
-#[derive(Debug, Clone)]
-pub enum ModuleStatus {
-    Unlinked,
-    Linking,
-    Linked,
-    Evaluating,
-    Evaluated,
-    Error(JsValue),
-}
-
-impl PartialEq for ModuleStatus {
-    fn eq(&self, other: &Self) -> bool {
-        matches!(
-            (self, other),
-            (ModuleStatus::Unlinked, ModuleStatus::Unlinked)
-                | (ModuleStatus::Linking, ModuleStatus::Linking)
-                | (ModuleStatus::Linked, ModuleStatus::Linked)
-                | (ModuleStatus::Evaluating, ModuleStatus::Evaluating)
-                | (ModuleStatus::Evaluated, ModuleStatus::Evaluated)
-        )
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ImportEntry {
-    pub module_request: String,
-    pub import_name: ImportName,
-    pub local_name: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum ImportName {
-    Star,
-    Default,
-    Named(String),
-}
-
-#[derive(Debug, Clone)]
-pub struct ExportEntry {
-    pub export_name: Option<String>,
-    pub module_request: Option<String>,
-    pub import_name: Option<ExportImportName>,
-    pub local_name: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub enum ExportImportName {
-    Star,
-    Named(String),
-}
-
-pub struct ModuleRecord {
-    pub specifier: String,
-    pub status: ModuleStatus,
-    pub environment: Option<EnvRef>,
-    pub namespace: Option<JsValue>,
-    pub import_entries: Vec<ImportEntry>,
-    pub export_entries: Vec<ExportEntry>,
-    pub local_export_entries: Vec<ExportEntry>,
-    pub indirect_export_entries: Vec<ExportEntry>,
-    pub star_export_entries: Vec<ExportEntry>,
-}
