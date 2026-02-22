@@ -3899,137 +3899,16 @@ impl Interpreter {
                         }
                         match interp.to_property_descriptor(&desc_val) {
                             Ok(desc) => {
-                                // ArraySetLength: §10.4.2.4
-                                if key == "length"
-                                    && obj.borrow().class_name == "Array"
-                                    && let Some(ref new_len_val) = desc.value {
-                                        let new_num = match interp.to_number_value(new_len_val) {
-                                            Ok(n) => n,
-                                            Err(e) => return Completion::Throw(e),
-                                        };
-                                        let new_len = new_num as u32;
-                                        if (new_len as f64) != new_num
-                                            || new_num < 0.0
-                                            || new_num.is_nan()
-                                            || new_num.is_infinite()
-                                        {
-                                            return Completion::Throw(
-                                                interp.create_error(
-                                                    "RangeError",
-                                                    "Invalid array length",
-                                                ),
-                                            );
-                                        }
-                                        let old_len = match obj.borrow().get_property("length") {
-                                            JsValue::Number(n) => n as u32,
-                                            _ => 0,
-                                        };
-                                        // §10.4.2.4 step 3.f: if old length is non-writable, reject
-                                        let old_len_writable = obj.borrow().properties.get("length")
-                                            .map(|d| d.writable != Some(false))
-                                            .unwrap_or(true);
-                                        if !old_len_writable && new_len != old_len {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "Cannot assign to read only property 'length'",
-                                            ));
-                                        }
-                                        let mut final_len = new_len;
-                                        if new_len < old_len {
-                                            // §10.4.2.4 step 3.l: delete from old_len-1 downward
-                                            let mut b = obj.borrow_mut();
-                                            let mut delete_failed = false;
-                                            let mut i = old_len;
-                                            while i > new_len {
-                                                i -= 1;
-                                                let k = i.to_string();
-                                                // Check if property exists and is non-configurable
-                                                let is_non_configurable = b.properties.get(&k)
-                                                    .map(|d| d.configurable == Some(false))
-                                                    .unwrap_or(false);
-                                                if is_non_configurable {
-                                                    final_len = i + 1;
-                                                    delete_failed = true;
-                                                    break;
-                                                }
-                                                b.properties.remove(&k);
-                                                b.property_order.retain(|pk| pk != &k);
-                                            }
-                                            // Also delete remaining indices between final_len and the failed one
-                                            if delete_failed {
-                                                // Clean up indices we already passed
-                                            } else {
-                                                // Delete everything from new_len to where we stopped
-                                                for j in new_len..i {
-                                                    let k = j.to_string();
-                                                    b.properties.remove(&k);
-                                                    b.property_order.retain(|pk| pk != &k);
-                                                }
-                                            }
-                                            if let Some(ref mut elems) = b.array_elements {
-                                                elems.truncate(final_len as usize);
-                                            }
-                                            if delete_failed {
-                                                // Set length to final_len, then throw
-                                                b.properties.insert(
-                                                    "length".to_string(),
-                                                    PropertyDescriptor::data(JsValue::Number(final_len as f64), true, false, false),
-                                                );
-                                                drop(b);
-                                                return Completion::Throw(interp.create_type_error(
-                                                    "Cannot delete array element",
-                                                ));
-                                            }
-                                        }
-                                        let len_desc = PropertyDescriptor {
-                                            value: Some(JsValue::Number(final_len as f64)),
-                                            ..desc
-                                        };
-                                        if !obj
-                                            .borrow_mut()
-                                            .define_own_property(key, len_desc)
-                                        {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "Cannot define property, object is not extensible or property is non-configurable",
-                                            ));
-                                        }
-                                        return Completion::Normal(target);
-                                    }
                                 let is_array = obj.borrow().class_name == "Array";
-                                // §10.4.2.1 step 3: array index property
                                 if is_array {
-                                    if let Ok(idx) = key.parse::<u32>() {
-                                        let b = obj.borrow();
-                                        let old_len = match b.get_property("length") {
-                                            JsValue::Number(n) => n as u32,
-                                            _ => 0,
-                                        };
-                                        let len_not_writable = b.properties.get("length")
-                                            .map(|d| d.writable == Some(false))
-                                            .unwrap_or(false);
-                                        drop(b);
-                                        // §10.4.2.1 step 3.a: reject if index >= old_len and length is non-writable
-                                        if idx >= old_len && len_not_writable {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "Cannot define property on array: index >= length and length is not writable",
-                                            ));
-                                        }
-                                        if !obj.borrow_mut().define_own_property(key.clone(), desc) {
+                                    match interp.array_define_own_property(o.id as usize, &key, desc) {
+                                        Ok(true) => {}
+                                        Ok(false) => {
                                             return Completion::Throw(interp.create_type_error(
                                                 "Cannot define property, object is not extensible or property is non-configurable",
                                             ));
                                         }
-                                        // §10.4.2.1 step 3.e: update length if index >= old_len
-                                        if idx >= old_len {
-                                            let new_len = idx + 1;
-                                            obj.borrow_mut().properties.insert(
-                                                "length".to_string(),
-                                                PropertyDescriptor::data(JsValue::Number(new_len as f64), true, false, false),
-                                            );
-                                        }
-                                    } else if !obj.borrow_mut().define_own_property(key, desc) {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "Cannot define property, object is not extensible or property is non-configurable",
-                                        ));
+                                        Err(e) => return Completion::Throw(e),
                                     }
                                 } else if !obj.borrow_mut().define_own_property(key, desc) {
                                     return Completion::Throw(interp.create_type_error(
@@ -4943,7 +4822,23 @@ impl Interpreter {
                         }
                         // Apply all descriptors
                         for (key, desc) in descriptors {
-                            if let Some(target_obj) = interp.get_object(t.id)
+                            let is_array = if let Some(target_obj) = interp.get_object(t.id) {
+                                target_obj.borrow().class_name == "Array"
+                            } else {
+                                false
+                            };
+
+                            if is_array {
+                                match interp.array_define_own_property(t.id as usize, &key, desc) {
+                                    Ok(true) => {}
+                                    Ok(false) => {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Cannot define property, object is not extensible or property is non-configurable",
+                                        ));
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else if let Some(target_obj) = interp.get_object(t.id)
                                 && !target_obj.borrow_mut().define_own_property(key, desc) {
                                     return Completion::Throw(interp.create_type_error(
                                         "Cannot define property, object is not extensible or property is non-configurable",
