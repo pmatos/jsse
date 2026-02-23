@@ -125,12 +125,23 @@ fn pua_to_surrogate(c: char) -> Option<u16> {
 /// Lone surrogates are mapped to PUA characters so they survive the conversion
 /// and can be matched by patterns that also use the PUA mapping.
 pub(crate) fn js_string_to_regex_input(code_units: &[u16]) -> String {
+    js_string_to_regex_input_mode(code_units, true)
+}
+
+fn js_string_to_regex_input_non_unicode(code_units: &[u16]) -> String {
+    js_string_to_regex_input_mode(code_units, false)
+}
+
+fn js_string_to_regex_input_mode(code_units: &[u16], unicode: bool) -> String {
     let mut result = String::new();
     let mut i = 0;
     while i < code_units.len() {
         let cu = code_units[i];
         if (0xD800..=0xDBFF).contains(&cu) {
-            if i + 1 < code_units.len() && (0xDC00..=0xDFFF).contains(&code_units[i + 1]) {
+            if unicode
+                && i + 1 < code_units.len()
+                && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
+            {
                 let cp =
                     ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
                 if let Some(c) = char::from_u32(cp) {
@@ -1459,8 +1470,35 @@ pub(super) fn translate_js_pattern_ex(
                     {
                         let hex: String = chars[i + 2..i + 6].iter().collect();
                         if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                            if is_surrogate(cp) {
+                            if unicode && (0xD800..=0xDBFF).contains(&cp)
+                                && i + 11 < len
+                                && chars[i + 6] == '\\'
+                                && chars[i + 7] == 'u'
+                                && chars[i + 8].is_ascii_hexdigit()
+                                && chars[i + 9].is_ascii_hexdigit()
+                                && chars[i + 10].is_ascii_hexdigit()
+                                && chars[i + 11].is_ascii_hexdigit()
+                            {
+                                let trail_hex: String = chars[i + 8..i + 12].iter().collect();
+                                if let Ok(trail) = u32::from_str_radix(&trail_hex, 16)
+                                    && (0xDC00..=0xDFFF).contains(&trail)
+                                {
+                                    let combined = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
+                                    if let Some(ch) = char::from_u32(combined) {
+                                        push_literal_char(&mut result, ch, in_char_class);
+                                    }
+                                    i += 12;
+                                } else {
+                                    if is_surrogate(cp) {
+                                        push_literal_char(&mut result, surrogate_to_pua(cp), in_char_class);
+                                    } else if let Some(ch) = char::from_u32(cp) {
+                                        push_literal_char(&mut result, ch, in_char_class);
+                                    }
+                                    i += 6;
+                                }
+                            } else if is_surrogate(cp) {
                                 push_literal_char(&mut result, surrogate_to_pua(cp), in_char_class);
+                                i += 6;
                             } else if let Some(ch) = char::from_u32(cp) {
                                 if non_unicode_icase(icase)
                                     && !in_char_class
@@ -1470,9 +1508,13 @@ pub(super) fn translate_js_pattern_ex(
                                 } else {
                                     push_literal_char(&mut result, ch, in_char_class);
                                 }
+                                i += 6;
+                            } else {
+                                i += 6;
                             }
+                        } else {
+                            i += 6;
                         }
-                        i += 6;
                     } else if !unicode {
                         // Annex B: incomplete \u is identity escape in non-unicode mode
                         push_literal_char(&mut result, 'u', in_char_class);
@@ -1993,7 +2035,13 @@ pub(super) fn translate_js_pattern_ex(
             continue;
         }
 
-        if non_unicode_icase(icase) && !in_char_class && needs_case_fold_guard(c) {
+        if !unicode && c as u32 >= 0x10000 {
+            let cp = c as u32;
+            let hi = ((cp - 0x10000) >> 10) + 0xD800;
+            let lo = ((cp - 0x10000) & 0x3FF) + 0xDC00;
+            push_literal_char(&mut result, surrogate_to_pua(hi), in_char_class);
+            push_literal_char(&mut result, surrogate_to_pua(lo), in_char_class);
+        } else if non_unicode_icase(icase) && !in_char_class && needs_case_fold_guard(c) {
             push_case_fold_guarded(&mut result, c, false);
         } else {
             result.push(c);
@@ -4361,6 +4409,22 @@ fn get_substitution(
     Ok(result)
 }
 
+fn split_surrogates_for_non_unicode(input: &str) -> String {
+    let mut result = String::new();
+    for c in input.chars() {
+        if c as u32 >= 0x10000 && pua_to_surrogate(c).is_none() {
+            let cp = c as u32;
+            let hi = ((cp - 0x10000) >> 10) + 0xD800;
+            let lo = ((cp - 0x10000) & 0x3FF) + 0xDC00;
+            result.push(surrogate_to_pua(hi));
+            result.push(surrogate_to_pua(lo));
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 fn regexp_exec_raw(
     interp: &mut Interpreter,
     this_id: u64,
@@ -4371,6 +4435,15 @@ fn regexp_exec_raw(
     let global = flags.contains('g');
     let sticky = flags.contains('y');
     let has_indices = flags.contains('d');
+    let unicode = flags.contains('u') || flags.contains('v');
+
+    let non_unicode_input;
+    let input = if !unicode {
+        non_unicode_input = split_surrogates_for_non_unicode(input);
+        &non_unicode_input
+    } else {
+        input
+    };
 
     // Spec: Let lastIndex be ? ToLength(? Get(R, "lastIndex")).
     let this_val = JsValue::Object(crate::types::JsObject { id: this_id });

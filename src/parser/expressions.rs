@@ -336,6 +336,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_exponentiation(&mut self) -> Result<Expression, ParseError> {
+        let start = self.current_token_start;
         let base = self.parse_unary()?;
         if self.current == Token::Exponent {
             let is_unary = matches!(
@@ -345,7 +346,8 @@ impl<'a> Parser<'a> {
                     | Expression::Void(_)
                     | Expression::Delete(_)
             );
-            if is_unary {
+            let is_parenthesized = self.source.as_bytes().get(start) == Some(&b'(');
+            if is_unary && !is_parenthesized {
                 return Err(self.error(
                     "Unary operator used immediately before exponentiation expression. Parenthesization is required",
                 ));
