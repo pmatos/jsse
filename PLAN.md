@@ -239,5 +239,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 85,480 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 85,441 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |

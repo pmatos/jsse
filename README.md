@@ -76,6 +76,9 @@ Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262
   - `ArrayBuffer` (constructor, `byteLength`, `slice`, `isView`)
   - TypedArrays (`Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`) with indexed access, prototype methods (`at`, `set`, `subarray`, `slice`, `copyWithin`, `fill`, `indexOf`, `lastIndexOf`, `includes`, `find`, `findIndex`, `findLast`, `findLastIndex`, `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `every`, `some`, `reverse`, `sort`, `join`, `toString`, `toReversed`, `toSorted`, `entries`, `keys`, `values`, `from`, `of`)
   - `DataView` (constructor, all get/set methods for Int8 through BigUint64, little/big endian)
+  - `Temporal` (all types: `Instant`, `ZonedDateTime`, `PlainDateTime`, `PlainDate`, `PlainTime`, `PlainYearMonth`, `PlainMonthDay`, `Duration`, `Temporal.Now`; full arithmetic, comparison, rounding, formatting; IANA timezone support via ICU4X; 12 calendar systems; 100% test262 + intl402/Temporal compliance)
+  - `Intl.DateTimeFormat` (partial — dateStyle/timeStyle, calendar-aware Temporal formatting)
+  - `Intl.NumberFormat` (partial)
   - `globalThis`
   - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
