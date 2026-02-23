@@ -912,7 +912,7 @@ impl<'a> Lexer<'a> {
         let mut in_class = false;
         loop {
             match self.peek() {
-                None | Some('\n') | Some('\r') => {
+                None | Some('\n') | Some('\r') | Some('\u{2028}') | Some('\u{2029}') => {
                     return Err(LexError {
                         message: "Unterminated regular expression".to_string(),
                         location: self.location(),
@@ -932,8 +932,16 @@ impl<'a> Lexer<'a> {
                 }
                 Some('\\') => {
                     pattern.push(self.advance().unwrap());
-                    if let Some(_c) = self.peek() {
-                        pattern.push(self.advance().unwrap());
+                    match self.peek() {
+                        None | Some('\n') | Some('\r') | Some('\u{2028}') | Some('\u{2029}') => {
+                            return Err(LexError {
+                                message: "Unterminated regular expression".to_string(),
+                                location: self.location(),
+                            });
+                        }
+                        Some(_) => {
+                            pattern.push(self.advance().unwrap());
+                        }
                     }
                 }
                 Some(_) => {
