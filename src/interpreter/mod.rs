@@ -1839,10 +1839,7 @@ impl Interpreter {
 
         // 9. If newLenDesc.[[Writable]] is absent or true, let newWritable be true.
         //    Else, need to defer setting writable to false until after deletions.
-        let new_writable = match new_len_desc.writable {
-            Some(false) => false,
-            _ => true,
-        };
+        let new_writable = !matches!(new_len_desc.writable, Some(false));
 
         // 10. If newWritable is false, set newLenDesc.[[Writable]] to true (we'll set it false later).
         if !new_writable {
@@ -1910,10 +1907,8 @@ impl Interpreter {
                 len_desc.value = Some(JsValue::Number(actual_new_len as f64));
             }
             // 13.d.iii.2. If newWritable is false, set length writable to false.
-            if !new_writable {
-                if let Some(len_desc) = obj.properties.get_mut("length") {
-                    len_desc.writable = Some(false);
-                }
+            if !new_writable && let Some(len_desc) = obj.properties.get_mut("length") {
+                len_desc.writable = Some(false);
             }
             return Ok(false);
         }
@@ -1943,84 +1938,83 @@ impl Interpreter {
         }
 
         // 2. If P is an array index (canonical numeric string with value <= 0xFFFFFFFE)...
-        if let Ok(index) = key.parse::<u64>() {
-            if index <= 0xFFFF_FFFE && index.to_string() == key {
-                let index_u32 = index as u32;
+        if let Ok(index) = key.parse::<u64>()
+            && index <= 0xFFFF_FFFE
+            && index.to_string() == key
+        {
+            let index_u32 = index as u32;
 
-                // 2.a. Let oldLen be the current length value.
-                let (old_len, length_writable) = {
-                    let obj_rc = self.get_object(obj_id as u64).unwrap();
-                    let obj = obj_rc.borrow();
-                    let len_desc = obj.properties.get("length");
-                    let ol = len_desc
-                        .and_then(|d| d.value.as_ref())
-                        .and_then(|v| {
-                            if let JsValue::Number(n) = v {
-                                Some(*n as u32)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0);
-                    let w = len_desc.and_then(|d| d.writable).unwrap_or(true);
-                    (ol, w)
-                };
-
-                // 2.b. If index >= oldLen and length is non-writable, return false.
-                if index_u32 >= old_len && !length_writable {
-                    return Ok(false);
-                }
-
-                // 2.c. Let succeeded be OrdinaryDefineOwnProperty(A, P, Desc).
-                let succeeded = {
-                    let obj_rc = self.get_object(obj_id as u64).unwrap();
-                    obj_rc
-                        .borrow_mut()
-                        .define_own_property(key.to_string(), desc.clone())
-                };
-
-                // 2.d. If succeeded is false, return false.
-                if !succeeded {
-                    return Ok(false);
-                }
-
-                // 2.e. If index >= oldLen, set length to index + 1.
-                if index_u32 >= old_len {
-                    let new_len = index_u32 + 1;
-                    let obj_rc = self.get_object(obj_id as u64).unwrap();
-                    let mut obj = obj_rc.borrow_mut();
-                    if let Some(len_desc) = obj.properties.get_mut("length") {
-                        len_desc.value = Some(JsValue::Number(new_len as f64));
-                    }
-                    // Also update array_elements if needed.
-                    if let Some(ref mut elems) = obj.array_elements {
-                        let val = desc.value.unwrap_or(JsValue::Undefined);
-                        let idx = index_u32 as usize;
-                        if idx < elems.len() {
-                            elems[idx] = val;
-                        } else if idx <= elems.len() + 1024 {
-                            while elems.len() < idx {
-                                elems.push(JsValue::Undefined);
-                            }
-                            elems.push(val);
+            // 2.a. Let oldLen be the current length value.
+            let (old_len, length_writable) = {
+                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj = obj_rc.borrow();
+                let len_desc = obj.properties.get("length");
+                let ol = len_desc
+                    .and_then(|d| d.value.as_ref())
+                    .and_then(|v| {
+                        if let JsValue::Number(n) = v {
+                            Some(*n as u32)
+                        } else {
+                            None
                         }
-                    }
-                } else {
-                    // Update array_elements for in-range indices.
-                    let obj_rc = self.get_object(obj_id as u64).unwrap();
-                    let mut obj = obj_rc.borrow_mut();
-                    if let Some(ref mut elems) = obj.array_elements {
-                        let idx = index_u32 as usize;
-                        if idx < elems.len() {
-                            if let Some(ref val) = desc.value {
-                                elems[idx] = val.clone();
-                            }
-                        }
-                    }
-                }
+                    })
+                    .unwrap_or(0);
+                let w = len_desc.and_then(|d| d.writable).unwrap_or(true);
+                (ol, w)
+            };
 
-                return Ok(true);
+            // 2.b. If index >= oldLen and length is non-writable, return false.
+            if index_u32 >= old_len && !length_writable {
+                return Ok(false);
             }
+
+            // 2.c. Let succeeded be OrdinaryDefineOwnProperty(A, P, Desc).
+            let succeeded = {
+                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                obj_rc
+                    .borrow_mut()
+                    .define_own_property(key.to_string(), desc.clone())
+            };
+
+            // 2.d. If succeeded is false, return false.
+            if !succeeded {
+                return Ok(false);
+            }
+
+            // 2.e. If index >= oldLen, set length to index + 1.
+            if index_u32 >= old_len {
+                let new_len = index_u32 + 1;
+                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let mut obj = obj_rc.borrow_mut();
+                if let Some(len_desc) = obj.properties.get_mut("length") {
+                    len_desc.value = Some(JsValue::Number(new_len as f64));
+                }
+                if let Some(ref mut elems) = obj.array_elements {
+                    let val = desc.value.unwrap_or(JsValue::Undefined);
+                    let idx = index_u32 as usize;
+                    if idx < elems.len() {
+                        elems[idx] = val;
+                    } else if idx <= elems.len() + 1024 {
+                        while elems.len() < idx {
+                            elems.push(JsValue::Undefined);
+                        }
+                        elems.push(val);
+                    }
+                }
+            } else {
+                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let mut obj = obj_rc.borrow_mut();
+                if let Some(ref mut elems) = obj.array_elements {
+                    let idx = index_u32 as usize;
+                    if idx < elems.len()
+                        && let Some(ref val) = desc.value
+                    {
+                        elems[idx] = val.clone();
+                    }
+                }
+            }
+
+            return Ok(true);
         }
 
         // 3. Return OrdinaryDefineOwnProperty(A, P, Desc).
