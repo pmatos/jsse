@@ -2549,18 +2549,66 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 continue;
             }
 
-            if after_escape == 'x' && i < len && chars[i].is_ascii_hexdigit() {
-                i += 1;
+            if after_escape == 'x' {
                 if i < len && chars[i].is_ascii_hexdigit() {
                     i += 1;
+                    if i < len && chars[i].is_ascii_hexdigit() {
+                        i += 1;
+                    } else if _unicode {
+                        return Err(format!(
+                            "Invalid regular expression: /{}/ : Invalid escape",
+                            source
+                        ));
+                    }
+                } else if _unicode {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Invalid escape",
+                        source
+                    ));
                 }
             } else if after_escape == 'u' {
                 if i < len && chars[i] == '{' {
                     i += 1;
+                    let hex_start = i;
                     while i < len && chars[i] != '}' {
+                        if _unicode && !chars[i].is_ascii_hexdigit() {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                source
+                            ));
+                        }
                         i += 1;
                     }
-                    if i < len {
+                    if i >= len {
+                        if _unicode {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                source
+                            ));
+                        }
+                    } else {
+                        if _unicode {
+                            let hex_str: String = chars[hex_start..i].iter().collect();
+                            if hex_str.is_empty() {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                    source
+                                ));
+                            }
+                            if let Ok(cp) = u64::from_str_radix(&hex_str, 16) {
+                                if cp > 0x10FFFF {
+                                    return Err(format!(
+                                        "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                        source
+                                    ));
+                                }
+                            } else {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                    source
+                                ));
+                            }
+                        }
                         i += 1;
                     }
                 } else {
@@ -2569,9 +2617,22 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         i += 1;
                         count += 1;
                     }
+                    if _unicode && count < 4 {
+                        return Err(format!(
+                            "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                            source
+                        ));
+                    }
                 }
-            } else if after_escape == 'c' && i < len && chars[i].is_ascii_alphabetic() {
-                i += 1;
+            } else if after_escape == 'c' {
+                if i < len && chars[i].is_ascii_alphabetic() {
+                    i += 1;
+                } else if _unicode {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Invalid escape",
+                        source
+                    ));
+                }
             } else if (after_escape == 'p' || after_escape == 'P') && i < len && chars[i] == '{' {
                 let start = i + 1;
                 let mut end = start;
@@ -2617,7 +2678,11 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     i = end;
                 }
             } else if _unicode {
-                // In unicode mode, only specific escape sequences are valid
+                // In unicode mode, only specific escape sequences are valid.
+                // Note: \c, \x, \u, \p, \P are handled above with proper validation.
+                // If we reach here with those characters, they already failed their
+                // proper forms and should be rejected.
+                // \1-\7 are allowed as backreferences; \8, \9 are always invalid.
                 let valid = matches!(
                     after_escape,
                     'd' | 'D'
@@ -2633,30 +2698,33 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         | 'f'
                         | 'v'
                         | '0'
-                        | 'c'
-                        | 'x'
-                        | 'u'
-                        | 'p'
-                        | 'P'
                         | 'k'
-                        | '^'
-                        | '$'
-                        | '\\'
-                        | '.'
-                        | '*'
-                        | '+'
-                        | '?'
-                        | '('
-                        | ')'
-                        | '['
-                        | ']'
-                        | '{'
-                        | '}'
-                        | '|'
-                        | '/'
-                        | '1'..='9'
+                        | '1'
+                        ..='7'
+                            | '^'
+                            | '$'
+                            | '\\'
+                            | '.'
+                            | '*'
+                            | '+'
+                            | '?'
+                            | '('
+                            | ')'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                            | '|'
+                            | '/'
                 );
                 if !valid {
+                    return Err(format!(
+                        "Invalid regular expression: /{}/ : Invalid escape",
+                        source
+                    ));
+                }
+                // In unicode mode, \0 must not be followed by another digit (no octal)
+                if after_escape == '0' && i < len && chars[i].is_ascii_digit() {
                     return Err(format!(
                         "Invalid regular expression: /{}/ : Invalid escape",
                         source
@@ -2679,25 +2747,170 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 validate_v_flag_class_inner(&chars, &mut i, source, class_negated)?;
             } else {
                 let mut prev_value: Option<u32> = None;
+                let mut prev_is_class_escape = false;
                 let mut expecting_range_end = false;
 
                 while i < len && chars[i] != ']' {
+                    if _unicode && chars[i] == '\\' && i + 1 < len {
+                        let esc_char = chars[i + 1];
+                        if esc_char == 'x' {
+                            if !(i + 3 < len
+                                && chars[i + 2].is_ascii_hexdigit()
+                                && chars[i + 3].is_ascii_hexdigit())
+                            {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid escape",
+                                    source
+                                ));
+                            }
+                        } else if esc_char == 'u' {
+                            if i + 2 < len && chars[i + 2] == '{' {
+                                let hex_start = i + 3;
+                                let mut j = hex_start;
+                                while j < len && chars[j] != '}' {
+                                    if !chars[j].is_ascii_hexdigit() {
+                                        return Err(format!(
+                                            "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                            source
+                                        ));
+                                    }
+                                    j += 1;
+                                }
+                                if j >= len {
+                                    return Err(format!(
+                                        "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                        source
+                                    ));
+                                }
+                                let hex_str: String = chars[hex_start..j].iter().collect();
+                                if hex_str.is_empty() {
+                                    return Err(format!(
+                                        "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                        source
+                                    ));
+                                }
+                                if let Ok(cp) = u64::from_str_radix(&hex_str, 16)
+                                    && cp > 0x10FFFF
+                                {
+                                    return Err(format!(
+                                        "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                        source
+                                    ));
+                                }
+                            } else {
+                                let mut count = 0;
+                                let mut j = i + 2;
+                                while count < 4 && j < len && chars[j].is_ascii_hexdigit() {
+                                    j += 1;
+                                    count += 1;
+                                }
+                                if count < 4 {
+                                    return Err(format!(
+                                        "Invalid regular expression: /{}/ : Invalid Unicode escape",
+                                        source
+                                    ));
+                                }
+                            }
+                        } else if esc_char == 'c' {
+                            if !(i + 2 < len && chars[i + 2].is_ascii_alphabetic()) {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid escape",
+                                    source
+                                ));
+                            }
+                        } else if esc_char == '0' {
+                            if i + 2 < len && chars[i + 2].is_ascii_digit() {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid escape",
+                                    source
+                                ));
+                            }
+                        } else {
+                            let is_p_without_brace = (esc_char == 'p' || esc_char == 'P')
+                                && !(i + 2 < len && chars[i + 2] == '{');
+                            let is_invalid_identity = !matches!(
+                                esc_char,
+                                'd' | 'D'
+                                    | 'w'
+                                    | 'W'
+                                    | 's'
+                                    | 'S'
+                                    | 'b'
+                                    | 'B'
+                                    | 'n'
+                                    | 'r'
+                                    | 't'
+                                    | 'f'
+                                    | 'v'
+                                    | '0'
+                                    | 'c'
+                                    | 'x'
+                                    | 'u'
+                                    | 'p'
+                                    | 'P'
+                                    | '^'
+                                    | '$'
+                                    | '\\'
+                                    | '.'
+                                    | '*'
+                                    | '+'
+                                    | '?'
+                                    | '('
+                                    | ')'
+                                    | '['
+                                    | ']'
+                                    | '{'
+                                    | '}'
+                                    | '|'
+                                    | '/'
+                                    | '-'
+                            );
+                            if is_p_without_brace || is_invalid_identity {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid escape",
+                                    source
+                                ));
+                            }
+                        }
+                    }
+
                     if chars[i] == '-' && !expecting_range_end {
-                        if prev_value.is_some() && i + 1 < len && chars[i + 1] != ']' {
+                        if (prev_value.is_some() || prev_is_class_escape)
+                            && i + 1 < len
+                            && chars[i + 1] != ']'
+                        {
+                            if _unicode && prev_is_class_escape {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Invalid class escape in range",
+                                    source
+                                ));
+                            }
                             expecting_range_end = true;
                             i += 1;
                             continue;
                         }
                         prev_value = Some('-' as u32);
+                        prev_is_class_escape = false;
                         i += 1;
                         continue;
                     }
 
                     let save_i = i;
                     let val = resolve_class_escape(&chars, &mut i);
+                    let is_class_esc = val.is_none()
+                        && save_i < len
+                        && chars[save_i] == '\\'
+                        && save_i + 1 < len
+                        && matches!(chars[save_i + 1], 'd' | 'D' | 'w' | 'W' | 's' | 'S');
 
                     if expecting_range_end {
                         expecting_range_end = false;
+                        if _unicode && is_class_esc {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Invalid class escape in range",
+                                source
+                            ));
+                        }
                         if let (Some(start_val), Some(end_val)) = (prev_value, val)
                             && start_val > end_val
                         {
@@ -2707,10 +2920,12 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                             ));
                         }
                         prev_value = val;
+                        prev_is_class_escape = is_class_esc;
                         continue;
                     }
 
                     prev_value = val;
+                    prev_is_class_escape = is_class_esc;
                     if i == save_i {
                         i += 1;
                     }
@@ -2804,6 +3019,12 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         j += 1;
                     }
                     if !is_quant {
+                        if _unicode {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Lone quantifier brackets",
+                                source
+                            ));
+                        }
                         has_atom = true;
                         i += 1;
                         continue;
@@ -2832,7 +3053,12 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     j += 1;
                 }
                 if !found_close {
-                    // Not a quantifier, just a literal '{'
+                    if _unicode {
+                        return Err(format!(
+                            "Invalid regular expression: /{}/ : Lone quantifier brackets",
+                            source
+                        ));
+                    }
                     i += 1;
                     continue;
                 }
@@ -2861,6 +3087,12 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     _ => false,
                 };
                 if !valid {
+                    if _unicode {
+                        return Err(format!(
+                            "Invalid regular expression: /{}/ : Lone quantifier brackets",
+                            source
+                        ));
+                    }
                     i += 1;
                     continue;
                 }
@@ -2914,6 +3146,16 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     }
                 }
             }
+            i = quant_end;
+            has_atom = false;
+            continue;
+        }
+
+        if _unicode && (c == '}' || c == ']') {
+            return Err(format!(
+                "Invalid regular expression: /{}/ : Lone quantifier brackets",
+                source
+            ));
         }
 
         has_atom = true;
