@@ -884,10 +884,14 @@ impl<'a> Parser<'a> {
                 let regex_tok = self.lexer.lex_regex()?;
                 if let Token::RegExpLiteral { pattern, flags } = regex_tok {
                     let full_pattern = format!("{}{}", prefix, pattern);
+                    self.prev_line_terminator = false;
                     self.current = self.lexer.next_token()?;
                     while self.current == Token::LineTerminator {
+                        self.prev_line_terminator = true;
                         self.current = self.lexer.next_token()?;
                     }
+                    self.current_token_start = self.lexer.token_start();
+                    self.current_token_end = self.lexer.offset();
                     validate_regexp_literal(&full_pattern, &flags)?;
                     Ok(Expression::Literal(Literal::RegExp(full_pattern, flags)))
                 } else {
