@@ -1919,6 +1919,26 @@ impl Interpreter {
                             }
                         }
 
+                        // BalanceTimeDuration: convert time to days for PlainDate
+                        if !is_zdt && temporal_unit_order(largest_unit) >= temporal_unit_order("day") {
+                            let time_ns: i128 = rh as i128 * 3_600_000_000_000
+                                + rmi as i128 * 60_000_000_000
+                                + rs as i128 * 1_000_000_000
+                                + rms as i128 * 1_000_000
+                                + rus as i128 * 1_000
+                                + rns as i128;
+                            let extra_days = time_ns / 86_400_000_000_000;
+                            let rem_ns = time_ns % 86_400_000_000_000;
+                            rd += extra_days as f64;
+                            let r = unbalance_time_ns_i128(rem_ns, "hour");
+                            rh = r.1 as f64;
+                            rmi = r.2 as f64;
+                            rs = r.3 as f64;
+                            rms = r.4 as f64;
+                            rus = r.5 as f64;
+                            rns = r.6 as f64;
+                        }
+
                         // BalanceDateDurationRelative
                         if matches!(largest_unit, "year" | "month" | "week")
                             || (largest_unit == "day"
