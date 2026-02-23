@@ -1041,8 +1041,8 @@ impl Interpreter {
 
                         // If era+eraYear provided, use calendar_fields_to_iso with specific year
                         if let (Some(es), Some(ey)) = (&era_str, era_year) {
-                            if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso(
-                                Some(es), ey, Some(&mc), month_num.map(|v| v as u8), d_f as u8, &cal,
+                            if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso_overflow(
+                                Some(es), ey, Some(&mc), month_num.map(|v| v as u8), d_f as u8, &cal, &overflow,
                             ) {
                                 return create_plain_month_day_result(interp, iso_m, iso_d, iso_y, &cal);
                             }
@@ -1058,8 +1058,8 @@ impl Interpreter {
                             if let Some(yr) = year_opt {
                                 let era_ref = era_str.as_deref();
                                 let ey = era_year.unwrap_or(yr);
-                                if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso(
-                                    era_ref, ey, Some(&mc), month_num.map(|v| v as u8), d_f as u8, &cal,
+                                if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso_overflow(
+                                    era_ref, ey, Some(&mc), month_num.map(|v| v as u8), d_f as u8, &cal, &overflow,
                                 ) {
                                     return create_plain_month_day_result(interp, iso_m, iso_d, iso_y, &cal);
                                 }

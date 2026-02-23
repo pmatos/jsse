@@ -3,7 +3,8 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,496 (48,257 files, dual strict/non-strict per spec)
-**Current pass rate:** 85,521 / 92,624 (92.33%)
+**Current pass rate:** 85,480 / 92,496 (92.41%)
+**intl402/Temporal pass rate:** 3,560 / 3,838 (92.76%)
 
 ---
 
@@ -220,6 +221,7 @@ These are tracked across all phases:
 | `built-ins/String` | 2,427 | 2,312 (95.3%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
 | `annexB` | 1,377 | 1,038 (75.4%) |
+| `intl402/Temporal` | 3,838 | 3,560 (92.76%) |
 | `intl402` | varies | Internationalization — optional |
 
 ---
@@ -237,5 +239,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 85,521 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 85,480 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |

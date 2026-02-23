@@ -834,13 +834,13 @@ impl Interpreter {
 
                     let (mut dy, mut dm, _, _) = if cal != "iso8601" {
                         match super::difference_calendar_date(
-                            y1, m1, rd1, y2, m2, rd1, &largest_unit, &cal,
+                            y1, m1, rd1, y2, m2, rd2, &largest_unit, &cal,
                         ) {
                             Some(v) => v,
-                            None => difference_iso_date(y1, m1, rd1, y2, m2, rd1, &largest_unit),
+                            None => difference_iso_date(y1, m1, rd1, y2, m2, rd2, &largest_unit),
                         }
                     } else {
-                        difference_iso_date(y1, m1, rd1, y2, m2, rd1, &largest_unit)
+                        difference_iso_date(y1, m1, rd1, y2, m2, rd2, &largest_unit)
                     };
 
                     let effective_mode = if sign == -1 {
@@ -1326,13 +1326,14 @@ impl Interpreter {
                                 (None, y)
                             };
 
-                        if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso(
+                        if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso_overflow(
                             icu_era.as_deref(),
                             icu_year,
                             mc_str.as_deref(),
                             month_num.map(|v| v as u8),
                             1, // day=1 for year-month
                             &cal,
+                            &overflow,
                         ) {
                             return create_plain_year_month_result(interp, iso_y, iso_m, iso_d, &cal);
                         }

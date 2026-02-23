@@ -2394,13 +2394,14 @@ impl Interpreter {
                                 (None, y_f as i32)
                             };
 
-                        match super::calendar_fields_to_iso(
+                        match super::calendar_fields_to_iso_overflow(
                             icu_era.as_deref(),
                             icu_year,
                             mc_str.as_deref(),
                             month_num.map(|v| v as u8),
                             d_f as u8,
                             &cal,
+                            &overflow,
                         ) {
                             Some((iso_y, iso_m, iso_d)) => {
                                 if !super::iso_date_time_within_limits(

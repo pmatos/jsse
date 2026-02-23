@@ -190,17 +190,22 @@ fn get_tz_offset_ns(tz: &str, epoch_ns: &BigInt) -> i64 {
     // IANA timezone — use chrono-tz
     use chrono::{Offset, TimeZone, Utc};
     use chrono_tz::Tz;
-    let epoch_secs: i64 = (epoch_ns / BigInt::from(NS_PER_SEC))
-        .try_into()
-        .unwrap_or(0);
+    // Use floor division to correctly handle negative epoch nanoseconds.
+    // Truncation toward zero would place e.g. -59004000000000001ns in second
+    // -59004000 instead of -59004001, giving the wrong offset near transitions.
+    let ns_per_sec_bi = BigInt::from(NS_PER_SEC);
+    let zero = BigInt::from(0i64);
+    let q = epoch_ns / &ns_per_sec_bi;
+    let r = epoch_ns % &ns_per_sec_bi;
+    let (epoch_secs_bi, rem_bi) = if r < zero {
+        (q - BigInt::from(1i64), r + &ns_per_sec_bi)
+    } else {
+        (q, r)
+    };
+    let epoch_secs: i64 = epoch_secs_bi.try_into().unwrap_or(0);
     let nanos: u32 = {
-        let rem = epoch_ns % BigInt::from(NS_PER_SEC);
-        let r: i64 = rem.try_into().unwrap_or(0);
-        if r >= 0 {
-            r as u32
-        } else {
-            (r + NS_PER_SEC as i64) as u32
-        }
+        let r: i64 = rem_bi.try_into().unwrap_or(0);
+        r as u32
     };
 
     if let Ok(tz_parsed) = tz.parse::<Tz>() {
@@ -407,81 +412,161 @@ fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
     hi
 }
 
-/// Find the next UTC offset transition strictly after epoch_ns.
-/// Returns None if no transition exists within valid epoch range.
-fn get_next_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
-    let ns_max: i128 = 8_640_000_000_000_000_000_000;
-    let current_off = get_tz_offset_ns(tz, &BigInt::from(epoch_ns)) as i128;
+/// Get total UTC offset in seconds at a given UTC epoch second.
+/// Uses OffsetComponents to get base_utc_offset + dst_offset.
+fn get_total_offset_secs(tz_parsed: &chrono_tz::Tz, epoch_secs: i64) -> i32 {
+    use chrono::{NaiveDateTime, TimeZone};
+    use chrono_tz::OffsetComponents;
+    let dt = NaiveDateTime::from_timestamp_opt(epoch_secs, 0)
+        .unwrap_or_else(|| NaiveDateTime::from_timestamp_opt(0, 0).unwrap());
+    let utc_dt = dt.and_utc();
+    let tz_dt = utc_dt.with_timezone(tz_parsed);
+    let offset = tz_dt.offset();
+    (offset.base_utc_offset().num_seconds() + offset.dst_offset().num_seconds()) as i32
+}
 
-    // Exponentially probe forward to find a point with a different offset
-    let mut step: i128 = NS_PER_SEC;
-    let mut probe = ((epoch_ns / NS_PER_SEC) + 1) * NS_PER_SEC; // next second boundary
-    loop {
-        if probe > ns_max {
-            return None;
+/// Find the exact transition point (in nanoseconds) between lo_ns and hi_ns,
+/// where offsets are known to differ. Binary search at second granularity.
+fn find_exact_transition(tz_parsed: &chrono_tz::Tz, lo_ns: i128, hi_ns: i128) -> i128 {
+    let mut lo = lo_ns;
+    let mut hi = hi_ns;
+    let lo_off = get_total_offset_secs(tz_parsed, (lo / NS_PER_SEC) as i64);
+    while hi - lo > NS_PER_SEC {
+        let mid = lo + (hi - lo) / 2;
+        let mid_sec = (mid / NS_PER_SEC) * NS_PER_SEC;
+        let mid_off = get_total_offset_secs(tz_parsed, (mid_sec / NS_PER_SEC) as i64);
+        if mid_off == lo_off {
+            lo = mid_sec;
+        } else {
+            hi = mid_sec;
         }
-        let probe_off = get_tz_offset_ns(tz, &BigInt::from(probe)) as i128;
-        if probe_off != current_off {
-            // Binary search between (probe - step) and probe at second granularity
-            let mut lo = (probe - step).max(((epoch_ns / NS_PER_SEC) + 1) * NS_PER_SEC);
-            let mut hi = probe;
-            let lo_off = get_tz_offset_ns(tz, &BigInt::from(lo)) as i128;
-            while hi - lo > NS_PER_SEC {
-                let mid = lo + (hi - lo) / 2;
-                let mid_sec = (mid / NS_PER_SEC) * NS_PER_SEC;
-                let mid_off = get_tz_offset_ns(tz, &BigInt::from(mid_sec)) as i128;
-                if mid_off == lo_off {
-                    lo = mid_sec;
-                } else {
-                    hi = mid_sec;
+    }
+    hi
+}
+
+/// Scan forward day-by-day from start_ns to find the first offset transition.
+/// Returns None if no transition found before limit_ns.
+/// Find the next UTC offset transition strictly after epoch_ns.
+/// First window uses 1-day steps (catches close-together transitions near start).
+/// Subsequent windows use 90-day coarse steps for fast far-distance scanning.
+fn get_next_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
+    use chrono_tz::Tz;
+
+    let ns_max: i128 = 8_640_000_000_000_000_000_000;
+    let tz_parsed: Tz = tz.parse().ok()?;
+
+    let start_ns = ((epoch_ns / NS_PER_SEC) + 1) * NS_PER_SEC;
+    if start_ns > ns_max {
+        return None;
+    }
+
+    let coarse = NS_PER_DAY * 90;
+    let mut prev_ns = start_ns;
+    let mut prev_off = get_total_offset_secs(&tz_parsed, (prev_ns / NS_PER_SEC) as i64);
+    let mut step = coarse;
+    let mut first_window = true;
+
+    loop {
+        let window_end = (prev_ns + step).min(ns_max);
+        let inner_step = if first_window { NS_PER_DAY } else { coarse };
+        let mut check = prev_ns;
+        let mut check_off = prev_off;
+
+        while check < window_end {
+            let next_check = (check + inner_step).min(window_end);
+            let next_check_off =
+                get_total_offset_secs(&tz_parsed, (next_check / NS_PER_SEC) as i64);
+            if next_check_off != check_off {
+                if inner_step <= NS_PER_DAY {
+                    return Some(find_exact_transition(&tz_parsed, check, next_check));
+                }
+                // Coarse bracket — day-scan within it
+                let mut scan = check;
+                let mut scan_off = check_off;
+                while scan < next_check {
+                    let ns = (scan + NS_PER_DAY).min(next_check);
+                    let ns_off =
+                        get_total_offset_secs(&tz_parsed, (ns / NS_PER_SEC) as i64);
+                    if ns_off != scan_off {
+                        return Some(find_exact_transition(&tz_parsed, scan, ns));
+                    }
+                    scan = ns;
+                    scan_off = ns_off;
                 }
             }
-            // hi is the first second with a different offset = the transition point
-            return Some(hi);
+            check = next_check;
+            check_off = next_check_off;
         }
-        step = (step * 2).min(NS_PER_DAY * 180);
-        probe += step;
+
+        if window_end >= ns_max {
+            return None;
+        }
+        prev_ns = window_end;
+        prev_off = check_off;
+        first_window = false;
+        step = (step * 2).min(NS_PER_DAY * 36500);
     }
 }
 
 /// Find the previous UTC offset transition strictly before epoch_ns.
-/// Returns None if no transition exists within valid epoch range.
+/// First window uses 1-day steps (catches close-together transitions near start).
+/// Subsequent windows use 90-day coarse steps for fast far-distance scanning.
 fn get_previous_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
-    let ns_min: i128 = -8_640_000_000_000_000_000_000;
-    // Check offset at the second boundary just before epoch_ns
-    let ref_second = (epoch_ns - 1) / NS_PER_SEC;
-    let ref_ns = ref_second * NS_PER_SEC;
-    let current_off = get_tz_offset_ns(tz, &BigInt::from(ref_ns)) as i128;
+    use chrono_tz::Tz;
 
-    // Exponentially probe backward
-    let mut step: i128 = NS_PER_SEC;
-    let mut probe = ref_ns - NS_PER_SEC;
+    let ns_min: i128 = -8_640_000_000_000_000_000_000;
+    let tz_parsed: Tz = tz.parse().ok()?;
+
+    let ref_ns = ((epoch_ns - 1) / NS_PER_SEC) * NS_PER_SEC;
+    if ref_ns < ns_min {
+        return None;
+    }
+
+    let coarse = NS_PER_DAY * 90;
+    let mut next_ns = ref_ns;
+    let mut next_off = get_total_offset_secs(&tz_parsed, (next_ns / NS_PER_SEC) as i64);
+    let mut step = coarse;
+    let mut first_window = true;
+
     loop {
-        if probe < ns_min {
-            return None;
-        }
-        let probe_off = get_tz_offset_ns(tz, &BigInt::from(probe)) as i128;
-        if probe_off != current_off {
-            // Binary search: find the exact transition between probe and (probe + step)
-            let mut lo = probe;
-            let mut hi = (probe + step).min(ref_ns);
-            let lo_off = get_tz_offset_ns(tz, &BigInt::from(lo)) as i128;
-            while hi - lo > NS_PER_SEC {
-                let mid = lo + (hi - lo) / 2;
-                // Snap to second boundary for probing
-                let mid_sec = (mid / NS_PER_SEC) * NS_PER_SEC;
-                let mid_off = get_tz_offset_ns(tz, &BigInt::from(mid_sec)) as i128;
-                if mid_off == lo_off {
-                    lo = mid_sec;
-                } else {
-                    hi = mid_sec;
+        let window_start = (next_ns - step).max(ns_min);
+        let inner_step = if first_window { NS_PER_DAY } else { coarse };
+        let mut check = next_ns;
+        let mut check_off = next_off;
+
+        while check > window_start {
+            let prev_check = (check - inner_step).max(window_start);
+            let prev_check_off =
+                get_total_offset_secs(&tz_parsed, (prev_check / NS_PER_SEC) as i64);
+            if prev_check_off != check_off {
+                if inner_step <= NS_PER_DAY {
+                    return Some(find_exact_transition(&tz_parsed, prev_check, check));
+                }
+                // Coarse bracket — day-scan backward within it
+                let mut scan = check;
+                let mut scan_off = check_off;
+                while scan > prev_check {
+                    let ns = (scan - NS_PER_DAY).max(prev_check);
+                    let ns_off =
+                        get_total_offset_secs(&tz_parsed, (ns / NS_PER_SEC) as i64);
+                    if ns_off != scan_off {
+                        return Some(find_exact_transition(&tz_parsed, ns, scan));
+                    }
+                    scan = ns;
+                    scan_off = ns_off;
                 }
             }
-            // hi is the first second with the "current" offset = the transition point
-            return Some(hi);
+            check = prev_check;
+            check_off = prev_check_off;
         }
-        step = (step * 2).min(NS_PER_DAY * 180);
-        probe -= step;
+
+        if window_start <= ns_min {
+            return None;
+        }
+        next_ns = window_start;
+        next_off = check_off;
+        first_window = false;
+        step = (step * 2).min(NS_PER_DAY * 36500);
     }
 }
 
@@ -3402,17 +3487,7 @@ fn zdt_add_subtract(
         (y, m, d)
     };
 
-    // Rebuild local nanoseconds
-    let epoch_days = super::iso_date_to_epoch_days(ny, nm, nd) as i128;
-    let day_ns = h as i128 * NS_PER_HOUR
-        + mi as i128 * NS_PER_MIN
-        + s as i128 * NS_PER_SEC
-        + ms as i128 * NS_PER_MS
-        + us as i128 * 1_000
-        + nanos as i128;
-    let local_ns = epoch_days * NS_PER_DAY + day_ns;
-
-    // Add time part
+    // Time part delta in nanoseconds
     let time_ns = (hours * sign as f64) as i128 * NS_PER_HOUR
         + (minutes * sign as f64) as i128 * NS_PER_MIN
         + (seconds * sign as f64) as i128 * NS_PER_SEC
@@ -3420,11 +3495,28 @@ fn zdt_add_subtract(
         + (microseconds * sign as f64) as i128 * 1_000
         + (nanoseconds * sign as f64) as i128;
 
-    let approx = BigInt::from(local_ns);
-    let offset = get_tz_offset_ns(&tz, &approx) as i128;
-    let new_epoch_ns = BigInt::from(local_ns + time_ns - offset);
+    // If date part was added, rebuild local wall-clock then re-resolve
+    if years != 0.0 || months != 0.0 || weeks != 0.0 || days != 0.0 {
+        let epoch_days = super::iso_date_to_epoch_days(ny, nm, nd) as i128;
+        let day_ns = h as i128 * NS_PER_HOUR
+            + mi as i128 * NS_PER_MIN
+            + s as i128 * NS_PER_SEC
+            + ms as i128 * NS_PER_MS
+            + us as i128 * 1_000
+            + nanos as i128;
+        let local_ns = epoch_days * NS_PER_DAY + day_ns;
 
-    create_zdt(interp, new_epoch_ns, tz, cal)
+        // Resolve local time in timezone using compatible disambiguation
+        let intermediate_epoch = disambiguate_instant(&tz, local_ns, "compatible");
+        // Add time part directly to epoch (no re-resolution)
+        let new_epoch_ns = BigInt::from(intermediate_epoch + time_ns);
+        create_zdt(interp, new_epoch_ns, tz, cal)
+    } else {
+        // Time-only duration: add directly to epoch nanoseconds
+        let epoch: i128 = (&ns).try_into().unwrap_or(0);
+        let new_epoch_ns = BigInt::from(epoch + time_ns);
+        create_zdt(interp, new_epoch_ns, tz, cal)
+    }
 }
 
 fn zdt_until_since(
@@ -4012,3 +4104,4 @@ fn parse_zdt_to_string_options(
         cal_display,
     ))
 }
+

@@ -1411,13 +1411,14 @@ impl Interpreter {
                                 (None, bag.year.unwrap_or(0))
                             };
 
-                        match super::calendar_fields_to_iso(
+                        match super::calendar_fields_to_iso_overflow(
                             icu_era,
                             icu_year,
                             bag.mc_str.as_deref(),
                             bag.month_num,
                             bag.day,
                             &bag.cal,
+                            &overflow,
                         ) {
                             Some((iso_y, iso_m, iso_d)) => {
                                 if !super::iso_date_within_limits(iso_y, iso_m, iso_d) {
