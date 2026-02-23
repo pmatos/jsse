@@ -2504,6 +2504,8 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     let mut has_any_named_group = false;
     let mut has_bare_k_escape = false;
     let mut has_incomplete_backref = false;
+    // Track assertion groups: 0 = non-assertion, 1 = lookahead, 2 = lookbehind
+    let mut group_kind_stack: Vec<u8> = Vec::new();
 
     while i < len {
         let c = chars[i];
@@ -2941,14 +2943,20 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
         if c == '(' {
             i += 1;
+            let mut kind: u8 = 0; // 0=non-assertion, 1=lookahead, 2=lookbehind
             if i < len && chars[i] == '?' {
                 i += 1;
                 if i < len {
                     match chars[i] {
-                        ':' | '=' | '!' => {
+                        ':' => {
+                            i += 1;
+                        }
+                        '=' | '!' => {
+                            kind = 1; // lookahead
                             i += 1;
                         }
                         '<' if i + 1 < len && (chars[i + 1] == '=' || chars[i + 1] == '!') => {
+                            kind = 2; // lookbehind
                             i += 2;
                         }
                         '<' if i + 1 < len && chars[i + 1] != '=' && chars[i + 1] != '!' => {
@@ -2977,6 +2985,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     }
                 }
             }
+            group_kind_stack.push(kind);
             group_depth += 1;
             while alt_ids.len() <= group_depth {
                 alt_ids.push(0);
@@ -2988,7 +2997,50 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
         if c == ')' {
             i += 1;
             group_depth = group_depth.saturating_sub(1);
-            has_atom = true;
+            let kind = group_kind_stack.pop().unwrap_or(0);
+            if kind > 0 {
+                // Assertion group: check if next is a quantifier
+                // Lookbehinds (kind=2): always reject quantifiers
+                // Lookaheads (kind=1): reject in unicode mode only (Annex B allows in non-unicode)
+                let reject = kind == 2 || _unicode;
+                if reject {
+                    if i < len {
+                        let qc = chars[i];
+                        if qc == '*' || qc == '+' || qc == '?' {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Nothing to repeat",
+                                source
+                            ));
+                        }
+                        if qc == '{' {
+                            let mut j = i + 1;
+                            let mut is_quant = false;
+                            while j < len {
+                                if chars[j] == '}' {
+                                    is_quant = true;
+                                    break;
+                                }
+                                if !chars[j].is_ascii_digit() && chars[j] != ',' {
+                                    break;
+                                }
+                                j += 1;
+                            }
+                            if is_quant {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Nothing to repeat",
+                                    source
+                                ));
+                            }
+                        }
+                    }
+                    has_atom = false;
+                } else {
+                    // Non-unicode lookahead: allowed as Annex B QuantifiableAssertion
+                    has_atom = true;
+                }
+            } else {
+                has_atom = true;
+            }
             continue;
         }
 
