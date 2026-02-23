@@ -48,7 +48,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | for-in | 95% | 188/198 |
 | Object | 97% | 6,565/6,802 |
 | Function | 94% | 839/893 |
-| Array | 91% | 5,567/6,111 |
+| Array | 96% | 5,846/6,111 |
 | DataView | 91% | 1,016/1,122 |
 | TypedArray | 89% | 2,558/2,860 |
 | RegExp | 93% | 3,481/3,756 |
@@ -172,6 +172,8 @@ These features block significant numbers of tests:
 
 65. ~~**SharedArrayBuffer + Atomics implementation**~~ — ✅ Done (+868 new passes, 93.84% → 94.78%). Full implementation of SharedArrayBuffer (§25.2) and Atomics namespace (§25.4). SharedArrayBuffer: constructor with `maxByteLength` option, prototype methods (byteLength, maxByteLength, growable, grow, slice), @@species, @@toStringTag. `arraybuffer_is_shared` flag on JsObjectData, `shared_arraybuffer_prototype` on Interpreter with GC root. detach_arraybuffer throws TypeError for SABs. Atomics: 14 methods — add/sub/and/or/xor/exchange (read-modify-write), load, store (with ToIntegerOrInfinity return), compareExchange (bytewise comparison), isLockFree, wait (throws TypeError, [[CanBlock]]=false), notify (returns 0), waitAsync (synchronous not-equal/timed-out paths), pause (strict type checking). ValidateIntegerTypedArray and ValidateAtomicAccess helpers with proper spec-compliant error ordering. Single-threaded engine: $262.agent tests not implementable. SharedArrayBuffer: 180/208 (87%), Atomics: 492/764 (64%), TypedArrayConstructors: +102 bonus passes.
 
+66. ~~**Array exotic [[DefineOwnProperty]] + ArraySetLength**~~ — ✅ Done (+116 new passes, 94.84% → 94.96%). Implemented spec-compliant Array exotic [[DefineOwnProperty]] (§10.4.2.1) and ArraySetLength (§10.4.2.4) as centralized methods on Interpreter. Refactored Object.defineProperty to use these methods (removing ~120 lines of inline Array logic). Updated Object.defineProperties to route Array targets through array_define_own_property(). Fixed set_property_value writable check for Array length. Object/defineProperty: 2250/2250 (100%), Object/defineProperties: 1262/1264 (99.84%), Object: 6,565/6,802 (97%), Array: 5,846/6,111 (96%).
+
 ---
 
 ## Cross-Cutting Concerns
@@ -216,8 +218,8 @@ These are tracked across all phases:
 | `language/asi` | 102 | |
 | `language/` (other) | ~400 | white-space, comments, keywords, etc. |
 | `built-ins/Temporal` | 8,964 | 8,964 (100%) |
-| `built-ins/Object` | 6,802 | 6,407 (94.2%) |
-| `built-ins/Array` | 6,111 | 5,567 (91.1%) |
+| `built-ins/Object` | 6,802 | 6,565 (96.5%) |
+| `built-ins/Array` | 6,111 | 5,846 (95.7%) |
 | `built-ins/RegExp` | 4,012 | 3,846 (95.9%) |
 | `built-ins/TypedArray` | 2,860 | 2,558 (89.4%) |
 | `built-ins/TypedArrayConstructors` | 1,442 | 1,122 (77.8%) |
