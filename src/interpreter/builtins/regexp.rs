@@ -1305,19 +1305,30 @@ pub(super) fn translate_js_pattern_ex(
                             let name = decode_group_name_raw(&chars[start..start + end]);
                             if duplicated_names.contains(&name) {
                                 if let Some(variants) = dup_group_map.get(&name) {
-                                    let parts: Vec<String> = variants
+                                    let backrefs: Vec<String> = variants
                                         .iter()
                                         .map(|(iname, _)| {
                                             format!("(?P={})", sanitize_group_name(iname))
                                         })
                                         .collect();
-                                    result.push_str(&format!("(?:{}|(?=))", parts.join("|")));
+                                    let guards: Vec<String> = variants
+                                        .iter()
+                                        .map(|(iname, _)| {
+                                            format!("(?(<{}>)(?!)|)", sanitize_group_name(iname))
+                                        })
+                                        .collect();
+                                    result.push_str(&format!(
+                                        "(?:{}|{})",
+                                        backrefs.join("|"),
+                                        guards.join("")
+                                    ));
                                 } else {
                                     result
                                         .push_str(&format!("(?P={})", sanitize_group_name(&name)));
                                 }
                             } else {
-                                result.push_str(&format!("(?P={})", sanitize_group_name(&name)));
+                                let sname = sanitize_group_name(&name);
+                                result.push_str(&format!("(?(<{}>)(?P={}))", sname, sname));
                             }
                             i = start + end + 1;
                             continue;
@@ -3390,6 +3401,38 @@ impl RegexCaptures {
 
 type DupGroupMap = std::collections::HashMap<String, Vec<(String, u32)>>;
 
+fn clear_stale_dup_captures(caps: &mut RegexCaptures, dup_map: &DupGroupMap) {
+    if dup_map.is_empty() {
+        return;
+    }
+    for variants in dup_map.values() {
+        let mut matched_indices: Vec<(usize, usize)> = Vec::new();
+        for (internal_name, _) in variants {
+            let sanitized = sanitize_group_name(internal_name);
+            for (i, name_opt) in caps.names.iter().enumerate() {
+                if let Some(n) = name_opt
+                    && *n == sanitized
+                    && let Some(ref m) = caps.groups[i]
+                {
+                    matched_indices.push((i, m.start));
+                }
+            }
+        }
+        if matched_indices.len() > 1 {
+            let best_idx = matched_indices
+                .iter()
+                .max_by_key(|(_, start)| *start)
+                .unwrap()
+                .0;
+            for (idx, _) in &matched_indices {
+                if *idx != best_idx {
+                    caps.groups[*idx] = None;
+                }
+            }
+        }
+    }
+}
+
 fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
     build_regex_ex(source, flags).map(|(re, _, _)| re)
 }
@@ -4202,7 +4245,7 @@ fn regexp_exec_raw(
         Err(_) => return Completion::Normal(JsValue::Null),
     };
 
-    let caps = match regex_captures_at(&re, input, last_index_byte) {
+    let mut caps = match regex_captures_at(&re, input, last_index_byte) {
         Some(c) => c,
         None => {
             if (global || sticky)
@@ -4213,6 +4256,8 @@ fn regexp_exec_raw(
             return Completion::Normal(JsValue::Null);
         }
     };
+
+    clear_stale_dup_captures(&mut caps, &dup_map);
 
     let full_match = caps.get(0).unwrap();
     // Convert absolute byte offsets to UTF-16 code unit offsets
