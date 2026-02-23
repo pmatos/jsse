@@ -1054,6 +1054,77 @@ fn unescape_q_string(s: &str) -> String {
     result
 }
 
+fn decode_group_name_raw(chars: &[char]) -> String {
+    let mut result = String::new();
+    let len = chars.len();
+    let mut i = 0;
+    while i < len {
+        if chars[i] == '\\' && i + 1 < len && chars[i + 1] == 'u' {
+            i += 2; // skip \u
+            if i < len && chars[i] == '{' {
+                i += 1; // skip {
+                let hex_start = i;
+                while i < len && chars[i] != '}' {
+                    i += 1;
+                }
+                let hex: String = chars[hex_start..i].iter().collect();
+                i += 1; // skip }
+                if let Ok(cp) = u32::from_str_radix(&hex, 16)
+                    && let Some(c) = char::from_u32(cp)
+                {
+                    result.push(c);
+                }
+            } else if i + 4 <= len {
+                let hex: String = chars[i..i + 4].iter().collect();
+                if let Ok(cp) = u32::from_str_radix(&hex, 16) {
+                    i += 4;
+                    if (0xD800..=0xDBFF).contains(&cp)
+                        && i + 5 < len
+                        && chars[i] == '\\'
+                        && chars[i + 1] == 'u'
+                    {
+                        let trail_hex: String = chars[i + 2..i + 6].iter().collect();
+                        if let Ok(trail) = u32::from_str_radix(&trail_hex, 16)
+                            && (0xDC00..=0xDFFF).contains(&trail)
+                        {
+                            let combined = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
+                            if let Some(c) = char::from_u32(combined) {
+                                result.push(c);
+                            }
+                            i += 6; // skip \uXXXX trail surrogate
+                            continue;
+                        }
+                    }
+                    if let Some(c) = char::from_u32(cp) {
+                        result.push(c);
+                    }
+                } else {
+                    i += 4;
+                }
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+    result
+}
+
+fn sanitize_group_name(name: &str) -> String {
+    let mut result = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            result.push(c);
+        } else {
+            result.push_str(&format!("_u{:04X}_", c as u32));
+        }
+    }
+    if result.starts_with(|c: char| c.is_ascii_digit()) {
+        result.insert(0, '_');
+    }
+    result
+}
+
 pub(super) struct TranslationResult {
     pub(super) pattern: String,
     dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>>,
@@ -1154,7 +1225,7 @@ pub(super) fn translate_js_pattern_ex(
                             k += 1;
                         }
                         if k < len {
-                            let name: String = chars[name_start..k].iter().collect();
+                            let name = decode_group_name_raw(&chars[name_start..k]);
                             all_group_names.push(name);
                         }
                     }
@@ -1231,19 +1302,22 @@ pub(super) fn translate_js_pattern_ex(
                     } else {
                         let start = i + 3;
                         if let Some(end) = chars[start..].iter().position(|&c| c == '>') {
-                            let name: String = chars[start..start + end].iter().collect();
+                            let name = decode_group_name_raw(&chars[start..start + end]);
                             if duplicated_names.contains(&name) {
                                 if let Some(variants) = dup_group_map.get(&name) {
                                     let parts: Vec<String> = variants
                                         .iter()
-                                        .map(|(iname, _)| format!("(?P={})", iname))
+                                        .map(|(iname, _)| {
+                                            format!("(?P={})", sanitize_group_name(iname))
+                                        })
                                         .collect();
                                     result.push_str(&format!("(?:{}|(?=))", parts.join("|")));
                                 } else {
-                                    result.push_str(&format!("(?P={})", name));
+                                    result
+                                        .push_str(&format!("(?P={})", sanitize_group_name(&name)));
                                 }
                             } else {
-                                result.push_str(&format!("(?P={})", name));
+                                result.push_str(&format!("(?P={})", sanitize_group_name(&name)));
                             }
                             i = start + end + 1;
                             continue;
@@ -1587,7 +1661,7 @@ pub(super) fn translate_js_pattern_ex(
                 while k < len && chars[k] != '>' {
                     k += 1;
                 }
-                let name: String = chars[name_start..k].iter().collect();
+                let name = decode_group_name_raw(&chars[name_start..k]);
                 if group_name_seen.insert(name.clone()) {
                     group_name_order.push(name.clone());
                 }
@@ -1599,11 +1673,11 @@ pub(super) fn translate_js_pattern_ex(
                         .entry(name)
                         .or_default()
                         .push((internal_name.clone(), groups_seen));
-                    result.push_str(&format!("(?P<{}>", internal_name));
+                    result.push_str(&format!("(?P<{}>", sanitize_group_name(&internal_name)));
                     i = k + 1; // skip past name and '>'
                 } else {
-                    result.push_str("(?P<");
-                    i += 3;
+                    result.push_str(&format!("(?P<{}>", sanitize_group_name(&name)));
+                    i = k + 1; // skip past name and '>'
                 }
             }
             continue;
@@ -4197,9 +4271,10 @@ fn regexp_exec_raw(
                 // Duplicate named group: find which variant matched
                 let mut matched_val = JsValue::Undefined;
                 for (internal_name, _) in variants {
+                    let sanitized = sanitize_group_name(internal_name);
                     for (i, name_opt) in caps.names.iter().enumerate() {
                         if let Some(n) = name_opt
-                            && n == internal_name
+                            && *n == sanitized
                             && let Some(m) = caps.get(i)
                         {
                             matched_val = JsValue::String(regex_output_to_js_string(&m.text));
@@ -4214,11 +4289,12 @@ fn regexp_exec_raw(
                     .borrow_mut()
                     .insert_value(orig_name.clone(), matched_val);
             } else {
-                // Non-duplicate: find by exact name match in caps.names
+                // Non-duplicate: find by sanitized name match in caps.names
+                let sanitized = sanitize_group_name(orig_name);
                 let mut val = JsValue::Undefined;
                 for (i, name_opt) in caps.names.iter().enumerate() {
                     if let Some(n) = name_opt
-                        && n == orig_name
+                        && *n == sanitized
                     {
                         val = match caps.get(i) {
                             Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
@@ -4275,9 +4351,10 @@ fn regexp_exec_raw(
                     if let Some(variants) = dup_map.get(orig_name) {
                         let mut matched_val = JsValue::Undefined;
                         for (internal_name, _) in variants {
+                            let sanitized = sanitize_group_name(internal_name);
                             for (i, name_opt) in caps.names.iter().enumerate() {
                                 if let Some(n) = name_opt
-                                    && n == internal_name
+                                    && *n == sanitized
                                     && let Some(m) = caps.get(i)
                                 {
                                     let cap_start = byte_offset_to_utf16(input, m.start);
@@ -4297,10 +4374,11 @@ fn regexp_exec_raw(
                             .borrow_mut()
                             .insert_value(orig_name.clone(), matched_val);
                     } else {
+                        let sanitized = sanitize_group_name(orig_name);
                         let mut val = JsValue::Undefined;
                         for (i, name_opt) in caps.names.iter().enumerate() {
                             if let Some(n) = name_opt
-                                && n == orig_name
+                                && *n == sanitized
                             {
                                 val = match caps.get(i) {
                                     Some(m) => {
