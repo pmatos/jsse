@@ -1153,6 +1153,9 @@ pub(super) fn translate_js_pattern_ex(
     let mut in_char_class = false;
     let mut groups_seen: u32 = 0;
     let mut open_groups: Vec<u32> = Vec::new();
+    let mut open_group_names: Vec<Option<String>> = Vec::new();
+    let mut group_num_to_name: std::collections::HashMap<u32, String> =
+        std::collections::HashMap::new();
     let mut group_is_capturing: Vec<bool> = Vec::new();
     let mut lookbehind_depth: u32 = 0;
     let mut is_lookbehind_group: Vec<bool> = Vec::new();
@@ -1335,8 +1338,15 @@ pub(super) fn translate_js_pattern_ex(
                                         .push_str(&format!("(?P={})", sanitize_group_name(&name)));
                                 }
                             } else {
-                                let sname = sanitize_group_name(&name);
-                                result.push_str(&format!("(?(<{}>)(?P={}))", sname, sname));
+                                let is_forward = !group_name_seen.contains(&name);
+                                let is_self_ref =
+                                    open_group_names.iter().any(|n| n.as_deref() == Some(&name));
+                                if is_forward || is_self_ref {
+                                    result.push_str("(?:)");
+                                } else {
+                                    let sname = sanitize_group_name(&name);
+                                    result.push_str(&format!("(?(<{}>)(?P={}))", sname, sname));
+                                }
                             }
                             i = start + end + 1;
                             continue;
@@ -1545,10 +1555,43 @@ pub(super) fn translate_js_pattern_ex(
                         result.push_str("(?:)");
                         i = ref_end;
                     } else if ref_num <= total_groups {
-                        // Normal backreference to already-seen group
-                        result.push('\\');
-                        for &ch in &chars[ref_start..ref_end] {
-                            result.push(ch);
+                        // Backward backreference: use conditional to handle
+                        // groups that didn't participate (e.g. (a)?\1)
+                        if let Some(gname) = group_num_to_name.get(&ref_num) {
+                            let sname = sanitize_group_name(gname);
+                            if duplicated_names.contains(gname) {
+                                if let Some(variants) = dup_group_map.get(gname) {
+                                    let backrefs: Vec<String> = variants
+                                        .iter()
+                                        .map(|(iname, _)| {
+                                            format!("(?P={})", sanitize_group_name(iname))
+                                        })
+                                        .collect();
+                                    let guards: Vec<String> = variants
+                                        .iter()
+                                        .map(|(iname, _)| {
+                                            format!("(?(<{}>)(?!)|)", sanitize_group_name(iname))
+                                        })
+                                        .collect();
+                                    result.push_str(&format!(
+                                        "(?:{}|{})",
+                                        backrefs.join("|"),
+                                        guards.join("")
+                                    ));
+                                } else {
+                                    result
+                                        .push_str(&format!("(?P={})", sanitize_group_name(gname)));
+                                }
+                            } else {
+                                result.push_str(&format!("(?(<{}>)(?P={})|)", sname, sname));
+                            }
+                        } else {
+                            result.push_str(&format!("(?({})", ref_num));
+                            result.push('\\');
+                            for &ch in &chars[ref_start..ref_end] {
+                                result.push(ch);
+                            }
+                            result.push_str("|)");
                         }
                         i = ref_end;
                     } else if !flags.contains('u') && !flags.contains('v') {
@@ -1704,6 +1747,7 @@ pub(super) fn translate_js_pattern_ex(
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(true);
                 group_result_start.push(None);
+                open_group_names.push(None);
                 result.push_str("(?<");
                 result.push(chars[i + 3]);
                 i += 4;
@@ -1727,6 +1771,8 @@ pub(super) fn translate_js_pattern_ex(
                     k += 1;
                 }
                 let name = decode_group_name_raw(&chars[name_start..k]);
+                open_group_names.push(Some(name.clone()));
+                group_num_to_name.insert(groups_seen, name.clone());
                 if group_name_seen.insert(name.clone()) {
                     group_name_order.push(name.clone());
                 }
@@ -1813,6 +1859,7 @@ pub(super) fn translate_js_pattern_ex(
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(false);
                 group_result_start.push(None);
+                open_group_names.push(None);
 
                 // Emit the group with s stripped from flags
                 result.push_str("(?");
@@ -1855,6 +1902,7 @@ pub(super) fn translate_js_pattern_ex(
             let was_capturing = matches!(group_is_capturing.pop(), Some(true));
             let was_lookbehind = matches!(is_lookbehind_group.pop(), Some(true));
             let grp_start = group_result_start.pop().flatten();
+            open_group_names.pop();
             if was_capturing {
                 open_groups.pop();
             }
@@ -1909,6 +1957,7 @@ pub(super) fn translate_js_pattern_ex(
                 open_groups.push(groups_seen);
                 group_is_capturing.push(true);
                 is_lookbehind_group.push(false);
+                open_group_names.push(None);
                 if lookbehind_depth > 0 {
                     group_result_start.push(Some(result.len()));
                 } else {
@@ -1918,6 +1967,7 @@ pub(super) fn translate_js_pattern_ex(
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(false);
                 group_result_start.push(None);
+                open_group_names.push(None);
             }
         }
 
