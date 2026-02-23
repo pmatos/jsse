@@ -1081,10 +1081,24 @@ impl Interpreter {
             "toPlainYearMonth".to_string(),
             0,
             |interp, this, _args| {
-                let (y, m, _d, cal) = match get_plain_date_fields(interp, &this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, &this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                if cal != "iso8601" {
+                    // For non-ISO calendars, find the ISO date for day 1 of the calendar month
+                    if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
+                        if let Some((iy, im, id)) =
+                            super::calendar_fields_to_iso(
+                                None, cf.year, Some(&cf.month_code), None, 1, &cal,
+                            )
+                        {
+                            return super::plain_year_month::create_plain_year_month_result(
+                                interp, iy, im, id, &cal,
+                            );
+                        }
+                    }
+                }
                 super::plain_year_month::create_plain_year_month_result(interp, y, m, 1, &cal)
             },
         ));

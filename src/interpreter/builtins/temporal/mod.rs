@@ -1702,15 +1702,17 @@ pub(crate) fn iso_day_of_year(year: i32, month: u8, day: u8) -> u16 {
 
 // ISO day of week: 1=Monday, 7=Sunday (per spec)
 pub(crate) fn iso_day_of_week(year: i32, month: u8, day: u8) -> u8 {
-    // Use a modified version of Tomohiko Sakamoto's algorithm
-    let t: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
-    let mut y = year;
-    if month < 3 {
-        y -= 1;
-    }
-    let dow = (y + y / 4 - y / 100 + y / 400 + t[(month - 1) as usize] + day as i32) % 7;
-    // Convert: 0=Sunday -> 7, 1=Monday -> 1, ..., 6=Saturday -> 6
-    if dow == 0 { 7 } else { dow as u8 }
+    // Use Julian Day Number for correct results across all years including negative
+    let y = year as i64;
+    let m = month as i64;
+    let d = day as i64;
+    let a = (14 - m) / 12;
+    let y2 = y + 4800 - a;
+    let m2 = m + 12 * a - 3;
+    let jdn = d + (153 * m2 + 2) / 5 + 365 * y2 + y2 / 4 - y2 / 100 + y2 / 400 - 32045;
+    // JDN % 7: 0=Monday, 1=Tuesday, ..., 6=Sunday
+    let dow = jdn.rem_euclid(7) + 1; // 1=Monday, ..., 7=Sunday
+    dow as u8
 }
 
 // ISO week of year (ISO 8601 week date): returns (week, yearOfWeek)

@@ -639,6 +639,22 @@ fn format_offset_string(offset_ns: i64) -> String {
     }
 }
 
+// FormatDateTimeUTCOffsetRounded: rounds offset to nearest minute
+fn format_offset_string_rounded(offset_ns: i64) -> String {
+    let ns_per_min = NS_PER_MIN as i64;
+    // RoundNumberToIncrement(offset_ns, 60e9, half-expand)
+    let rounded = if offset_ns >= 0 {
+        (offset_ns + ns_per_min / 2) / ns_per_min * ns_per_min
+    } else {
+        -(((-offset_ns) + ns_per_min / 2) / ns_per_min * ns_per_min)
+    };
+    let sign = if rounded >= 0 { '+' } else { '-' };
+    let abs_min = (rounded.unsigned_abs() as i64) / ns_per_min;
+    let h = abs_min / 60;
+    let m = abs_min % 60;
+    format!("{sign}{h:02}:{m:02}")
+}
+
 fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> Completion {
     if !is_valid_epoch_ns(&ns) {
         return Completion::Throw(interp.create_range_error("epochNanoseconds out of range"));
@@ -1585,7 +1601,7 @@ fn zdt_to_string(
     };
 
     let offset_str = if offset_display != "never" {
-        format_offset_string(offset_ns)
+        format_offset_string_rounded(offset_ns)
     } else {
         String::new()
     };

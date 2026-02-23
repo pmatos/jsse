@@ -4,7 +4,7 @@ A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,496 (48,257 files, dual strict/non-strict per spec)
 **Current pass rate:** 85,441 / 92,496 (92.37%)
-**intl402/Temporal pass rate:** 3,832 / 3,838 (99.84%)
+**intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
 
@@ -221,7 +221,7 @@ These are tracked across all phases:
 | `built-ins/String` | 2,427 | 2,312 (95.3%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
 | `annexB` | 1,377 | 1,038 (75.4%) |
-| `intl402/Temporal` | 3,838 | 3,832 (99.84%) |
+| `intl402/Temporal` | 3,838 | 3,838 (100.00%) |
 | `intl402` | varies | Internationalization — optional |
 
 ---
