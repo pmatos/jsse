@@ -501,6 +501,9 @@ impl<'a> Lexer<'a> {
                     if digits == 0 {
                         return Err(self.error("Invalid Unicode escape"));
                     }
+                    if (0xD800..=0xDFFF).contains(&val) {
+                        return Err(self.error("Invalid Unicode code point"));
+                    }
                     let c = char::from_u32(val)
                         .ok_or_else(|| self.error("Invalid Unicode code point"))?;
                     let mut buf = [0u16; 2];

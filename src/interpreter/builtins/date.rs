@@ -1,5 +1,167 @@
 use super::super::*;
 
+fn date_to_locale_string(
+    interp: &mut Interpreter,
+    this: &JsValue,
+    args: &[JsValue],
+    required: &str,
+    defaults: &str,
+) -> Completion {
+    fn this_time_value_locale(interp: &Interpreter, this: &JsValue) -> Option<f64> {
+        if let JsValue::Object(o) = this
+            && let Some(obj) = interp.get_object(o.id)
+        {
+            let b = obj.borrow();
+            if b.class_name == "Date"
+                && let Some(JsValue::Number(t)) = &b.primitive_value
+            {
+                return Some(*t);
+            }
+        }
+        None
+    }
+
+    let tv = match this_time_value_locale(interp, this) {
+        Some(t) => t,
+        None => {
+            let e = interp.create_type_error("this is not a Date object");
+            return Completion::Throw(e);
+        }
+    };
+
+    if tv.is_nan() {
+        return Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")));
+    }
+
+    let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+    let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+
+    // ToDateTimeOptions(options, required, defaults)
+    let options_obj = if matches!(options_arg, JsValue::Undefined) {
+        interp.create_object()
+    } else {
+        match interp.to_object(&options_arg) {
+            Completion::Normal(v) => {
+                if let JsValue::Object(o) = &v {
+                    if let Some(src) = interp.get_object(o.id) {
+                        let new_obj = interp.create_object();
+                        let src_b = src.borrow();
+                        for (k, pd) in src_b.properties.iter() {
+                            new_obj.borrow_mut().insert_property(k.clone(), pd.clone());
+                        }
+                        new_obj
+                    } else {
+                        interp.create_object()
+                    }
+                } else {
+                    interp.create_object()
+                }
+            }
+            Completion::Throw(e) => return Completion::Throw(e),
+            _ => interp.create_object(),
+        }
+    };
+
+    let has_prop = |obj: &Rc<RefCell<JsObjectData>>, name: &str| -> bool {
+        obj.borrow().properties.contains_key(name)
+    };
+
+    let mut need_defaults = true;
+
+    if required == "date" || required == "any" {
+        for prop in &["weekday", "year", "month", "day"] {
+            if has_prop(&options_obj, prop) {
+                need_defaults = false;
+                break;
+            }
+        }
+    }
+    if need_defaults && (required == "time" || required == "any") {
+        for prop in &["dayPeriod", "hour", "minute", "second", "fractionalSecondDigits"] {
+            if has_prop(&options_obj, prop) {
+                need_defaults = false;
+                break;
+            }
+        }
+    }
+    if need_defaults {
+        if has_prop(&options_obj, "dateStyle") || has_prop(&options_obj, "timeStyle") {
+            need_defaults = false;
+        }
+    }
+
+    if need_defaults {
+        let numeric = JsValue::String(JsString::from_str("numeric"));
+        if defaults == "date" || defaults == "all" {
+            options_obj.borrow_mut().insert_property(
+                "year".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            options_obj.borrow_mut().insert_property(
+                "month".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            options_obj.borrow_mut().insert_property(
+                "day".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+        }
+        if defaults == "time" || defaults == "all" {
+            options_obj.borrow_mut().insert_property(
+                "hour".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            options_obj.borrow_mut().insert_property(
+                "minute".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            options_obj.borrow_mut().insert_property(
+                "second".to_string(),
+                PropertyDescriptor::data(numeric, true, true, true),
+            );
+        }
+    }
+
+    let opt_id = options_obj.borrow().id.unwrap();
+    let opt_val = JsValue::Object(crate::types::JsObject { id: opt_id });
+
+    // Use the built-in DateTimeFormat constructor directly (not through user-visible Intl property)
+    let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+        Some(v) => v,
+        None => {
+            return Completion::Normal(JsValue::String(JsString::from_str(
+                &format_date_string(tv),
+            )));
+        }
+    };
+
+    // Call new Intl.DateTimeFormat(locales, options)
+    let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, opt_val]) {
+        Completion::Normal(v) => v,
+        Completion::Throw(e) => return Completion::Throw(e),
+        _ => return Completion::Normal(JsValue::Undefined),
+    };
+
+    // Get the format function from the DateTimeFormat instance
+    if let JsValue::Object(dtf_obj) = &dtf_instance {
+        let format_val = match interp.get_object_property(dtf_obj.id, "format", &dtf_instance) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Completion::Throw(e),
+            _ => JsValue::Undefined,
+        };
+
+        // Call format(tv)
+        let date_val = JsValue::Number(tv);
+        match interp.call_function(&format_val, &dtf_instance, &[date_val]) {
+            Completion::Normal(v) => Completion::Normal(v),
+            Completion::Throw(e) => Completion::Throw(e),
+            _ => Completion::Normal(JsValue::Undefined),
+        }
+    } else {
+        Completion::Normal(JsValue::String(JsString::from_str(&format_date_string(tv))))
+    }
+}
+
 impl Interpreter {
     pub(crate) fn setup_date_builtin(&mut self) {
         let proto = self.create_object();
@@ -972,49 +1134,22 @@ impl Interpreter {
             (
                 "toLocaleDateString",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => {
-                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
-                    }
-                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
-                        &format_date_only_string(t),
-                    ))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
+                Rc::new(|interp, this, args| {
+                    date_to_locale_string(interp, this, args, "date", "date")
                 }),
             ),
             (
                 "toLocaleString",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => {
-                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
-                    }
-                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
-                        &format_date_string(t),
-                    ))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
+                Rc::new(|interp, this, args| {
+                    date_to_locale_string(interp, this, args, "any", "all")
                 }),
             ),
             (
                 "toLocaleTimeString",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => {
-                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
-                    }
-                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
-                        &format_time_only_string(t),
-                    ))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
+                Rc::new(|interp, this, args| {
+                    date_to_locale_string(interp, this, args, "time", "time")
                 }),
             ),
         ];

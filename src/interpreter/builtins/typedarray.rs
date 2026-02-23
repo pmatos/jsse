@@ -2073,7 +2073,7 @@ impl Interpreter {
         let to_locale_string_fn = self.create_function(JsFunction::native(
             "toLocaleString".to_string(),
             0,
-            |interp, this_val, _args| {
+            |interp, this_val, args| {
                 // ValidateTypedArray: Type(O) must be Object
                 if !matches!(this_val, JsValue::Object(_)) {
                     return Completion::Throw(interp.create_type_error("not a TypedArray"));
@@ -2096,6 +2096,9 @@ impl Interpreter {
                         }
                     };
                     let separator = ",";
+                    let locales = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let pass_args = vec![locales, options];
                     let mut parts: Vec<String> = Vec::with_capacity(typed_array_length(&ta));
                     for k in 0..typed_array_length(&ta) {
                         let next_element = typed_array_get_index(&ta, k);
@@ -2120,7 +2123,7 @@ impl Interpreter {
                                     match interp.call_function(
                                         &to_locale_str_method,
                                         &next_element,
-                                        &[],
+                                        &pass_args,
                                     ) {
                                         Completion::Normal(v) => {
                                             let s = match interp.to_string_value(&v) {

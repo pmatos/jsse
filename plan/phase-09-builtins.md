@@ -39,7 +39,7 @@ Ordered roughly by dependency and importance.
   - [x] `Object.prototype.hasOwnProperty()`, `Object.prototype.isPrototypeOf()`
   - [x] `Object.prototype.propertyIsEnumerable()`
   - [x] `Object.prototype.toLocaleString()`, `Object.prototype.toString()`, `Object.prototype.valueOf()`
-  - [ ] `Object.prototype.__proto__` (Annex B)
+  - [x] `Object.prototype.__proto__` (Annex B)
   - [x] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__` (Annex B)
 - [x] **Function** (§20.2) — 94% pass rate (839/893 scenarios)
   - [x] `Function()` constructor (sloppy closure env, ToString coercion)
@@ -86,12 +86,12 @@ Ordered roughly by dependency and importance.
   - [x] Most methods: `abs`, `acos`, `acosh`, `asin`, `asinh`, `atan`, `atanh`, `atan2`, `cbrt`, `ceil`, `clz32`, `cos`, `cosh`, `exp`, `expm1`, `floor`, `fround`, `hypot`, `imul`, `log`, `log1p`, `log10`, `log2`, `max`, `min`, `pow`, `random`, `round`, `sign`, `sin`, `sinh`, `sqrt`, `tan`, `tanh`, `trunc`
   - [x] `f16round`, `sumPrecise`
   - [x] `Math[@@toStringTag]` = `"Math"`
-- [ ] **Date** (§21.4) — **NOT IMPLEMENTED, 594 tests**
-  - [ ] `Date()` constructor (multiple overloads)
-  - [ ] `Date.now()`, `Date.parse()`, `Date.UTC()`
-  - [ ] All prototype get/set methods (getFullYear, getMonth, getDate, getHours, getMinutes, getSeconds, getMilliseconds, getDay, getTime, getTimezoneOffset, and all `setX`/`getUTCX` variants)
-  - [ ] `Date.prototype.toDateString()`, `.toTimeString()`, `.toISOString()`, `.toJSON()`, `.toLocaleDateString()`, `.toLocaleString()`, `.toLocaleTimeString()`, `.toString()`, `.toUTCString()`
-  - [ ] `Date.prototype.valueOf()`, `[@@toPrimitive]`
+- [x] **Date** (§21.4) — 95% pass rate (1,124/1,188 scenarios)
+  - [x] `Date()` constructor (multiple overloads)
+  - [x] `Date.now()`, `Date.parse()`, `Date.UTC()`
+  - [x] All prototype get/set methods (getFullYear, getMonth, getDate, getHours, getMinutes, getSeconds, getMilliseconds, getDay, getTime, getTimezoneOffset, and all `setX`/`getUTCX` variants)
+  - [x] `Date.prototype.toDateString()`, `.toTimeString()`, `.toISOString()`, `.toJSON()`, `.toLocaleDateString()`, `.toLocaleString()`, `.toLocaleTimeString()`, `.toString()`, `.toUTCString()`
+  - [x] `Date.prototype.valueOf()`, `[@@toPrimitive]`
 
 **Tests:** `built-ins/Number/` (335), `built-ins/BigInt/` (75), `built-ins/Math/` (327), `built-ins/Date/` (594)
 
@@ -157,12 +157,12 @@ Ordered roughly by dependency and importance.
 - [x] **Set** (§24.2) — 95% (365/383 tests)
   - [x] `Set()` constructor
   - [x] `Set.prototype`: `add`, `clear`, `delete`, `difference`, `entries`, `forEach`, `has`, `intersection`, `isDisjointFrom`, `isSubsetOf`, `isSupersetOf`, `keys`, `size`, `symmetricDifference`, `union`, `values`, `[@@iterator]`, `[@@toStringTag]`
-- [ ] **WeakMap** (§24.3)
-  - [ ] `WeakMap()` constructor
-  - [ ] `delete`, `get`, `has`, `set`
-- [ ] **WeakSet** (§24.4)
-  - [ ] `WeakSet()` constructor
-  - [ ] `add`, `delete`, `has`
+- [x] **WeakMap** (§24.3) — ✅ 72/141 passing
+  - [x] `WeakMap()` constructor
+  - [x] `delete`, `get`, `has`, `set`
+- [x] **WeakSet** (§24.4) — ✅ 50/85 passing
+  - [x] `WeakSet()` constructor
+  - [x] `add`, `delete`, `has`
 
 **Tests:** `built-ins/Map/` (204), `built-ins/MapIteratorPrototype/` (11), `built-ins/Set/` (383), `built-ins/SetIteratorPrototype/` (11), `built-ins/WeakMap/` (141), `built-ins/WeakSet/` (85)
 
@@ -214,9 +214,9 @@ Ordered roughly by dependency and importance.
   - [x] PromiseResolve, PerformPromiseThen
   - [x] PromiseCapability Records (via create_resolving_functions)
   - [x] Microtask queue with synchronous drain
-- [ ] **GeneratorFunction** (§27.3) — depends on generator runtime
+- [x] **GeneratorFunction** (§27.3) — ✅ 18/23 passing (78%)
 - [x] **AsyncGeneratorFunction** (§27.4) — ✅ async function* dispatch, AsyncGeneratorFunction.prototype chain, 9/23 (39%)
-- [ ] **Generator** prototype (§27.5) — depends on generator runtime
+- [x] **Generator** prototype (§27.5) — ✅ 49/61 passing (80%)
 - [x] **AsyncGenerator** prototype (§27.6) — ✅ next/return/throw returning promises, rejected promises for type errors, yield* async delegation, 30/48 (63%)
 - [x] **AsyncFunction** (§27.7) — ✅ Basic async/await works
 
@@ -255,11 +255,15 @@ Ordered roughly by dependency and importance.
 
 **Tests:** `built-ins/ShadowRealm/` (67)
 
-### 9.13 Temporal (Stage 3 — Optional)
-- [ ] All Temporal types: `Instant`, `ZonedDateTime`, `PlainDateTime`, `PlainDate`, `PlainTime`, `PlainYearMonth`, `PlainMonthDay`, `Duration`, `Calendar`, `TimeZone`
-- [ ] Full arithmetic, comparison, formatting
+### 9.13 Temporal — ✅ 100% (8,964/8,964 scenarios)
+- [x] All Temporal types: `Instant`, `ZonedDateTime`, `PlainDateTime`, `PlainDate`, `PlainTime`, `PlainYearMonth`, `PlainMonthDay`, `Duration`
+- [x] Full arithmetic, comparison, formatting, rounding
+- [x] Timezone support (IANA via ICU4X): DST transitions, disambiguation, offset handling
+- [x] Calendar support (ISO8601 + non-ISO via ICU4X): Hebrew, Buddhist, Coptic, Ethiopian, Indian, Islamic, Japanese, Persian, ROC, Chinese, Dangi, Gregory
+- [x] `Temporal.Now` namespace
+- [x] intl402/Temporal: 3,838/3,838 (100.00%)
 
-**Tests:** `built-ins/Temporal/` (4,482) — can be deferred
+**Tests:** `built-ins/Temporal/` (8,964/8,964), `intl402/Temporal/` (3,838/3,838)
 
 ### 9.14 ThrowTypeError (§10.2.4)
 - [x] `%ThrowTypeError%` intrinsic function — ✅ 13/14 passing (93%)

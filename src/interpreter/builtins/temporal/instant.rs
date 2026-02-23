@@ -456,10 +456,15 @@ impl Interpreter {
                     frac_digits.map(|d| d as i32)
                 };
 
+                let actual_offset = if tz_id != "UTC" && tz_id.contains('/') {
+                    super::zoned_date_time::get_tz_offset_ns_pub(&tz_id, &rounded_ns)
+                } else {
+                    tz_offset_ns
+                };
                 let result = instant_to_string_with_tz(
                     &rounded_ns,
                     &tz_id,
-                    tz_offset_ns,
+                    actual_offset,
                     precision,
                     tz_explicit,
                 );
@@ -491,13 +496,26 @@ impl Interpreter {
         let to_locale_fn = self.create_function(JsFunction::native(
             "toLocaleString".to_string(),
             0,
-            |interp, this, _args| {
-                let ns = match get_instant_ns(interp, this) {
+            |interp, this, args| {
+                let _ns = match get_instant_ns(interp, &this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let result = instant_to_string_with_tz(&ns, "UTC", 0, None, false);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                    Some(v) => v,
+                    None => {
+                        let result = instant_to_string_with_tz(&_ns, "UTC", 0, None, false);
+                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                    }
+                };
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => return Completion::Normal(JsValue::Undefined),
+                };
+                super::temporal_format_with_dtf(interp, &dtf_instance, &this)
             },
         ));
         proto
@@ -1120,33 +1138,19 @@ fn instant_to_string_with_tz(
         _ => format!("{hour:02}:{minute:02}:{second:02}"),
     };
 
-    // Format offset: Z only when no explicit timeZone; otherwise numeric offset
+    // Format offset rounded to minutes (FormatUTCOffsetRounded)
     let offset_str = if !tz_explicit && tz_offset_ns == 0 {
         "Z".to_string()
     } else {
-        let abs_offset = tz_offset_ns.unsigned_abs() as i64;
         let sign_ch = if tz_offset_ns >= 0 { '+' } else { '-' };
-        let oh = abs_offset / 3_600_000_000_000;
-        let om = (abs_offset / 60_000_000_000) % 60;
-        let os = (abs_offset / 1_000_000_000) % 60;
-        let ons = abs_offset % 1_000_000_000;
-        if ons != 0 {
-            let frac = format!("{ons:09}");
-            let trimmed = frac.trim_end_matches('0');
-            format!("{sign_ch}{oh:02}:{om:02}:{os:02}.{trimmed}")
-        } else if os != 0 {
-            format!("{sign_ch}{oh:02}:{om:02}:{os:02}")
-        } else {
-            format!("{sign_ch}{oh:02}:{om:02}")
-        }
+        let abs_ns = tz_offset_ns.unsigned_abs() as i64;
+        let total_minutes = (abs_ns + 30_000_000_000) / 60_000_000_000;
+        let oh = total_minutes / 60;
+        let om = total_minutes % 60;
+        format!("{sign_ch}{oh:02}:{om:02}")
     };
 
-    let mut result = format!("{year_str}-{month:02}-{day:02}T{time_str}{offset_str}");
-
-    // Add timezone annotation if not UTC/offset
-    if tz_id != "UTC" && !tz_id.starts_with('+') && !tz_id.starts_with('-') {
-        result.push_str(&format!("[{tz_id}]"));
-    }
+    let result = format!("{year_str}-{month:02}-{day:02}T{time_str}{offset_str}");
 
     result
 }

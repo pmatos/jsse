@@ -31,28 +31,29 @@ Implement error handling extensions, the memory model for shared memory, and all
   - [ ] B.1.4 Legacy string escape sequences
 - [x] **B.2 Additional Built-in Properties (partial)**
   - [x] `escape()` and `unescape()` global functions
-  - [ ] `Object.prototype.__proto__`
-  - [ ] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__`
+  - [x] `Object.prototype.__proto__`
+  - [x] `Object.prototype.__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__`
   - [x] `String.prototype` HTML methods + `substr()`
   - [x] `Date.prototype.getYear()`, `.setYear()`, `.toGMTString()`
   - [ ] `RegExp` legacy static properties (`RegExp.$1`–`$9`, `RegExp.input`, `RegExp.lastMatch`, etc.)
-- [ ] **B.3 Other Additional Features**
-  - [ ] B.3.2 Block-level function declarations in sloppy mode
-  - [ ] B.3.3 FunctionDeclarations in IfStatement
-  - [ ] B.3.4 Changes to `eval` for block-level function declarations
+- [x] **B.3 Other Additional Features (partial)**
+  - [x] B.3.2 Block-level function declarations in sloppy mode
+  - [x] B.3.3 FunctionDeclarations in IfStatement
+  - [x] B.3.4 Changes to `eval` for block-level function declarations
   - [ ] B.3.5 `for-in` initializer (deprecated)
   - [ ] B.3.6 `arguments` and eval in parameter initializers
   - [ ] Changes to IsHTMLDDA (`[[IsHTMLDDA]]` internal slot: `typeof === "undefined"`, falsy)
 
-### 10.4 Intl (ECMA-402) — Optional
-- [ ] `Intl` namespace
+### 10.4 Intl (ECMA-402)
+- [x] `Intl` namespace
+- [x] `Intl.DateTimeFormat` (partial — dateStyle/timeStyle, calendar-aware formatting)
+- [x] `Intl.NumberFormat` (partial)
+- [x] **intl402/Temporal: 3,838/3,838 (100.00%)** — full Temporal internationalization support
 - [ ] `Intl.Collator`
-- [ ] `Intl.DateTimeFormat`
 - [ ] `Intl.DisplayNames`
 - [ ] `Intl.DurationFormat`
 - [ ] `Intl.ListFormat`
 - [ ] `Intl.Locale`
-- [ ] `Intl.NumberFormat`
 - [ ] `Intl.PluralRules`
 - [ ] `Intl.RelativeTimeFormat`
 - [ ] `Intl.Segmenter`
@@ -66,6 +67,7 @@ Implement error handling extensions, the memory model for shared memory, and all
 - [ ] Interrupt/timeout support
 
 ## test262 Tests
-- `test262/test/annexB/` — 1,086 tests
-- `test262/test/intl402/` — varies (optional)
+- `test262/test/annexB/` — 1,377 scenarios (1,038 passing, 75.4%)
+- `test262/test/intl402/Temporal/` — 3,838 scenarios (3,838 passing, 100.00%)
+- `test262/test/intl402/` (non-Temporal) — varies (optional)
 - `test262/test/staging/` — experimental/proposal tests (optional)

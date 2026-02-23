@@ -481,13 +481,30 @@ impl Interpreter {
         let to_locale_fn = self.create_function(JsFunction::native(
             "toLocaleString".to_string(),
             0,
-            |interp, this, _args| {
-                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, this) {
+            |interp, this, args| {
+                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, &this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let result = format_plain_time(h, m, s, ms, us, ns, None);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                    Some(v) => v,
+                    None => {
+                        let result = format_plain_time(h, m, s, ms, us, ns, None);
+                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                    }
+                };
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                // PlainTime has time but not date
+                if let Err(e) = super::check_locale_string_style_conflict(interp, &options_arg, false, true) {
+                    return Completion::Throw(e);
+                }
+                let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => return Completion::Normal(JsValue::Undefined),
+                };
+                super::temporal_format_with_dtf(interp, &dtf_instance, &this)
             },
         ));
         proto

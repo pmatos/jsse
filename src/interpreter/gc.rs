@@ -79,11 +79,26 @@ impl Interpreter {
             &self.temporal_plain_year_month_prototype,
             &self.temporal_plain_month_day_prototype,
             &self.temporal_zoned_date_time_prototype,
+            &self.intl_locale_prototype,
+            &self.intl_collator_prototype,
+            &self.intl_number_format_prototype,
+            &self.intl_plural_rules_prototype,
+            &self.intl_list_format_prototype,
+            &self.intl_segmenter_prototype,
+            &self.intl_relative_time_format_prototype,
+            &self.intl_display_names_prototype,
+            &self.intl_duration_format_prototype,
+            &self.intl_date_time_format_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id
             {
                 worklist.push(id);
+            }
+        }
+        for ctor in [&self.intl_number_format_ctor, &self.intl_date_time_format_ctor, &self.intl_duration_format_ctor] {
+            if let Some(JsValue::Object(o)) = ctor {
+                worklist.push(o.id);
             }
         }
         if let Some(JsValue::Object(o)) = &self.new_target {

@@ -1,6 +1,6 @@
 pub(crate) mod array;
 mod atomics;
-mod bigint;
+pub(crate) mod bigint;
 mod collections;
 mod date;
 mod disposable;
@@ -12,6 +12,7 @@ mod regexp_lookbehind;
 mod string;
 mod temporal;
 mod typedarray;
+mod intl;
 
 use super::*;
 
@@ -3133,6 +3134,9 @@ impl Interpreter {
         // Temporal built-in
         self.setup_temporal();
 
+        // Intl built-in
+        self.setup_intl();
+
         // globalThis - create a global object
         let global_obj = self.create_object();
         let global_val = JsValue::Object(crate::types::JsObject {
@@ -3215,6 +3219,7 @@ impl Interpreter {
             "SharedArrayBuffer",
             "Atomics",
             "Temporal",
+            "Intl",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.global_env.borrow();

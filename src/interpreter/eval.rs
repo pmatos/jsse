@@ -1501,11 +1501,13 @@ impl Interpreter {
         match val {
             JsValue::Object(o) => {
                 // §7.1.1 Step 2-3: Check @@toPrimitive
-                let exotic_to_prim = if let Some(obj) = self.get_object(o.id) {
+                let exotic_to_prim = {
                     let key = "Symbol(Symbol.toPrimitive)";
-                    obj.borrow().get_property(key)
-                } else {
-                    JsValue::Undefined
+                    match self.get_object_property(o.id, key, val) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => JsValue::Undefined,
+                    }
                 };
                 if !matches!(exotic_to_prim, JsValue::Undefined | JsValue::Null) {
                     if let JsValue::Object(fo) = &exotic_to_prim
@@ -1597,6 +1599,16 @@ impl Interpreter {
             JsValue::Object(_) => {
                 let prim = self.to_primitive(val, "string")?;
                 self.to_string_value(&prim)
+            }
+        }
+    }
+
+    pub(crate) fn to_js_string(&mut self, val: &JsValue) -> Result<JsString, JsValue> {
+        match val {
+            JsValue::String(s) => Ok(s.clone()),
+            other => {
+                let s = self.to_string_value(other)?;
+                Ok(JsString::from_str(&s))
             }
         }
     }
@@ -1695,8 +1707,7 @@ impl Interpreter {
             if *n != n.trunc() {
                 return false;
             }
-            use num_bigint::BigInt;
-            let n_as_bigint = BigInt::from(*n as i64);
+            let n_as_bigint = crate::interpreter::builtins::bigint::f64_to_bigint(*n);
             return bigint_ops::equal(&b.value, &n_as_bigint);
         }
         // BigInt == String
@@ -1760,15 +1771,16 @@ impl Interpreter {
             if *n == f64::NEG_INFINITY {
                 return Ok(Some(false));
             }
-            use num_bigint::BigInt;
-            let n_floor = BigInt::from(*n as i64);
+            let n_trunc = n.trunc();
+            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
             if b.value < n_floor {
                 return Ok(Some(true));
             }
             if b.value > n_floor {
                 return Ok(Some(false));
             }
-            return Ok(Some((*n as i64 as f64) < *n));
+            // n_floor == b.value, so result depends on fractional part
+            return Ok(Some(n_trunc < *n));
         }
         if let (JsValue::Number(n), JsValue::BigInt(b)) = (&lprim, &rprim) {
             if n.is_nan() {
@@ -1780,15 +1792,16 @@ impl Interpreter {
             if *n == f64::INFINITY {
                 return Ok(Some(false));
             }
-            use num_bigint::BigInt;
-            let n_floor = BigInt::from(*n as i64);
+            let n_trunc = n.trunc();
+            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
             if n_floor < b.value {
                 return Ok(Some(true));
             }
             if n_floor > b.value {
                 return Ok(Some(false));
             }
-            return Ok(Some(*n < (*n as i64 as f64)));
+            // n_floor == b.value, so result depends on fractional part
+            return Ok(Some(*n < n_trunc));
         }
         // BigInt vs String: try parsing
         if let (JsValue::BigInt(_), JsValue::String(s)) = (&lprim, &rprim) {
@@ -2717,6 +2730,27 @@ impl Interpreter {
                             proto_opt = proto_rc.borrow().prototype.clone();
                         }
                     }
+                    // ArraySetLength validation
+                    if key == "length" && obj.borrow().class_name == "Array" {
+                        let num = match self.to_number_value(&final_val) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let uint32 = num as u32;
+                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite() {
+                            return Completion::Throw(
+                                self.create_error("RangeError", "Invalid array length"),
+                            );
+                        }
+                        let length_val = JsValue::Number(uint32 as f64);
+                        let success = obj.borrow_mut().set_property_value(&key, length_val.clone());
+                        if !success && env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}'"
+                            )));
+                        }
+                        return Completion::Normal(length_val);
+                    }
                     let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
                     if !success && env.borrow().strict {
                         return Completion::Throw(self.create_type_error(&format!(
@@ -3044,6 +3078,27 @@ impl Interpreter {
                                 }
                             }
                         }
+                    }
+                    // ArraySetLength validation: reject non-integral/negative length values
+                    if key == "length" && obj.borrow().class_name == "Array" {
+                        let num = match self.to_number_value(&rval) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let uint32 = num as u32;
+                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite() {
+                            return Completion::Throw(
+                                self.create_error("RangeError", "Invalid array length"),
+                            );
+                        }
+                        let rval = JsValue::Number(uint32 as f64);
+                        let success = obj.borrow_mut().set_property_value(&key, rval.clone());
+                        if !success && env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}'"
+                            )));
+                        }
+                        return Completion::Normal(rval);
                     }
                     let success = obj.borrow_mut().set_property_value(&key, rval.clone());
                     if !success && env.borrow().strict {

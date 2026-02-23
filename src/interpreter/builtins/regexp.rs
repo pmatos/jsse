@@ -4217,6 +4217,8 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, s: &str) -> Comple
     }
 }
 
+/// Inner implementation of RegExp @@replace result collection and processing.
+/// Extracted so the caller can bracket it with gc_temp_roots save/restore.
 /// AdvanceStringIndex per spec. `index` is in UTF-16 code units.
 fn advance_string_index(s: &str, index: usize, unicode: bool) -> usize {
     if !unicode {
@@ -5183,6 +5185,7 @@ impl Interpreter {
 
                 // 10-11. Collect results
                 let mut results: Vec<JsValue> = Vec::new();
+                let gc_root_start = interp.gc_temp_roots.len();
                 loop {
                     // 11a. Let result be ? RegExpExec(rx, S).
                     let result = regexp_exec_abstract(interp, rx_id, &s);
@@ -5192,6 +5195,9 @@ impl Interpreter {
                             if matches!(result_val, JsValue::Object(_)) =>
                         {
                             let result_obj = result_val.clone();
+                            if let JsValue::Object(ref o) = result_obj {
+                                interp.gc_temp_roots.push(o.id);
+                            }
                             results.push(result_obj.clone());
 
                             if !global {
@@ -5207,11 +5213,17 @@ impl Interpreter {
                             let matched_val =
                                 match interp.get_object_property(result_id, "0", &result_obj) {
                                     Completion::Normal(v) => v,
-                                    other => return other,
+                                    other => {
+                                        interp.gc_temp_roots.truncate(gc_root_start);
+                                        return other;
+                                    }
                                 };
                             let match_str = match interp.to_string_value(&matched_val) {
                                 Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
+                                Err(e) => {
+                                    interp.gc_temp_roots.truncate(gc_root_start);
+                                    return Completion::Throw(e);
+                                }
                             };
                             if match_str.is_empty() {
                                 // a. Let thisIndex be ? ToLength(? Get(rx, "lastIndex")).
@@ -5219,11 +5231,17 @@ impl Interpreter {
                                 let li_val =
                                     match interp.get_object_property(rx_id, "lastIndex", &rx_val) {
                                         Completion::Normal(v) => v,
-                                        other => return other,
+                                        other => {
+                                            interp.gc_temp_roots.truncate(gc_root_start);
+                                            return other;
+                                        }
                                     };
                                 let li_num = match interp.to_number_value(&li_val) {
                                     Ok(n) => n,
-                                    Err(e) => return Completion::Throw(e),
+                                    Err(e) => {
+                                        interp.gc_temp_roots.truncate(gc_root_start);
+                                        return Completion::Throw(e);
+                                    }
                                 };
                                 let this_index = {
                                     let n = if li_num.is_nan() || li_num <= 0.0 {
@@ -5236,12 +5254,18 @@ impl Interpreter {
                                 let next_index = advance_string_index(&s, this_index, full_unicode);
                                 match set_last_index_strict(interp, rx_id, next_index as f64) {
                                     Ok(()) => {}
-                                    Err(e) => return Completion::Throw(e),
+                                    Err(e) => {
+                                        interp.gc_temp_roots.truncate(gc_root_start);
+                                        return Completion::Throw(e);
+                                    }
                                 }
                             }
                         }
                         Completion::Normal(_) => break,
-                        other => return other,
+                        other => {
+                            interp.gc_temp_roots.truncate(gc_root_start);
+                            return other;
+                        }
                     }
                 }
 
@@ -5260,12 +5284,18 @@ impl Interpreter {
                     let len_val = match interp.get_object_property(result_id, "length", result_val)
                     {
                         Completion::Normal(v) => v,
-                        other => return other,
+                        other => {
+                            interp.gc_temp_roots.truncate(gc_root_start);
+                            return other;
+                        }
                     };
                     let n_captures = {
                         let n = match interp.to_number_value(&len_val) {
                             Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => {
+                                interp.gc_temp_roots.truncate(gc_root_start);
+                                return Completion::Throw(e);
+                            }
                         };
                         let len = if n.is_nan() || n <= 0.0 {
                             0.0
@@ -5274,22 +5304,31 @@ impl Interpreter {
                         };
                         (len as usize).max(1) // at least 1
                     };
-                    // nCaptures = max(nCaptures - 1, 0) — number of capture groups
+                    // nCaptures = max(nCaptures - 1, 0) -- number of capture groups
                     let n_cap = if n_captures > 0 { n_captures - 1 } else { 0 };
 
                     // d. Let matched be ? ToString(? Get(result, "0")).
                     let matched_val = match interp.get_object_property(result_id, "0", result_val) {
                         Completion::Normal(v) => v,
-                        other => return other,
+                        other => {
+                            interp.gc_temp_roots.truncate(gc_root_start);
+                            return other;
+                        }
                     };
                     let matched = match interp.to_string_value(&matched_val) {
                         Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
+                        Err(e) => {
+                            interp.gc_temp_roots.truncate(gc_root_start);
+                            return Completion::Throw(e);
+                        }
                     };
                     // Get match_length in byte offsets within the PUA-mapped string
                     let matched_pua = match to_regex_input(interp, &matched_val) {
                         Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
+                        Err(e) => {
+                            interp.gc_temp_roots.truncate(gc_root_start);
+                            return Completion::Throw(e);
+                        }
                     };
                     let match_length = matched_pua.len();
 
@@ -5297,13 +5336,19 @@ impl Interpreter {
                     let index_val = match interp.get_object_property(result_id, "index", result_val)
                     {
                         Completion::Normal(v) => v,
-                        other => return other,
+                        other => {
+                            interp.gc_temp_roots.truncate(gc_root_start);
+                            return other;
+                        }
                     };
                     // Convert position from UTF-16 code units to byte offset in PUA-mapped string
                     let position = {
                         let n = match interp.to_number_value(&index_val) {
                             Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => {
+                                interp.gc_temp_roots.truncate(gc_root_start);
+                                return Completion::Throw(e);
+                            }
                         };
                         let int = to_integer_or_infinity(n);
                         let utf16_pos = int.max(0.0) as usize;
@@ -5317,12 +5362,18 @@ impl Interpreter {
                             match interp.get_object_property(result_id, &n.to_string(), result_val)
                             {
                                 Completion::Normal(v) => v,
-                                other => return other,
+                                other => {
+                                    interp.gc_temp_roots.truncate(gc_root_start);
+                                    return other;
+                                }
                             };
                         if !cap_n.is_undefined() {
                             let cap_str = match interp.to_string_value(&cap_n) {
                                 Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
+                                Err(e) => {
+                                    interp.gc_temp_roots.truncate(gc_root_start);
+                                    return Completion::Throw(e);
+                                }
                             };
                             captures.push(JsValue::String(JsString::from_str(&cap_str)));
                         } else {
@@ -5334,7 +5385,10 @@ impl Interpreter {
                     let named_captures =
                         match interp.get_object_property(result_id, "groups", result_val) {
                             Completion::Normal(v) => v,
-                            other => return other,
+                            other => {
+                                interp.gc_temp_roots.truncate(gc_root_start);
+                                return other;
+                            }
                         };
 
                     let replacement = if functional_replace {
@@ -5357,9 +5411,15 @@ impl Interpreter {
                         match repl_val {
                             Completion::Normal(v) => match interp.to_string_value(&v) {
                                 Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
+                                Err(e) => {
+                                    interp.gc_temp_roots.truncate(gc_root_start);
+                                    return Completion::Throw(e);
+                                }
                             },
-                            other => return other,
+                            other => {
+                                interp.gc_temp_roots.truncate(gc_root_start);
+                                return other;
+                            }
                         }
                     } else {
                         // l. Else (string replace)
@@ -5368,7 +5428,10 @@ impl Interpreter {
                             // i. Set namedCaptures to ? ToObject(namedCaptures).
                             match interp.to_object(&named_captures) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
+                                Completion::Throw(e) => {
+                                    interp.gc_temp_roots.truncate(gc_root_start);
+                                    return Completion::Throw(e);
+                                }
                                 _ => JsValue::Undefined,
                             }
                         } else {
@@ -5384,7 +5447,10 @@ impl Interpreter {
                             template,
                         ) {
                             Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => {
+                                interp.gc_temp_roots.truncate(gc_root_start);
+                                return Completion::Throw(e);
+                            }
                         }
                     };
 
@@ -5395,6 +5461,8 @@ impl Interpreter {
                         next_source_position = position + match_length;
                     }
                 }
+
+                interp.gc_temp_roots.truncate(gc_root_start);
 
                 // 15. Return accumulatedResult + remainder of S.
                 if next_source_position < length_s {
