@@ -932,6 +932,10 @@ impl Interpreter {
                                     "eraYear provided without era",
                                 ));
                             }
+                        } else if has_era || has_era_year {
+                            return Completion::Throw(interp.create_type_error(
+                                "era and eraYear are not valid for this calendar",
+                            ));
                         }
 
                         let mc_for_icu = if has_mc {
@@ -2147,21 +2151,23 @@ impl Interpreter {
                         interp.create_type_error("options must be an object"),
                     );
                 }
+                let mut disambiguation = "compatible".to_string();
                 if matches!(opts, JsValue::Object(_)) {
                     let dis_val = match super::get_prop(interp, &opts, "disambiguation") {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
                     if !super::is_undefined(&dis_val) {
-                        let s = match interp.to_string_value(&dis_val) {
+                        let sv = match interp.to_string_value(&dis_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };
-                        if !matches!(s.as_str(), "compatible" | "earlier" | "later" | "reject") {
+                        if !matches!(sv.as_str(), "compatible" | "earlier" | "later" | "reject") {
                             return Completion::Throw(interp.create_range_error(&format!(
-                                "{s} is not a valid value for disambiguation"
+                                "{sv} is not a valid value for disambiguation"
                             )));
                         }
+                        disambiguation = sv;
                     }
                 }
                 let epoch_days = super::iso_date_to_epoch_days(y, m, d) as i128;
@@ -2172,9 +2178,19 @@ impl Interpreter {
                     + us as i128 * 1_000
                     + ns as i128;
                 let local_ns = epoch_days * 86_400_000_000_000 + day_ns;
-                let approx = num_bigint::BigInt::from(local_ns);
-                let offset = super::zoned_date_time::get_tz_offset_ns_pub(&tz, &approx) as i128;
-                let epoch_ns = num_bigint::BigInt::from(local_ns - offset);
+
+                if disambiguation == "reject" {
+                    let candidates = super::zoned_date_time::get_possible_epoch_ns(&tz, local_ns);
+                    if candidates.len() != 1 {
+                        return Completion::Throw(
+                            interp.create_range_error("ambiguous or nonexistent wall-clock time"),
+                        );
+                    }
+                    let epoch_ns = num_bigint::BigInt::from(candidates[0]);
+                    return super::zoned_date_time::create_zdt_pub(interp, epoch_ns, tz, cal);
+                }
+                let epoch_instant = super::zoned_date_time::disambiguate_instant(&tz, local_ns, &disambiguation);
+                let epoch_ns = num_bigint::BigInt::from(epoch_instant);
                 super::zoned_date_time::create_zdt_pub(interp, epoch_ns, tz, cal)
             },
         ));
@@ -2393,6 +2409,14 @@ impl Interpreter {
                             } else {
                                 (None, y_f as i32)
                             };
+
+                        // CalendarResolveFields: check required field presence (TypeError)
+                        // before range validation (RangeError)
+                        if mc_str.is_none() && month_num.is_none() {
+                            return Completion::Throw(
+                                interp.create_type_error("month or monthCode is required"),
+                            );
+                        }
 
                         match super::calendar_fields_to_iso_overflow(
                             icu_era.as_deref(),

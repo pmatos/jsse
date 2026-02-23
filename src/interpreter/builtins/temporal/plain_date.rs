@@ -525,7 +525,7 @@ impl Interpreter {
                             );
                         }
 
-                        // Validate era/eraYear pairing for era-based calendars
+                        // Validate era/eraYear pairing
                         if super::calendar_has_eras(&cal) {
                             if has_era && !has_era_year {
                                 return Completion::Throw(interp.create_type_error(
@@ -537,6 +537,10 @@ impl Interpreter {
                                     "eraYear provided without era",
                                 ));
                             }
+                        } else if has_era || has_era_year {
+                            return Completion::Throw(interp.create_type_error(
+                                "era and eraYear are not valid for this calendar",
+                            ));
                         }
 
                         // Determine month_code and month_ordinal for ICU
@@ -1181,28 +1185,25 @@ impl Interpreter {
                 };
                 let item = args.first().cloned().unwrap_or(JsValue::Undefined);
 
-                let (tz, h, mi, s, ms, us, ns) = if let JsValue::String(_) = &item {
-                    // String argument = timezone, time defaults to midnight
+                // has_plain_time = true when the caller explicitly provides a plainTime
+                let (tz, has_plain_time, h, mi, s, ms, us, ns) = if let JsValue::String(_) = &item {
                     let tz = match super::to_temporal_time_zone_identifier(interp, &item) {
                         Ok(t) => t,
                         Err(c) => return c,
                     };
-                    (tz, 0u8, 0u8, 0u8, 0u16, 0u16, 0u16)
+                    (tz, false, 0u8, 0u8, 0u8, 0u16, 0u16, 0u16)
                 } else if let JsValue::Object(_) = &item {
-                    // Per spec: get timeZone property
                     let tz_val = match super::get_prop(interp, &item, "timeZone") {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
                     if super::is_undefined(&tz_val) {
-                        // timeZone undefined → treat item itself as timezone
                         let tz = match super::to_temporal_time_zone_identifier(interp, &item) {
                             Ok(t) => t,
                             Err(c) => return c,
                         };
-                        (tz, 0u8, 0u8, 0u8, 0u16, 0u16, 0u16)
+                        (tz, false, 0u8, 0u8, 0u8, 0u16, 0u16, 0u16)
                     } else {
-                        // Object with timeZone and optional plainTime
                         let tz = match super::to_temporal_time_zone_identifier(interp, &tz_val) {
                             Ok(t) => t,
                             Err(c) => return c,
@@ -1212,14 +1213,14 @@ impl Interpreter {
                             c => return c,
                         };
                         if super::is_undefined(&pt_val) {
-                            (tz, 0, 0, 0, 0, 0, 0)
+                            (tz, false, 0, 0, 0, 0, 0, 0)
                         } else {
                             let (th, tm, ts, tms, tus, tns) =
                                 match super::plain_time::to_temporal_plain_time(interp, pt_val) {
                                     Ok(v) => v,
                                     Err(c) => return c,
                                 };
-                            (tz, th, tm, ts, tms, tus, tns)
+                            (tz, true, th, tm, ts, tms, tus, tns)
                         }
                     }
                 } else {
@@ -1229,6 +1230,15 @@ impl Interpreter {
                 };
 
                 let epoch_days = super::iso_date_to_epoch_days(y, m, d) as i128;
+
+                if !has_plain_time {
+                    // No plainTime → use start of day (spec GetStartOfDay)
+                    let sod = super::zoned_date_time::get_start_of_day(&tz, epoch_days);
+                    let epoch_ns = num_bigint::BigInt::from(sod);
+                    return super::zoned_date_time::create_zdt_pub(interp, epoch_ns, tz, cal);
+                }
+
+                // Explicit plainTime → disambiguate with "compatible"
                 let day_ns = h as i128 * 3_600_000_000_000
                     + mi as i128 * 60_000_000_000
                     + s as i128 * 1_000_000_000
@@ -1236,9 +1246,8 @@ impl Interpreter {
                     + us as i128 * 1_000
                     + ns as i128;
                 let local_ns = epoch_days * 86_400_000_000_000 + day_ns;
-                let approx = num_bigint::BigInt::from(local_ns);
-                let offset = super::zoned_date_time::get_tz_offset_ns_pub(&tz, &approx) as i128;
-                let epoch_ns = num_bigint::BigInt::from(local_ns - offset);
+                let epoch_instant = super::zoned_date_time::disambiguate_instant(&tz, local_ns, "compatible");
+                let epoch_ns = num_bigint::BigInt::from(epoch_instant);
 
                 super::zoned_date_time::create_zdt_pub(interp, epoch_ns, tz, cal)
             },

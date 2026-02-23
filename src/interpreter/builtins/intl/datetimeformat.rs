@@ -541,6 +541,7 @@ struct DateComponents {
     minute: u32,
     second: u32,
     millisecond: u32,
+    cal_month_name: Option<String>, // non-Gregorian month name override
 }
 
 fn timestamp_to_components(ms: f64) -> DateComponents {
@@ -561,6 +562,72 @@ fn timestamp_to_components(ms: f64) -> DateComponents {
         minute,
         second,
         millisecond,
+        cal_month_name: None,
+    }
+}
+
+fn calendar_month_name_en(calendar_id: &str, month_code: &str) -> String {
+    match calendar_id {
+        "islamic" | "islamic-umalqura" | "islamic-tbla" | "islamic-civil" | "islamic-rgsa" => {
+            match month_code {
+                "M01" => "Muharram".to_string(),
+                "M02" => "Safar".to_string(),
+                "M03" => "Rabi\u{02bb} I".to_string(),
+                "M04" => "Rabi\u{02bb} II".to_string(),
+                "M05" => "Jumada I".to_string(),
+                "M06" => "Jumada II".to_string(),
+                "M07" => "Rajab".to_string(),
+                "M08" => "Sha\u{02bb}ban".to_string(),
+                "M09" => "Ramadan".to_string(),
+                "M10" => "Shawwal".to_string(),
+                "M11" => "Dhu\u{02bb}l-Qi\u{02bb}dah".to_string(),
+                "M12" => "Dhu\u{02bb}l-Hijjah".to_string(),
+                _ => month_code.to_string(),
+            }
+        }
+        "hebrew" => {
+            match month_code {
+                "M01" => "Tishri".to_string(),
+                "M02" => "Heshvan".to_string(),
+                "M03" => "Kislev".to_string(),
+                "M04" => "Tevet".to_string(),
+                "M05" => "Shevat".to_string(),
+                "M05L" => "Adar I".to_string(),
+                "M06" => "Adar".to_string(),
+                "M07" => "Nisan".to_string(),
+                "M08" => "Iyar".to_string(),
+                "M09" => "Sivan".to_string(),
+                "M10" => "Tamuz".to_string(),
+                "M11" => "Av".to_string(),
+                "M12" => "Elul".to_string(),
+                _ => month_code.to_string(),
+            }
+        }
+        "persian" => {
+            match month_code {
+                "M01" => "Farvardin".to_string(),
+                "M02" => "Ordibehesht".to_string(),
+                "M03" => "Khordad".to_string(),
+                "M04" => "Tir".to_string(),
+                "M05" => "Mordad".to_string(),
+                "M06" => "Shahrivar".to_string(),
+                "M07" => "Mehr".to_string(),
+                "M08" => "Aban".to_string(),
+                "M09" => "Azar".to_string(),
+                "M10" => "Dey".to_string(),
+                "M11" => "Bahman".to_string(),
+                "M12" => "Esfand".to_string(),
+                _ => month_code.to_string(),
+            }
+        }
+        _ => {
+            // For other calendars (Chinese, etc.) use Gregorian names as fallback
+            if let Ok(num) = month_code[1..].replace('L', "").parse::<u32>() {
+                month_name_long(num).to_string()
+            } else {
+                month_code.to_string()
+            }
+        }
     }
 }
 
@@ -814,34 +881,40 @@ fn format_2digit(n: u32) -> String {
 }
 
 fn format_date_style(c: &DateComponents, style: &str, tz: &str) -> String {
+    let ml = c.cal_month_name.as_deref().unwrap_or(month_name_long(c.month));
+    let ms = if c.cal_month_name.is_some() {
+        // For non-Gregorian calendars, use numeric abbreviation in short style
+        month_name_short(c.month)
+    } else {
+        month_name_short(c.month)
+    };
     match style {
         "full" => format!(
             "{}, {} {}, {}",
             weekday_name_long(c.weekday),
-            month_name_long(c.month),
+            ml,
             c.day,
             c.year
         ),
-        "long" => format!("{} {}, {}", month_name_long(c.month), c.day, c.year),
-        "medium" => format!("{} {}, {}", month_name_short(c.month), c.day, c.year),
+        "long" => format!("{} {}, {}", ml, c.day, c.year),
+        "medium" => format!("{} {}, {}", ms, c.day, c.year),
         "short" => format!("{}/{}/{}", c.month, c.day, c.year % 100),
         _ => format!("{}/{}/{}", c.month, c.day, c.year),
     }
 }
 
 fn format_reduced_date_style(c: &DateComponents, style: &str, has_year: bool, has_month: bool, has_day: bool) -> String {
+    let ml = c.cal_month_name.as_deref().unwrap_or(month_name_long(c.month));
     if has_year && has_month && !has_day {
-        // PlainYearMonth: year + month, no day
         match style {
-            "full" | "long" => format!("{} {}", month_name_long(c.month), c.year),
+            "full" | "long" => format!("{} {}", ml, c.year),
             "medium" => format!("{} {}", month_name_short(c.month), c.year),
             "short" => format!("{}/{}", c.month, c.year % 100),
             _ => format!("{}/{}", c.month, c.year),
         }
     } else if !has_year && has_month && has_day {
-        // PlainMonthDay: month + day, no year
         match style {
-            "full" | "long" => format!("{} {}", month_name_long(c.month), c.day),
+            "full" | "long" => format!("{} {}", ml, c.day),
             "medium" => format!("{} {}", month_name_short(c.month), c.day),
             "short" => format!("{}/{}", c.month, c.day),
             _ => format!("{}/{}", c.month, c.day),
@@ -980,8 +1053,23 @@ fn format_with_options(ms: f64, opts: &DtfOptions) -> String {
 
 fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
     let adjusted_ms = ms + tz_offset_ms(&opts.time_zone, ms);
-    let c = timestamp_to_components(adjusted_ms);
+    let mut c = timestamp_to_components(adjusted_ms);
     let hc = resolve_hour_cycle(opts);
+
+    // For non-Gregorian calendars with dateStyle, convert to calendar fields
+    if opts.date_style.is_some()
+        && opts.calendar != "gregory"
+        && opts.calendar != "iso8601"
+    {
+        if let Some(cf) = crate::interpreter::builtins::temporal::iso_to_calendar_fields(
+            c.year, c.month as u8, c.day as u8, &opts.calendar,
+        ) {
+            c.year = cf.year;
+            c.month = cf.month_ordinal as u32;
+            c.day = cf.day as u32;
+            c.cal_month_name = Some(calendar_month_name_en(&opts.calendar, &cf.month_code));
+        }
+    }
 
     // dateStyle/timeStyle shorthand
     if opts.date_style.is_some() || opts.time_style.is_some() {

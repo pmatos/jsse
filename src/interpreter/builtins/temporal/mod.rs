@@ -332,7 +332,7 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
         }
     }
     if let Some(parsed) = parse_temporal_year_month_string(cal) {
-        let c = parsed.2.unwrap_or_else(|| "iso8601".to_string());
+        let c = parsed.3.unwrap_or_else(|| "iso8601".to_string());
         let cn = canonicalize_temporal_calendar(&c);
         if is_supported_temporal_calendar(&cn) {
             return Some(cn);
@@ -395,7 +395,20 @@ pub(crate) fn iso_to_calendar_fields(
 
     let yi = d.year();
     let (year, era, era_year) = if let Some(e) = yi.era() {
-        (yi.extended_year(), Some(e.era.to_string()), Some(e.year))
+        let ext = yi.extended_year();
+        // Japanese calendar: dates before 1873-01-01 use ce/bce instead of meiji etc.
+        if calendar_id == "japanese"
+            && (iso_year < 1873 || (iso_year == 1873 && iso_month == 1 && iso_day == 1 && false))
+            && !matches!(e.era.to_string().as_str(), "ce" | "bce")
+        {
+            if ext >= 1 {
+                (ext, Some("ce".to_string()), Some(ext))
+            } else {
+                (ext, Some("bce".to_string()), Some(1 - ext))
+            }
+        } else {
+            (ext, Some(e.era.to_string()), Some(e.year))
+        }
     } else {
         (yi.era_year_or_related_iso(), None, None)
     };
@@ -450,7 +463,83 @@ pub(crate) fn calendar_fields_to_iso(
     ))
 }
 
+fn validate_calendar_date_round_trip(
+    iso_y: i32, iso_m: u8, iso_d: u8,
+    calendar_id: &str, requested_day: u8, requested_month_code: Option<&str>,
+) -> bool {
+    if let Some(cf) = iso_to_calendar_fields(iso_y, iso_m, iso_d, calendar_id) {
+        if cf.day != requested_day { return false; }
+        if let Some(mc) = requested_month_code {
+            if cf.month_code != mc { return false; }
+        }
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn iso_to_calendar_fields_from_year(year: i32, calendar_id: &str) -> Option<CalendarFields> {
+    let kind = calendar_id_to_icu_kind(calendar_id)?;
+    let cal = AnyCalendar::new(kind);
+    let mut f = IcuDateFields::default();
+    f.extended_year = Some(year);
+    f.ordinal_month = Some(1);
+    f.day = Some(1);
+    let d = IcuDate::try_from_fields(f, Default::default(), cal).ok()?;
+    Some(CalendarFields {
+        year,
+        era: None,
+        era_year: None,
+        month_ordinal: 1,
+        month_code: d.month().standard_code.0.to_string(),
+        day: 1,
+        day_of_year: 1,
+        days_in_month: d.days_in_month(),
+        days_in_year: d.days_in_year(),
+        months_in_year: d.months_in_year(),
+        in_leap_year: d.is_in_leap_year(),
+    })
+}
+
+pub(crate) fn ordinal_month_to_month_code(year: i32, ordinal_month: u8, calendar_id: &str) -> Option<String> {
+    let kind = calendar_id_to_icu_kind(calendar_id)?;
+    let cal = AnyCalendar::new(kind);
+    let mut f = IcuDateFields::default();
+    f.extended_year = Some(year);
+    f.ordinal_month = Some(ordinal_month);
+    f.day = Some(1);
+    let d = IcuDate::try_from_fields(f, Default::default(), cal).ok()?;
+    Some(d.month().standard_code.0.to_string())
+}
+
 /// Like `calendar_fields_to_iso`, but with overflow handling.
+fn is_valid_month_code_for_calendar(month_code: &str, calendar_id: &str) -> bool {
+    if month_code.len() == 3 && month_code.starts_with('M') {
+        if let Ok(num) = month_code[1..].parse::<u8>() {
+            let max_month = if matches!(calendar_id, "coptic" | "ethiopic" | "ethioaa") {
+                13
+            } else {
+                12
+            };
+            return num >= 1 && num <= max_month;
+        }
+        return false;
+    }
+    if month_code.len() == 4 && month_code.starts_with('M') && month_code.ends_with('L') {
+        if let Ok(num) = month_code[1..3].parse::<u8>() {
+            if num < 1 || num > 12 {
+                return false;
+            }
+            if calendar_id == "hebrew" {
+                return num == 5;
+            }
+            return matches!(calendar_id, "chinese" | "dangi");
+        }
+        return false;
+    }
+    false
+}
+
 /// When overflow is "constrain", clamps the day to the calendar month's maximum.
 /// When overflow is "reject", returns None for invalid dates.
 pub(crate) fn calendar_fields_to_iso_overflow(
@@ -462,9 +551,18 @@ pub(crate) fn calendar_fields_to_iso_overflow(
     calendar_id: &str,
     overflow: &str,
 ) -> Option<(i32, u8, u8)> {
-    // Try exact first
-    if let Some(result) = calendar_fields_to_iso(era, year, month_code, month_ordinal, day, calendar_id) {
-        return Some(result);
+    if let Some(mc) = month_code {
+        if !is_valid_month_code_for_calendar(mc, calendar_id) {
+            return None;
+        }
+    }
+    if let Some((iy, im, id)) = calendar_fields_to_iso(era, year, month_code, month_ordinal, day, calendar_id) {
+        if overflow == "reject" {
+            if !validate_calendar_date_round_trip(iy, im, id, calendar_id, day, month_code) {
+                return None;
+            }
+        }
+        return Some((iy, im, id));
     }
     if overflow == "reject" {
         return None;
@@ -486,10 +584,78 @@ pub(crate) fn calendar_fields_to_iso_overflow(
         fields.ordinal_month = Some(mo);
     }
     fields.day = Some(1);
-    let d = IcuDate::try_from_fields(fields, Default::default(), cal).ok()?;
-    let max_day = d.days_in_month();
-    let clamped = day.min(max_day).max(1);
-    calendar_fields_to_iso(era, year, month_code, month_ordinal, clamped, calendar_id)
+    match IcuDate::try_from_fields(fields, Default::default(), cal) {
+        Ok(d) => {
+            let max_day = d.days_in_month();
+            let clamped = day.min(max_day).max(1);
+            calendar_fields_to_iso(era, year, month_code, month_ordinal, clamped, calendar_id)
+        }
+        Err(_) => {
+            // Month code doesn't exist (e.g. M06L in non-leap year) — fall back
+            if let Some(mc) = month_code {
+                if mc.ends_with('L') {
+                    let fallback_mc = if calendar_id == "hebrew" && mc == "M05L" {
+                        "M06".to_string()
+                    } else {
+                        mc[..mc.len() - 1].to_string()
+                    };
+                    let kind2 = calendar_id_to_icu_kind(calendar_id)?;
+                    let cal2 = AnyCalendar::new(kind2);
+                    let mut f2 = IcuDateFields::default();
+                    if let Some(e) = era {
+                        f2.era = Some(e.as_bytes());
+                        f2.era_year = Some(year);
+                    } else {
+                        f2.extended_year = Some(year);
+                    }
+                    f2.month_code = Some(fallback_mc.as_bytes());
+                    f2.day = Some(1);
+                    if let Ok(temp) = IcuDate::try_from_fields(f2, Default::default(), cal2) {
+                        let max_day = temp.days_in_month();
+                        let clamped = day.min(max_day).max(1);
+                        return calendar_fields_to_iso(era, year, Some(&fallback_mc), month_ordinal, clamped, calendar_id);
+                    }
+                }
+            }
+            // Ordinal month out of range: clamp to last month
+            if let Some(mo) = month_ordinal {
+                if month_code.is_none() {
+                    let kind3 = calendar_id_to_icu_kind(calendar_id)?;
+                    let cal3 = AnyCalendar::new(kind3);
+                    let mut f3 = IcuDateFields::default();
+                    if let Some(e) = era {
+                        f3.era = Some(e.as_bytes());
+                        f3.era_year = Some(year);
+                    } else {
+                        f3.extended_year = Some(year);
+                    }
+                    f3.ordinal_month = Some(1);
+                    f3.day = Some(1);
+                    if let Ok(temp) = IcuDate::try_from_fields(f3, Default::default(), cal3) {
+                        let miy = temp.months_in_year();
+                        let clamped_mo = mo.min(miy);
+                        let kind4 = calendar_id_to_icu_kind(calendar_id)?;
+                        let cal4 = AnyCalendar::new(kind4);
+                        let mut f4 = IcuDateFields::default();
+                        if let Some(e) = era {
+                            f4.era = Some(e.as_bytes());
+                            f4.era_year = Some(year);
+                        } else {
+                            f4.extended_year = Some(year);
+                        }
+                        f4.ordinal_month = Some(clamped_mo);
+                        f4.day = Some(1);
+                        if let Ok(temp2) = IcuDate::try_from_fields(f4, Default::default(), cal4) {
+                            let max_day = temp2.days_in_month();
+                            let clamped_d = day.min(max_day).max(1);
+                            return calendar_fields_to_iso(era, year, None, Some(clamped_mo), clamped_d, calendar_id);
+                        }
+                    }
+                }
+            }
+            None
+        }
+    }
 }
 
 /// Convert a calendar month code + day into an ISO date for PlainMonthDay.
@@ -511,6 +677,9 @@ pub(crate) fn calendar_month_day_to_iso(
     calendar_id: &str,
     overflow: &str,
 ) -> Option<(i32, u8, u8)> {
+    if !is_valid_month_code_for_calendar(month_code, calendar_id) {
+        return None;
+    }
     let kind = calendar_id_to_icu_kind(calendar_id)?;
 
     // If a year_hint is provided, validate/constrain against it first
@@ -556,28 +725,25 @@ pub(crate) fn calendar_month_day_to_iso(
     let cal_ref = iso_ref.to_any().to_calendar(cal_1972);
     let base_cal_year = cal_ref.year().extended_year();
 
-    // Collect candidates: try calendar years from base+1 down to base-30
-    // For each, check if the month_code+day is valid and maps to ISO year ≤ 1972
+    let search_range = if matches!(calendar_id, "chinese" | "dangi") { 60 } else { 30 };
     let mut best: Option<(i32, u8, u8)> = None;
-    for cy in (base_cal_year - 30..=base_cal_year + 1).rev() {
+    for cy in (base_cal_year - search_range..=base_cal_year + 1).rev() {
         let cal = AnyCalendar::new(kind);
         let mut f = IcuDateFields::default();
         f.extended_year = Some(cy);
         f.month_code = Some(month_code.as_bytes());
         f.day = Some(actual_day);
         if let Ok(d) = IcuDate::try_from_fields(f, Default::default(), cal) {
+            let actual_mc = d.month().standard_code.0.to_string();
+            if actual_mc != month_code { continue; }
+            if d.day_of_month().0 != actual_day { continue; }
             let iso = d.to_iso();
             let iso_result_year = iso.year().extended_year();
             if iso_result_year <= 1972 {
                 let candidate = (iso_result_year, iso.month().ordinal, iso.day_of_month().0);
-                // Keep the latest (largest ISO year)
                 if best.is_none() || candidate.0 > best.unwrap().0
                     || (candidate.0 == best.unwrap().0 && candidate > best.unwrap()) {
                     best = Some(candidate);
-                }
-                // Once we have a result from iso_year=1972, we won't find better
-                if iso_result_year == 1972 {
-                    return Some(candidate);
                 }
             }
         }
@@ -586,44 +752,53 @@ pub(crate) fn calendar_month_day_to_iso(
         return best;
     }
 
-    // If no year_hint was given and we couldn't find anything in 1940-1972 range,
-    // try a broader search (needed for unusual month codes in lunisolar calendars)
-    if year_hint.is_none() && overflow == "constrain" {
-        // Find the maximum day for this month code across years near 1972
-        let cal_base = AnyCalendar::new(kind);
-        let iso_ref = IcuDate::try_new_iso(1972, 7, 1).ok()?;
-        let cal_date = iso_ref.to_any().to_calendar(cal_base);
-        let base_year = cal_date.year().extended_year();
-
+    // Broader search for unusual month codes in lunisolar calendars
+    if overflow == "constrain" {
+        // First find the max days for this month_code across years ≤ 1972
         let mut best_max = 0u8;
-        let mut best_year = base_year;
-        for offset in 0i32..=20 {
-            let years: Vec<i32> = if offset == 0 { vec![base_year] } else { vec![base_year + offset, base_year - offset] };
-            for &y in &years {
-                let cal = AnyCalendar::new(kind);
-                let mut f = IcuDateFields::default();
-                f.extended_year = Some(y);
-                f.month_code = Some(month_code.as_bytes());
-                f.day = Some(1);
-                if let Ok(temp) = IcuDate::try_from_fields(f, Default::default(), cal) {
-                    let md = temp.days_in_month();
-                    if md > best_max {
-                        best_max = md;
-                        best_year = y;
-                    }
+        for cy in (base_cal_year - search_range..=base_cal_year + 1).rev() {
+            let cal = AnyCalendar::new(kind);
+            let mut f = IcuDateFields::default();
+            f.extended_year = Some(cy);
+            f.month_code = Some(month_code.as_bytes());
+            f.day = Some(1);
+            if let Ok(temp) = IcuDate::try_from_fields(f, Default::default(), cal) {
+                let actual_mc = temp.month().standard_code.0.to_string();
+                if actual_mc != month_code { continue; }
+                let iso = temp.to_iso();
+                if iso.year().extended_year() > 1972 { continue; }
+                let md = temp.days_in_month();
+                if md > best_max {
+                    best_max = md;
                 }
             }
         }
         if best_max > 0 {
             let clamped = actual_day.min(best_max).max(1);
-            let cal = AnyCalendar::new(kind);
-            let mut fields = IcuDateFields::default();
-            fields.extended_year = Some(best_year);
-            fields.month_code = Some(month_code.as_bytes());
-            fields.day = Some(clamped);
-            if let Ok(d) = IcuDate::try_from_fields(fields, Default::default(), cal) {
-                let iso = d.to_iso();
-                return Some((iso.year().extended_year(), iso.month().ordinal, iso.day_of_month().0));
+            // Now find the latest year ≤ 1972 where this month_code + clamped day exists
+            let mut best2: Option<(i32, u8, u8)> = None;
+            for cy in (base_cal_year - search_range..=base_cal_year + 1).rev() {
+                let cal = AnyCalendar::new(kind);
+                let mut f = IcuDateFields::default();
+                f.extended_year = Some(cy);
+                f.month_code = Some(month_code.as_bytes());
+                f.day = Some(clamped);
+                if let Ok(d) = IcuDate::try_from_fields(f, Default::default(), cal) {
+                    let amc = d.month().standard_code.0.to_string();
+                    if amc != month_code { continue; }
+                    if d.day_of_month().0 != clamped { continue; }
+                    let iso = d.to_iso();
+                    let iy = iso.year().extended_year();
+                    if iy <= 1972 {
+                        let c = (iy, iso.month().ordinal, iso.day_of_month().0);
+                        if best2.is_none() || c.0 > best2.unwrap().0 {
+                            best2 = Some(c);
+                        }
+                    }
+                }
+            }
+            if best2.is_some() {
+                return best2;
             }
         }
     }
@@ -665,7 +840,14 @@ pub(crate) fn add_calendar_date(
         fields.month_code = Some(mc_str.as_bytes());
         fields.day = Some(d);
         cal_date = match IcuDate::try_from_fields(fields, Default::default(), new_cal) {
-            Ok(d) => d,
+            Ok(result) => {
+                if overflow == "reject" {
+                    if result.day_of_month().0 != d || result.month().standard_code.0.to_string() != mc_str {
+                        return None;
+                    }
+                }
+                result
+            }
             Err(_) => {
                 if overflow == "reject" {
                     return None;
@@ -780,7 +962,12 @@ pub(crate) fn add_calendar_date(
         fields.ordinal_month = Some(new_mo);
         fields.day = Some(d);
         cal_date = match IcuDate::try_from_fields(fields, Default::default(), new_cal) {
-            Ok(d) => d,
+            Ok(result) => {
+                if overflow == "reject" && result.day_of_month().0 != d {
+                    return None;
+                }
+                result
+            }
             Err(_) => {
                 if overflow == "reject" {
                     return None;
@@ -2906,7 +3093,7 @@ pub(crate) fn parse_temporal_time_string(s: &str) -> Option<(u8, u8, u8, u16, u1
 /// `date_only_offset` is true when offset present but no time component.
 pub(crate) fn parse_temporal_year_month_string(
     s: &str,
-) -> Option<(i32, u8, Option<String>, bool, bool)> {
+) -> Option<(i32, u8, Option<u8>, Option<String>, bool, bool)> {
     let s = s.trim();
     let bytes = s.as_bytes();
     // Try YYYY-MM or YYYYMM first
@@ -2925,7 +3112,7 @@ pub(crate) fn parse_temporal_year_month_string(
                     let mut calendar = None;
                     pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
                     if pos == bytes.len() {
-                        return Some((year, month, calendar, false, false));
+                        return Some((year, month, None, calendar, false, false));
                     }
                 }
             }
@@ -2937,6 +3124,7 @@ pub(crate) fn parse_temporal_year_month_string(
     Some((
         parsed.year,
         parsed.month,
+        Some(parsed.day),
         parsed.calendar,
         parsed.has_utc_designator,
         date_only_offset,

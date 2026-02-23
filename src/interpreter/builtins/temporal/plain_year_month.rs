@@ -335,18 +335,18 @@ fn to_temporal_plain_year_month(
                 }
             };
             // PlainYearMonth does not accept UTC designator
-            if parsed.3 {
+            if parsed.4 {
                 return Err(Completion::Throw(interp.create_range_error(
                     "UTC designator Z is not allowed in a PlainYearMonth string",
                 )));
             }
             // Date-only string with UTC offset is not valid
-            if parsed.4 {
+            if parsed.5 {
                 return Err(Completion::Throw(interp.create_range_error(
                     "UTC offset without time is not valid for PlainYearMonth",
                 )));
             }
-            let cal = parsed.2.unwrap_or_else(|| "iso8601".to_string());
+            let cal = parsed.3.unwrap_or_else(|| "iso8601".to_string());
             let cal = match validate_calendar(&cal) {
                 Some(c) => c,
                 None => {
@@ -360,7 +360,8 @@ fn to_temporal_plain_year_month(
                     interp.create_range_error("Date outside representable range"),
                 ));
             }
-            Ok((parsed.0, parsed.1, 1, cal))
+            let ref_day = parsed.2.unwrap_or(1);
+            Ok((parsed.0, parsed.1, ref_day, cal))
         }
         _ => Err(Completion::Throw(
             interp.create_type_error("Cannot convert to Temporal.PlainYearMonth"),
@@ -608,6 +609,10 @@ impl Interpreter {
                                     "eraYear provided without era",
                                 ));
                             }
+                        } else if has_era || has_era_year {
+                            return Completion::Throw(interp.create_type_error(
+                                "era and eraYear are not valid for this calendar",
+                            ));
                         }
 
                         let mc_for_icu = if has_mc {
@@ -735,7 +740,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let _overflow = match parse_overflow_option(interp, &options) {
+                    let overflow = match parse_overflow_option(interp, &options) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -766,9 +771,16 @@ impl Interpreter {
                     let years = (dur.0 as i32) * sign;
                     let months = (dur.1 as i32) * sign;
                     let (ry, rm, final_rd) = if cal != "iso8601" && (years != 0 || months != 0) {
-                        match super::add_calendar_date(y, m, rd, years, months, 0, 0, &cal, "constrain") {
+                        match super::add_calendar_date(y, m, rd, years, months, 0, 0, &cal, &overflow) {
                             Some((ny, nm, nd)) => (ny, nm, nd),
                             None => {
+                                if overflow == "reject" {
+                                    return Completion::Throw(
+                                        interp.create_range_error(
+                                            "Calendar date arithmetic failed with overflow reject",
+                                        ),
+                                    );
+                                }
                                 let (iy, im, _) = add_iso_date(y, m, rd, years, months, 0, 0);
                                 let cm = im.max(1).min(12);
                                 (iy, cm, rd.min(iso_days_in_month(iy, cm)))

@@ -221,7 +221,7 @@ fn get_tz_offset_ns(tz: &str, epoch_ns: &BigInt) -> i64 {
 /// Return all possible epoch nanoseconds for a given wall-clock time in a timezone.
 /// For normal times there is one result; for DST overlaps there are two (sorted chronologically).
 /// For DST gaps the result is empty.
-fn get_possible_epoch_ns(tz: &str, local_ns: i128) -> Vec<i128> {
+pub(crate) fn get_possible_epoch_ns(tz: &str, local_ns: i128) -> Vec<i128> {
     if tz == "UTC" || tz == "Etc/UTC" || tz == "Etc/GMT" {
         return vec![local_ns];
     }
@@ -319,7 +319,7 @@ fn offset_match_or_reject(
 
 /// Disambiguate a local wall-clock time to a single UTC epoch nanosecond.
 /// `mode`: "compatible" | "earlier" | "later"
-fn disambiguate_instant(tz: &str, local_ns: i128, mode: &str) -> i128 {
+pub(crate) fn disambiguate_instant(tz: &str, local_ns: i128, mode: &str) -> i128 {
     let candidates = get_possible_epoch_ns(tz, local_ns);
     match candidates.len() {
         0 => {
@@ -375,7 +375,7 @@ fn disambiguate_instant(tz: &str, local_ns: i128, mode: &str) -> i128 {
 
 /// Find the start of day per spec GetStartOfDay:
 /// Try midnight; if it exists, return earliest instant. If gap, find first valid local time.
-fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
+pub(crate) fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
     let local_midnight = epoch_days * NS_PER_DAY;
     let candidates = get_possible_epoch_ns(tz, local_midnight);
     if !candidates.is_empty() {
@@ -405,10 +405,6 @@ fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
             hi = mid;
         }
     }
-    // Snap to second boundary
-    lo = (lo / NS_PER_SEC) * NS_PER_SEC;
-    hi = lo + NS_PER_SEC;
-    // Return the first instant after the transition
     hi
 }
 
@@ -455,14 +451,22 @@ fn get_next_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
     let ns_max: i128 = 8_640_000_000_000_000_000_000;
     let tz_parsed: Tz = tz.parse().ok()?;
 
-    let start_ns = ((epoch_ns / NS_PER_SEC) + 1) * NS_PER_SEC;
+    let ref_sec = epoch_ns.div_euclid(NS_PER_SEC);
+    let start_ns = (ref_sec + 1) * NS_PER_SEC;
     if start_ns > ns_max {
         return None;
     }
 
+    // Check if there's a transition at the boundary between the current second and the next
+    let ref_off = get_total_offset_secs(&tz_parsed, ref_sec as i64);
+    let start_off = get_total_offset_secs(&tz_parsed, (start_ns / NS_PER_SEC) as i64);
+    if ref_off != start_off {
+        return Some(start_ns);
+    }
+
     let coarse = NS_PER_DAY * 90;
     let mut prev_ns = start_ns;
-    let mut prev_off = get_total_offset_secs(&tz_parsed, (prev_ns / NS_PER_SEC) as i64);
+    let mut prev_off = start_off;
     let mut step = coarse;
     let mut first_window = true;
 
@@ -517,14 +521,15 @@ fn get_previous_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
     let ns_min: i128 = -8_640_000_000_000_000_000_000;
     let tz_parsed: Tz = tz.parse().ok()?;
 
-    let ref_ns = ((epoch_ns - 1) / NS_PER_SEC) * NS_PER_SEC;
+    let ref_sec = (epoch_ns - 1).div_euclid(NS_PER_SEC);
+    let ref_ns = ref_sec * NS_PER_SEC;
     if ref_ns < ns_min {
         return None;
     }
 
     let coarse = NS_PER_DAY * 90;
     let mut next_ns = ref_ns;
-    let mut next_off = get_total_offset_secs(&tz_parsed, (next_ns / NS_PER_SEC) as i64);
+    let mut next_off = get_total_offset_secs(&tz_parsed, ref_sec as i64);
     let mut step = coarse;
     let mut first_window = true;
 
@@ -907,7 +912,9 @@ fn to_temporal_zoned_date_time_with_options(
                     Completion::Normal(v) => v,
                     c => return c,
                 };
-                let (icu_era, icu_year) = if !is_undefined(&era_val) && !is_undefined(&era_year_val) {
+                let (icu_era, icu_year) = if !is_undefined(&era_val) && !is_undefined(&era_year_val)
+                    && super::calendar_has_eras(&calendar)
+                {
                     let era_str = match super::to_primitive_and_require_string(interp, &era_val, "era") {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -2542,7 +2549,7 @@ impl Interpreter {
                                 ));
                             }
 
-                            // Validate era/eraYear pairing for era-based calendars
+                            // Validate era/eraYear pairing
                             if super::calendar_has_eras(&cal) {
                                 if has_era && !has_era_year {
                                     return Completion::Throw(interp.create_type_error(
@@ -2554,6 +2561,10 @@ impl Interpreter {
                                         "eraYear provided without era",
                                     ));
                                 }
+                            } else if has_era || has_era_year {
+                                return Completion::Throw(interp.create_type_error(
+                                    "era and eraYear are not valid for this calendar",
+                                ));
                             }
 
                             // Determine month_code and month_ordinal for ICU
@@ -2879,19 +2890,29 @@ impl Interpreter {
                         + nns as i128;
                     let local_ns = epoch_days * NS_PER_DAY + day_ns;
 
-                    // Determine offset: use user-provided offset if offset option is "use"
-                    let offset_ns = if offset_opt == "use" && !is_undefined(&offset_prop) {
+                    // Determine offset based on offset option
+                    let tz_offset_ns = get_tz_offset_ns(&tz, &BigInt::from(local_ns)) as i128;
+                    let offset_ns = if !is_undefined(&offset_prop) {
                         let off_str = match interp.to_string_value(&offset_prop) {
                             Ok(s) => s,
                             Err(c) => return Completion::Throw(c),
                         };
-                        match super::parse_utc_offset_timezone(&off_str) {
+                        let user_offset_ns = match super::parse_utc_offset_timezone(&off_str) {
                             Some(canonical) => super::offset_string_to_ns(&canonical),
-                            None => get_tz_offset_ns(&tz, &BigInt::from(local_ns)) as i128,
+                            None => tz_offset_ns,
+                        };
+                        if offset_opt == "reject" && user_offset_ns != tz_offset_ns {
+                            return Completion::Throw(interp.create_range_error(
+                                "offset does not match the time zone offset",
+                            ));
+                        } else if offset_opt == "use" {
+                            user_offset_ns
+                        } else {
+                            // "prefer" or "ignore": use timezone offset
+                            tz_offset_ns
                         }
                     } else {
-                        let approx = BigInt::from(local_ns);
-                        get_tz_offset_ns(&tz, &approx) as i128
+                        tz_offset_ns
                     };
                     let new_epoch_ns = BigInt::from(local_ns - offset_ns);
                     create_zdt(interp, new_epoch_ns, tz, cal)
@@ -3462,16 +3483,12 @@ fn zdt_add_subtract(
         if cal != "iso8601" && (sy != 0 || sm != 0) {
             match super::add_calendar_date(y, m, d, sy, sm, sw, sd, &cal, &overflow) {
                 Some(v) => v,
-                None => match super::add_iso_date_with_overflow(y, m, d, sy, sm, sw, sd, &overflow)
-                {
-                    Ok(v) => v,
-                    Err(()) => {
-                        return Completion::Throw(
-                            interp
-                                .create_range_error("day is out of range for the resulting month"),
-                        );
-                    }
-                },
+                None => {
+                    return Completion::Throw(
+                        interp
+                            .create_range_error("day is out of range for the resulting month"),
+                    );
+                }
             }
         } else {
             match super::add_iso_date_with_overflow(y, m, d, sy, sm, sw, sd, &overflow) {
@@ -3624,49 +3641,63 @@ fn zdt_until_since(
             }
         };
 
-        let mut day_correction: i32 = if time_diff_sign == poly_sign { 1 } else { 0 };
-        let max_correction = if poly_sign == -1 { 2 } else { 1 };
+        let mut time_remainder: i128;
+        let mut adj_oy: i32;
+        let mut adj_om: u8;
+        let mut adj_od: u8;
 
-        let mut time_remainder: i128 = 0;
-        let mut adj_oy = oy as i32;
-        let mut adj_om = om;
-        let mut adj_od = od;
+        // When ISO dates are the same, skip day correction entirely.
+        // The time remainder is just the raw epoch nanosecond difference.
+        // This handles same-date-reverse-wallclock during DST transitions
+        // (per tc39/proposal-temporal#3141).
+        if ty == oy as i32 && tm == om && td == od {
+            adj_oy = oy as i32;
+            adj_om = om;
+            adj_od = od;
+            time_remainder = ns_diff;
+        } else {
+            let mut day_correction: i32 = if time_diff_sign == poly_sign { 1 } else { 0 };
+            let max_correction = if poly_sign == -1 { 2 } else { 1 };
+            adj_oy = oy as i32;
+            adj_om = om;
+            adj_od = od;
 
-        loop {
-            let (ay, am, ad) = if day_correction == 0 {
-                (oy as i32, om, od)
-            } else {
-                super::balance_iso_date(
-                    oy as i32,
-                    om as i32,
-                    od as i32 + day_correction * poly_sign,
-                )
-            };
-            let int_epoch = super::iso_date_to_epoch_days(ay, am, ad) as i128;
-            let int_local = int_epoch * NS_PER_DAY + this_time_ns;
-            let int_off = get_tz_offset_ns(&tz, &BigInt::from(int_local)) as i128;
-            let int_ns = int_local - int_off;
+            loop {
+                let (ay, am, ad) = if day_correction == 0 {
+                    (oy as i32, om, od)
+                } else {
+                    super::balance_iso_date(
+                        oy as i32,
+                        om as i32,
+                        od as i32 + day_correction * poly_sign,
+                    )
+                };
+                let int_epoch = super::iso_date_to_epoch_days(ay, am, ad) as i128;
+                let int_local = int_epoch * NS_PER_DAY + this_time_ns;
+                let int_off = get_tz_offset_ns(&tz, &BigInt::from(int_local)) as i128;
+                let int_ns = int_local - int_off;
 
-            time_remainder = n2 - int_ns;
-            let tr_sign = if time_remainder > 0 {
-                1
-            } else if time_remainder < 0 {
-                -1
-            } else {
-                0
-            };
-            if tr_sign != poly_sign {
-                adj_oy = ay;
-                adj_om = am;
-                adj_od = ad;
-                break;
-            }
-            day_correction += 1;
-            if day_correction > max_correction {
-                adj_oy = ay;
-                adj_om = am;
-                adj_od = ad;
-                break;
+                time_remainder = n2 - int_ns;
+                let tr_sign = if time_remainder > 0 {
+                    1
+                } else if time_remainder < 0 {
+                    -1
+                } else {
+                    0
+                };
+                if tr_sign != poly_sign {
+                    adj_oy = ay;
+                    adj_om = am;
+                    adj_od = ad;
+                    break;
+                }
+                day_correction += 1;
+                if day_correction > max_correction {
+                    adj_oy = ay;
+                    adj_om = am;
+                    adj_od = ad;
+                    break;
+                }
             }
         }
 
