@@ -1165,6 +1165,10 @@ pub(super) fn translate_js_pattern_ex(
     let mut dotall_stack: Vec<Option<bool>> = Vec::new();
     let mut dot_all = dot_all_base;
     let unicode = flags.contains('u') || flags.contains('v');
+    let icase_base = flags.contains('i');
+    let mut icase = icase_base;
+    let mut icase_stack: Vec<Option<bool>> = Vec::new();
+    let non_unicode_icase = |ic: bool| -> bool { ic && !unicode };
 
     // Pre-count total capturing groups in the pattern
     let total_groups = {
@@ -1297,7 +1301,11 @@ pub(super) fn translate_js_pattern_ex(
                 'k' if !in_char_class && i + 2 < len && chars[i + 2] == '<' => {
                     if !unicode && all_group_names.is_empty() {
                         // Annex B: \k without named groups is identity escape
-                        push_literal_char(&mut result, 'k', false);
+                        if non_unicode_icase(icase) {
+                            push_case_fold_guarded(&mut result, 'k', false);
+                        } else {
+                            push_literal_char(&mut result, 'k', false);
+                        }
                         i += 2;
                     } else {
                         let start = i + 3;
@@ -1359,7 +1367,14 @@ pub(super) fn translate_js_pattern_ex(
                         if let Ok(val) = u32::from_str_radix(&octal_str, 8)
                             && let Some(ch) = char::from_u32(val)
                         {
-                            push_literal_char(&mut result, ch, in_char_class);
+                            if non_unicode_icase(icase)
+                                && !in_char_class
+                                && needs_case_fold_guard(ch)
+                            {
+                                push_case_fold_guarded(&mut result, ch, false);
+                            } else {
+                                push_literal_char(&mut result, ch, in_char_class);
+                            }
                         }
                         i = octal_end;
                     } else {
@@ -1388,7 +1403,11 @@ pub(super) fn translate_js_pattern_ex(
                     if let Ok(cp) = u32::from_str_radix(&hex, 16)
                         && let Some(ch) = char::from_u32(cp)
                     {
-                        push_literal_char(&mut result, ch, in_char_class);
+                        if non_unicode_icase(icase) && !in_char_class && needs_case_fold_guard(ch) {
+                            push_case_fold_guarded(&mut result, ch, false);
+                        } else {
+                            push_literal_char(&mut result, ch, in_char_class);
+                        }
                     }
                     i += 4;
                 }
@@ -1407,7 +1426,14 @@ pub(super) fn translate_js_pattern_ex(
                                         in_char_class,
                                     );
                                 } else if let Some(ch) = char::from_u32(cp) {
-                                    push_literal_char(&mut result, ch, in_char_class);
+                                    if non_unicode_icase(icase)
+                                        && !in_char_class
+                                        && needs_case_fold_guard(ch)
+                                    {
+                                        push_case_fold_guarded(&mut result, ch, false);
+                                    } else {
+                                        push_literal_char(&mut result, ch, in_char_class);
+                                    }
                                 }
                             }
                             i = start + end + 1;
@@ -1426,7 +1452,14 @@ pub(super) fn translate_js_pattern_ex(
                             if is_surrogate(cp) {
                                 push_literal_char(&mut result, surrogate_to_pua(cp), in_char_class);
                             } else if let Some(ch) = char::from_u32(cp) {
-                                push_literal_char(&mut result, ch, in_char_class);
+                                if non_unicode_icase(icase)
+                                    && !in_char_class
+                                    && needs_case_fold_guard(ch)
+                                {
+                                    push_case_fold_guarded(&mut result, ch, false);
+                                } else {
+                                    push_literal_char(&mut result, ch, in_char_class);
+                                }
                             }
                         }
                         i += 6;
@@ -1536,7 +1569,14 @@ pub(super) fn translate_js_pattern_ex(
                             if let Ok(val) = u32::from_str_radix(&octal_str, 8) {
                                 if val <= 0xFF {
                                     if let Some(ch) = char::from_u32(val) {
-                                        push_literal_char(&mut result, ch, in_char_class);
+                                        if non_unicode_icase(icase)
+                                            && !in_char_class
+                                            && needs_case_fold_guard(ch)
+                                        {
+                                            push_case_fold_guarded(&mut result, ch, false);
+                                        } else {
+                                            push_literal_char(&mut result, ch, in_char_class);
+                                        }
                                         i = octal_end;
                                     } else {
                                         result.push('\\');
@@ -1547,7 +1587,14 @@ pub(super) fn translate_js_pattern_ex(
                                     // Value too large, just match first digit as octal
                                     let single_val = (next as u32) - ('0' as u32);
                                     if let Some(ch) = char::from_u32(single_val) {
-                                        push_literal_char(&mut result, ch, in_char_class);
+                                        if non_unicode_icase(icase)
+                                            && !in_char_class
+                                            && needs_case_fold_guard(ch)
+                                        {
+                                            push_case_fold_guarded(&mut result, ch, false);
+                                        } else {
+                                            push_literal_char(&mut result, ch, in_char_class);
+                                        }
                                     }
                                     i += 2;
                                 }
@@ -1630,6 +1677,11 @@ pub(super) fn translate_js_pattern_ex(
                         // Escaped syntax char: keep the backslash
                         result.push('\\');
                         result.push(next);
+                    } else if non_unicode_icase(icase)
+                        && !in_char_class
+                        && needs_case_fold_guard(next)
+                    {
+                        push_case_fold_guarded(&mut result, next, false);
                     } else {
                         // Identity escape: push the literal character
                         // (fancy_regex may interpret \< \> \A \Z etc. specially)
@@ -1648,6 +1700,7 @@ pub(super) fn translate_js_pattern_ex(
                 // Lookbehind - pass through
                 lookbehind_depth += 1;
                 dotall_stack.push(None);
+                icase_stack.push(None);
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(true);
                 group_result_start.push(None);
@@ -1666,6 +1719,7 @@ pub(super) fn translate_js_pattern_ex(
                     None
                 });
                 dotall_stack.push(None);
+                icase_stack.push(None);
                 // Extract the group name to check if it's duplicated
                 let name_start = i + 3;
                 let mut k = name_start;
@@ -1747,6 +1801,15 @@ pub(super) fn translate_js_pattern_ex(
                     dot_all = false;
                 }
                 dotall_stack.push(Some(prev_dot_all));
+
+                let prev_icase = icase;
+                if add_i {
+                    icase = true;
+                }
+                if remove_i {
+                    icase = false;
+                }
+                icase_stack.push(Some(prev_icase));
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(false);
                 group_result_start.push(None);
@@ -1781,10 +1844,13 @@ pub(super) fn translate_js_pattern_ex(
             }
         }
 
-        // Close group: pop dotall state if needed
+        // Close group: pop dotall/icase state if needed
         if c == ')' && !in_char_class {
             if let Some(Some(prev)) = dotall_stack.pop() {
                 dot_all = prev;
+            }
+            if let Some(Some(prev)) = icase_stack.pop() {
+                icase = prev;
             }
             let was_capturing = matches!(group_is_capturing.pop(), Some(true));
             let was_lookbehind = matches!(is_lookbehind_group.pop(), Some(true));
@@ -1837,6 +1903,7 @@ pub(super) fn translate_js_pattern_ex(
         // Handle '(' for other group types (non-capturing (?:), lookahead (?=), (?!), plain)
         if c == '(' && !in_char_class {
             dotall_stack.push(None);
+            icase_stack.push(None);
             if i + 1 >= len || chars[i + 1] != '?' {
                 groups_seen += 1;
                 open_groups.push(groups_seen);
@@ -1876,7 +1943,11 @@ pub(super) fn translate_js_pattern_ex(
             continue;
         }
 
-        result.push(c);
+        if non_unicode_icase(icase) && !in_char_class && needs_case_fold_guard(c) {
+            push_case_fold_guarded(&mut result, c, false);
+        } else {
+            result.push(c);
+        }
         i += 1;
     }
 
@@ -1959,6 +2030,47 @@ fn push_literal_char(result: &mut String, ch: char, _in_char_class: bool) {
         result.push('\\');
     }
     result.push(ch);
+}
+
+fn needs_case_fold_guard(ch: char) -> bool {
+    matches!(
+        ch,
+        's' | 'S'
+            | 'k'
+            | 'K'
+            | '\u{017F}'
+            | '\u{212A}'
+            | '\u{1E9E}'
+            | '\u{212B}'
+            | '\u{00DF}'
+            | '\u{00E5}'
+            | '\u{00C5}'
+    )
+}
+
+fn push_escaped(result: &mut String, ch: char) {
+    if is_syntax_character(ch) || ch == '/' {
+        result.push('\\');
+    }
+    result.push(ch);
+}
+
+fn push_case_fold_guarded(result: &mut String, ch: char, in_char_class: bool) {
+    if in_char_class {
+        push_escaped(result, ch);
+        return;
+    }
+    match ch {
+        's' | 'S' => result.push_str("(?-i:[sS])"),
+        'k' | 'K' => result.push_str("(?-i:[kK])"),
+        '\u{017F}' => result.push_str("(?-i:\u{017F})"),
+        '\u{212A}' => result.push_str("(?-i:\u{212A})"),
+        '\u{1E9E}' => result.push_str("(?-i:\u{1E9E})"),
+        '\u{212B}' => result.push_str("(?-i:\u{212B})"),
+        '\u{00DF}' => result.push_str("(?-i:\u{00DF})"),
+        '\u{00E5}' | '\u{00C5}' => result.push_str("(?-i:[\u{00E5}\u{00C5}])"),
+        _ => push_escaped(result, ch),
+    }
 }
 
 fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
