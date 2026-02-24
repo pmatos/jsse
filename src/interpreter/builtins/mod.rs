@@ -408,6 +408,56 @@ impl Interpreter {
             dollar_262
                 .borrow_mut()
                 .insert_builtin("gc".to_string(), gc_fn);
+
+            // $262.IsHTMLDDA — B.3.6 [[IsHTMLDDA]] internal slot
+            let htmldda_obj = self.create_object();
+            htmldda_obj.borrow_mut().callable = Some(JsFunction::native(
+                "".to_string(),
+                0,
+                |_interp, _this, _args| Completion::Normal(JsValue::Null),
+            ));
+            htmldda_obj.borrow_mut().is_htmldda = true;
+            let htmldda_val = JsValue::Object(crate::types::JsObject {
+                id: htmldda_obj.borrow().id.unwrap(),
+            });
+            dollar_262
+                .borrow_mut()
+                .insert_builtin("IsHTMLDDA".to_string(), htmldda_val);
+
+            // $262.evalScript
+            let eval_script_fn = self.create_function(JsFunction::native(
+                "evalScript".to_string(),
+                1,
+                |interp, _this, args| {
+                    let code = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let code_str = match interp.to_string_value(&code) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let mut parser = match crate::parser::Parser::new(&code_str) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let err =
+                                interp.create_error("SyntaxError", &format!("{}", e));
+                            return Completion::Throw(err);
+                        }
+                    };
+                    let program = match parser.parse_program() {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let err =
+                                interp.create_error("SyntaxError", &format!("{}", e));
+                            return Completion::Throw(err);
+                        }
+                    };
+                    let env = interp.global_env.clone();
+                    interp.exec_statements(&program.body, &env)
+                },
+            ));
+            dollar_262
+                .borrow_mut()
+                .insert_builtin("evalScript".to_string(), eval_script_fn);
+
             let dollar_262_val = JsValue::Object(crate::types::JsObject {
                 id: dollar_262.borrow().id.unwrap(),
             });
@@ -1379,7 +1429,7 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::constructor("Boolean".to_string(), 1, |interp, this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let b = to_boolean(&val);
+                let b = interp.to_boolean_val(&val);
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -2188,7 +2238,7 @@ impl Interpreter {
                 };
 
                 let fn_source_text = format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
-                let source = format!("(function anonymous({}) {{ {} }})", params_str, body_str);
+                let source = format!("(function anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                 let mut p = match parser::Parser::new(&source) {
                     Ok(p) => p,
                     Err(e) => {
@@ -2582,7 +2632,7 @@ impl Interpreter {
                     let fn_source_text =
                         format!("async function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
                     let source =
-                        format!("(async function anonymous({}) {{ {} }})", params_str, body_str);
+                        format!("(async function anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -2685,7 +2735,7 @@ impl Interpreter {
                         params_str, body_str
                     );
                     let source =
-                        format!("(function* anonymous({}) {{ {} }})", params_str, body_str);
+                        format!("(function* anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -2788,7 +2838,7 @@ impl Interpreter {
                         params_str, body_str
                     );
                     let source =
-                        format!("(async function* anonymous({}) {{ {} }})", params_str, body_str);
+                        format!("(async function* anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -3220,6 +3270,8 @@ impl Interpreter {
             "Atomics",
             "Temporal",
             "Intl",
+            "escape",
+            "unescape",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.global_env.borrow();
@@ -5315,7 +5367,7 @@ impl Interpreter {
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,
             };
-            return Ok(to_boolean(&done));
+            return Ok(self.to_boolean_val(&done));
         }
         Ok(true)
     }

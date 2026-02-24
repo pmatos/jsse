@@ -261,6 +261,7 @@ pub struct Lexer<'a> {
     column: u32,
     pub strict: bool,
     pub last_string_has_escape: bool,
+    had_line_terminator: bool,
 }
 
 impl<'a> Lexer<'a> {
@@ -277,6 +278,7 @@ impl<'a> Lexer<'a> {
             column: 0,
             strict: false,
             last_string_has_escape: false,
+            had_line_terminator: true,
         }
     }
 
@@ -984,6 +986,7 @@ impl<'a> Lexer<'a> {
             if Self::is_line_terminator(ch) {
                 self.advance();
                 self.handle_newline(ch);
+                self.had_line_terminator = true;
                 return Ok(Token::LineTerminator);
             }
 
@@ -1000,10 +1003,29 @@ impl<'a> Lexer<'a> {
                     self.advance();
                     let had_lt = self.skip_block_comment()?;
                     if had_lt {
+                        self.had_line_terminator = true;
                         return Ok(Token::LineTerminator);
                     }
                     continue;
                 }
+            }
+
+            // Annex B.1.1: HTML-like comments
+            // <!-- is a single-line comment
+            if ch == '<' && self.source[self.offset..].starts_with("<!--") {
+                self.advance(); // <
+                self.advance(); // !
+                self.advance(); // -
+                self.advance(); // -
+                self.skip_line_comment();
+                continue;
+            }
+            // --> at start of line is a single-line comment
+            if ch == '-' && self.had_line_terminator && self.source[self.offset..].starts_with("-->") {
+                self.advance(); // -
+                self.advance(); // >
+                self.skip_line_comment();
+                continue;
             }
 
             // Hashbang
@@ -1011,6 +1033,8 @@ impl<'a> Lexer<'a> {
                 self.skip_line_comment();
                 continue;
             }
+
+            self.had_line_terminator = false;
 
             // Private name: #identifier
             if ch == '#' {

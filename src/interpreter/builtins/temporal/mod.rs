@@ -31,9 +31,19 @@ fn has_datetime_options(interp: &mut Interpreter, options: &JsValue) -> bool {
     }
     if let JsValue::Object(o) = options {
         for key in &[
-            "dateStyle", "timeStyle", "year", "month", "day", "weekday",
-            "hour", "minute", "second", "fractionalSecondDigits", "dayPeriod",
-            "timeZoneName", "era",
+            "dateStyle",
+            "timeStyle",
+            "year",
+            "month",
+            "day",
+            "weekday",
+            "hour",
+            "minute",
+            "second",
+            "fractionalSecondDigits",
+            "dayPeriod",
+            "timeZoneName",
+            "era",
         ] {
             if let Completion::Normal(v) = interp.get_object_property(o.id, key, options) {
                 if !matches!(v, JsValue::Undefined) {
@@ -71,10 +81,9 @@ pub(crate) fn temporal_construct_dtf(
             for key in keys {
                 if let Completion::Normal(v) = interp.get_object_property(o.id, &key, options) {
                     if !matches!(v, JsValue::Undefined) {
-                        opts_obj.borrow_mut().insert_property(
-                            key,
-                            PropertyDescriptor::data(v, true, true, true),
-                        );
+                        opts_obj
+                            .borrow_mut()
+                            .insert_property(key, PropertyDescriptor::data(v, true, true, true));
                     }
                 }
             }
@@ -86,30 +95,78 @@ pub(crate) fn temporal_construct_dtf(
     let two_digit = JsValue::String(JsString::from_str("2-digit"));
     match defaults {
         TemporalDefaults::All => {
-            opts_obj.borrow_mut().insert_property("year".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("month".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("day".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("hour".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("minute".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("second".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property(
+                "year".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "month".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "day".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "hour".to_string(),
+                PropertyDescriptor::data(two_digit.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "minute".to_string(),
+                PropertyDescriptor::data(two_digit.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "second".to_string(),
+                PropertyDescriptor::data(two_digit.clone(), true, true, true),
+            );
         }
         TemporalDefaults::Date => {
-            opts_obj.borrow_mut().insert_property("year".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("month".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("day".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property(
+                "year".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "month".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "day".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
         }
         TemporalDefaults::Time => {
-            opts_obj.borrow_mut().insert_property("hour".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("minute".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("second".to_string(), PropertyDescriptor::data(two_digit.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property(
+                "hour".to_string(),
+                PropertyDescriptor::data(two_digit.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "minute".to_string(),
+                PropertyDescriptor::data(two_digit.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "second".to_string(),
+                PropertyDescriptor::data(two_digit.clone(), true, true, true),
+            );
         }
         TemporalDefaults::YearMonth => {
-            opts_obj.borrow_mut().insert_property("year".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("month".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property(
+                "year".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "month".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
         }
         TemporalDefaults::MonthDay => {
-            opts_obj.borrow_mut().insert_property("month".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
-            opts_obj.borrow_mut().insert_property("day".to_string(), PropertyDescriptor::data(numeric.clone(), true, true, true));
+            opts_obj.borrow_mut().insert_property(
+                "month".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
+            opts_obj.borrow_mut().insert_property(
+                "day".to_string(),
+                PropertyDescriptor::data(numeric.clone(), true, true, true),
+            );
         }
     }
 
@@ -143,14 +200,14 @@ pub(crate) fn check_locale_string_style_conflict(
         let has_ds = !matches!(ds, JsValue::Undefined);
         let has_ts = !matches!(ts, JsValue::Undefined);
         if has_ds && !has_date {
-            return Err(interp.create_type_error(
-                "dateStyle does not overlap with this Temporal type",
-            ));
+            return Err(
+                interp.create_type_error("dateStyle does not overlap with this Temporal type")
+            );
         }
         if has_ts && !has_time {
-            return Err(interp.create_type_error(
-                "timeStyle does not overlap with this Temporal type",
-            ));
+            return Err(
+                interp.create_type_error("timeStyle does not overlap with this Temporal type")
+            );
         }
     }
     Ok(())
@@ -168,11 +225,12 @@ pub(crate) fn check_calendar_mismatch(
         return Ok(());
     }
     if let JsValue::Object(dtf_obj) = dtf_instance {
-        let resolved_fn = match interp.get_object_property(dtf_obj.id, "resolvedOptions", dtf_instance) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Err(e),
-            _ => return Ok(()),
-        };
+        let resolved_fn =
+            match interp.get_object_property(dtf_obj.id, "resolvedOptions", dtf_instance) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Ok(()),
+            };
         let resolved = match interp.call_function(&resolved_fn, dtf_instance, &[]) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
@@ -241,9 +299,22 @@ pub(crate) fn ascii_lowercase(s: &str) -> String {
 ///
 /// Returns the normalized calendar ID, or None if invalid.
 const SUPPORTED_CALENDARS: &[&str] = &[
-    "iso8601", "buddhist", "chinese", "coptic", "dangi", "ethioaa", "ethiopic",
-    "gregory", "hebrew", "indian", "islamic-civil",
-    "islamic-tbla", "islamic-umalqura", "japanese", "persian", "roc",
+    "iso8601",
+    "buddhist",
+    "chinese",
+    "coptic",
+    "dangi",
+    "ethioaa",
+    "ethiopic",
+    "gregory",
+    "hebrew",
+    "indian",
+    "islamic-civil",
+    "islamic-tbla",
+    "islamic-umalqura",
+    "japanese",
+    "persian",
+    "roc",
 ];
 
 fn canonicalize_temporal_calendar(cal: &str) -> String {
@@ -342,8 +413,8 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
     None
 }
 
-use icu::calendar::{AnyCalendar, AnyCalendarKind, Date as IcuDate};
 use icu::calendar::types::MonthCode as IcuMonthCode;
+use icu::calendar::{AnyCalendar, AnyCalendarKind, Date as IcuDate};
 use icu_calendar::types::DateFields as IcuDateFields;
 use tinystr::TinyAsciiStr;
 
@@ -465,13 +536,21 @@ pub(crate) fn calendar_fields_to_iso(
 }
 
 fn validate_calendar_date_round_trip(
-    iso_y: i32, iso_m: u8, iso_d: u8,
-    calendar_id: &str, requested_day: u8, requested_month_code: Option<&str>,
+    iso_y: i32,
+    iso_m: u8,
+    iso_d: u8,
+    calendar_id: &str,
+    requested_day: u8,
+    requested_month_code: Option<&str>,
 ) -> bool {
     if let Some(cf) = iso_to_calendar_fields(iso_y, iso_m, iso_d, calendar_id) {
-        if cf.day != requested_day { return false; }
+        if cf.day != requested_day {
+            return false;
+        }
         if let Some(mc) = requested_month_code {
-            if cf.month_code != mc { return false; }
+            if cf.month_code != mc {
+                return false;
+            }
         }
         true
     } else {
@@ -479,7 +558,10 @@ fn validate_calendar_date_round_trip(
     }
 }
 
-pub(crate) fn iso_to_calendar_fields_from_year(year: i32, calendar_id: &str) -> Option<CalendarFields> {
+pub(crate) fn iso_to_calendar_fields_from_year(
+    year: i32,
+    calendar_id: &str,
+) -> Option<CalendarFields> {
     let kind = calendar_id_to_icu_kind(calendar_id)?;
     let cal = AnyCalendar::new(kind);
     let mut f = IcuDateFields::default();
@@ -502,7 +584,11 @@ pub(crate) fn iso_to_calendar_fields_from_year(year: i32, calendar_id: &str) -> 
     })
 }
 
-pub(crate) fn ordinal_month_to_month_code(year: i32, ordinal_month: u8, calendar_id: &str) -> Option<String> {
+pub(crate) fn ordinal_month_to_month_code(
+    year: i32,
+    ordinal_month: u8,
+    calendar_id: &str,
+) -> Option<String> {
     let kind = calendar_id_to_icu_kind(calendar_id)?;
     let cal = AnyCalendar::new(kind);
     let mut f = IcuDateFields::default();
@@ -557,7 +643,9 @@ pub(crate) fn calendar_fields_to_iso_overflow(
             return None;
         }
     }
-    if let Some((iy, im, id)) = calendar_fields_to_iso(era, year, month_code, month_ordinal, day, calendar_id) {
+    if let Some((iy, im, id)) =
+        calendar_fields_to_iso(era, year, month_code, month_ordinal, day, calendar_id)
+    {
         if overflow == "reject" {
             if !validate_calendar_date_round_trip(iy, im, id, calendar_id, day, month_code) {
                 return None;
@@ -614,7 +702,14 @@ pub(crate) fn calendar_fields_to_iso_overflow(
                     if let Ok(temp) = IcuDate::try_from_fields(f2, Default::default(), cal2) {
                         let max_day = temp.days_in_month();
                         let clamped = day.min(max_day).max(1);
-                        return calendar_fields_to_iso(era, year, Some(&fallback_mc), month_ordinal, clamped, calendar_id);
+                        return calendar_fields_to_iso(
+                            era,
+                            year,
+                            Some(&fallback_mc),
+                            month_ordinal,
+                            clamped,
+                            calendar_id,
+                        );
                     }
                 }
             }
@@ -649,7 +744,14 @@ pub(crate) fn calendar_fields_to_iso_overflow(
                         if let Ok(temp2) = IcuDate::try_from_fields(f4, Default::default(), cal4) {
                             let max_day = temp2.days_in_month();
                             let clamped_d = day.min(max_day).max(1);
-                            return calendar_fields_to_iso(era, year, None, Some(clamped_mo), clamped_d, calendar_id);
+                            return calendar_fields_to_iso(
+                                era,
+                                year,
+                                None,
+                                Some(clamped_mo),
+                                clamped_d,
+                                calendar_id,
+                            );
                         }
                     }
                 }
@@ -726,7 +828,11 @@ pub(crate) fn calendar_month_day_to_iso(
     let cal_ref = iso_ref.to_any().to_calendar(cal_1972);
     let base_cal_year = cal_ref.year().extended_year();
 
-    let search_range = if matches!(calendar_id, "chinese" | "dangi") { 60 } else { 30 };
+    let search_range = if matches!(calendar_id, "chinese" | "dangi") {
+        60
+    } else {
+        30
+    };
     let mut best: Option<(i32, u8, u8)> = None;
     for cy in (base_cal_year - search_range..=base_cal_year + 1).rev() {
         let cal = AnyCalendar::new(kind);
@@ -736,14 +842,20 @@ pub(crate) fn calendar_month_day_to_iso(
         f.day = Some(actual_day);
         if let Ok(d) = IcuDate::try_from_fields(f, Default::default(), cal) {
             let actual_mc = d.month().standard_code.0.to_string();
-            if actual_mc != month_code { continue; }
-            if d.day_of_month().0 != actual_day { continue; }
+            if actual_mc != month_code {
+                continue;
+            }
+            if d.day_of_month().0 != actual_day {
+                continue;
+            }
             let iso = d.to_iso();
             let iso_result_year = iso.year().extended_year();
             if iso_result_year <= 1972 {
                 let candidate = (iso_result_year, iso.month().ordinal, iso.day_of_month().0);
-                if best.is_none() || candidate.0 > best.unwrap().0
-                    || (candidate.0 == best.unwrap().0 && candidate > best.unwrap()) {
+                if best.is_none()
+                    || candidate.0 > best.unwrap().0
+                    || (candidate.0 == best.unwrap().0 && candidate > best.unwrap())
+                {
                     best = Some(candidate);
                 }
             }
@@ -765,9 +877,13 @@ pub(crate) fn calendar_month_day_to_iso(
             f.day = Some(1);
             if let Ok(temp) = IcuDate::try_from_fields(f, Default::default(), cal) {
                 let actual_mc = temp.month().standard_code.0.to_string();
-                if actual_mc != month_code { continue; }
+                if actual_mc != month_code {
+                    continue;
+                }
                 let iso = temp.to_iso();
-                if iso.year().extended_year() > 1972 { continue; }
+                if iso.year().extended_year() > 1972 {
+                    continue;
+                }
                 let md = temp.days_in_month();
                 if md > best_max {
                     best_max = md;
@@ -786,8 +902,12 @@ pub(crate) fn calendar_month_day_to_iso(
                 f.day = Some(clamped);
                 if let Ok(d) = IcuDate::try_from_fields(f, Default::default(), cal) {
                     let amc = d.month().standard_code.0.to_string();
-                    if amc != month_code { continue; }
-                    if d.day_of_month().0 != clamped { continue; }
+                    if amc != month_code {
+                        continue;
+                    }
+                    if d.day_of_month().0 != clamped {
+                        continue;
+                    }
                     let iso = d.to_iso();
                     let iy = iso.year().extended_year();
                     if iy <= 1972 {
@@ -843,7 +963,9 @@ pub(crate) fn add_calendar_date(
         cal_date = match IcuDate::try_from_fields(fields, Default::default(), new_cal) {
             Ok(result) => {
                 if overflow == "reject" {
-                    if result.day_of_month().0 != d || result.month().standard_code.0.to_string() != mc_str {
+                    if result.day_of_month().0 != d
+                        || result.month().standard_code.0.to_string() != mc_str
+                    {
                         return None;
                     }
                 }
@@ -859,9 +981,7 @@ pub(crate) fn add_calendar_date(
                 fields2.extended_year = Some(new_y);
                 fields2.month_code = Some(mc_str.as_bytes());
                 fields2.day = Some(1);
-                if let Ok(temp) =
-                    IcuDate::try_from_fields(fields2, Default::default(), new_cal2)
-                {
+                if let Ok(temp) = IcuDate::try_from_fields(fields2, Default::default(), new_cal2) {
                     let max_d = temp.days_in_month();
                     let clamped_d = d.min(max_d);
                     let new_cal3 = AnyCalendar::new(kind);
@@ -942,13 +1062,12 @@ pub(crate) fn add_calendar_date(
             fields.extended_year = Some(new_y);
             fields.ordinal_month = Some(1);
             fields.day = Some(1);
-            let cur_miy = if let Ok(temp) =
-                IcuDate::try_from_fields(fields, Default::default(), new_cal)
-            {
-                temp.months_in_year() as i32
-            } else {
-                miy as i32
-            };
+            let cur_miy =
+                if let Ok(temp) = IcuDate::try_from_fields(fields, Default::default(), new_cal) {
+                    temp.months_in_year() as i32
+                } else {
+                    miy as i32
+                };
             if total_months < cur_miy {
                 break;
             }
@@ -979,8 +1098,7 @@ pub(crate) fn add_calendar_date(
                 fields2.extended_year = Some(new_y);
                 fields2.ordinal_month = Some(new_mo);
                 fields2.day = Some(1);
-                let temp =
-                    IcuDate::try_from_fields(fields2, Default::default(), new_cal2).ok()?;
+                let temp = IcuDate::try_from_fields(fields2, Default::default(), new_cal2).ok()?;
                 let max_d = temp.days_in_month();
                 let clamped_d = d.min(max_d);
                 let new_cal3 = AnyCalendar::new(kind);
@@ -1061,7 +1179,11 @@ pub(crate) fn difference_calendar_date(
         let iso_d = IcuDate::try_new_iso(iy, im, id).ok()?;
         let cal = AnyCalendar::new(kind);
         let cd = iso_d.to_any().to_calendar(cal);
-        Some((cd.year().extended_year(), cd.month().ordinal, cd.day_of_month().0))
+        Some((
+            cd.year().extended_year(),
+            cd.month().ordinal,
+            cd.day_of_month().0,
+        ))
     };
 
     let epoch1 = iso_date_to_epoch_days(iso_y1, iso_m1, iso_d1);
@@ -1099,7 +1221,15 @@ pub(crate) fn difference_calendar_date(
             // Verify year estimate with CompareSurpasses using original day
             if years != 0 {
                 let inter = add_calendar_date(
-                    iso_y1, iso_m1, iso_d1, years, 0, 0, 0, calendar_id, "constrain",
+                    iso_y1,
+                    iso_m1,
+                    iso_d1,
+                    years,
+                    0,
+                    0,
+                    0,
+                    calendar_id,
+                    "constrain",
                 )?;
                 let (iy, im, _id) = iso_to_cal(inter.0, inter.1, inter.2)?;
                 if compare_surpasses(sign, iy, im, day1, y2, m2_ord, day2) {
@@ -1130,7 +1260,15 @@ pub(crate) fn difference_calendar_date(
 
             // Remaining days via epoch
             let final_date = add_calendar_date(
-                iso_y1, iso_m1, iso_d1, years, months, 0, 0, calendar_id, "constrain",
+                iso_y1,
+                iso_m1,
+                iso_d1,
+                years,
+                months,
+                0,
+                0,
+                calendar_id,
+                "constrain",
             )?;
             let epoch_final = iso_date_to_epoch_days(final_date.0, final_date.1, final_date.2);
             let days = (epoch2 - epoch_final) as i32;
@@ -1160,7 +1298,15 @@ pub(crate) fn difference_calendar_date(
             }
 
             let final_date = add_calendar_date(
-                iso_y1, iso_m1, iso_d1, 0, months, 0, 0, calendar_id, "constrain",
+                iso_y1,
+                iso_m1,
+                iso_d1,
+                0,
+                months,
+                0,
+                0,
+                calendar_id,
+                "constrain",
             )?;
             let epoch_final = iso_date_to_epoch_days(final_date.0, final_date.1, final_date.2);
             let days = (epoch2 - epoch_final) as i32;
@@ -2389,35 +2535,66 @@ pub(crate) fn offset_string_to_ns(s: &str) -> i128 {
 pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
     static LINK_MAP: &[(&str, &str)] = &[
         // UTC aliases
-        ("Etc/GMT", "UTC"), ("Etc/UTC", "UTC"), ("Etc/GMT+0", "UTC"),
-        ("Etc/GMT-0", "UTC"), ("Etc/GMT0", "UTC"), ("Etc/Greenwich", "UTC"),
-        ("Etc/UCT", "UTC"), ("Etc/Universal", "UTC"), ("Etc/Zulu", "UTC"),
-        ("GMT", "UTC"), ("GMT+0", "UTC"), ("GMT-0", "UTC"), ("GMT0", "UTC"),
-        ("Greenwich", "UTC"), ("UCT", "UTC"), ("Universal", "UTC"), ("Zulu", "UTC"),
+        ("Etc/GMT", "UTC"),
+        ("Etc/UTC", "UTC"),
+        ("Etc/GMT+0", "UTC"),
+        ("Etc/GMT-0", "UTC"),
+        ("Etc/GMT0", "UTC"),
+        ("Etc/Greenwich", "UTC"),
+        ("Etc/UCT", "UTC"),
+        ("Etc/Universal", "UTC"),
+        ("Etc/Zulu", "UTC"),
+        ("GMT", "UTC"),
+        ("GMT+0", "UTC"),
+        ("GMT-0", "UTC"),
+        ("GMT0", "UTC"),
+        ("Greenwich", "UTC"),
+        ("UCT", "UTC"),
+        ("Universal", "UTC"),
+        ("Zulu", "UTC"),
         // Africa
-        ("Africa/Asmera", "Africa/Asmara"), ("Africa/Timbuktu", "Africa/Bamako"),
+        ("Africa/Asmera", "Africa/Asmara"),
+        ("Africa/Timbuktu", "Africa/Bamako"),
         ("Africa/Bamako", "Africa/Abidjan"),
-        ("Africa/Banjul", "Africa/Abidjan"), ("Africa/Conakry", "Africa/Abidjan"),
-        ("Africa/Dakar", "Africa/Abidjan"), ("Africa/Freetown", "Africa/Abidjan"),
-        ("Africa/Lome", "Africa/Abidjan"), ("Africa/Nouakchott", "Africa/Abidjan"),
-        ("Africa/Ouagadougou", "Africa/Abidjan"), ("Atlantic/St_Helena", "Africa/Abidjan"),
+        ("Africa/Banjul", "Africa/Abidjan"),
+        ("Africa/Conakry", "Africa/Abidjan"),
+        ("Africa/Dakar", "Africa/Abidjan"),
+        ("Africa/Freetown", "Africa/Abidjan"),
+        ("Africa/Lome", "Africa/Abidjan"),
+        ("Africa/Nouakchott", "Africa/Abidjan"),
+        ("Africa/Ouagadougou", "Africa/Abidjan"),
+        ("Atlantic/St_Helena", "Africa/Abidjan"),
         ("Africa/Asmara", "Africa/Nairobi"),
-        ("Africa/Dar_es_Salaam", "Africa/Nairobi"), ("Africa/Djibouti", "Africa/Nairobi"),
-        ("Africa/Kampala", "Africa/Nairobi"), ("Africa/Mogadishu", "Africa/Nairobi"),
-        ("Indian/Antananarivo", "Africa/Nairobi"), ("Indian/Comoro", "Africa/Nairobi"),
+        ("Africa/Dar_es_Salaam", "Africa/Nairobi"),
+        ("Africa/Djibouti", "Africa/Nairobi"),
+        ("Africa/Kampala", "Africa/Nairobi"),
+        ("Africa/Mogadishu", "Africa/Nairobi"),
+        ("Indian/Antananarivo", "Africa/Nairobi"),
+        ("Indian/Comoro", "Africa/Nairobi"),
         ("Indian/Mayotte", "Africa/Nairobi"),
-        ("Africa/Blantyre", "Africa/Maputo"), ("Africa/Bujumbura", "Africa/Maputo"),
-        ("Africa/Gaborone", "Africa/Maputo"), ("Africa/Harare", "Africa/Maputo"),
-        ("Africa/Kigali", "Africa/Maputo"), ("Africa/Lubumbashi", "Africa/Maputo"),
+        ("Africa/Blantyre", "Africa/Maputo"),
+        ("Africa/Bujumbura", "Africa/Maputo"),
+        ("Africa/Gaborone", "Africa/Maputo"),
+        ("Africa/Harare", "Africa/Maputo"),
+        ("Africa/Kigali", "Africa/Maputo"),
+        ("Africa/Lubumbashi", "Africa/Maputo"),
         ("Africa/Lusaka", "Africa/Maputo"),
-        ("Africa/Bangui", "Africa/Lagos"), ("Africa/Brazzaville", "Africa/Lagos"),
-        ("Africa/Douala", "Africa/Lagos"), ("Africa/Kinshasa", "Africa/Lagos"),
-        ("Africa/Libreville", "Africa/Lagos"), ("Africa/Luanda", "Africa/Lagos"),
-        ("Africa/Malabo", "Africa/Lagos"), ("Africa/Niamey", "Africa/Lagos"),
+        ("Africa/Bangui", "Africa/Lagos"),
+        ("Africa/Brazzaville", "Africa/Lagos"),
+        ("Africa/Douala", "Africa/Lagos"),
+        ("Africa/Kinshasa", "Africa/Lagos"),
+        ("Africa/Libreville", "Africa/Lagos"),
+        ("Africa/Luanda", "Africa/Lagos"),
+        ("Africa/Malabo", "Africa/Lagos"),
+        ("Africa/Niamey", "Africa/Lagos"),
         ("Africa/Porto-Novo", "Africa/Lagos"),
-        ("Africa/Maseru", "Africa/Johannesburg"), ("Africa/Mbabane", "Africa/Johannesburg"),
+        ("Africa/Maseru", "Africa/Johannesburg"),
+        ("Africa/Mbabane", "Africa/Johannesburg"),
         // Americas
-        ("America/Argentina/ComodRivadavia", "America/Argentina/Catamarca"),
+        (
+            "America/Argentina/ComodRivadavia",
+            "America/Argentina/Catamarca",
+        ),
         ("America/Atka", "America/Adak"),
         ("America/Buenos_Aires", "America/Argentina/Buenos_Aires"),
         ("America/Catamarca", "America/Argentina/Catamarca"),
@@ -2431,7 +2608,8 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("America/Knox_IN", "America/Indiana/Knox"),
         ("America/Louisville", "America/Kentucky/Louisville"),
         ("America/Mendoza", "America/Argentina/Mendoza"),
-        ("America/Montreal", "America/Toronto"), ("America/Nipigon", "America/Toronto"),
+        ("America/Montreal", "America/Toronto"),
+        ("America/Nipigon", "America/Toronto"),
         ("America/Pangnirtung", "America/Iqaluit"),
         ("America/Porto_Acre", "America/Rio_Branco"),
         ("America/Rainy_River", "America/Winnipeg"),
@@ -2465,26 +2643,42 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("America/St_Vincent", "America/Puerto_Rico"),
         ("America/Tortola", "America/Puerto_Rico"),
         // US
-        ("US/Alaska", "America/Anchorage"), ("US/Aleutian", "America/Adak"),
-        ("US/Arizona", "America/Phoenix"), ("US/Central", "America/Chicago"),
+        ("US/Alaska", "America/Anchorage"),
+        ("US/Aleutian", "America/Adak"),
+        ("US/Arizona", "America/Phoenix"),
+        ("US/Central", "America/Chicago"),
         ("US/East-Indiana", "America/Indiana/Indianapolis"),
-        ("US/Eastern", "America/New_York"), ("US/Hawaii", "Pacific/Honolulu"),
+        ("US/Eastern", "America/New_York"),
+        ("US/Hawaii", "Pacific/Honolulu"),
         ("US/Indiana-Starke", "America/Indiana/Knox"),
-        ("US/Michigan", "America/Detroit"), ("US/Mountain", "America/Denver"),
-        ("US/Pacific", "America/Los_Angeles"), ("US/Samoa", "Pacific/Pago_Pago"),
+        ("US/Michigan", "America/Detroit"),
+        ("US/Mountain", "America/Denver"),
+        ("US/Pacific", "America/Los_Angeles"),
+        ("US/Samoa", "Pacific/Pago_Pago"),
         // Asia
-        ("Asia/Ashkhabad", "Asia/Ashgabat"), ("Asia/Calcutta", "Asia/Kolkata"),
+        ("Asia/Ashkhabad", "Asia/Ashgabat"),
+        ("Asia/Calcutta", "Asia/Kolkata"),
         ("Asia/Choibalsan", "Asia/Ulaanbaatar"),
-        ("Asia/Chongqing", "Asia/Shanghai"), ("Asia/Chungking", "Asia/Shanghai"),
-        ("Asia/Dacca", "Asia/Dhaka"), ("Asia/Harbin", "Asia/Shanghai"),
-        ("Asia/Istanbul", "Europe/Istanbul"), ("Asia/Kashgar", "Asia/Urumqi"),
-        ("Asia/Katmandu", "Asia/Kathmandu"), ("Asia/Macao", "Asia/Macau"),
-        ("Asia/Rangoon", "Asia/Yangon"), ("Asia/Saigon", "Asia/Ho_Chi_Minh"),
-        ("Asia/Tel_Aviv", "Asia/Jerusalem"), ("Asia/Thimbu", "Asia/Thimphu"),
-        ("Asia/Ujung_Pandang", "Asia/Makassar"), ("Asia/Ulan_Bator", "Asia/Ulaanbaatar"),
-        ("Antarctica/Syowa", "Asia/Riyadh"), ("Asia/Aden", "Asia/Riyadh"),
-        ("Asia/Bahrain", "Asia/Qatar"), ("Asia/Kuwait", "Asia/Riyadh"),
-        ("Asia/Phnom_Penh", "Asia/Bangkok"), ("Asia/Vientiane", "Asia/Bangkok"),
+        ("Asia/Chongqing", "Asia/Shanghai"),
+        ("Asia/Chungking", "Asia/Shanghai"),
+        ("Asia/Dacca", "Asia/Dhaka"),
+        ("Asia/Harbin", "Asia/Shanghai"),
+        ("Asia/Istanbul", "Europe/Istanbul"),
+        ("Asia/Kashgar", "Asia/Urumqi"),
+        ("Asia/Katmandu", "Asia/Kathmandu"),
+        ("Asia/Macao", "Asia/Macau"),
+        ("Asia/Rangoon", "Asia/Yangon"),
+        ("Asia/Saigon", "Asia/Ho_Chi_Minh"),
+        ("Asia/Tel_Aviv", "Asia/Jerusalem"),
+        ("Asia/Thimbu", "Asia/Thimphu"),
+        ("Asia/Ujung_Pandang", "Asia/Makassar"),
+        ("Asia/Ulan_Bator", "Asia/Ulaanbaatar"),
+        ("Antarctica/Syowa", "Asia/Riyadh"),
+        ("Asia/Aden", "Asia/Riyadh"),
+        ("Asia/Bahrain", "Asia/Qatar"),
+        ("Asia/Kuwait", "Asia/Riyadh"),
+        ("Asia/Phnom_Penh", "Asia/Bangkok"),
+        ("Asia/Vientiane", "Asia/Bangkok"),
         ("Asia/Muscat", "Asia/Dubai"),
         ("Asia/Brunei", "Asia/Kuching"),
         // Europe
@@ -2494,11 +2688,13 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Europe/Tiraspol", "Europe/Chisinau"),
         ("Europe/Uzhgorod", "Europe/Kyiv"),
         ("Europe/Zaporozhye", "Europe/Kyiv"),
-        ("Europe/Jersey", "Europe/London"), ("Europe/Guernsey", "Europe/London"),
+        ("Europe/Jersey", "Europe/London"),
+        ("Europe/Guernsey", "Europe/London"),
         ("Europe/Isle_of_Man", "Europe/London"),
         ("Europe/Mariehamn", "Europe/Helsinki"),
         ("Europe/Busingen", "Europe/Zurich"),
-        ("Europe/Vatican", "Europe/Rome"), ("Europe/San_Marino", "Europe/Rome"),
+        ("Europe/Vatican", "Europe/Rome"),
+        ("Europe/San_Marino", "Europe/Rome"),
         ("Europe/Vaduz", "Europe/Zurich"),
         ("Arctic/Longyearbyen", "Europe/Oslo"),
         ("Europe/Ljubljana", "Europe/Belgrade"),
@@ -2512,10 +2708,12 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Europe/Monaco", "Europe/Paris"),
         // Australia
         ("Antarctica/South_Pole", "Antarctica/McMurdo"),
-        ("Australia/ACT", "Australia/Sydney"), ("Australia/Canberra", "Australia/Sydney"),
+        ("Australia/ACT", "Australia/Sydney"),
+        ("Australia/Canberra", "Australia/Sydney"),
         ("Australia/Currie", "Australia/Hobart"),
         ("Australia/LHI", "Australia/Lord_Howe"),
-        ("Australia/NSW", "Australia/Sydney"), ("Australia/North", "Australia/Darwin"),
+        ("Australia/NSW", "Australia/Sydney"),
+        ("Australia/North", "Australia/Darwin"),
         ("Australia/Queensland", "Australia/Brisbane"),
         ("Australia/South", "Australia/Adelaide"),
         ("Australia/Tasmania", "Australia/Hobart"),
@@ -2529,7 +2727,8 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Pacific/Johnston", "Pacific/Honolulu"),
         ("Pacific/Ponape", "Pacific/Pohnpei"),
         ("Pacific/Samoa", "Pacific/Pago_Pago"),
-        ("Pacific/Truk", "Pacific/Chuuk"), ("Pacific/Yap", "Pacific/Chuuk"),
+        ("Pacific/Truk", "Pacific/Chuuk"),
+        ("Pacific/Yap", "Pacific/Chuuk"),
         ("Pacific/Saipan", "Pacific/Guam"),
         ("Pacific/Midway", "Pacific/Pago_Pago"),
         ("Pacific/Funafuti", "Pacific/Tarawa"),
@@ -2537,10 +2736,14 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Pacific/Wake", "Pacific/Tarawa"),
         ("Pacific/Wallis", "Pacific/Tarawa"),
         // Brazil / Canada / Chile / Mexico
-        ("Brazil/Acre", "America/Rio_Branco"), ("Brazil/DeNoronha", "America/Noronha"),
-        ("Brazil/East", "America/Sao_Paulo"), ("Brazil/West", "America/Manaus"),
-        ("Canada/Atlantic", "America/Halifax"), ("Canada/Central", "America/Winnipeg"),
-        ("Canada/Eastern", "America/Toronto"), ("Canada/Mountain", "America/Edmonton"),
+        ("Brazil/Acre", "America/Rio_Branco"),
+        ("Brazil/DeNoronha", "America/Noronha"),
+        ("Brazil/East", "America/Sao_Paulo"),
+        ("Brazil/West", "America/Manaus"),
+        ("Canada/Atlantic", "America/Halifax"),
+        ("Canada/Central", "America/Winnipeg"),
+        ("Canada/Eastern", "America/Toronto"),
+        ("Canada/Mountain", "America/Edmonton"),
         ("Canada/Newfoundland", "America/St_Johns"),
         ("Canada/Pacific", "America/Vancouver"),
         ("Canada/Saskatchewan", "America/Regina"),
@@ -2551,29 +2754,48 @@ pub(crate) fn canonicalize_iana_tz(s: &str) -> String {
         ("Mexico/BajaSur", "America/Mazatlan"),
         ("Mexico/General", "America/Mexico_City"),
         // Country names
-        ("Cuba", "America/Havana"), ("Egypt", "Africa/Cairo"),
-        ("Eire", "Europe/Dublin"), ("Hongkong", "Asia/Hong_Kong"),
-        ("Iceland", "Atlantic/Reykjavik"), ("Iran", "Asia/Tehran"),
-        ("Israel", "Asia/Jerusalem"), ("Jamaica", "America/Jamaica"),
-        ("Japan", "Asia/Tokyo"), ("Kwajalein", "Pacific/Kwajalein"),
-        ("Libya", "Africa/Tripoli"), ("NZ", "Pacific/Auckland"),
-        ("NZ-CHAT", "Pacific/Chatham"), ("Navajo", "America/Denver"),
-        ("PRC", "Asia/Shanghai"), ("Poland", "Europe/Warsaw"),
-        ("Portugal", "Europe/Lisbon"), ("ROC", "Asia/Taipei"),
-        ("ROK", "Asia/Seoul"), ("Singapore", "Asia/Singapore"),
-        ("Turkey", "Europe/Istanbul"), ("W-SU", "Europe/Moscow"),
-        ("GB", "Europe/London"), ("GB-Eire", "Europe/London"),
+        ("Cuba", "America/Havana"),
+        ("Egypt", "Africa/Cairo"),
+        ("Eire", "Europe/Dublin"),
+        ("Hongkong", "Asia/Hong_Kong"),
+        ("Iceland", "Atlantic/Reykjavik"),
+        ("Iran", "Asia/Tehran"),
+        ("Israel", "Asia/Jerusalem"),
+        ("Jamaica", "America/Jamaica"),
+        ("Japan", "Asia/Tokyo"),
+        ("Kwajalein", "Pacific/Kwajalein"),
+        ("Libya", "Africa/Tripoli"),
+        ("NZ", "Pacific/Auckland"),
+        ("NZ-CHAT", "Pacific/Chatham"),
+        ("Navajo", "America/Denver"),
+        ("PRC", "Asia/Shanghai"),
+        ("Poland", "Europe/Warsaw"),
+        ("Portugal", "Europe/Lisbon"),
+        ("ROC", "Asia/Taipei"),
+        ("ROK", "Asia/Seoul"),
+        ("Singapore", "Asia/Singapore"),
+        ("Turkey", "Europe/Istanbul"),
+        ("W-SU", "Europe/Moscow"),
+        ("GB", "Europe/London"),
+        ("GB-Eire", "Europe/London"),
         // POSIX-style
-        ("CET", "Europe/Brussels"), ("CST6CDT", "America/Chicago"),
-        ("EET", "Europe/Athens"), ("EST", "America/Panama"),
-        ("EST5EDT", "America/New_York"), ("HST", "Pacific/Honolulu"),
-        ("MET", "Europe/Brussels"), ("MST", "America/Phoenix"),
-        ("MST7MDT", "America/Denver"), ("PST8PDT", "America/Los_Angeles"),
+        ("CET", "Europe/Brussels"),
+        ("CST6CDT", "America/Chicago"),
+        ("EET", "Europe/Athens"),
+        ("EST", "America/Panama"),
+        ("EST5EDT", "America/New_York"),
+        ("HST", "Pacific/Honolulu"),
+        ("MET", "Europe/Brussels"),
+        ("MST", "America/Phoenix"),
+        ("MST7MDT", "America/Denver"),
+        ("PST8PDT", "America/Los_Angeles"),
         ("WET", "Europe/Lisbon"),
         // Indian
-        ("Indian/Christmas", "Asia/Bangkok"), ("Indian/Cocos", "Asia/Yangon"),
+        ("Indian/Christmas", "Asia/Bangkok"),
+        ("Indian/Cocos", "Asia/Yangon"),
         ("Indian/Kerguelen", "Indian/Maldives"),
-        ("Indian/Mahe", "Asia/Dubai"), ("Indian/Reunion", "Asia/Dubai"),
+        ("Indian/Mahe", "Asia/Dubai"),
+        ("Indian/Reunion", "Asia/Dubai"),
         // Antarctica
         ("Antarctica/Davis", "Asia/Bangkok"),
         ("Antarctica/Mawson", "Indian/Maldives"),

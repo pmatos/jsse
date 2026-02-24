@@ -106,7 +106,9 @@ fn create_segment_object(
     obj.borrow_mut().insert_property(
         "segment".to_string(),
         PropertyDescriptor::data(
-            JsValue::String(JsString { code_units: segment.to_vec() }),
+            JsValue::String(JsString {
+                code_units: segment.to_vec(),
+            }),
             true,
             true,
             true,
@@ -119,7 +121,9 @@ fn create_segment_object(
     obj.borrow_mut().insert_property(
         "input".to_string(),
         PropertyDescriptor::data(
-            JsValue::String(JsString { code_units: input.to_vec() }),
+            JsValue::String(JsString {
+                code_units: input.to_vec(),
+            }),
             true,
             true,
             true,
@@ -202,12 +206,7 @@ impl Interpreter {
 
                 segments_obj.borrow_mut().insert_property(
                     "[[SegmenterInput]]".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(input_js),
-                        false,
-                        false,
-                        false,
-                    ),
+                    PropertyDescriptor::data(JsValue::String(input_js), false, false, false),
                 );
                 segments_obj.borrow_mut().insert_property(
                     "[[SegmenterGranularity]]".to_string(),
@@ -228,10 +227,8 @@ impl Interpreter {
                     ),
                 );
 
-                let breaks_vals: Vec<JsValue> = breaks
-                    .iter()
-                    .map(|&b| JsValue::Number(b as f64))
-                    .collect();
+                let breaks_vals: Vec<JsValue> =
+                    breaks.iter().map(|&b| JsValue::Number(b as f64)).collect();
                 let breaks_arr = interp.create_array(breaks_vals);
                 segments_obj.borrow_mut().insert_property(
                     "[[SegmenterBreaks]]".to_string(),
@@ -256,11 +253,9 @@ impl Interpreter {
                             false
                         };
                         if !is_segments {
-                            return Completion::Throw(
-                                interp.create_type_error(
-                                    "%Segments.prototype%.containing called on incompatible receiver",
-                                ),
-                            );
+                            return Completion::Throw(interp.create_type_error(
+                                "%Segments.prototype%.containing called on incompatible receiver",
+                            ));
                         }
 
                         let idx_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -387,22 +382,14 @@ impl Interpreter {
                         let segs = compute_segments(&input_clone, &granularity_clone);
                         let seg_data: Vec<(Vec<u16>, usize, Vec<u16>, bool)> = segs
                             .into_iter()
-                            .map(|s| {
-                                (
-                                    s.segment,
-                                    s.index,
-                                    s.input,
-                                    s.is_word_like.unwrap_or(false),
-                                )
-                            })
+                            .map(|s| (s.segment, s.index, s.input, s.is_word_like.unwrap_or(false)))
                             .collect();
 
                         let iter_obj = interp.create_object();
                         if let Some(ref ip) = interp.iterator_prototype {
                             iter_obj.borrow_mut().prototype = Some(ip.clone());
                         }
-                        iter_obj.borrow_mut().class_name =
-                            "Segmenter String Iterator".to_string();
+                        iter_obj.borrow_mut().class_name = "Segmenter String Iterator".to_string();
 
                         let has_word_like = granularity_clone == "word";
 
@@ -462,13 +449,14 @@ impl Interpreter {
                                             }
 
                                             let (ref seg, idx, ref inp, wl) = segments[position];
-                                            let is_word_like = if has_word_like {
-                                                Some(wl)
-                                            } else {
-                                                None
-                                            };
+                                            let is_word_like =
+                                                if has_word_like { Some(wl) } else { None };
                                             let seg_obj = create_segment_object(
-                                                interp, seg, idx, inp, is_word_like,
+                                                interp,
+                                                seg,
+                                                idx,
+                                                inp,
+                                                is_word_like,
                                             );
 
                                             obj.borrow_mut().iterator_state =
@@ -479,15 +467,13 @@ impl Interpreter {
                                                 });
 
                                             return Completion::Normal(
-                                                interp
-                                                    .create_iter_result_object(seg_obj, false),
+                                                interp.create_iter_result_object(seg_obj, false),
                                             );
                                         }
                                     }
                                 }
                                 Completion::Normal(
-                                    interp
-                                        .create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::Undefined, true),
                                 )
                             },
                         ));
@@ -496,9 +482,7 @@ impl Interpreter {
                             .insert_builtin("next".to_string(), next_fn);
 
                         let iter_id = iter_obj.borrow().id.unwrap();
-                        Completion::Normal(JsValue::Object(crate::types::JsObject {
-                            id: iter_id,
-                        }))
+                        Completion::Normal(JsValue::Object(crate::types::JsObject { id: iter_id }))
                     },
                 ));
 

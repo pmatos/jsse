@@ -2750,7 +2750,7 @@ impl Interpreter {
                         &[val.clone(), JsValue::Number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
-                            if to_boolean(&result) {
+                            if interp.to_boolean_val(&result) {
                                 return Completion::Normal(val);
                             }
                         }
@@ -2782,7 +2782,7 @@ impl Interpreter {
                         &[val, JsValue::Number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
-                            if to_boolean(&result) {
+                            if interp.to_boolean_val(&result) {
                                 return Completion::Normal(JsValue::Number(i as f64));
                             }
                         }
@@ -2815,7 +2815,7 @@ impl Interpreter {
                         &[val.clone(), JsValue::Number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
-                            if to_boolean(&result) {
+                            if interp.to_boolean_val(&result) {
                                 return Completion::Normal(val);
                             }
                         }
@@ -2849,7 +2849,7 @@ impl Interpreter {
                         &[val, JsValue::Number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
-                            if to_boolean(&result) {
+                            if interp.to_boolean_val(&result) {
                                 return Completion::Normal(JsValue::Number(i as f64));
                             }
                         }
@@ -2957,7 +2957,7 @@ impl Interpreter {
                         &[val.clone(), JsValue::Number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
-                            if to_boolean(&result) {
+                            if interp.to_boolean_val(&result) {
                                 kept.push(val);
                             }
                         }
@@ -3007,7 +3007,7 @@ impl Interpreter {
                         &[val, JsValue::Number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
-                            if !to_boolean(&result) {
+                            if !interp.to_boolean_val(&result) {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
                         }
@@ -3039,7 +3039,7 @@ impl Interpreter {
                         &[val, JsValue::Number(i as f64), this_val.clone()],
                     ) {
                         Completion::Normal(result) => {
-                            if to_boolean(&result) {
+                            if interp.to_boolean_val(&result) {
                                 return Completion::Normal(JsValue::Boolean(true));
                             }
                         }
@@ -4112,6 +4112,11 @@ impl Interpreter {
                     Completion::Throw(e) => return Err(Completion::Throw(e)),
                     _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
                 };
+                if !matches!(iter, JsValue::Object(_)) {
+                    return Err(Completion::Throw(
+                        self.create_type_error("Result of the Symbol.iterator method is not an object"),
+                    ));
+                }
                 let mut values = Vec::new();
                 while let JsValue::Object(io) = &iter {
                     let next_fn = match self.get_object_property(io.id, "next", &iter) {
@@ -4125,7 +4130,7 @@ impl Interpreter {
                     };
                     if let JsValue::Object(ro) = &result {
                         let done = match self.get_object_property(ro.id, "done", &result) {
-                            Completion::Normal(v) => to_boolean(&v),
+                            Completion::Normal(v) => self.to_boolean_val(&v),
                             _ => true,
                         };
                         if done {
@@ -4325,7 +4330,7 @@ impl Interpreter {
                                 _ => 0,
                             };
                             let little_endian = if args.len() > 1 {
-                                to_boolean(&args[1])
+                                interp.to_boolean_val(&args[1])
                             } else {
                                 false
                             };
@@ -4505,7 +4510,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             };
                             let little_endian = if args.len() > 2 {
-                                to_boolean(&args[2])
+                                interp.to_boolean_val(&args[2])
                             } else {
                                 false
                             };
@@ -4586,7 +4591,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             };
                             let little_endian = if args.len() > 2 {
-                                to_boolean(&args[2])
+                                interp.to_boolean_val(&args[2])
                             } else {
                                 false
                             };
@@ -5225,7 +5230,7 @@ fn parse_to_base64_options(
             Completion::Normal(v) => v,
             other => return Err(other),
         };
-        omit_padding = to_boolean(&omit_val);
+        omit_padding = interp.to_boolean_val(&omit_val);
     }
     Ok((alphabet, omit_padding))
 }

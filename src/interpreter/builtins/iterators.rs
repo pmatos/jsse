@@ -178,7 +178,7 @@ fn iterator_step_value_getter(
         Completion::Throw(e) => return Err(e),
         _ => JsValue::Undefined,
     };
-    if to_boolean(&done) {
+    if interp.to_boolean_val(&done) {
         return Ok(None);
     }
     // Read .value via getter
@@ -967,7 +967,7 @@ impl Interpreter {
                                 &[value, JsValue::Number(counter)],
                             ) {
                                 Completion::Normal(v) => {
-                                    if to_boolean(&v) {
+                                    if interp.to_boolean_val(&v) {
                                         // Propagate IteratorClose errors
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
@@ -1026,7 +1026,7 @@ impl Interpreter {
                                 &[value, JsValue::Number(counter)],
                             ) {
                                 Completion::Normal(v) => {
-                                    if !to_boolean(&v) {
+                                    if !interp.to_boolean_val(&v) {
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
                                         }
@@ -1084,7 +1084,7 @@ impl Interpreter {
                                 &[value.clone(), JsValue::Number(counter)],
                             ) {
                                 Completion::Normal(v) => {
-                                    if to_boolean(&v) {
+                                    if interp.to_boolean_val(&v) {
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
                                         }
@@ -1380,7 +1380,7 @@ impl Interpreter {
                                         state_next.borrow_mut().3 = counter;
                                         match test_result {
                                             Completion::Normal(v) => {
-                                                if to_boolean(&v) {
+                                                if interp.to_boolean_val(&v) {
                                                     return Completion::Normal(
                                                         interp.create_iter_result_object(value, false),
                                                     );

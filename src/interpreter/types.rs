@@ -95,6 +95,8 @@ pub struct Environment {
     pub(crate) class_private_names: Option<std::collections::HashMap<String, String>>,
     pub(crate) is_field_initializer: bool,
     pub(crate) arguments_immutable: bool,
+    pub(crate) has_simple_params: bool,
+    pub(crate) is_simple_catch_scope: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -177,6 +179,8 @@ impl Environment {
             class_private_names: None,
             is_field_initializer: false,
             arguments_immutable: false,
+            has_simple_params: true,
+            is_simple_catch_scope: false,
         }))
     }
 
@@ -195,6 +199,8 @@ impl Environment {
             class_private_names: None,
             is_field_initializer: false,
             arguments_immutable: false,
+            has_simple_params: true,
+            is_simple_catch_scope: false,
         }))
     }
 
@@ -974,6 +980,7 @@ pub struct JsObjectData {
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
     pub(crate) temporal_data: Option<TemporalData>,
     pub(crate) intl_data: Option<IntlData>,
+    pub(crate) is_htmldda: bool,
 }
 
 #[derive(Clone)]
@@ -1028,6 +1035,7 @@ impl JsObjectData {
             module_namespace: None,
             temporal_data: None,
             intl_data: None,
+            is_htmldda: false,
         }
     }
 

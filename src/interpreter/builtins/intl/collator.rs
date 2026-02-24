@@ -206,7 +206,10 @@ fn is_collation_supported_for_locale(locale_str: &str, collation_name: &str) -> 
         "si" => matches!(collation_name, "dict"),
         "th" => false,
         "tr" => false,
-        "zh" => matches!(collation_name, "big5han" | "pinyin" | "stroke" | "unihan" | "zhuyin"),
+        "zh" => matches!(
+            collation_name,
+            "big5han" | "pinyin" | "stroke" | "unihan" | "zhuyin"
+        ),
         _ => false,
     }
 }
@@ -261,7 +264,15 @@ impl Interpreter {
                         }
                     }
 
-                    let (locale, usage, collation_val, sensitivity, numeric, case_first, ignore_punctuation) = {
+                    let (
+                        locale,
+                        usage,
+                        collation_val,
+                        sensitivity,
+                        numeric,
+                        case_first,
+                        ignore_punctuation,
+                    ) = {
                         if let Some(obj) = interp.get_object(o.id) {
                             let b = obj.borrow();
                             if let Some(IntlData::Collator {
@@ -378,14 +389,8 @@ impl Interpreter {
                                     "sensitivity",
                                     JsValue::String(JsString::from_str(&sensitivity)),
                                 ),
-                                (
-                                    "ignorePunctuation",
-                                    JsValue::Boolean(ignore_punctuation),
-                                ),
-                                (
-                                    "collation",
-                                    JsValue::String(JsString::from_str(&collation)),
-                                ),
+                                ("ignorePunctuation", JsValue::Boolean(ignore_punctuation)),
+                                ("collation", JsValue::String(JsString::from_str(&collation))),
                                 ("numeric", JsValue::Boolean(numeric)),
                                 (
                                     "caseFirst",
@@ -461,12 +466,7 @@ impl Interpreter {
                 };
 
                 // Read options for collation, numeric, caseFirst
-                let opt_collation = match interp.intl_get_option(
-                    &options,
-                    "collation",
-                    &[],
-                    None,
-                ) {
+                let opt_collation = match interp.intl_get_option(&options, "collation", &[], None) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -484,7 +484,7 @@ impl Interpreter {
                     if matches!(num_val, JsValue::Undefined) {
                         None
                     } else {
-                        Some(to_boolean(&num_val))
+                        Some(interp.to_boolean_val(&num_val))
                     }
                 };
 
@@ -527,9 +527,8 @@ impl Interpreter {
                 };
 
                 let valid_collations = [
-                    "big5han", "compat", "dict", "emoji", "eor", "phonebk",
-                    "phonetic", "pinyin", "searchjl", "stroke", "trad",
-                    "unihan", "zhuyin",
+                    "big5han", "compat", "dict", "emoji", "eor", "phonebk", "phonetic", "pinyin",
+                    "searchjl", "stroke", "trad", "unihan", "zhuyin",
                 ];
 
                 // Resolve collation: options > unicode extension > default
@@ -549,7 +548,8 @@ impl Interpreter {
 
                     if resolved_co == "default" {
                         if let Some(ref co) = ext_co {
-                            if co != "search" && co != "standard"
+                            if co != "search"
+                                && co != "standard"
                                 && valid_collations.contains(&co.as_str())
                                 && is_collation_supported_for_locale(&base_loc, co)
                             {
@@ -648,7 +648,7 @@ impl Interpreter {
                     if matches!(ip_val, JsValue::Undefined) {
                         is_thai_locale(&locale)
                     } else {
-                        to_boolean(&ip_val)
+                        interp.to_boolean_val(&ip_val)
                     }
                 };
 
@@ -724,17 +724,18 @@ impl Interpreter {
 
         let opts = self.intl_coerce_options_to_object(options)?;
 
-        let usage = self.intl_get_option(
-            &opts, "usage", &["sort", "search"], Some("sort"),
-        )?.unwrap_or_else(|| "sort".to_string());
+        let usage = self
+            .intl_get_option(&opts, "usage", &["sort", "search"], Some("sort"))?
+            .unwrap_or_else(|| "sort".to_string());
 
         let _locale_matcher = self.intl_get_option(
-            &opts, "localeMatcher", &["lookup", "best fit"], Some("best fit"),
+            &opts,
+            "localeMatcher",
+            &["lookup", "best fit"],
+            Some("best fit"),
         )?;
 
-        let opt_collation = self.intl_get_option(
-            &opts, "collation", &[], None,
-        )?;
+        let opt_collation = self.intl_get_option(&opts, "collation", &[], None)?;
 
         let opt_numeric = {
             let num_val = if let JsValue::Object(o) = &opts {
@@ -749,13 +750,12 @@ impl Interpreter {
             if matches!(num_val, JsValue::Undefined) {
                 None
             } else {
-                Some(to_boolean(&num_val))
+                Some(self.to_boolean_val(&num_val))
             }
         };
 
-        let opt_case_first = self.intl_get_option(
-            &opts, "caseFirst", &["upper", "lower", "false"], None,
-        )?;
+        let opt_case_first =
+            self.intl_get_option(&opts, "caseFirst", &["upper", "lower", "false"], None)?;
 
         let raw_locale = self.intl_resolve_locale(&requested);
 
@@ -785,9 +785,8 @@ impl Interpreter {
         };
 
         let valid_collations = [
-            "big5han", "compat", "dict", "emoji", "eor", "phonebk",
-            "phonetic", "pinyin", "searchjl", "stroke", "trad",
-            "unihan", "zhuyin",
+            "big5han", "compat", "dict", "emoji", "eor", "phonebk", "phonetic", "pinyin",
+            "searchjl", "stroke", "trad", "unihan", "zhuyin",
         ];
 
         let collation = {
@@ -804,7 +803,8 @@ impl Interpreter {
 
             if resolved_co == "default" {
                 if let Some(ref co) = ext_co {
-                    if co != "search" && co != "standard"
+                    if co != "search"
+                        && co != "standard"
                         && valid_collations.contains(&co.as_str())
                         && is_collation_supported_for_locale(&base_loc, co)
                     {
@@ -816,9 +816,14 @@ impl Interpreter {
             resolved_co
         };
 
-        let sensitivity = self.intl_get_option(
-            &opts, "sensitivity", &["base", "accent", "case", "variant"], None,
-        )?.unwrap_or_else(|| "variant".to_string());
+        let sensitivity = self
+            .intl_get_option(
+                &opts,
+                "sensitivity",
+                &["base", "accent", "case", "variant"],
+                None,
+            )?
+            .unwrap_or_else(|| "variant".to_string());
 
         let locale = base_locale(&raw_locale);
 
@@ -835,7 +840,7 @@ impl Interpreter {
             if matches!(ip_val, JsValue::Undefined) {
                 is_thai_locale(&locale)
             } else {
-                to_boolean(&ip_val)
+                self.to_boolean_val(&ip_val)
             }
         };
 

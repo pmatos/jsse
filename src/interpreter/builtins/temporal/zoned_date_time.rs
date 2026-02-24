@@ -228,7 +228,7 @@ pub(crate) fn get_possible_epoch_ns(tz: &str, local_ns: i128) -> Vec<i128> {
         return vec![local_ns - off];
     }
 
-    use chrono::{NaiveDateTime, TimeZone, Offset, MappedLocalTime};
+    use chrono::{MappedLocalTime, NaiveDateTime, Offset, TimeZone};
     use chrono_tz::Tz;
 
     let tz_parsed = match tz.parse::<Tz>() {
@@ -288,7 +288,12 @@ fn is_offset_match(parsed_ns: i128, actual_ns: i128, sub_minute: bool) -> bool {
 
 /// Find the first possible epoch ns whose tz offset fuzzy-matches the parsed offset.
 /// Returns None if no candidate matches.
-fn offset_match_candidates(tz: &str, local_ns: i128, off_ns: i128, sub_minute: bool) -> Option<BigInt> {
+fn offset_match_candidates(
+    tz: &str,
+    local_ns: i128,
+    off_ns: i128,
+    sub_minute: bool,
+) -> Option<BigInt> {
     let candidates = get_possible_epoch_ns(tz, local_ns);
     for candidate in &candidates {
         let actual_off = get_tz_offset_ns(tz, &BigInt::from(*candidate)) as i128;
@@ -487,8 +492,7 @@ fn get_next_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
                 let mut scan_off = check_off;
                 while scan < next_check {
                     let ns = (scan + NS_PER_DAY).min(next_check);
-                    let ns_off =
-                        get_total_offset_secs(&tz_parsed, (ns / NS_PER_SEC) as i64);
+                    let ns_off = get_total_offset_secs(&tz_parsed, (ns / NS_PER_SEC) as i64);
                     if ns_off != scan_off {
                         return Some(find_exact_transition(&tz_parsed, scan, ns));
                     }
@@ -550,8 +554,7 @@ fn get_previous_transition(tz: &str, epoch_ns: i128) -> Option<i128> {
                 let mut scan_off = check_off;
                 while scan > prev_check {
                     let ns = (scan - NS_PER_DAY).max(prev_check);
-                    let ns_off =
-                        get_total_offset_secs(&tz_parsed, (ns / NS_PER_SEC) as i64);
+                    let ns_off = get_total_offset_secs(&tz_parsed, (ns / NS_PER_SEC) as i64);
                     if ns_off != scan_off {
                         return Some(find_exact_transition(&tz_parsed, ns, scan));
                     }
@@ -926,13 +929,15 @@ fn to_temporal_zoned_date_time_with_options(
                     Completion::Normal(v) => v,
                     c => return c,
                 };
-                let (icu_era, icu_year) = if !is_undefined(&era_val) && !is_undefined(&era_year_val)
+                let (icu_era, icu_year) = if !is_undefined(&era_val)
+                    && !is_undefined(&era_year_val)
                     && super::calendar_has_eras(&calendar)
                 {
-                    let era_str = match super::to_primitive_and_require_string(interp, &era_val, "era") {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
+                    let era_str =
+                        match super::to_primitive_and_require_string(interp, &era_val, "era") {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
                     let ey = match to_integer_with_truncation(interp, &era_year_val) {
                         Ok(v) => v as i32,
                         Err(c) => return c,
@@ -942,7 +947,11 @@ fn to_temporal_zoned_date_time_with_options(
                     (None, year)
                 };
                 let mc_opt = month_code_str.as_deref();
-                let mo_opt = if has_month { month_coerced.map(|m| m as u8) } else { None };
+                let mo_opt = if has_month {
+                    month_coerced.map(|m| m as u8)
+                } else {
+                    None
+                };
 
                 // Require month or monthCode
                 if mc_opt.is_none() && mo_opt.is_none() {
@@ -952,7 +961,13 @@ fn to_temporal_zoned_date_time_with_options(
                 }
 
                 match super::calendar_fields_to_iso_overflow(
-                    icu_era.as_deref(), icu_year, mc_opt, mo_opt, day_i as u8, &calendar, &overflow,
+                    icu_era.as_deref(),
+                    icu_year,
+                    mc_opt,
+                    mo_opt,
+                    day_i as u8,
+                    &calendar,
+                    &overflow,
                 ) {
                     Some((iy, im, id)) => {
                         // Jump to the final ZDT construction with ISO values
@@ -961,35 +976,60 @@ fn to_temporal_zoned_date_time_with_options(
                         let day_i = id as f64;
 
                         // Validate time fields
-                        let (hour_i, minute_i, second_i, ms_i, us_i, ns_i) = if overflow == "reject" {
+                        let (hour_i, minute_i, second_i, ms_i, us_i, ns_i) = if overflow == "reject"
+                        {
                             if hour_raw < 0 || hour_raw > 23 {
-                                return Completion::Throw(interp.create_range_error("hour out of range"));
+                                return Completion::Throw(
+                                    interp.create_range_error("hour out of range"),
+                                );
                             }
                             if minute_raw < 0 || minute_raw > 59 {
-                                return Completion::Throw(interp.create_range_error("minute out of range"));
+                                return Completion::Throw(
+                                    interp.create_range_error("minute out of range"),
+                                );
                             }
                             if second_raw < 0 || second_raw > 59 {
-                                return Completion::Throw(interp.create_range_error("second out of range"));
+                                return Completion::Throw(
+                                    interp.create_range_error("second out of range"),
+                                );
                             }
                             if millisecond_raw < 0 || millisecond_raw > 999 {
-                                return Completion::Throw(interp.create_range_error("millisecond out of range"));
+                                return Completion::Throw(
+                                    interp.create_range_error("millisecond out of range"),
+                                );
                             }
                             if microsecond_raw < 0 || microsecond_raw > 999 {
-                                return Completion::Throw(interp.create_range_error("microsecond out of range"));
+                                return Completion::Throw(
+                                    interp.create_range_error("microsecond out of range"),
+                                );
                             }
                             if nanosecond_raw < 0 || nanosecond_raw > 999 {
-                                return Completion::Throw(interp.create_range_error("nanosecond out of range"));
+                                return Completion::Throw(
+                                    interp.create_range_error("nanosecond out of range"),
+                                );
                             }
-                            (hour_raw, minute_raw, second_raw, millisecond_raw, microsecond_raw, nanosecond_raw)
+                            (
+                                hour_raw,
+                                minute_raw,
+                                second_raw,
+                                millisecond_raw,
+                                microsecond_raw,
+                                nanosecond_raw,
+                            )
                         } else {
                             (
-                                hour_raw.clamp(0, 23), minute_raw.clamp(0, 59),
-                                second_raw.clamp(0, 59), millisecond_raw.clamp(0, 999),
-                                microsecond_raw.clamp(0, 999), nanosecond_raw.clamp(0, 999),
+                                hour_raw.clamp(0, 23),
+                                minute_raw.clamp(0, 59),
+                                second_raw.clamp(0, 59),
+                                millisecond_raw.clamp(0, 999),
+                                microsecond_raw.clamp(0, 999),
+                                nanosecond_raw.clamp(0, 999),
                             )
                         };
 
-                        let epoch_days = super::iso_date_to_epoch_days(year, month_raw as u8, day_i as u8) as i128;
+                        let epoch_days =
+                            super::iso_date_to_epoch_days(year, month_raw as u8, day_i as u8)
+                                as i128;
                         let day_ns = hour_i as i128 * NS_PER_HOUR
                             + minute_i as i128 * NS_PER_MIN
                             + second_i as i128 * NS_PER_SEC
@@ -1233,7 +1273,13 @@ fn to_temporal_zoned_date_time_with_options(
                                 if parsed.has_utc_designator {
                                     BigInt::from(exact_ns)
                                 } else {
-                                    match offset_match_or_reject(interp, &tz, local_ns, off_ns, off.has_sub_minute) {
+                                    match offset_match_or_reject(
+                                        interp,
+                                        &tz,
+                                        local_ns,
+                                        off_ns,
+                                        off.has_sub_minute,
+                                    ) {
                                         Ok(ns) => ns,
                                         Err(c) => return c,
                                     }
@@ -1257,7 +1303,12 @@ fn to_temporal_zoned_date_time_with_options(
                                     BigInt::from(exact_ns)
                                 } else {
                                     // Try fuzzy match first; fall back to compatible disambiguation
-                                    match offset_match_candidates(&tz, local_ns, off_ns, off.has_sub_minute) {
+                                    match offset_match_candidates(
+                                        &tz,
+                                        local_ns,
+                                        off_ns,
+                                        off.has_sub_minute,
+                                    ) {
                                         Some(ns) => ns,
                                         None => {
                                             // No match — use "compatible" disambiguation
@@ -1376,58 +1427,60 @@ fn from_string_with_options(
         + parsed.nanosecond as i128;
     let local_ns = epoch_days * NS_PER_DAY + day_ns;
 
-    let epoch_ns =
-        if let Some(ref off) = parsed.offset {
-            let off_ns = off.sign as i128
-                * (off.hours as i128 * NS_PER_HOUR
-                    + off.minutes as i128 * NS_PER_MIN
-                    + off.seconds as i128 * NS_PER_SEC
-                    + off.nanoseconds as i128);
-            let exact_ns = local_ns - off_ns;
-            let tz_off = get_tz_offset_ns(&tz, &BigInt::from(exact_ns)) as i128;
+    let epoch_ns = if let Some(ref off) = parsed.offset {
+        let off_ns = off.sign as i128
+            * (off.hours as i128 * NS_PER_HOUR
+                + off.minutes as i128 * NS_PER_MIN
+                + off.seconds as i128 * NS_PER_SEC
+                + off.nanoseconds as i128);
+        let exact_ns = local_ns - off_ns;
+        let tz_off = get_tz_offset_ns(&tz, &BigInt::from(exact_ns)) as i128;
 
-            match offset_opt.as_str() {
-                "reject" => {
-                    if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
-                        return Completion::Throw(interp.create_range_error(
-                            "ZonedDateTime is outside the representable range",
-                        ));
-                    }
-                    if parsed.has_utc_designator {
-                        BigInt::from(exact_ns)
-                    } else {
-                        match offset_match_or_reject(interp, &tz, local_ns, off_ns, off.has_sub_minute) {
-                                        Ok(ns) => ns,
-                                        Err(c) => return c,
-                                    }
+        match offset_opt.as_str() {
+            "reject" => {
+                if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
+                    return Completion::Throw(
+                        interp
+                            .create_range_error("ZonedDateTime is outside the representable range"),
+                    );
+                }
+                if parsed.has_utc_designator {
+                    BigInt::from(exact_ns)
+                } else {
+                    match offset_match_or_reject(interp, &tz, local_ns, off_ns, off.has_sub_minute)
+                    {
+                        Ok(ns) => ns,
+                        Err(c) => return c,
                     }
                 }
-                "use" => BigInt::from(exact_ns),
-                "ignore" => BigInt::from(local_ns - tz_off),
-                "prefer" => {
-                    if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
-                        return Completion::Throw(interp.create_range_error(
-                            "ZonedDateTime is outside the representable range",
-                        ));
-                    }
-                    if parsed.has_utc_designator {
-                        BigInt::from(exact_ns)
-                    } else {
-                        match offset_match_candidates(&tz, local_ns, off_ns, off.has_sub_minute) {
-                            Some(ns) => ns,
-                            None => BigInt::from(local_ns - tz_off),
-                        }
-                    }
-                }
-                _ => BigInt::from(exact_ns),
             }
-        } else if !parsed.has_time {
-            // No time in string → start-of-day per spec (time is ~start-of-day~)
-            BigInt::from(get_start_of_day(&tz, epoch_days))
-        } else {
-            // Time specified but no offset → wall clock disambiguation
-            BigInt::from(disambiguate_instant(&tz, local_ns, &_disambiguation))
-        };
+            "use" => BigInt::from(exact_ns),
+            "ignore" => BigInt::from(local_ns - tz_off),
+            "prefer" => {
+                if !parsed.has_utc_designator && epoch_days.abs() > 100_000_000 {
+                    return Completion::Throw(
+                        interp
+                            .create_range_error("ZonedDateTime is outside the representable range"),
+                    );
+                }
+                if parsed.has_utc_designator {
+                    BigInt::from(exact_ns)
+                } else {
+                    match offset_match_candidates(&tz, local_ns, off_ns, off.has_sub_minute) {
+                        Some(ns) => ns,
+                        None => BigInt::from(local_ns - tz_off),
+                    }
+                }
+            }
+            _ => BigInt::from(exact_ns),
+        }
+    } else if !parsed.has_time {
+        // No time in string → start-of-day per spec (time is ~start-of-day~)
+        BigInt::from(get_start_of_day(&tz, epoch_days))
+    } else {
+        // Time specified but no offset → wall clock disambiguation
+        BigInt::from(disambiguate_instant(&tz, local_ns, &_disambiguation))
+    };
 
     if !is_valid_epoch_ns(&epoch_ns) {
         return Completion::Throw(
@@ -2017,19 +2070,24 @@ impl Interpreter {
                     let dtf_val = match interp.intl_date_time_format_ctor.clone() {
                         Some(v) => v,
                         None => {
-                            let result = zdt_to_string(&ns, &tz, &_cal, "auto", "auto", "auto", None, "trunc");
-                            return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                            let result = zdt_to_string(
+                                &ns, &tz, &_cal, "auto", "auto", "auto", None, "trunc",
+                            );
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                &result,
+                            )));
                         }
                     };
                     let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     // Reject user-provided timeZone option
                     if let JsValue::Object(ref o) = options_arg {
-                        let tz_val = match interp.get_object_property(o.id, "timeZone", &options_arg) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
-                        };
+                        let tz_val =
+                            match interp.get_object_property(o.id, "timeZone", &options_arg) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
+                            };
                         if !matches!(tz_val, JsValue::Undefined) {
                             return Completion::Throw(interp.create_type_error(
                                 "ZonedDateTime toLocaleString does not accept a timeZone option",
@@ -2044,11 +2102,13 @@ impl Interpreter {
                         }
                         // Copy properties from user options if present
                         if let JsValue::Object(ref o) = options_arg {
-                            let keys: Vec<String> = interp.get_object(o.id)
+                            let keys: Vec<String> = interp
+                                .get_object(o.id)
                                 .map(|rc| rc.borrow().properties.keys().cloned().collect())
                                 .unwrap_or_default();
                             for key in keys {
-                                let val = match interp.get_object_property(o.id, &key, &options_arg) {
+                                let val = match interp.get_object_property(o.id, &key, &options_arg)
+                                {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     _ => JsValue::Undefined,
@@ -2065,21 +2125,35 @@ impl Interpreter {
                         opts_obj.borrow_mut().insert_property(
                             "timeZone".to_string(),
                             crate::interpreter::types::PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&tz)), true, true, true,
+                                JsValue::String(JsString::from_str(&tz)),
+                                true,
+                                true,
+                                true,
                             ),
                         );
                         // If no explicit date/time components/styles, set ZDT defaults
                         // (timeZoneName alone doesn't count as explicit)
                         let has_explicit = {
                             let b = opts_obj.borrow();
-                            ["year", "month", "day", "weekday", "hour", "minute",
-                             "second", "dayPeriod",
-                             "fractionalSecondDigits", "dateStyle", "timeStyle"]
-                                .iter().any(|k| {
-                                    b.properties.get(*k).is_some_and(|pd| {
-                                        !matches!(pd.value, Some(JsValue::Undefined) | None)
-                                    })
+                            [
+                                "year",
+                                "month",
+                                "day",
+                                "weekday",
+                                "hour",
+                                "minute",
+                                "second",
+                                "dayPeriod",
+                                "fractionalSecondDigits",
+                                "dateStyle",
+                                "timeStyle",
+                            ]
+                            .iter()
+                            .any(|k| {
+                                b.properties.get(*k).is_some_and(|pd| {
+                                    !matches!(pd.value, Some(JsValue::Undefined) | None)
                                 })
+                            })
                         };
                         if !has_explicit {
                             let has_tz_name = {
@@ -2089,13 +2163,20 @@ impl Interpreter {
                                 })
                             };
                             for (k, v) in [
-                                ("year", "numeric"), ("month", "numeric"), ("day", "numeric"),
-                                ("hour", "numeric"), ("minute", "numeric"), ("second", "numeric"),
+                                ("year", "numeric"),
+                                ("month", "numeric"),
+                                ("day", "numeric"),
+                                ("hour", "numeric"),
+                                ("minute", "numeric"),
+                                ("second", "numeric"),
                             ] {
                                 opts_obj.borrow_mut().insert_property(
                                     k.to_string(),
                                     crate::interpreter::types::PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str(v)), true, true, true,
+                                        JsValue::String(JsString::from_str(v)),
+                                        true,
+                                        true,
+                                        true,
                                     ),
                                 );
                             }
@@ -2103,7 +2184,10 @@ impl Interpreter {
                                 opts_obj.borrow_mut().insert_property(
                                     "timeZoneName".to_string(),
                                     crate::interpreter::types::PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str("short")), true, true, true,
+                                        JsValue::String(JsString::from_str("short")),
+                                        true,
+                                        true,
+                                        true,
                                     ),
                                 );
                             }
@@ -2111,12 +2195,15 @@ impl Interpreter {
                         let oid = opts_obj.borrow().id.unwrap();
                         JsValue::Object(crate::types::JsObject { id: oid })
                     };
-                    let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, effective_opts]) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => return Completion::Normal(JsValue::Undefined),
-                    };
-                    if let Err(e) = super::check_calendar_mismatch(interp, &dtf_instance, &_cal, true) {
+                    let dtf_instance =
+                        match interp.construct(&dtf_val, &[locales_arg, effective_opts]) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => return Completion::Normal(JsValue::Undefined),
+                        };
+                    if let Err(e) =
+                        super::check_calendar_mismatch(interp, &dtf_instance, &_cal, true)
+                    {
                         return Completion::Throw(e);
                     }
                     // Convert ZDT to epoch ms for DTF.format()
@@ -2394,10 +2481,11 @@ impl Interpreter {
                         let epoch_ns = get_start_of_day(&tz, epoch_days);
                         create_zdt(interp, BigInt::from(epoch_ns), tz, cal)
                     } else {
-                        let (h, mi, s, ms, us, nanos) = match super::plain_time::to_temporal_plain_time(interp, time_arg) {
-                            Ok(f) => f,
-                            Err(c) => return c,
-                        };
+                        let (h, mi, s, ms, us, nanos) =
+                            match super::plain_time::to_temporal_plain_time(interp, time_arg) {
+                                Ok(f) => f,
+                                Err(c) => return c,
+                            };
                         let day_ns = h as i128 * NS_PER_HOUR
                             + mi as i128 * NS_PER_MIN
                             + s as i128 * NS_PER_SEC
@@ -2406,7 +2494,8 @@ impl Interpreter {
                             + nanos as i128;
                         let local_ns = epoch_days * NS_PER_DAY + day_ns;
                         // Per spec: use GetEpochNanosecondsFor with compatible
-                        let epoch_ns = BigInt::from(disambiguate_instant(&tz, local_ns, "compatible"));
+                        let epoch_ns =
+                            BigInt::from(disambiguate_instant(&tz, local_ns, "compatible"));
                         create_zdt(interp, epoch_ns, tz, cal)
                     }
                 },
@@ -2462,11 +2551,9 @@ impl Interpreter {
                                             Err(c) => return Completion::Throw(c),
                                         };
                                         if n.is_infinite() {
-                                            return Completion::Throw(
-                                                interp.create_range_error(&format!(
-                                                    "{} must be finite", $name
-                                                )),
-                                            );
+                                            return Completion::Throw(interp.create_range_error(
+                                                &format!("{} must be finite", $name),
+                                            ));
                                         }
                                         (if n.is_nan() { 0 } else { n as i32 }, true)
                                     }
@@ -2480,7 +2567,10 @@ impl Interpreter {
 
                             // month, monthCode
                             let (raw_month, has_m) = match super::read_field_positive_int(
-                                interp, &bag, "month", cf.month_ordinal,
+                                interp,
+                                &bag,
+                                "month",
+                                cf.month_ordinal,
                             ) {
                                 Ok(v) => (Some(v.0), v.1),
                                 Err(c) => return c,
@@ -2563,14 +2653,14 @@ impl Interpreter {
                             // Validate era/eraYear pairing
                             if super::calendar_has_eras(&cal) {
                                 if has_era && !has_era_year {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "era provided without eraYear",
-                                    ));
+                                    return Completion::Throw(
+                                        interp.create_type_error("era provided without eraYear"),
+                                    );
                                 }
                                 if has_era_year && !has_era {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "eraYear provided without era",
-                                    ));
+                                    return Completion::Throw(
+                                        interp.create_type_error("eraYear provided without era"),
+                                    );
                                 }
                             } else if has_era || has_era_year {
                                 return Completion::Throw(interp.create_type_error(
@@ -2591,13 +2681,12 @@ impl Interpreter {
                             // Determine era for ICU
                             let (icu_era, icu_year) =
                                 if super::calendar_has_eras(&cal) && has_era && has_era_year {
-                                    let era_str =
-                                        match super::to_primitive_and_require_string(
-                                            interp, &era_val, "era",
-                                        ) {
-                                            Ok(v) => v,
-                                            Err(c) => return c,
-                                        };
+                                    let era_str = match super::to_primitive_and_require_string(
+                                        interp, &era_val, "era",
+                                    ) {
+                                        Ok(v) => v,
+                                        Err(c) => return c,
+                                    };
                                     let ey = match super::to_integer_with_truncation(
                                         interp,
                                         &era_year_val,
@@ -2648,22 +2737,29 @@ impl Interpreter {
                                         }
                                         if nms_raw < 0 || nms_raw > 999 {
                                             return Completion::Throw(
-                                                interp.create_range_error("millisecond out of range"),
+                                                interp
+                                                    .create_range_error("millisecond out of range"),
                                             );
                                         }
                                         if nus_raw < 0 || nus_raw > 999 {
                                             return Completion::Throw(
-                                                interp.create_range_error("microsecond out of range"),
+                                                interp
+                                                    .create_range_error("microsecond out of range"),
                                             );
                                         }
                                         if nns_raw < 0 || nns_raw > 999 {
                                             return Completion::Throw(
-                                                interp.create_range_error("nanosecond out of range"),
+                                                interp
+                                                    .create_range_error("nanosecond out of range"),
                                             );
                                         }
                                         (
-                                            nh_raw as u8, nmi_raw as u8, ns2_raw as u8,
-                                            nms_raw as u16, nus_raw as u16, nns_raw as u16,
+                                            nh_raw as u8,
+                                            nmi_raw as u8,
+                                            ns2_raw as u8,
+                                            nms_raw as u16,
+                                            nus_raw as u16,
+                                            nns_raw as u16,
                                         )
                                     } else {
                                         (
@@ -2685,26 +2781,23 @@ impl Interpreter {
                                         + nus as i128 * 1_000
                                         + nns as i128;
                                     let local_ns = epoch_days * NS_PER_DAY + day_ns;
-                                    let offset_ns =
-                                        if offset_opt == "use" && !is_undefined(&offset_prop) {
-                                            let off_str =
-                                                match interp.to_string_value(&offset_prop) {
-                                                    Ok(sv) => sv,
-                                                    Err(c) => return Completion::Throw(c),
-                                                };
-                                            match super::parse_utc_offset_timezone(&off_str) {
-                                                Some(canonical) => {
-                                                    super::offset_string_to_ns(&canonical)
-                                                }
-                                                None => get_tz_offset_ns(
-                                                    &tz,
-                                                    &BigInt::from(local_ns),
-                                                )
-                                                    as i128,
-                                            }
-                                        } else {
-                                            get_tz_offset_ns(&tz, &BigInt::from(local_ns)) as i128
+                                    let offset_ns = if offset_opt == "use"
+                                        && !is_undefined(&offset_prop)
+                                    {
+                                        let off_str = match interp.to_string_value(&offset_prop) {
+                                            Ok(sv) => sv,
+                                            Err(c) => return Completion::Throw(c),
                                         };
+                                        match super::parse_utc_offset_timezone(&off_str) {
+                                            Some(canonical) => {
+                                                super::offset_string_to_ns(&canonical)
+                                            }
+                                            None => get_tz_offset_ns(&tz, &BigInt::from(local_ns))
+                                                as i128,
+                                        }
+                                    } else {
+                                        get_tz_offset_ns(&tz, &BigInt::from(local_ns)) as i128
+                                    };
                                     let new_epoch_ns = BigInt::from(local_ns - offset_ns);
                                     return create_zdt(interp, new_epoch_ns, tz, cal);
                                 }
@@ -2903,28 +2996,29 @@ impl Interpreter {
 
                     // Determine offset based on offset option
                     let tz_offset_ns = get_tz_offset_ns(&tz, &BigInt::from(local_ns)) as i128;
-                    let offset_ns = if !is_undefined(&offset_prop) {
-                        let off_str = match interp.to_string_value(&offset_prop) {
-                            Ok(s) => s,
-                            Err(c) => return Completion::Throw(c),
-                        };
-                        let user_offset_ns = match super::parse_utc_offset_timezone(&off_str) {
-                            Some(canonical) => super::offset_string_to_ns(&canonical),
-                            None => tz_offset_ns,
-                        };
-                        if offset_opt == "reject" && user_offset_ns != tz_offset_ns {
-                            return Completion::Throw(interp.create_range_error(
-                                "offset does not match the time zone offset",
-                            ));
-                        } else if offset_opt == "use" {
-                            user_offset_ns
+                    let offset_ns =
+                        if !is_undefined(&offset_prop) {
+                            let off_str = match interp.to_string_value(&offset_prop) {
+                                Ok(s) => s,
+                                Err(c) => return Completion::Throw(c),
+                            };
+                            let user_offset_ns = match super::parse_utc_offset_timezone(&off_str) {
+                                Some(canonical) => super::offset_string_to_ns(&canonical),
+                                None => tz_offset_ns,
+                            };
+                            if offset_opt == "reject" && user_offset_ns != tz_offset_ns {
+                                return Completion::Throw(interp.create_range_error(
+                                    "offset does not match the time zone offset",
+                                ));
+                            } else if offset_opt == "use" {
+                                user_offset_ns
+                            } else {
+                                // "prefer" or "ignore": use timezone offset
+                                tz_offset_ns
+                            }
                         } else {
-                            // "prefer" or "ignore": use timezone offset
                             tz_offset_ns
-                        }
-                    } else {
-                        tz_offset_ns
-                    };
+                        };
                     let new_epoch_ns = BigInt::from(local_ns - offset_ns);
                     create_zdt(interp, new_epoch_ns, tz, cal)
                 },
@@ -3496,8 +3590,7 @@ fn zdt_add_subtract(
                 Some(v) => v,
                 None => {
                     return Completion::Throw(
-                        interp
-                            .create_range_error("day is out of range for the resulting month"),
+                        interp.create_range_error("day is out of range for the resulting month"),
                     );
                 }
             }
@@ -3567,9 +3660,10 @@ fn zdt_until_since(
         Err(c) => return c,
     };
     if cal != cal2 {
-        return Completion::Throw(interp.create_range_error(
-            &format!("cannot compute difference between dates of different calendars: {} and {}", cal, cal2),
-        ));
+        return Completion::Throw(interp.create_range_error(&format!(
+            "cannot compute difference between dates of different calendars: {} and {}",
+            cal, cal2
+        )));
     }
 
     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -3596,10 +3690,12 @@ fn zdt_until_since(
         let tz_eq = tz.eq_ignore_ascii_case(&tz2)
             || super::canonicalize_iana_tz(&tz) == super::canonicalize_iana_tz(&tz2);
         if !tz_eq {
-            return Completion::Throw(interp.create_range_error(&format!(
-                "Time zones '{}' and '{}' are not equal",
-                tz, tz2
-            )));
+            return Completion::Throw(
+                interp.create_range_error(&format!(
+                    "Time zones '{}' and '{}' are not equal",
+                    tz, tz2
+                )),
+            );
         }
     }
 
@@ -3713,19 +3809,27 @@ fn zdt_until_since(
         }
 
         // dateUntil from this's perspective (asymmetric)
-        let (mut dy, mut dm, mut dw, dd) =
-            if cal != "iso8601" && matches!(largest_unit.as_str(), "year" | "month") {
-                match super::difference_calendar_date(
-                    ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit, &cal,
-                ) {
-                    Some(v) => v,
-                    None => super::difference_iso_date(
-                        ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit,
-                    ),
+        let (mut dy, mut dm, mut dw, dd) = if cal != "iso8601"
+            && matches!(largest_unit.as_str(), "year" | "month")
+        {
+            match super::difference_calendar_date(
+                ty,
+                tm,
+                td,
+                adj_oy,
+                adj_om,
+                adj_od,
+                &largest_unit,
+                &cal,
+            ) {
+                Some(v) => v,
+                None => {
+                    super::difference_iso_date(ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit)
                 }
-            } else {
-                super::difference_iso_date(ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit)
-            };
+            }
+        } else {
+            super::difference_iso_date(ty, tm, td, adj_oy, adj_om, adj_od, &largest_unit)
+        };
         let mut dd = dd as i64;
 
         // Decompose time remainder (already signed, same direction as date components)
@@ -4146,4 +4250,3 @@ fn parse_zdt_to_string_options(
         cal_display,
     ))
 }
-

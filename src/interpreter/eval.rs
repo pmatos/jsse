@@ -317,7 +317,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if to_boolean(&test_val) {
+                if self.to_boolean_val(&test_val) {
                     self.eval_expr(cons, env)
                 } else {
                     self.eval_expr(alt, env)
@@ -343,6 +343,8 @@ impl Interpreter {
                         class_private_names: None,
                         is_field_initializer: false,
                         arguments_immutable: false,
+                        has_simple_params: true,
+                        is_simple_catch_scope: false,
                     }));
                     func_env
                         .borrow_mut()
@@ -1476,7 +1478,7 @@ impl Interpreter {
                 }
                 _ => Completion::Normal(JsValue::Number(to_number(val))),
             },
-            UnaryOp::Not => Completion::Normal(JsValue::Boolean(!to_boolean(val))),
+            UnaryOp::Not => Completion::Normal(JsValue::Boolean(!self.to_boolean_val(val))),
             UnaryOp::BitNot => match val {
                 JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
                     value: bigint_ops::bitwise_not(&b.value),
@@ -1787,6 +1789,25 @@ impl Interpreter {
     fn abstract_equality(&mut self, left: &JsValue, right: &JsValue) -> bool {
         if std::mem::discriminant(left) == std::mem::discriminant(right) {
             return strict_equality(left, right);
+        }
+        // B.3.6.2: IsHTMLDDA == null/undefined
+        if let JsValue::Object(o) = left {
+            if let Some(Some(obj)) = self.objects.get(o.id as usize) {
+                if obj.borrow().is_htmldda
+                    && (right.is_null() || right.is_undefined())
+                {
+                    return true;
+                }
+            }
+        }
+        if let JsValue::Object(o) = right {
+            if let Some(Some(obj)) = self.objects.get(o.id as usize) {
+                if obj.borrow().is_htmldda
+                    && (left.is_null() || left.is_undefined())
+                {
+                    return true;
+                }
+            }
         }
         if (left.is_null() && right.is_undefined()) || (left.is_undefined() && right.is_null()) {
             return true;
@@ -2147,14 +2168,14 @@ impl Interpreter {
         };
         match op {
             LogicalOp::And => {
-                if !to_boolean(&lval) {
+                if !self.to_boolean_val(&lval) {
                     Completion::Normal(lval)
                 } else {
                     self.eval_expr(right, env)
                 }
             }
             LogicalOp::Or => {
-                if to_boolean(&lval) {
+                if self.to_boolean_val(&lval) {
                     Completion::Normal(lval)
                 } else {
                     self.eval_expr(right, env)
@@ -2985,8 +3006,8 @@ impl Interpreter {
                     }
                 };
                 let should_assign = match op {
-                    AssignOp::LogicalAndAssign => to_boolean(&lval),
-                    AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                    AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
+                    AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
                     AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
                     _ => unreachable!(),
                 };
@@ -3042,8 +3063,8 @@ impl Interpreter {
                     }
                 };
                 let should_assign = match op {
-                    AssignOp::LogicalAndAssign => to_boolean(&lval),
-                    AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                    AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
+                    AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
                     AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
                     _ => unreachable!(),
                 };
@@ -3156,8 +3177,8 @@ impl Interpreter {
                     JsValue::Undefined
                 };
                 let should_assign = match op {
-                    AssignOp::LogicalAndAssign => to_boolean(&lval),
-                    AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                    AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
+                    AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
                     AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
                     _ => unreachable!(),
                 };
@@ -3271,8 +3292,8 @@ impl Interpreter {
                     other => return other,
                 };
                 let should_assign = match op {
-                    AssignOp::LogicalAndAssign => to_boolean(&lval),
-                    AssignOp::LogicalOrAssign => !to_boolean(&lval),
+                    AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
+                    AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
                     AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
                     _ => unreachable!(),
                 };
@@ -5101,7 +5122,7 @@ impl Interpreter {
                         }
                         other => return other,
                     };
-                    current_id = if to_boolean(&cond_val) {
+                    current_id = if self.to_boolean_val(&cond_val) {
                         *true_state
                     } else {
                         *false_state
@@ -6578,7 +6599,7 @@ impl Interpreter {
                             }
                         }
                     };
-                    current_id = if to_boolean(&cond_val) {
+                    current_id = if self.to_boolean_val(&cond_val) {
                         *true_state
                     } else {
                         *false_state
@@ -7659,6 +7680,7 @@ impl Interpreter {
                                 let body_env =
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
+                                body_env.borrow_mut().has_simple_params = false;
                                 let mut var_names = std::collections::HashSet::new();
                                 Self::collect_var_names_from_stmts(&body, &mut var_names);
                                 let mut param_names_set = std::collections::HashSet::new();
@@ -7766,6 +7788,7 @@ impl Interpreter {
                                 let body_env =
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
+                                body_env.borrow_mut().has_simple_params = false;
                                 let mut var_names = std::collections::HashSet::new();
                                 Self::collect_var_names_from_stmts(&body, &mut var_names);
                                 let mut param_names_set = std::collections::HashSet::new();
@@ -7919,6 +7942,7 @@ impl Interpreter {
                         let exec_env = if !is_simple {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
                             body_env.borrow_mut().strict = func_env.borrow().strict;
+                            body_env.borrow_mut().has_simple_params = false;
                             let mut var_names = std::collections::HashSet::new();
                             Self::collect_var_names_from_stmts(&body, &mut var_names);
                             let mut param_names = std::collections::HashSet::new();
@@ -9420,7 +9444,7 @@ impl Interpreter {
                 }
                 let result = self.call_function(&method, right, std::slice::from_ref(left));
                 return match result {
-                    Completion::Normal(v) => Completion::Normal(JsValue::Boolean(to_boolean(&v))),
+                    Completion::Normal(v) => Completion::Normal(JsValue::Boolean(self.to_boolean_val(&v))),
                     other => other,
                 };
             }
@@ -9645,7 +9669,7 @@ impl Interpreter {
             let key_val = JsValue::String(JsString::from_str(key));
             match self.invoke_proxy_trap(obj_id, "has", vec![target_val.clone(), key_val]) {
                 Ok(Some(v)) => {
-                    let trap_result = to_boolean(&v);
+                    let trap_result = self.to_boolean_val(&v);
                     if !trap_result
                         && let JsValue::Object(ref t) = target_val
                         && let Some(tobj) = self.get_object(t.id)
@@ -9717,7 +9741,7 @@ impl Interpreter {
         if let JsValue::Object(u_ref) = &unscopables_val {
             let u_this = unscopables_val.clone();
             match self.get_object_property(u_ref.id, name, &u_this) {
-                Completion::Normal(v) => Ok(to_boolean(&v)),
+                Completion::Normal(v) => Ok(self.to_boolean_val(&v)),
                 Completion::Throw(e) => Err(e),
                 _ => Ok(false),
             }
@@ -9937,7 +9961,7 @@ impl Interpreter {
                 vec![target_val.clone(), key_val, value.clone(), receiver.clone()],
             ) {
                 Ok(Some(v)) => {
-                    if to_boolean(&v) {
+                    if self.to_boolean_val(&v) {
                         if let JsValue::Object(ref t) = target_val
                             && let Some(tobj) = self.get_object(t.id)
                         {
@@ -10074,7 +10098,7 @@ impl Interpreter {
                 vec![target_val.clone(), key_val],
             ) {
                 Ok(Some(v)) => {
-                    let trap_result = to_boolean(&v);
+                    let trap_result = self.to_boolean_val(&v);
                     if trap_result
                         && let JsValue::Object(ref t) = target_val
                         && let Some(tobj) = self.get_object(t.id)
@@ -10203,7 +10227,7 @@ impl Interpreter {
                 vec![target_val.clone(), key_val, desc_val.clone()],
             ) {
                 Ok(Some(v)) => {
-                    let trap_result = to_boolean(&v);
+                    let trap_result = self.to_boolean_val(&v);
                     if !trap_result {
                         return Ok(false);
                     }
@@ -10568,7 +10592,7 @@ impl Interpreter {
                 vec![target_val.clone(), proto.clone()],
             ) {
                 Ok(Some(v)) => {
-                    if !to_boolean(&v) {
+                    if !self.to_boolean_val(&v) {
                         return Ok(false);
                     }
                     if let JsValue::Object(ref t) = target_val
@@ -10632,7 +10656,7 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "isExtensible", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
-                    let trap_result = to_boolean(&v);
+                    let trap_result = self.to_boolean_val(&v);
                     if let JsValue::Object(ref t) = target_val
                         && let Some(tobj) = self.get_object(t.id)
                     {
@@ -10666,7 +10690,7 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "preventExtensions", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
-                    let trap_result = to_boolean(&v);
+                    let trap_result = self.to_boolean_val(&v);
                     if trap_result
                         && let JsValue::Object(ref t) = target_val
                         && let Some(tobj) = self.get_object(t.id)
@@ -11565,7 +11589,7 @@ impl Interpreter {
                             && let Some(desc_rc) = self.get_object(dobj.id)
                         {
                             match desc_rc.borrow().get_property_value("enumerable") {
-                                Some(ev) => crate::interpreter::helpers::to_boolean(&ev),
+                                Some(ev) => self.to_boolean_val(&ev),
                                 None => false,
                             }
                         } else {

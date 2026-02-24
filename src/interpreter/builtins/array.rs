@@ -865,7 +865,11 @@ impl Interpreter {
                                 Err(c) => return c,
                             };
                         if interp.is_callable(&to_locale_str_method) {
-                            match interp.call_function(&to_locale_str_method, &next_element, &pass_args) {
+                            match interp.call_function(
+                                &to_locale_str_method,
+                                &next_element,
+                                &pass_args,
+                            ) {
                                 Completion::Normal(v) => match interp.to_string_value(&v) {
                                     Ok(s) => parts.push(s),
                                     Err(e) => return Completion::Throw(e),
@@ -915,7 +919,7 @@ impl Interpreter {
                             JsValue::Undefined
                         };
                         if !matches!(spreadable_val, JsValue::Undefined) {
-                            to_boolean(&spreadable_val)
+                            interp.to_boolean_val(&spreadable_val)
                         } else {
                             // 4. Return ? IsArray(O)
                             match is_array_check(interp, obj_ref.id) {
@@ -1353,7 +1357,7 @@ impl Interpreter {
                                 &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
                             ) {
                                 Completion::Normal(v) => {
-                                    if to_boolean(&v) {
+                                    if interp.to_boolean_val(&v) {
                                         if let Err(e) = create_data_property_or_throw(
                                             interp,
                                             &a,
@@ -1583,7 +1587,7 @@ impl Interpreter {
                                 &[kvalue, JsValue::Number(k as f64), o.clone()],
                             ) {
                                 Completion::Normal(v) => {
-                                    if to_boolean(&v) {
+                                    if interp.to_boolean_val(&v) {
                                         return Completion::Normal(JsValue::Boolean(true));
                                     }
                                 }
@@ -1635,7 +1639,7 @@ impl Interpreter {
                                 &[kvalue, JsValue::Number(k as f64), o.clone()],
                             ) {
                                 Completion::Normal(v) => {
-                                    if !to_boolean(&v) {
+                                    if !interp.to_boolean_val(&v) {
                                         return Completion::Normal(JsValue::Boolean(false));
                                     }
                                 }
@@ -1684,7 +1688,7 @@ impl Interpreter {
                         &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
                     ) {
                         Completion::Normal(v) => {
-                            if to_boolean(&v) {
+                            if interp.to_boolean_val(&v) {
                                 return Completion::Normal(kvalue);
                             }
                         }
@@ -1729,7 +1733,7 @@ impl Interpreter {
                         &[kvalue, JsValue::Number(k as f64), o.clone()],
                     ) {
                         Completion::Normal(v) => {
-                            if to_boolean(&v) {
+                            if interp.to_boolean_val(&v) {
                                 return Completion::Normal(JsValue::Number(k as f64));
                             }
                         }
@@ -1774,7 +1778,7 @@ impl Interpreter {
                         &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
                     ) {
                         Completion::Normal(v) => {
-                            if to_boolean(&v) {
+                            if interp.to_boolean_val(&v) {
                                 return Completion::Normal(kvalue);
                             }
                         }
@@ -1821,7 +1825,7 @@ impl Interpreter {
                         &[kvalue, JsValue::Number(k as f64), o.clone()],
                     ) {
                         Completion::Normal(v) => {
-                            if to_boolean(&v) {
+                            if interp.to_boolean_val(&v) {
                                 return Completion::Normal(JsValue::Number(k as f64));
                             }
                         }
@@ -3184,7 +3188,7 @@ impl Interpreter {
                         // Check done
                         let done = if let JsValue::Object(ref o) = next_result {
                             match interp.get_object_property(o.id, "done", &next_result) {
-                                Completion::Normal(v) => to_boolean(&v),
+                                Completion::Normal(v) => interp.to_boolean_val(&v),
                                 _ => false,
                             }
                         } else {

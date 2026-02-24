@@ -77,7 +77,13 @@ fn date_to_locale_string(
         }
     }
     if need_defaults && (required == "time" || required == "any") {
-        for prop in &["dayPeriod", "hour", "minute", "second", "fractionalSecondDigits"] {
+        for prop in &[
+            "dayPeriod",
+            "hour",
+            "minute",
+            "second",
+            "fractionalSecondDigits",
+        ] {
             if has_prop(&options_obj, prop) {
                 need_defaults = false;
                 break;
@@ -129,9 +135,9 @@ fn date_to_locale_string(
     let dtf_val = match interp.intl_date_time_format_ctor.clone() {
         Some(v) => v,
         None => {
-            return Completion::Normal(JsValue::String(JsString::from_str(
-                &format_date_string(tv),
-            )));
+            return Completion::Normal(JsValue::String(JsString::from_str(&format_date_string(
+                tv,
+            ))));
         }
     };
 

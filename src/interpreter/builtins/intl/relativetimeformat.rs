@@ -1,8 +1,7 @@
 use super::super::super::*;
 use fixed_decimal::{Decimal, FloatPrecision};
 use icu::experimental::relativetime::{
-    RelativeTimeFormatter, RelativeTimeFormatterOptions,
-    options::Numeric,
+    RelativeTimeFormatter, RelativeTimeFormatterOptions, options::Numeric,
 };
 use icu::locale::Locale as IcuLocale;
 
@@ -208,7 +207,8 @@ fn replace_number_in_rtf_output(
 
     // Find the latn number in the RTF output and replace with transliterated version
     if let Some(pos) = base_result.find(&base_number) {
-        let transliterated = super::numberformat::transliterate_digits(&base_number, numbering_system);
+        let transliterated =
+            super::numberformat::transliterate_digits(&base_number, numbering_system);
         let mut result = String::new();
         result.push_str(&base_result[..pos]);
         result.push_str(&transliterated);
@@ -315,8 +315,12 @@ fn format_rtf_to_parts_data(
     while pos < remaining_chars.len() {
         let c = remaining_chars[pos];
         if c.is_ascii_digit() {
-            end = start + remaining[..].char_indices()
-                .nth(pos).map(|(i, c)| i + c.len_utf8()).unwrap_or(end);
+            end = start
+                + remaining[..]
+                    .char_indices()
+                    .nth(pos)
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(end);
             pos += 1;
         } else {
             // Check if this is a group or decimal separator
@@ -327,8 +331,10 @@ fn format_rtf_to_parts_data(
                 if pos + sep_chars < remaining_chars.len()
                     && remaining_chars[pos + sep_chars].is_ascii_digit()
                 {
-                    let byte_end = remaining[..].char_indices()
-                        .nth(pos + sep_chars).map(|(i, c)| i + c.len_utf8())
+                    let byte_end = remaining[..]
+                        .char_indices()
+                        .nth(pos + sep_chars)
+                        .map(|(i, c)| i + c.len_utf8())
                         .unwrap_or(remaining.len());
                     end = start + byte_end;
                     pos += sep_chars;
@@ -341,8 +347,10 @@ fn format_rtf_to_parts_data(
                     && remaining_chars[pos + sep_chars].is_ascii_digit()
                 {
                     // Decimal separator followed by digit
-                    let byte_end = remaining[..].char_indices()
-                        .nth(pos + sep_chars).map(|(i, c)| i + c.len_utf8())
+                    let byte_end = remaining[..]
+                        .char_indices()
+                        .nth(pos + sep_chars)
+                        .map(|(i, c)| i + c.len_utf8())
                         .unwrap_or(remaining.len());
                     end = start + byte_end;
                     pos += sep_chars;
@@ -392,11 +400,7 @@ fn parse_number_to_parts_locale(
 
         let fraction_part = &number_str[dec_pos + decimal_sep.len()..];
         if !fraction_part.is_empty() {
-            parts.push((
-                "fraction".to_string(),
-                fraction_part.to_string(),
-                unit_val,
-            ));
+            parts.push(("fraction".to_string(), fraction_part.to_string(), unit_val));
         }
     } else {
         parse_integer_groups_locale(number_str, unit, group_sep, &mut parts);
@@ -454,16 +458,11 @@ fn extract_rtf_data(
             }
         }
     }
-    Err(interp.create_type_error(
-        "Intl.RelativeTimeFormat method called on incompatible receiver",
-    ))
+    Err(interp.create_type_error("Intl.RelativeTimeFormat method called on incompatible receiver"))
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_relative_time_format(
-        &mut self,
-        intl_obj: &Rc<RefCell<JsObjectData>>,
-    ) {
+    pub(crate) fn setup_intl_relative_time_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
         if let Some(ref op) = self.object_prototype {
             proto.borrow_mut().prototype = Some(op.clone());
@@ -474,7 +473,9 @@ impl Interpreter {
         proto.borrow_mut().insert_property(
             "Symbol(Symbol.toStringTag)".to_string(),
             PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.RelativeTimeFormat"))),
+                value: Some(JsValue::String(JsString::from_str(
+                    "Intl.RelativeTimeFormat",
+                ))),
                 writable: Some(false),
                 enumerable: Some(false),
                 configurable: Some(true),
@@ -484,47 +485,49 @@ impl Interpreter {
         );
 
         // format(value, unit)
-        let format_fn = self.create_function(JsFunction::native(
-            "format".to_string(),
-            2,
-            |interp, this, args| {
-                let (locale, style, numeric, ns) = match extract_rtf_data(interp, this) {
-                    Ok(data) => data,
-                    Err(e) => return Completion::Throw(e),
-                };
+        let format_fn =
+            self.create_function(JsFunction::native(
+                "format".to_string(),
+                2,
+                |interp, this, args| {
+                    let (locale, style, numeric, ns) = match extract_rtf_data(interp, this) {
+                        Ok(data) => data,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
-                let value_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let value = match interp.to_number_value(&value_arg) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                    let value_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let value = match interp.to_number_value(&value_arg) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
-                if value.is_nan() || value.is_infinite() {
-                    return Completion::Throw(
-                        interp.create_range_error("Value must be finite for RelativeTimeFormat.format"),
-                    );
-                }
-
-                let unit_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let unit_str = match interp.to_string_value(&unit_arg) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
-                };
-
-                let unit = match validate_rtf_unit(&unit_str) {
-                    Some(u) => u,
-                    None => {
-                        return Completion::Throw(interp.create_range_error(&format!(
-                            "Invalid unit argument for RelativeTimeFormat: {}",
-                            unit_str
-                        )));
+                    if value.is_nan() || value.is_infinite() {
+                        return Completion::Throw(interp.create_range_error(
+                            "Value must be finite for RelativeTimeFormat.format",
+                        ));
                     }
-                };
 
-                let result = replace_number_in_rtf_output(&locale, &ns, &style, unit, &numeric, value);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
-            },
-        ));
+                    let unit_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let unit_str = match interp.to_string_value(&unit_arg) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    };
+
+                    let unit = match validate_rtf_unit(&unit_str) {
+                        Some(u) => u,
+                        None => {
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "Invalid unit argument for RelativeTimeFormat: {}",
+                                unit_str
+                            )));
+                        }
+                    };
+
+                    let result =
+                        replace_number_in_rtf_output(&locale, &ns, &style, unit, &numeric, value);
+                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                },
+            ));
         proto
             .borrow_mut()
             .insert_builtin("format".to_string(), format_fn);
@@ -546,11 +549,9 @@ impl Interpreter {
                 };
 
                 if value.is_nan() || value.is_infinite() {
-                    return Completion::Throw(
-                        interp.create_range_error(
-                            "Value must be finite for RelativeTimeFormat.formatToParts",
-                        ),
-                    );
+                    return Completion::Throw(interp.create_range_error(
+                        "Value must be finite for RelativeTimeFormat.formatToParts",
+                    ));
                 }
 
                 let unit_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -569,7 +570,8 @@ impl Interpreter {
                     }
                 };
 
-                let formatted = replace_number_in_rtf_output(&locale, &ns, &style, unit, &numeric, value);
+                let formatted =
+                    replace_number_in_rtf_output(&locale, &ns, &style, unit, &numeric, value);
 
                 let parts_data =
                     format_rtf_to_parts_data(&formatted, value, unit, &numeric, &locale);
@@ -674,9 +676,11 @@ impl Interpreter {
             0,
             move |interp, _this, args| {
                 if interp.new_target.is_none() {
-                    return Completion::Throw(interp.create_type_error(
-                        "Constructor Intl.RelativeTimeFormat requires 'new'",
-                    ));
+                    return Completion::Throw(
+                        interp.create_type_error(
+                            "Constructor Intl.RelativeTimeFormat requires 'new'",
+                        ),
+                    );
                 }
 
                 let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -704,12 +708,7 @@ impl Interpreter {
                 };
 
                 // Step 8-9: numberingSystem (read before style and numeric per spec)
-                let ns_opt = match interp.intl_get_option(
-                    &options,
-                    "numberingSystem",
-                    &[],
-                    None,
-                ) {
+                let ns_opt = match interp.intl_get_option(&options, "numberingSystem", &[], None) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -751,15 +750,14 @@ impl Interpreter {
                 let mut locale = interp.intl_resolve_locale(&requested);
 
                 let known_numbering_systems = [
-                    "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "brah",
-                    "cakm", "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr",
-                    "guru", "hanidec", "hmng", "hmnp", "java", "kali", "kawi", "khmr",
-                    "knda", "lana", "lanatham", "laoo", "latn", "lepc", "limb", "mathbold",
-                    "mathdbl", "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong",
-                    "mroo", "mtei", "mymr", "mymrshan", "mymrtlng", "nagm", "newa", "nkoo",
-                    "olck", "orya", "osma", "rohg", "saur", "segment", "shrd", "sind",
-                    "sinh", "sora", "sund", "takr", "talu", "tamldec", "telu", "thai",
-                    "tibt", "tirh", "tnsa", "vaii", "wara", "wcho",
+                    "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "brah", "cakm",
+                    "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr", "guru", "hanidec",
+                    "hmng", "hmnp", "java", "kali", "kawi", "khmr", "knda", "lana", "lanatham",
+                    "laoo", "latn", "lepc", "limb", "mathbold", "mathdbl", "mathmono", "mathsanb",
+                    "mathsans", "mlym", "modi", "mong", "mroo", "mtei", "mymr", "mymrshan",
+                    "mymrtlng", "nagm", "newa", "nkoo", "olck", "orya", "osma", "rohg", "saur",
+                    "segment", "shrd", "sind", "sinh", "sora", "sund", "takr", "talu", "tamldec",
+                    "telu", "thai", "tibt", "tirh", "tnsa", "vaii", "wara", "wcho",
                 ];
 
                 // Extract nu extension from locale if present
@@ -779,9 +777,7 @@ impl Interpreter {
                     if let Some(nu_pos) = locale.find("-nu-") {
                         let before = &locale[..nu_pos];
                         let after_nu = &locale[nu_pos + 4..];
-                        let rest = after_nu.find('-')
-                            .map(|p| &after_nu[p..])
-                            .unwrap_or("");
+                        let rest = after_nu.find('-').map(|p| &after_nu[p..]).unwrap_or("");
                         let result = format!("{}{}", before, rest);
                         // Clean up trailing -u- if empty
                         result.trim_end_matches("-u").to_string()

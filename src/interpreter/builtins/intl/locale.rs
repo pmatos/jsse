@@ -1,6 +1,6 @@
 use super::super::super::*;
-use icu::locale::extensions::unicode::{Key, Value};
 use icu::locale::Locale as IcuLocale;
+use icu::locale::extensions::unicode::{Key, Value};
 use icu::locale::{LocaleCanonicalizer, LocaleDirectionality, LocaleExpander};
 
 fn extract_unicode_keyword(locale: &IcuLocale, key_str: &str) -> Option<String> {
@@ -376,8 +376,7 @@ impl Interpreter {
             |interp, this, _args| {
                 get_locale_intl_data_field(interp, this, "numberingSystem", |data| {
                     if let IntlData::Locale {
-                        numbering_system,
-                        ..
+                        numbering_system, ..
                     } = data
                     {
                         Completion::Normal(match numbering_system {
@@ -487,8 +486,7 @@ impl Interpreter {
             |interp, this, _args| {
                 get_locale_intl_data_field(interp, this, "firstDayOfWeek", |data| {
                     if let IntlData::Locale {
-                        first_day_of_week,
-                        ..
+                        first_day_of_week, ..
                     } = data
                     {
                         Completion::Normal(match first_day_of_week {
@@ -567,22 +565,22 @@ impl Interpreter {
                         Ok(mut locale) => {
                             let expander = LocaleExpander::new_extended();
                             expander.maximize(&mut locale.id);
-                            return Completion::Normal(create_locale_object_from_icu(interp, &locale));
+                            return Completion::Normal(create_locale_object_from_icu(
+                                interp, &locale,
+                            ));
                         }
                         Err(_) => {
                             // For tags ICU4X can't parse (like "posix"),
                             // maximize returns the same tag
-                            return Completion::Normal(
-                                JsValue::Object(crate::types::JsObject { id: o.id })
-                            );
+                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                id: o.id,
+                            }));
                         }
                     }
                 }
-                Completion::Throw(
-                    interp.create_type_error(
-                        "Intl.Locale.prototype.maximize requires an Intl.Locale object",
-                    ),
-                )
+                Completion::Throw(interp.create_type_error(
+                    "Intl.Locale.prototype.maximize requires an Intl.Locale object",
+                ))
             },
         ));
         proto
@@ -612,20 +610,20 @@ impl Interpreter {
                         Ok(mut locale) => {
                             let expander = LocaleExpander::new_extended();
                             expander.minimize(&mut locale.id);
-                            return Completion::Normal(create_locale_object_from_icu(interp, &locale));
+                            return Completion::Normal(create_locale_object_from_icu(
+                                interp, &locale,
+                            ));
                         }
                         Err(_) => {
-                            return Completion::Normal(
-                                JsValue::Object(crate::types::JsObject { id: o.id })
-                            );
+                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                                id: o.id,
+                            }));
                         }
                     }
                 }
-                Completion::Throw(
-                    interp.create_type_error(
-                        "Intl.Locale.prototype.minimize requires an Intl.Locale object",
-                    ),
-                )
+                Completion::Throw(interp.create_type_error(
+                    "Intl.Locale.prototype.minimize requires an Intl.Locale object",
+                ))
             },
         ));
         proto
@@ -659,11 +657,9 @@ impl Interpreter {
                     };
                     return Completion::Normal(interp.create_array(calendars));
                 }
-                Completion::Throw(
-                    interp.create_type_error(
-                        "Intl.Locale.prototype.getCalendars requires an Intl.Locale object",
-                    ),
-                )
+                Completion::Throw(interp.create_type_error(
+                    "Intl.Locale.prototype.getCalendars requires an Intl.Locale object",
+                ))
             },
         ));
         proto
@@ -793,10 +789,9 @@ impl Interpreter {
                 )
             },
         ));
-        proto.borrow_mut().insert_builtin(
-            "getNumberingSystems".to_string(),
-            get_numbering_systems_fn,
-        );
+        proto
+            .borrow_mut()
+            .insert_builtin("getNumberingSystems".to_string(), get_numbering_systems_fn);
 
         // getTextInfo()
         let get_text_info_fn = self.create_function(JsFunction::native(
@@ -846,11 +841,9 @@ impl Interpreter {
                         id: info_id,
                     }));
                 }
-                Completion::Throw(
-                    interp.create_type_error(
-                        "Intl.Locale.prototype.getTextInfo requires an Intl.Locale object",
-                    ),
-                )
+                Completion::Throw(interp.create_type_error(
+                    "Intl.Locale.prototype.getTextInfo requires an Intl.Locale object",
+                ))
             },
         ));
         proto
@@ -888,11 +881,9 @@ impl Interpreter {
                         .collect();
                     return Completion::Normal(interp.create_array(values));
                 }
-                Completion::Throw(
-                    interp.create_type_error(
-                        "Intl.Locale.prototype.getTimeZones requires an Intl.Locale object",
-                    ),
-                )
+                Completion::Throw(interp.create_type_error(
+                    "Intl.Locale.prototype.getTimeZones requires an Intl.Locale object",
+                ))
             },
         ));
         proto
@@ -926,19 +917,17 @@ impl Interpreter {
                     let locale: IcuLocale = match tag.parse() {
                         Ok(l) => l,
                         Err(_) => {
-                            return Completion::Throw(interp.create_range_error(&format!(
-                                "Invalid language tag: {}",
-                                tag
-                            )));
+                            return Completion::Throw(
+                                interp
+                                    .create_range_error(&format!("Invalid language tag: {}", tag)),
+                            );
                         }
                     };
 
                     let first_day = if let Some(ref fw) = fw_value {
                         fw_keyword_to_day_number(fw).unwrap_or(7)
                     } else {
-                        let wi = icu::calendar::week::WeekInformation::try_new(
-                            (&locale).into(),
-                        );
+                        let wi = icu::calendar::week::WeekInformation::try_new((&locale).into());
                         if let Ok(week_info) = wi {
                             weekday_to_number(week_info.first_weekday)
                         } else {
@@ -947,9 +936,7 @@ impl Interpreter {
                     };
 
                     let mut weekend_days: Vec<i32> = Vec::new();
-                    let wi = icu::calendar::week::WeekInformation::try_new(
-                        (&locale).into(),
-                    );
+                    let wi = icu::calendar::week::WeekInformation::try_new((&locale).into());
                     if let Ok(week_info) = wi {
                         use icu::calendar::types::Weekday;
                         for wd in [
@@ -997,11 +984,9 @@ impl Interpreter {
                         id: info_id,
                     }));
                 }
-                Completion::Throw(
-                    interp.create_type_error(
-                        "Intl.Locale.prototype.getWeekInfo requires an Intl.Locale object",
-                    ),
-                )
+                Completion::Throw(interp.create_type_error(
+                    "Intl.Locale.prototype.getWeekInfo requires an Intl.Locale object",
+                ))
             },
         ));
         proto
@@ -1099,12 +1084,12 @@ impl Interpreter {
 
                     if let JsValue::Object(o) = &options {
                         // language override
-                        let lang_val =
-                            match interp.get_object_property(o.id, "language", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let lang_val = match interp.get_object_property(o.id, "language", &options)
+                        {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
                         if !lang_val.is_undefined() {
                             let lang_str = match interp.to_string_value(&lang_val) {
                                 Ok(s) => s,
@@ -1121,12 +1106,12 @@ impl Interpreter {
                         }
 
                         // script override
-                        let script_val =
-                            match interp.get_object_property(o.id, "script", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let script_val = match interp.get_object_property(o.id, "script", &options)
+                        {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
                         if !script_val.is_undefined() {
                             let script_str = match interp.to_string_value(&script_val) {
                                 Ok(s) => s,
@@ -1143,12 +1128,12 @@ impl Interpreter {
                         }
 
                         // region override
-                        let region_val =
-                            match interp.get_object_property(o.id, "region", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let region_val = match interp.get_object_property(o.id, "region", &options)
+                        {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
                         if !region_val.is_undefined() {
                             let region_str = match interp.to_string_value(&region_val) {
                                 Ok(s) => s,
@@ -1207,23 +1192,20 @@ impl Interpreter {
                             match new_base.parse::<IcuLocale>() {
                                 Ok(new_loc) => locale = new_loc,
                                 Err(_) => {
-                                    return Completion::Throw(
-                                        interp.create_range_error(&format!(
-                                            "Invalid variants subtag: {}",
-                                            variants_str
-                                        )),
-                                    );
+                                    return Completion::Throw(interp.create_range_error(&format!(
+                                        "Invalid variants subtag: {}",
+                                        variants_str
+                                    )));
                                 }
                             }
                         }
 
                         // calendar (ca)
-                        let cal_val =
-                            match interp.get_object_property(o.id, "calendar", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let cal_val = match interp.get_object_property(o.id, "calendar", &options) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
                         if !cal_val.is_undefined() {
                             let s = match interp.to_string_value(&cal_val) {
                                 Ok(s) => s,
@@ -1239,12 +1221,12 @@ impl Interpreter {
                         }
 
                         // collation (co)
-                        let col_val =
-                            match interp.get_object_property(o.id, "collation", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let col_val = match interp.get_object_property(o.id, "collation", &options)
+                        {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
                         if !col_val.is_undefined() {
                             let s = match interp.to_string_value(&col_val) {
                                 Ok(s) => s,
@@ -1290,12 +1272,11 @@ impl Interpreter {
                         }
 
                         // hourCycle (hc)
-                        let hc_val =
-                            match interp.get_object_property(o.id, "hourCycle", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let hc_val = match interp.get_object_property(o.id, "hourCycle", &options) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
                         if !hc_val.is_undefined() {
                             let s = match interp.to_string_value(&hc_val) {
                                 Ok(s) => s,
@@ -1311,12 +1292,11 @@ impl Interpreter {
                         }
 
                         // caseFirst (kf)
-                        let kf_val =
-                            match interp.get_object_property(o.id, "caseFirst", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let kf_val = match interp.get_object_property(o.id, "caseFirst", &options) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
                         if !kf_val.is_undefined() {
                             let s = match interp.to_string_value(&kf_val) {
                                 Ok(s) => s,
@@ -1339,15 +1319,14 @@ impl Interpreter {
                                 _ => JsValue::Undefined,
                             };
                         if !numeric_val.is_undefined() {
-                            let b = to_boolean(&numeric_val);
+                            let b = interp.to_boolean_val(&numeric_val);
                             let kn_val = if b { "true" } else { "false" };
                             set_unicode_keyword(&mut locale, "kn", kn_val);
                         }
 
                         // numberingSystem (nu)
                         let nu_val =
-                            match interp.get_object_property(o.id, "numberingSystem", &options)
-                            {
+                            match interp.get_object_property(o.id, "numberingSystem", &options) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => JsValue::Undefined,
@@ -1598,7 +1577,12 @@ fn get_timezones_for_region(region: &str) -> Vec<&'static str> {
         "TH" => vec!["Asia/Bangkok"],
         "PH" => vec!["Asia/Manila"],
         "MY" => vec!["Asia/Kuala_Lumpur", "Asia/Kuching"],
-        "ID" => vec!["Asia/Jakarta", "Asia/Jayapura", "Asia/Makassar", "Asia/Pontianak"],
+        "ID" => vec![
+            "Asia/Jakarta",
+            "Asia/Jayapura",
+            "Asia/Makassar",
+            "Asia/Pontianak",
+        ],
         "SA" => vec!["Asia/Riyadh"],
         "AE" => vec!["Asia/Dubai"],
         "EG" => vec!["Africa/Cairo"],
