@@ -2340,6 +2340,16 @@ impl Interpreter {
                 }
             }
             Completion::Normal(if prefix { new_val } else { old_val })
+        } else if let Expression::Call(_, _) = arg {
+            match self.eval_expr(arg, env) {
+                Completion::Normal(_) => {}
+                other => return other,
+            }
+            Completion::Throw(
+                self.create_reference_error(
+                    "Invalid left-hand side expression in update expression",
+                ),
+            )
         } else {
             Completion::Normal(JsValue::Number(f64::NAN))
         }
@@ -2915,6 +2925,15 @@ impl Interpreter {
                     Completion::Normal(_) => Completion::Normal(rval),
                     other => other,
                 }
+            }
+            Expression::Call(_, _) => {
+                match self.eval_expr(left, env) {
+                    Completion::Normal(_) => {}
+                    other => return other,
+                }
+                Completion::Throw(
+                    self.create_reference_error("Invalid left-hand side in assignment"),
+                )
             }
             _ => {
                 let rval = match self.eval_expr(right, env) {

@@ -19,23 +19,37 @@ impl<'a> Parser<'a> {
             }
             return self.parse_await_using_declaration();
         }
+        if matches!(&self.current, Token::Keyword(Keyword::Async)) && self.is_async_function() {
+            return self.parse_function_declaration();
+        }
         match &self.current {
             Token::Keyword(Keyword::Function) => self.parse_function_declaration(),
             Token::Keyword(Keyword::Class) => self.parse_class_declaration(),
             Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const) => {
                 self.parse_lexical_declaration()
             }
-            Token::Keyword(Keyword::Async) if self.is_async_function() => {
-                self.parse_function_declaration()
-            }
             _ => self.parse_statement(),
         }
     }
 
-    pub(super) fn is_async_function(&self) -> bool {
-        // peek ahead: `async function` without line terminator
-        // simplified: just check if current is async keyword
-        matches!(&self.current, Token::Keyword(Keyword::Async))
+    pub(super) fn is_async_function(&mut self) -> bool {
+        if !matches!(&self.current, Token::Keyword(Keyword::Async)) {
+            return false;
+        }
+        let saved_lt = self.prev_line_terminator;
+        let saved_ts = self.current_token_start;
+        let saved_te = self.current_token_end;
+        let Ok(saved) = self.advance() else {
+            return false;
+        };
+        let result =
+            self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
+        self.push_back(self.current.clone(), self.prev_line_terminator);
+        self.current = saved;
+        self.prev_line_terminator = saved_lt;
+        self.current_token_start = saved_ts;
+        self.current_token_end = saved_te;
+        result
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
@@ -624,19 +638,25 @@ impl<'a> Parser<'a> {
                         let right = self.parse_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
-                        return Ok(Statement::ForIn(ForInStatement {
-                            left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
-                            right,
-                            body,
-                        }));
+                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                            ForInOfLeft::Expression(expr)
+                        } else {
+                            ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                        };
+                        return Ok(Statement::ForIn(ForInStatement { left, right, body }));
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
                         self.advance()?;
                         let right = self.parse_assignment_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
+                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                            ForInOfLeft::Expression(expr)
+                        } else {
+                            ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                        };
                         return Ok(Statement::ForOf(ForOfStatement {
-                            left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
+                            left,
                             right,
                             body,
                             is_await,
@@ -781,19 +801,25 @@ impl<'a> Parser<'a> {
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    return Ok(Statement::ForIn(ForInStatement {
-                        left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
-                        right,
-                        body,
-                    }));
+                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                        ForInOfLeft::Expression(expr)
+                    } else {
+                        ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                    };
+                    return Ok(Statement::ForIn(ForInStatement { left, right, body }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
+                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                        ForInOfLeft::Expression(expr)
+                    } else {
+                        ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                    };
                     return Ok(Statement::ForOf(ForOfStatement {
-                        left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
+                        left,
                         right,
                         body,
                         is_await,

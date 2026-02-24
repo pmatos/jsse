@@ -328,6 +328,7 @@ pub struct ForOfStatement {
 pub enum ForInOfLeft {
     Variable(VariableDeclaration),
     Pattern(Pattern),
+    Expression(Expression),
 }
 
 #[derive(Clone, Debug)]

@@ -1304,6 +1304,15 @@ impl Interpreter {
                             }
                         }
                     },
+                    ForInOfLeft::Expression(expr) => {
+                        match self.eval_expr(expr, env) {
+                            Completion::Normal(_) => {}
+                            other => return other,
+                        }
+                        return Completion::Throw(
+                            self.create_reference_error("Invalid left-hand side in for-in loop"),
+                        );
+                    }
                 }
                 let result = self.exec_statement(&fi.body, &for_env);
                 match result {
@@ -1499,6 +1508,19 @@ impl Interpreter {
                     }
                     other => return other,
                 },
+                ForInOfLeft::Expression(expr) => {
+                    match self.eval_expr(expr, env) {
+                        Completion::Normal(_) => {}
+                        Completion::Throw(e) => {
+                            self.iterator_close(iterator, e.clone());
+                            return Completion::Throw(e);
+                        }
+                        other => return other,
+                    }
+                    let e = self.create_reference_error("Invalid left-hand side in for-of loop");
+                    self.iterator_close(iterator, e.clone());
+                    return Completion::Throw(e);
+                }
             }
             let body_result = self.exec_statement(&fo.body, &for_env);
             let body_result = self.dispose_resources(&for_env, body_result);
