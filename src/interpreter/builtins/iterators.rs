@@ -368,7 +368,7 @@ impl Interpreter {
                 .insert_property(key, PropertyDescriptor::data(dispose_fn, true, false, true));
         }
 
-        self.iterator_prototype = Some(iter_proto.clone());
+        self.realm_mut().iterator_prototype = Some(iter_proto.clone());
 
         // Iterator constructor (abstract — throws TypeError when called directly)
         let iterator_ctor = self.create_function(JsFunction::constructor(
@@ -386,7 +386,7 @@ impl Interpreter {
                 if let Some(JsValue::Object(nt)) = &interp.new_target {
                     // Check if new.target is the Iterator constructor by checking if
                     // looking up "Iterator" from global gives the same object
-                    let global_iter = interp.global_env.borrow().get("Iterator");
+                    let global_iter = interp.realm().global_env.borrow().get("Iterator");
                     if let Some(JsValue::Object(gi)) = global_iter
                         && gi.id == nt.id
                     {
@@ -494,10 +494,10 @@ impl Interpreter {
         }
 
         // Register Iterator as global
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Iterator", BindingKind::Var);
-        let _ = self
+        let _ = self.realm()
             .global_env
             .borrow_mut()
             .set("Iterator", iterator_ctor.clone());
@@ -733,7 +733,7 @@ impl Interpreter {
             ),
         );
 
-        self.array_iterator_prototype = Some(arr_iter_proto);
+        self.realm_mut().array_iterator_prototype = Some(arr_iter_proto);
 
         // %StringIteratorPrototype% (§22.1.5.1)
         let str_iter_proto = self.create_object();
@@ -818,12 +818,12 @@ impl Interpreter {
             ),
         );
 
-        self.string_iterator_prototype = Some(str_iter_proto);
+        self.realm_mut().string_iterator_prototype = Some(str_iter_proto);
     }
 
     fn create_iterator_helper_object(&mut self, next_fn: JsValue, return_fn: JsValue) -> JsValue {
         let obj = self.create_object();
-        obj.borrow_mut().prototype = self.iterator_prototype.clone();
+        obj.borrow_mut().prototype = self.realm().iterator_prototype.clone();
         obj.borrow_mut().class_name = "Iterator Helper".to_string();
         obj.borrow_mut().insert_builtin("next".to_string(), next_fn);
         obj.borrow_mut()
@@ -1995,7 +1995,7 @@ impl Interpreter {
 
         // Create shared WrapForValidIteratorPrototype
         let wrap_valid_proto = self.create_object();
-        wrap_valid_proto.borrow_mut().prototype = self.iterator_prototype.clone();
+        wrap_valid_proto.borrow_mut().prototype = self.realm().iterator_prototype.clone();
 
         let map_for_next = wrap_state_map.clone();
         let wrap_next_fn = self.create_function(JsFunction::native(
@@ -2126,7 +2126,7 @@ impl Interpreter {
                 // OrdinaryHasInstance: check if iter_val has %IteratorPrototype% in chain
                 let has_iter_proto = if let JsValue::Object(io) = &iter_val {
                     if let Some(iter_obj) = interp.get_object(io.id) {
-                        let ip = interp.iterator_prototype.clone();
+                        let ip = interp.realm().iterator_prototype.clone();
                         if let Some(ref ip) = ip {
                             let mut proto = iter_obj.borrow().prototype.clone();
                             let mut found = false;
@@ -3047,11 +3047,11 @@ impl Interpreter {
 
     pub(crate) fn create_array_iterator(&mut self, array_id: u64, kind: IteratorKind) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype = self.realm()
             .array_iterator_prototype
             .clone()
-            .or(self.iterator_prototype.clone())
-            .or(self.object_prototype.clone());
+            .or(self.realm().iterator_prototype.clone())
+            .or(self.realm().object_prototype.clone());
         obj_data.class_name = "Array Iterator".to_string();
         obj_data.iterator_state = Some(IteratorState::ArrayIterator {
             array_id,
@@ -3070,11 +3070,11 @@ impl Interpreter {
         kind: IteratorKind,
     ) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype = self.realm()
             .array_iterator_prototype
             .clone()
-            .or(self.iterator_prototype.clone())
-            .or(self.object_prototype.clone());
+            .or(self.realm().iterator_prototype.clone())
+            .or(self.realm().object_prototype.clone());
         obj_data.class_name = "Array Iterator".to_string();
         obj_data.iterator_state = Some(IteratorState::TypedArrayIterator {
             typed_array_id,
@@ -3089,11 +3089,11 @@ impl Interpreter {
 
     pub(crate) fn create_string_iterator(&mut self, string: JsString) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype = self.realm()
             .string_iterator_prototype
             .clone()
-            .or(self.iterator_prototype.clone())
-            .or(self.object_prototype.clone());
+            .or(self.realm().iterator_prototype.clone())
+            .or(self.realm().object_prototype.clone());
         obj_data.class_name = "String Iterator".to_string();
         obj_data.iterator_state = Some(IteratorState::StringIterator {
             string,
@@ -3108,7 +3108,7 @@ impl Interpreter {
     pub(crate) fn setup_generator_prototype(&mut self) {
         let gen_proto = self.create_object();
         gen_proto.borrow_mut().class_name = "Generator".to_string();
-        gen_proto.borrow_mut().prototype = self.iterator_prototype.clone();
+        gen_proto.borrow_mut().prototype = self.realm().iterator_prototype.clone();
 
         // next(value)
         let next_fn = self.create_function(JsFunction::native(
@@ -3212,7 +3212,7 @@ impl Interpreter {
             ),
         );
 
-        self.generator_prototype = Some(gen_proto.clone());
+        self.realm_mut().generator_prototype = Some(gen_proto.clone());
 
         // %GeneratorFunction.prototype% - the prototype of generator function objects
         let gf_proto = self.create_object();
@@ -3220,7 +3220,7 @@ impl Interpreter {
 
         // [[Prototype]] = Function.prototype
         // Get Function.prototype from global Function
-        if let Some(func_val) = self.global_env.borrow().get("Function")
+        if let Some(func_val) = self.realm().global_env.borrow().get("Function")
             && let JsValue::Object(func_obj) = func_val
             && let Some(func_data) = self.get_object(func_obj.id)
             && let JsValue::Object(func_proto_obj) = func_data.borrow().get_property("prototype")
@@ -3264,7 +3264,7 @@ impl Interpreter {
             ),
         );
 
-        self.generator_function_prototype = Some(gf_proto);
+        self.realm_mut().generator_function_prototype = Some(gf_proto);
     }
 
     pub(crate) fn setup_async_generator_prototype(&mut self) {
@@ -3283,7 +3283,7 @@ impl Interpreter {
                 PropertyDescriptor::data(async_iter_self_fn, true, false, true),
             );
         }
-        self.async_iterator_prototype = Some(async_iter_proto.clone());
+        self.realm_mut().async_iterator_prototype = Some(async_iter_proto.clone());
 
         // %AsyncGeneratorPrototype%
         let gen_proto = self.create_object();
@@ -3343,7 +3343,7 @@ impl Interpreter {
             ),
         );
 
-        self.async_generator_prototype = Some(gen_proto.clone());
+        self.realm_mut().async_generator_prototype = Some(gen_proto.clone());
 
         // %AsyncGeneratorFunction.prototype%
         let agf_proto = self.create_object();
@@ -3380,6 +3380,6 @@ impl Interpreter {
                 true,
             ),
         );
-        self.async_generator_function_prototype = Some(agf_proto);
+        self.realm_mut().async_generator_function_prototype = Some(agf_proto);
     }
 }

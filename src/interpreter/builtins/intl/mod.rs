@@ -313,10 +313,10 @@ impl Interpreter {
         self.setup_intl_duration_format(&intl_obj);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Intl", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("Intl", intl_val);
+        let _ = self.realm().global_env.borrow_mut().set("Intl", intl_val);
     }
 
     pub(crate) fn is_structurally_valid_language_tag(tag: &str) -> bool {
@@ -782,7 +782,7 @@ impl Interpreter {
         locales: &JsValue,
         options: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        let nf_ctor = if let Some(ref ctor) = self.intl_number_format_ctor {
+        let nf_ctor = if let Some(ref ctor) = self.realm().intl_number_format_ctor {
             ctor.clone()
         } else {
             return Err(self.create_type_error("Intl.NumberFormat is not available"));

@@ -21,7 +21,7 @@ impl Interpreter {
         }
 
         // Check if C is the built-in Promise constructor - fast path
-        let promise_ctor = self.global_env.borrow().get("Promise");
+        let promise_ctor = self.realm().global_env.borrow().get("Promise");
         if let Some(ref ctor_val) = promise_ctor
             && same_value(constructor, ctor_val)
         {
@@ -182,7 +182,7 @@ impl Interpreter {
 
     pub(crate) fn setup_promise(&mut self) {
         let proto = self.create_object();
-        self.promise_prototype = Some(proto.clone());
+        self.realm_mut().promise_prototype = Some(proto.clone());
 
         // Promise.prototype.then
         let then_fn = self.create_function(JsFunction::native(
@@ -243,7 +243,7 @@ impl Interpreter {
                     };
 
                 // Step 3: Let C = ? SpeciesConstructor(promise, %Promise%).
-                let promise_ctor = interp
+                let promise_ctor = interp.realm()
                     .global_env
                     .borrow()
                     .get("Promise")
@@ -386,7 +386,7 @@ impl Interpreter {
         );
 
         // Promise constructor
-        let _promise_proto = self.promise_prototype.clone();
+        let _promise_proto = self.realm().promise_prototype.clone();
         let ctor = self.create_function(JsFunction::constructor(
             "Promise".to_string(),
             1,
@@ -667,15 +667,15 @@ impl Interpreter {
         }
 
         // Register Promise as global
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Promise", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("Promise", ctor);
+        let _ = self.realm().global_env.borrow_mut().set("Promise", ctor);
     }
 
     pub(crate) fn create_promise_object(&mut self) -> JsValue {
         let mut data = JsObjectData::new();
-        data.prototype = self.promise_prototype.clone();
+        data.prototype = self.realm().promise_prototype.clone();
         data.class_name = "Promise".to_string();
         data.promise_data = Some(PromiseData::new());
         let obj = Rc::new(RefCell::new(data));
@@ -901,7 +901,7 @@ impl Interpreter {
         };
 
         // SpeciesConstructor(promise, %Promise%)
-        let promise_ctor = self
+        let promise_ctor = self.realm()
             .global_env
             .borrow()
             .get("Promise")
@@ -1570,7 +1570,7 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = "AggregateError".to_string();
-            if let Some(ref proto) = self.aggregate_error_prototype {
+            if let Some(ref proto) = self.realm().aggregate_error_prototype {
                 o.prototype = Some(proto.clone());
             }
             o.insert_builtin(

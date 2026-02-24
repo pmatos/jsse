@@ -341,7 +341,7 @@ impl Interpreter {
                     ),
                 );
             }
-            self.throw_type_error = Some(thrower);
+            self.realm_mut().throw_type_error = Some(thrower);
         }
 
         let console = self.create_object();
@@ -361,10 +361,10 @@ impl Interpreter {
                 .insert_builtin("log".to_string(), log_fn);
         }
         let console_val = JsValue::Object(crate::types::JsObject { id: console_id });
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("console", BindingKind::Const);
-        let _ = self.global_env.borrow_mut().set("console", console_val);
+        let _ = self.realm().global_env.borrow_mut().set("console", console_val);
 
         // print global (needed by test262 async harness doneprintHandle.js)
         {
@@ -377,44 +377,10 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            self.global_env
+            self.realm().global_env
                 .borrow_mut()
                 .declare("print", BindingKind::Var);
-            let _ = self.global_env.borrow_mut().set("print", print_fn);
-        }
-
-        // $262 test harness object
-        {
-            let dollar_262 = self.create_object();
-            let detach_fn = self.create_function(JsFunction::native(
-                "detachArrayBuffer".to_string(),
-                1,
-                |interp, _this, args| {
-                    let buf = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    interp.detach_arraybuffer(&buf)
-                },
-            ));
-            dollar_262
-                .borrow_mut()
-                .insert_builtin("detachArrayBuffer".to_string(), detach_fn);
-            let gc_fn = self.create_function(JsFunction::native(
-                "gc".to_string(),
-                0,
-                |interp, _this, _args| {
-                    interp.maybe_gc();
-                    Completion::Normal(JsValue::Undefined)
-                },
-            ));
-            dollar_262
-                .borrow_mut()
-                .insert_builtin("gc".to_string(), gc_fn);
-            let dollar_262_val = JsValue::Object(crate::types::JsObject {
-                id: dollar_262.borrow().id.unwrap(),
-            });
-            self.global_env
-                .borrow_mut()
-                .declare("$262", BindingKind::Var);
-            let _ = self.global_env.borrow_mut().set("$262", dollar_262_val);
+            let _ = self.realm().global_env.borrow_mut().set("print", print_fn);
         }
 
         // Error constructor
@@ -474,7 +440,7 @@ impl Interpreter {
 
         // Get Error.prototype for inheritance
         let error_prototype = {
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             if let Some(error_val) = env.get("Error")
                 && let JsValue::Object(o) = &error_val
             {
@@ -538,7 +504,7 @@ impl Interpreter {
             );
             // Set constructor on Error.prototype
             {
-                let env = self.global_env.borrow();
+                let env = self.realm().global_env.borrow();
                 if let Some(error_ctor) = env.get("Error") {
                     ep.borrow_mut()
                         .insert_builtin("constructor".to_string(), error_ctor);
@@ -564,7 +530,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(false))
                 },
             ));
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             if let Some(error_ctor) = env.get("Error")
                 && let JsValue::Object(o) = &error_ctor
                 && let Some(obj) = self.get_object(o.id)
@@ -706,7 +672,7 @@ impl Interpreter {
             // Set constructor on the per-type prototype
             {
                 let ctor_val = {
-                    let env = self.global_env.borrow();
+                    let env = self.realm().global_env.borrow();
                     env.get(name)
                 };
                 if let Some(ctor_val) = ctor_val {
@@ -717,7 +683,7 @@ impl Interpreter {
             }
             // Set constructor's .prototype to the per-type prototype
             {
-                let env = self.global_env.borrow();
+                let env = self.realm().global_env.borrow();
                 if let Some(ctor_val) = env.get(name)
                     && let JsValue::Object(o) = &ctor_val
                     && let Some(ctor_obj) = self.get_object(o.id)
@@ -811,7 +777,7 @@ impl Interpreter {
                 ),
             );
             {
-                let env = self.global_env.borrow();
+                let env = self.realm().global_env.borrow();
                 if let Some(ctor_val) = env.get("SuppressedError") {
                     suppressed_proto
                         .borrow_mut()
@@ -819,7 +785,7 @@ impl Interpreter {
                 }
             }
             {
-                let env = self.global_env.borrow();
+                let env = self.realm().global_env.borrow();
                 if let Some(ctor_val) = env.get("SuppressedError")
                     && let JsValue::Object(o) = &ctor_val
                     && let Some(ctor_obj) = self.get_object(o.id)
@@ -853,7 +819,7 @@ impl Interpreter {
                 JsValue::String(JsString::from_str("")),
             );
             let agg_proto_clone = agg_proto.clone();
-            self.aggregate_error_prototype = Some(agg_proto.clone());
+            self.realm_mut().aggregate_error_prototype = Some(agg_proto.clone());
             self.register_global_fn(
                 "AggregateError",
                 BindingKind::Var,
@@ -918,7 +884,7 @@ impl Interpreter {
                 ),
             );
             {
-                let env = self.global_env.borrow();
+                let env = self.realm().global_env.borrow();
                 if let Some(ctor_val) = env.get("AggregateError") {
                     agg_proto
                         .borrow_mut()
@@ -926,7 +892,7 @@ impl Interpreter {
                 }
             }
             {
-                let env = self.global_env.borrow();
+                let env = self.realm().global_env.borrow();
                 if let Some(ctor_val) = env.get("AggregateError")
                     && let JsValue::Object(o) = &ctor_val
                     && let Some(ctor_obj) = self.get_object(o.id)
@@ -988,7 +954,7 @@ impl Interpreter {
                 };
                 if let JsValue::Object(ref o) = arr {
                     let default_proto_id =
-                        interp.array_prototype.as_ref().and_then(|p| p.borrow().id);
+                        interp.realm().array_prototype.as_ref().and_then(|p| p.borrow().id);
                     interp.apply_new_target_prototype(o.id, default_proto_id);
                 }
                 Completion::Normal(arr)
@@ -1111,10 +1077,10 @@ impl Interpreter {
                 obj.borrow_mut()
                     .insert_builtin("keyFor".to_string(), key_for_fn);
             }
-            self.global_env
+            self.realm().global_env
                 .borrow_mut()
                 .declare("Symbol", BindingKind::Var);
-            let _ = self.global_env.borrow_mut().set("Symbol", symbol_fn);
+            let _ = self.realm().global_env.borrow_mut().set("Symbol", symbol_fn);
         }
 
         self.setup_iterator_prototypes();
@@ -1229,7 +1195,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::String(JsString::from_str(&result)))
                 },
             ));
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             if let Some(string_ctor) = env.get("String")
                 && let JsValue::Object(o) = &string_ctor
                 && let Some(obj) = self.get_object(o.id)
@@ -1309,7 +1275,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(result))
                 },
             ));
-            if let Some(num_val) = self.global_env.borrow().get("Number")
+            if let Some(num_val) = self.realm().global_env.borrow().get("Number")
                 && let JsValue::Object(o) = &num_val
                 && let Some(num_obj) = self.get_object(o.id)
             {
@@ -1553,9 +1519,9 @@ impl Interpreter {
 
         // Attach parseInt/parseFloat to Number constructor (must be after global registration)
         {
-            let parse_int = self.global_env.borrow().get("parseInt");
-            let parse_float = self.global_env.borrow().get("parseFloat");
-            if let Some(num_val) = self.global_env.borrow().get("Number")
+            let parse_int = self.realm().global_env.borrow().get("parseInt");
+            let parse_float = self.realm().global_env.borrow().get("parseFloat");
+            if let Some(num_val) = self.realm().global_env.borrow().get("Number")
                 && let JsValue::Object(o) = &num_val
                 && let Some(num_obj) = self.get_object(o.id)
             {
@@ -2134,21 +2100,33 @@ impl Interpreter {
         }
 
         let math_val = JsValue::Object(crate::types::JsObject { id: math_id });
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Math", BindingKind::Const);
-        let _ = self.global_env.borrow_mut().set("Math", math_val);
+        let _ = self.realm().global_env.borrow_mut().set("Math", math_val);
 
         // eval
-        self.register_global_fn(
-            "eval",
-            BindingKind::Var,
-            JsFunction::native("eval".to_string(), 1, |interp, _this, args| {
-                // Indirect eval: direct=false, caller_env=global
-                let global = interp.global_env.clone();
-                interp.perform_eval(args, false, false, &global)
-            }),
-        );
+        {
+            let eval_realm_id = self.current_realm_id;
+            let eval_fn = self.create_function(JsFunction::native(
+                "eval".to_string(),
+                1,
+                move |interp, _this, args| {
+                    // Indirect eval uses the eval function's realm
+                    let old_realm = interp.current_realm_id;
+                    interp.current_realm_id = eval_realm_id;
+                    let global = interp.realm().global_env.clone();
+                    interp.current_realm_id = old_realm;
+                    interp.perform_eval(args, false, false, &global)
+                },
+            ));
+            if let JsValue::Object(ref o) = eval_fn {
+                self.realm_mut().builtin_eval_id = Some(o.id);
+            }
+            let global_env = self.realm().global_env.clone();
+            global_env.borrow_mut().declare("eval", BindingKind::Var);
+            let _ = global_env.borrow_mut().set("eval", eval_fn);
+        }
 
         self.register_global_fn(
             "$DONOTEVALUATE",
@@ -2212,7 +2190,7 @@ impl Interpreter {
                     let is_strict = fe.body.first().is_some_and(|s| {
                         matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                     });
-                    let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
+                    let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
                     dynamic_fn_env.borrow_mut().strict = false;
                     let js_func = JsFunction::User {
                         name: Some("anonymous".to_string()),
@@ -2237,7 +2215,7 @@ impl Interpreter {
 
         // Per spec §20.2.3, Function.prototype is itself a function object
         {
-            let func_val = self.global_env.borrow().get("Function");
+            let func_val = self.realm().global_env.borrow().get("Function");
             if let Some(JsValue::Object(fo)) = func_val
                 && let Some(func_data) = self.get_object(fo.id)
             {
@@ -2269,7 +2247,7 @@ impl Interpreter {
 
         // Add Function.prototype[@@hasInstance]
         if let Some(sym_key) = self.get_symbol_key("hasInstance") {
-            let func_val = self.global_env.borrow().get("Function");
+            let func_val = self.realm().global_env.borrow().get("Function");
             let proto_data = func_val.and_then(|fv| {
                 if let JsValue::Object(fo) = fv {
                     self.get_object(fo.id).and_then(|fd| {
@@ -2302,7 +2280,7 @@ impl Interpreter {
 
         // Store Function.prototype for use as [[Prototype]] of all function objects
         {
-            let func_val = self.global_env.borrow().get("Function");
+            let func_val = self.realm().global_env.borrow().get("Function");
             if let Some(JsValue::Object(fo)) = func_val
                 && let Some(func_data) = self.get_object(fo.id)
             {
@@ -2312,17 +2290,17 @@ impl Interpreter {
                 {
                     // Set Function.prototype's [[Prototype]] to Object.prototype
                     if fp.borrow().prototype.is_none() {
-                        fp.borrow_mut().prototype = self.object_prototype.clone();
+                        fp.borrow_mut().prototype = self.realm().object_prototype.clone();
                     }
                     // Set function_prototype BEFORE installing methods so that
                     // call/apply/bind themselves get Function.prototype as [[Prototype]]
-                    self.function_prototype = Some(fp.clone());
+                    self.realm_mut().function_prototype = Some(fp.clone());
 
                     // Install call/apply/bind/toString on Function.prototype
                     self.setup_function_prototype(&fp);
 
                     // Function.prototype.caller and .arguments (§20.2.3.1, §20.2.3.2)
-                    if let Some(ref thrower) = self.throw_type_error {
+                    if let Some(ref thrower) = self.realm().throw_type_error {
                         fp.borrow_mut().insert_property(
                             "caller".to_string(),
                             PropertyDescriptor::accessor(
@@ -2372,7 +2350,7 @@ impl Interpreter {
                         out
                     }
 
-                    let bindings: Vec<JsValue> = self
+                    let bindings: Vec<JsValue> = self.realm()
                         .global_env
                         .borrow()
                         .bindings
@@ -2425,9 +2403,9 @@ impl Interpreter {
                     // Their [[Prototype]] should be Function.prototype per spec
                     // (§27.3.3, §27.7.3, §27.4.3) regardless of callability
                     for special_proto in [
-                        self.generator_function_prototype.clone(),
-                        self.async_function_prototype.clone(),
-                        self.async_generator_function_prototype.clone(),
+                        self.realm().generator_function_prototype.clone(),
+                        self.realm().async_function_prototype.clone(),
+                        self.realm().async_generator_function_prototype.clone(),
                     ]
                     .into_iter()
                     .flatten()
@@ -2438,22 +2416,22 @@ impl Interpreter {
                     // Fix internal prototype fields (iterator protos, collection protos, etc.)
                     // that aren't reachable through the global bindings walk above.
                     let internal_protos: Vec<Rc<RefCell<JsObjectData>>> = [
-                        self.iterator_prototype.clone(),
-                        self.array_iterator_prototype.clone(),
-                        self.string_iterator_prototype.clone(),
-                        self.map_iterator_prototype.clone(),
-                        self.set_iterator_prototype.clone(),
-                        self.generator_prototype.clone(),
-                        self.async_iterator_prototype.clone(),
-                        self.async_generator_prototype.clone(),
-                        self.regexp_prototype.clone(),
-                        self.promise_prototype.clone(),
-                        self.arraybuffer_prototype.clone(),
-                        self.typed_array_prototype.clone(),
-                        self.dataview_prototype.clone(),
-                        self.weakref_prototype.clone(),
-                        self.finalization_registry_prototype.clone(),
-                        self.aggregate_error_prototype.clone(),
+                        self.realm().iterator_prototype.clone(),
+                        self.realm().array_iterator_prototype.clone(),
+                        self.realm().string_iterator_prototype.clone(),
+                        self.realm().map_iterator_prototype.clone(),
+                        self.realm().set_iterator_prototype.clone(),
+                        self.realm().generator_prototype.clone(),
+                        self.realm().async_iterator_prototype.clone(),
+                        self.realm().async_generator_prototype.clone(),
+                        self.realm().regexp_prototype.clone(),
+                        self.realm().promise_prototype.clone(),
+                        self.realm().arraybuffer_prototype.clone(),
+                        self.realm().typed_array_prototype.clone(),
+                        self.realm().dataview_prototype.clone(),
+                        self.realm().weakref_prototype.clone(),
+                        self.realm().finalization_registry_prototype.clone(),
+                        self.realm().aggregate_error_prototype.clone(),
                     ]
                     .into_iter()
                     .flatten()
@@ -2478,7 +2456,7 @@ impl Interpreter {
                     }
 
                     // Fix %ThrowTypeError% prototype (§10.2.4 step 11)
-                    if let Some(JsValue::Object(ref te)) = self.throw_type_error
+                    if let Some(JsValue::Object(ref te)) = self.realm().throw_type_error
                         && let Some(te_obj) = self.get_object(te.id)
                     {
                         te_obj.borrow_mut().prototype = Some(fp.clone());
@@ -2491,7 +2469,7 @@ impl Interpreter {
         // Must happen after the Function.prototype retroactive fix above
         {
             let error_ctor_obj = {
-                let env = self.global_env.borrow();
+                let env = self.realm().global_env.borrow();
                 env.get("Error").and_then(|v| {
                     if let JsValue::Object(o) = &v {
                         self.get_object(o.id)
@@ -2509,7 +2487,7 @@ impl Interpreter {
                     "URIError",
                     "EvalError",
                 ] {
-                    let ctor_val = self.global_env.borrow().get(name);
+                    let ctor_val = self.realm().global_env.borrow().get(name);
                     if let Some(JsValue::Object(o)) = ctor_val
                         && let Some(ctor_obj) = self.get_object(o.id)
                     {
@@ -2526,7 +2504,7 @@ impl Interpreter {
             af_proto.borrow_mut().class_name = "AsyncFunction".to_string();
 
             // [[Prototype]] = Function.prototype
-            if let Some(func_val) = self.global_env.borrow().get("Function")
+            if let Some(func_val) = self.realm().global_env.borrow().get("Function")
                 && let JsValue::Object(func_obj) = func_val
                 && let Some(func_data) = self.get_object(func_obj.id)
                 && let JsValue::Object(func_proto_obj) =
@@ -2547,12 +2525,12 @@ impl Interpreter {
                 ),
             );
 
-            self.async_function_prototype = Some(af_proto);
+            self.realm_mut().async_function_prototype = Some(af_proto);
         }
 
         // AsyncFunction constructor (not a global per spec)
         // Create the constructor and wire it up with AsyncFunction.prototype
-        if let Some(af_proto) = self.async_function_prototype.clone() {
+        if let Some(af_proto) = self.realm().async_function_prototype.clone() {
             let af_ctor = self.create_function(JsFunction::constructor(
                 "AsyncFunction".to_string(),
                 1,
@@ -2606,7 +2584,7 @@ impl Interpreter {
                         let is_strict = fe.body.first().is_some_and(|s| {
                             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
-                        let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
+                        let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
@@ -2653,7 +2631,7 @@ impl Interpreter {
 
         // GeneratorFunction constructor (not a global per spec)
         // Create the constructor and wire it up with GeneratorFunction.prototype
-        if let Some(gf_proto) = self.generator_function_prototype.clone() {
+        if let Some(gf_proto) = self.realm().generator_function_prototype.clone() {
             let gf_ctor = self.create_function(JsFunction::constructor(
                 "GeneratorFunction".to_string(),
                 1,
@@ -2709,7 +2687,7 @@ impl Interpreter {
                         let is_strict = fe.body.first().is_some_and(|s| {
                             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
-                        let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
+                        let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
@@ -2756,7 +2734,7 @@ impl Interpreter {
 
         // AsyncGeneratorFunction constructor (not a global per spec)
         // Create the constructor and wire it up with AsyncGeneratorFunction.prototype
-        if let Some(agf_proto) = self.async_generator_function_prototype.clone() {
+        if let Some(agf_proto) = self.realm().async_generator_function_prototype.clone() {
             let agf_ctor = self.create_function(JsFunction::constructor(
                 "AsyncGeneratorFunction".to_string(),
                 1,
@@ -2812,7 +2790,7 @@ impl Interpreter {
                         let is_strict = fe.body.first().is_some_and(|s| {
                             matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
                         });
-                        let dynamic_fn_env = Environment::new(Some(interp.global_env.clone()));
+                        let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
@@ -3069,14 +3047,14 @@ impl Interpreter {
         let json_val = JsValue::Object(crate::types::JsObject {
             id: json_obj.borrow().id.unwrap(),
         });
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("JSON", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("JSON", json_val);
+        let _ = self.realm().global_env.borrow_mut().set("JSON", json_val);
 
         // String.fromCharCode
         {
-            let string_ctor = self.global_env.borrow().get("String");
+            let string_ctor = self.realm().global_env.borrow().get("String");
             if let Some(JsValue::Object(ref o)) = string_ctor {
                 let from_char_code = self.create_function(JsFunction::native(
                     "fromCharCode".to_string(),
@@ -3142,14 +3120,14 @@ impl Interpreter {
         let global_val = JsValue::Object(crate::types::JsObject {
             id: global_obj.borrow().id.unwrap(),
         });
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("globalThis", BindingKind::Var);
-        let _ = self
+        let _ = self.realm()
             .global_env
             .borrow_mut()
             .set("globalThis", global_val.clone());
-        self.global_env.borrow_mut().bindings.insert(
+        self.realm().global_env.borrow_mut().bindings.insert(
             "this".to_string(),
             Binding {
                 value: global_val,
@@ -3222,7 +3200,7 @@ impl Interpreter {
             "Intl",
         ];
         let vals: Vec<(String, JsValue)> = {
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             global_names
                 .iter()
                 .filter_map(|name| env.get(name).map(|v| (name.to_string(), v)))
@@ -3270,7 +3248,7 @@ impl Interpreter {
             "FinalizationRegistry",
         ];
         let ctor_vals: Vec<JsValue> = {
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             builtin_ctors
                 .iter()
                 .filter_map(|name| env.get(name))
@@ -3294,12 +3272,24 @@ impl Interpreter {
         // Per spec §9.1.1.4, the Global Environment Record has an Object Environment
         // Record whose binding object is the global object. Variable lookups in global
         // scope should check global object properties.
-        self.global_env.borrow_mut().global_object = Some(global_obj);
+        self.realm().global_env.borrow_mut().global_object = Some(global_obj.clone());
+        self.realm_mut().global_object = Some(global_obj);
+
+        // $262 test harness object (must be after global object is created)
+        {
+            let realm_id = self.current_realm_id;
+            let dollar_262_val = self.create_dollar_262(realm_id);
+            let global_env = self.realm().global_env.clone();
+            global_env
+                .borrow_mut()
+                .declare("$262", BindingKind::Var);
+            let _ = global_env.borrow_mut().set("$262", dollar_262_val);
+        }
     }
 
     fn setup_object_statics(&mut self) {
         // Get the Object function from global env
-        let obj_func_val = self
+        let obj_func_val = self.realm()
             .global_env
             .borrow()
             .get("Object")
@@ -3312,11 +3302,11 @@ impl Interpreter {
             if let Some(JsValue::Object(ref proto_ref)) = proto_val
                 && let Some(proto_obj) = self.get_object(proto_ref.id)
             {
-                self.object_prototype = Some(proto_obj.clone());
+                self.realm_mut().object_prototype = Some(proto_obj.clone());
 
                 // Fix Error.prototype chain - created before object_prototype was available
                 {
-                    let env = self.global_env.borrow();
+                    let env = self.realm().global_env.borrow();
                     for name in [
                         "Error",
                         "SyntaxError",
@@ -4998,7 +4988,7 @@ impl Interpreter {
     }
 
     pub(crate) fn get_symbol_iterator_key(&self) -> Option<String> {
-        self.global_env.borrow().get("Symbol").and_then(|sv| {
+        self.realm().global_env.borrow().get("Symbol").and_then(|sv| {
             if let JsValue::Object(so) = sv {
                 self.get_object(so.id).map(|sobj| {
                     let val = sobj.borrow().get_property("iterator");
@@ -5039,7 +5029,7 @@ impl Interpreter {
             }
             JsValue::String(_) => {
                 if let Some(key) = &sym_key {
-                    let str_proto = self.string_prototype.clone();
+                    let str_proto = self.realm().string_prototype.clone();
                     if let Some(proto) = str_proto {
                         let proto_id = proto.borrow().id.unwrap();
                         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
@@ -6299,10 +6289,10 @@ impl Interpreter {
 
         // Register Reflect as global
         let reflect_val = JsValue::Object(crate::types::JsObject { id: reflect_id });
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Reflect", BindingKind::Const);
-        let _ = self.global_env.borrow_mut().set("Reflect", reflect_val);
+        let _ = self.realm().global_env.borrow_mut().set("Reflect", reflect_val);
     }
 
     fn setup_proxy(&mut self) {
@@ -6427,10 +6417,10 @@ impl Interpreter {
                 .insert_builtin("revocable".to_string(), revocable_fn);
         }
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Proxy", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("Proxy", proxy_fn);
+        let _ = self.realm().global_env.borrow_mut().set("Proxy", proxy_fn);
     }
 
     fn setup_function_prototype(&mut self, obj_proto: &Rc<RefCell<JsObjectData>>) {

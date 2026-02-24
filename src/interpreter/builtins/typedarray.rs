@@ -30,7 +30,7 @@ impl Interpreter {
     fn setup_arraybuffer(&mut self) {
         let ab_proto = self.create_object();
         ab_proto.borrow_mut().class_name = "ArrayBuffer".to_string();
-        self.arraybuffer_prototype = Some(ab_proto.clone());
+        self.realm_mut().arraybuffer_prototype = Some(ab_proto.clone());
 
         // byteLength getter
         let byte_length_getter = self.create_function(JsFunction::native(
@@ -577,10 +577,10 @@ impl Interpreter {
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("ArrayBuffer", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("ArrayBuffer", ctor);
+        let _ = self.realm().global_env.borrow_mut().set("ArrayBuffer", ctor);
     }
 
     pub(crate) fn create_arraybuffer(&mut self, data: Vec<u8>) -> Rc<RefCell<JsObjectData>> {
@@ -598,7 +598,7 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = "ArrayBuffer".to_string();
-            o.prototype = self.arraybuffer_prototype.clone();
+            o.prototype = self.realm().arraybuffer_prototype.clone();
             o.arraybuffer_data = Some(buf_rc);
             o.arraybuffer_detached = Some(detached);
             o.arraybuffer_max_byte_length = max_byte_length;
@@ -637,7 +637,7 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = "SharedArrayBuffer".to_string();
-            o.prototype = self.shared_arraybuffer_prototype.clone();
+            o.prototype = self.realm().shared_arraybuffer_prototype.clone();
             o.arraybuffer_data = Some(buf_rc);
             o.arraybuffer_detached = None;
             o.arraybuffer_max_byte_length = max_byte_length;
@@ -649,7 +649,7 @@ impl Interpreter {
     fn setup_shared_arraybuffer(&mut self) {
         let sab_proto = self.create_object();
         sab_proto.borrow_mut().class_name = "SharedArrayBuffer".to_string();
-        self.shared_arraybuffer_prototype = Some(sab_proto.clone());
+        self.realm_mut().shared_arraybuffer_prototype = Some(sab_proto.clone());
 
         // byteLength getter
         let byte_length_getter = self.create_function(JsFunction::native(
@@ -998,16 +998,16 @@ impl Interpreter {
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("SharedArrayBuffer", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("SharedArrayBuffer", ctor);
+        let _ = self.realm().global_env.borrow_mut().set("SharedArrayBuffer", ctor);
     }
 
     fn setup_typed_array_base_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "TypedArray".to_string();
-        self.typed_array_prototype = Some(proto.clone());
+        self.realm_mut().typed_array_prototype = Some(proto.clone());
 
         // byteOffset getter
         let byte_offset_getter = self.create_function(JsFunction::native(
@@ -1375,7 +1375,7 @@ impl Interpreter {
                     let new_offset = ta.byte_offset + begin * bpe;
 
                     let default_ctor_name = ta.kind.name();
-                    let default_ctor = interp
+                    let default_ctor = interp.realm()
                         .global_env
                         .borrow()
                         .get(default_ctor_name)
@@ -2221,7 +2221,7 @@ impl Interpreter {
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = interp.arraybuffer_prototype.clone();
+                        ab.prototype = interp.realm().arraybuffer_prototype.clone();
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
@@ -2361,7 +2361,7 @@ impl Interpreter {
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = interp.arraybuffer_prototype.clone();
+                        ab.prototype = interp.realm().arraybuffer_prototype.clone();
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
@@ -2604,7 +2604,7 @@ impl Interpreter {
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = interp.arraybuffer_prototype.clone();
+                        ab.prototype = interp.realm().arraybuffer_prototype.clone();
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
@@ -2756,7 +2756,7 @@ impl Interpreter {
         {
             let mut a = arr.borrow_mut();
             a.class_name = "Array".to_string();
-            a.prototype = self.array_prototype.clone();
+            a.prototype = self.realm().array_prototype.clone();
             a.array_elements = Some(elems);
             a.insert_builtin("length".to_string(), JsValue::Number(len as f64));
         }
@@ -3196,7 +3196,7 @@ impl Interpreter {
         ];
 
         // %TypedArray% constructor (not directly constructible, but holds from/of)
-        let ta_proto = self.typed_array_prototype.clone().unwrap();
+        let ta_proto = self.realm().typed_array_prototype.clone().unwrap();
         let ta_ctor = self.create_function(JsFunction::constructor(
             "TypedArray".to_string(),
             0,
@@ -3321,7 +3321,7 @@ impl Interpreter {
             );
         }
 
-        self.typed_array_constructor = Some(ta_ctor.clone());
+        self.realm_mut().typed_array_constructor = Some(ta_ctor.clone());
 
         for kind in kinds {
             let name = kind.name().to_string();
@@ -3468,7 +3468,7 @@ impl Interpreter {
                                     {
                                         let mut ab = ab_obj.borrow_mut();
                                         ab.class_name = "ArrayBuffer".to_string();
-                                        ab.prototype = interp.arraybuffer_prototype.clone();
+                                        ab.prototype = interp.realm().arraybuffer_prototype.clone();
                                         ab.arraybuffer_data = Some(new_buf_rc);
                                         ab.arraybuffer_detached = Some(new_detached);
                                     }
@@ -3509,7 +3509,7 @@ impl Interpreter {
                                 {
                                     let mut ab = ab_obj.borrow_mut();
                                     ab.class_name = "ArrayBuffer".to_string();
-                                    ab.prototype = interp.arraybuffer_prototype.clone();
+                                    ab.prototype = interp.realm().arraybuffer_prototype.clone();
                                     ab.arraybuffer_data = Some(new_buf_rc);
                                     ab.arraybuffer_detached = Some(new_detached);
                                 }
@@ -3570,34 +3570,34 @@ impl Interpreter {
 
             // Store prototype for this kind
             match kind {
-                TypedArrayKind::Int8 => self.int8array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Uint8 => self.uint8array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Int8 => self.realm_mut().int8array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Uint8 => self.realm_mut().uint8array_prototype = Some(type_proto.clone()),
                 TypedArrayKind::Uint8Clamped => {
-                    self.uint8clampedarray_prototype = Some(type_proto.clone())
+                    self.realm_mut().uint8clampedarray_prototype = Some(type_proto.clone())
                 }
-                TypedArrayKind::Int16 => self.int16array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Uint16 => self.uint16array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Int32 => self.int32array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Uint32 => self.uint32array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Float32 => self.float32array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Float64 => self.float64array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::BigInt64 => self.bigint64array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Int16 => self.realm_mut().int16array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Uint16 => self.realm_mut().uint16array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Int32 => self.realm_mut().int32array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Uint32 => self.realm_mut().uint32array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Float32 => self.realm_mut().float32array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Float64 => self.realm_mut().float64array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::BigInt64 => self.realm_mut().bigint64array_prototype = Some(type_proto.clone()),
                 TypedArrayKind::BigUint64 => {
-                    self.biguint64array_prototype = Some(type_proto.clone())
+                    self.realm_mut().biguint64array_prototype = Some(type_proto.clone())
                 }
             }
 
-            self.global_env
+            self.realm().global_env
                 .borrow_mut()
                 .declare(&name, BindingKind::Var);
-            let _ = self.global_env.borrow_mut().set(&name, ctor);
+            let _ = self.realm().global_env.borrow_mut().set(&name, ctor);
         }
     }
 
     fn setup_uint8array_base64_hex(&mut self) {
         // Get Uint8Array constructor from global env
-        let uint8_ctor = self.global_env.borrow().get("Uint8Array").unwrap();
-        let uint8_proto = self.uint8array_prototype.clone().unwrap();
+        let uint8_ctor = self.realm().global_env.borrow().get("Uint8Array").unwrap();
+        let uint8_proto = self.realm().uint8array_prototype.clone().unwrap();
 
         // --- Static methods on Uint8Array constructor ---
 
@@ -3824,7 +3824,7 @@ impl Interpreter {
         };
 
         let default_ctor_name = kind.name();
-        let default_ctor = self
+        let default_ctor = self.realm()
             .global_env
             .borrow()
             .get(default_ctor_name)
@@ -3911,7 +3911,7 @@ impl Interpreter {
         {
             let mut ab = ab_obj.borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
-            ab.prototype = self.arraybuffer_prototype.clone();
+            ab.prototype = self.realm().arraybuffer_prototype.clone();
             ab.arraybuffer_data = Some(buf_rc);
             ab.arraybuffer_detached = Some(detached);
         }
@@ -3970,7 +3970,7 @@ impl Interpreter {
         {
             let mut ab = ab_obj.borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
-            ab.prototype = self.arraybuffer_prototype.clone();
+            ab.prototype = self.realm().arraybuffer_prototype.clone();
             ab.arraybuffer_data = Some(buf_rc);
             ab.arraybuffer_detached = Some(detached);
         }
@@ -4023,17 +4023,17 @@ impl Interpreter {
 
     fn get_typed_array_prototype(&self, kind: TypedArrayKind) -> Option<Rc<RefCell<JsObjectData>>> {
         match kind {
-            TypedArrayKind::Int8 => self.int8array_prototype.clone(),
-            TypedArrayKind::Uint8 => self.uint8array_prototype.clone(),
-            TypedArrayKind::Uint8Clamped => self.uint8clampedarray_prototype.clone(),
-            TypedArrayKind::Int16 => self.int16array_prototype.clone(),
-            TypedArrayKind::Uint16 => self.uint16array_prototype.clone(),
-            TypedArrayKind::Int32 => self.int32array_prototype.clone(),
-            TypedArrayKind::Uint32 => self.uint32array_prototype.clone(),
-            TypedArrayKind::Float32 => self.float32array_prototype.clone(),
-            TypedArrayKind::Float64 => self.float64array_prototype.clone(),
-            TypedArrayKind::BigInt64 => self.bigint64array_prototype.clone(),
-            TypedArrayKind::BigUint64 => self.biguint64array_prototype.clone(),
+            TypedArrayKind::Int8 => self.realm().int8array_prototype.clone(),
+            TypedArrayKind::Uint8 => self.realm().uint8array_prototype.clone(),
+            TypedArrayKind::Uint8Clamped => self.realm().uint8clampedarray_prototype.clone(),
+            TypedArrayKind::Int16 => self.realm().int16array_prototype.clone(),
+            TypedArrayKind::Uint16 => self.realm().uint16array_prototype.clone(),
+            TypedArrayKind::Int32 => self.realm().int32array_prototype.clone(),
+            TypedArrayKind::Uint32 => self.realm().uint32array_prototype.clone(),
+            TypedArrayKind::Float32 => self.realm().float32array_prototype.clone(),
+            TypedArrayKind::Float64 => self.realm().float64array_prototype.clone(),
+            TypedArrayKind::BigInt64 => self.realm().bigint64array_prototype.clone(),
+            TypedArrayKind::BigUint64 => self.realm().biguint64array_prototype.clone(),
         }
     }
 
@@ -4099,7 +4099,7 @@ impl Interpreter {
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = self.arraybuffer_prototype.clone();
+                        ab.prototype = self.realm().arraybuffer_prototype.clone();
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
@@ -4210,7 +4210,7 @@ impl Interpreter {
     fn setup_dataview(&mut self) {
         let dv_proto = self.create_object();
         dv_proto.borrow_mut().class_name = "DataView".to_string();
-        self.dataview_prototype = Some(dv_proto.clone());
+        self.realm_mut().dataview_prototype = Some(dv_proto.clone());
 
         // Getters: buffer, byteOffset, byteLength
         let buffer_getter = self.create_function(JsFunction::native(
@@ -4907,10 +4907,10 @@ impl Interpreter {
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("DataView", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("DataView", ctor);
+        let _ = self.realm().global_env.borrow_mut().set("DataView", ctor);
     }
 }
 
@@ -5716,14 +5716,14 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
     {
         let mut ab = ab_obj.borrow_mut();
         ab.class_name = "ArrayBuffer".to_string();
-        ab.prototype = interp.arraybuffer_prototype.clone();
+        ab.prototype = interp.realm().arraybuffer_prototype.clone();
         ab.arraybuffer_data = Some(buf_rc);
         ab.arraybuffer_detached = Some(detached);
     }
     let ab_id = ab_obj.borrow().id.unwrap();
     let buf_val = JsValue::Object(JsObject { id: ab_id });
 
-    let proto = interp.uint8array_prototype.clone().unwrap();
+    let proto = interp.realm().uint8array_prototype.clone().unwrap();
     let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
     let id = result.borrow().id.unwrap();
     Completion::Normal(JsValue::Object(JsObject { id }))

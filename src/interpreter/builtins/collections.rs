@@ -7,7 +7,7 @@ impl Interpreter {
 
         // Map iterator prototype
         let map_iter_proto = self.create_object();
-        map_iter_proto.borrow_mut().prototype = self.iterator_prototype.clone();
+        map_iter_proto.borrow_mut().prototype = self.realm().iterator_prototype.clone();
         map_iter_proto.borrow_mut().class_name = "Map Iterator".to_string();
 
         map_iter_proto.borrow_mut().insert_property(
@@ -101,7 +101,7 @@ impl Interpreter {
             );
         }
 
-        self.map_iterator_prototype = Some(map_iter_proto);
+        self.realm_mut().map_iterator_prototype = Some(map_iter_proto);
 
         // Helper to create map iterators
         fn create_map_iterator(
@@ -110,11 +110,11 @@ impl Interpreter {
             kind: IteratorKind,
         ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype = interp
+            obj_data.prototype = interp.realm()
                 .map_iterator_prototype
                 .clone()
-                .or(interp.iterator_prototype.clone())
-                .or(interp.object_prototype.clone());
+                .or(interp.realm().iterator_prototype.clone())
+                .or(interp.realm().object_prototype.clone());
             obj_data.class_name = "Map Iterator".to_string();
             obj_data.iterator_state = Some(IteratorState::MapIterator {
                 map_id,
@@ -834,12 +834,12 @@ impl Interpreter {
                 .insert_builtin("groupBy".to_string(), group_by_fn);
         }
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Map", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("Map", map_ctor);
+        let _ = self.realm().global_env.borrow_mut().set("Map", map_ctor);
 
-        self.map_prototype = Some(proto);
+        self.realm_mut().map_prototype = Some(proto);
     }
 
     pub(crate) fn setup_set_prototype(&mut self) {
@@ -848,7 +848,7 @@ impl Interpreter {
 
         // Set iterator prototype
         let set_iter_proto = self.create_object();
-        set_iter_proto.borrow_mut().prototype = self.iterator_prototype.clone();
+        set_iter_proto.borrow_mut().prototype = self.realm().iterator_prototype.clone();
         set_iter_proto.borrow_mut().class_name = "Set Iterator".to_string();
 
         set_iter_proto.borrow_mut().insert_property(
@@ -940,7 +940,7 @@ impl Interpreter {
             );
         }
 
-        self.set_iterator_prototype = Some(set_iter_proto);
+        self.realm_mut().set_iterator_prototype = Some(set_iter_proto);
 
         fn create_set_iterator(
             interp: &mut Interpreter,
@@ -948,11 +948,11 @@ impl Interpreter {
             kind: IteratorKind,
         ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype = interp
+            obj_data.prototype = interp.realm()
                 .set_iterator_prototype
                 .clone()
-                .or(interp.iterator_prototype.clone())
-                .or(interp.object_prototype.clone());
+                .or(interp.realm().iterator_prototype.clone())
+                .or(interp.realm().object_prototype.clone());
             obj_data.class_name = "Set Iterator".to_string();
             obj_data.iterator_state = Some(IteratorState::SetIterator {
                 set_id,
@@ -1335,7 +1335,7 @@ impl Interpreter {
 
         fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
             let new_obj = interp.create_object();
-            new_obj.borrow_mut().prototype = interp.set_prototype.clone();
+            new_obj.borrow_mut().prototype = interp.realm().set_prototype.clone();
             new_obj.borrow_mut().class_name = "Set".to_string();
             new_obj.borrow_mut().set_data = Some(entries);
             let id = new_obj.borrow().id.unwrap();
@@ -1863,12 +1863,12 @@ impl Interpreter {
             );
         }
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Set", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("Set", set_ctor);
+        let _ = self.realm().global_env.borrow_mut().set("Set", set_ctor);
 
-        self.set_prototype = Some(proto);
+        self.realm_mut().set_prototype = Some(proto);
     }
 
     pub(crate) fn create_type_error(&mut self, msg: &str) -> JsValue {
@@ -2133,12 +2133,12 @@ impl Interpreter {
             PropertyDescriptor::data(weakmap_ctor.clone(), true, false, true),
         );
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("WeakMap", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("WeakMap", weakmap_ctor);
+        let _ = self.realm().global_env.borrow_mut().set("WeakMap", weakmap_ctor);
 
-        self.weakmap_prototype = Some(proto);
+        self.realm_mut().weakmap_prototype = Some(proto);
     }
 
     pub(crate) fn setup_weakset_prototype(&mut self) {
@@ -2342,12 +2342,12 @@ impl Interpreter {
             PropertyDescriptor::data(weakset_ctor.clone(), true, false, true),
         );
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("WeakSet", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("WeakSet", weakset_ctor);
+        let _ = self.realm().global_env.borrow_mut().set("WeakSet", weakset_ctor);
 
-        self.weakset_prototype = Some(proto);
+        self.realm_mut().weakset_prototype = Some(proto);
     }
 
     pub(crate) fn setup_weakref(&mut self) {
@@ -2411,7 +2411,7 @@ impl Interpreter {
                     ));
                 }
                 // OrdinaryCreateFromConstructor(NewTarget, "%WeakRef.prototype%")
-                let default_proto = interp.weakref_prototype.clone();
+                let default_proto = interp.realm().weakref_prototype.clone();
                 let proto = match interp.get_prototype_from_new_target(&default_proto) {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
@@ -2448,12 +2448,12 @@ impl Interpreter {
             PropertyDescriptor::data(weakref_ctor.clone(), true, false, true),
         );
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("WeakRef", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("WeakRef", weakref_ctor);
+        let _ = self.realm().global_env.borrow_mut().set("WeakRef", weakref_ctor);
 
-        self.weakref_prototype = Some(proto);
+        self.realm_mut().weakref_prototype = Some(proto);
     }
 
     pub(crate) fn setup_finalization_registry(&mut self) {
@@ -2643,7 +2643,7 @@ impl Interpreter {
                     ));
                 }
                 // OrdinaryCreateFromConstructor(NewTarget, "%FinalizationRegistry.prototype%")
-                let default_proto = interp.finalization_registry_prototype.clone();
+                let default_proto = interp.realm().finalization_registry_prototype.clone();
                 let proto = match interp.get_prototype_from_new_target(&default_proto) {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
@@ -2683,14 +2683,14 @@ impl Interpreter {
             PropertyDescriptor::data(fr_ctor.clone(), true, false, true),
         );
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("FinalizationRegistry", BindingKind::Var);
-        let _ = self
+        let _ = self.realm()
             .global_env
             .borrow_mut()
             .set("FinalizationRegistry", fr_ctor);
 
-        self.finalization_registry_prototype = Some(proto);
+        self.realm_mut().finalization_registry_prototype = Some(proto);
     }
 }

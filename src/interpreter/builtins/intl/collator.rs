@@ -219,7 +219,7 @@ fn is_thai_locale(locale_str: &str) -> bool {
 impl Interpreter {
     pub(crate) fn setup_intl_collator(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.object_prototype {
+        if let Some(ref op) = self.realm().object_prototype {
             proto.borrow_mut().prototype = Some(op.clone());
         }
         proto.borrow_mut().class_name = "Intl.Collator".to_string();
@@ -367,7 +367,7 @@ impl Interpreter {
                         }) = data
                         {
                             let result = interp.create_object();
-                            if let Some(ref op) = interp.object_prototype {
+                            if let Some(ref op) = interp.realm().object_prototype {
                                 result.borrow_mut().prototype = Some(op.clone());
                             }
 
@@ -415,7 +415,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.intl_collator_prototype = Some(proto.clone());
+        self.realm_mut().intl_collator_prototype = Some(proto.clone());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();

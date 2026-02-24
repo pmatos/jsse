@@ -60,7 +60,7 @@ pub(crate) fn temporal_construct_dtf(
 
     // Create options object with appropriate defaults
     let opts_obj = interp.create_object();
-    if let Some(ref op) = interp.object_prototype {
+    if let Some(ref op) = interp.realm().object_prototype {
         opts_obj.borrow_mut().prototype = Some(op.clone());
     }
 
@@ -1604,10 +1604,10 @@ impl Interpreter {
 
         // Register Temporal as global (writable, not enumerable, configurable)
         let temporal_val = JsValue::Object(crate::types::JsObject { id: temporal_id });
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Temporal", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("Temporal", temporal_val);
+        let _ = self.realm().global_env.borrow_mut().set("Temporal", temporal_val);
     }
 }
 

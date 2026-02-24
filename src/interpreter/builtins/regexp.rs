@@ -4702,7 +4702,7 @@ fn regexp_exec_raw(
 }
 
 fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<String> {
-    interp.global_env.borrow().get("Symbol").and_then(|sv| {
+    interp.realm().global_env.borrow().get("Symbol").and_then(|sv| {
         if let JsValue::Object(so) = sv {
             interp.get_object(so.id).map(|sobj| {
                 let val = sobj.borrow().get_property(name);
@@ -5575,7 +5575,7 @@ impl Interpreter {
 
                 // 3. Let C be ? SpeciesConstructor(rx, %RegExp%).
                 let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
-                let regexp_ctor = interp
+                let regexp_ctor = interp.realm()
                     .global_env
                     .borrow()
                     .get("RegExp")
@@ -5810,7 +5810,7 @@ impl Interpreter {
 
                 // 3. Let C be ? SpeciesConstructor(R, %RegExp%).
                 let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
-                let regexp_ctor = interp
+                let regexp_ctor = interp.realm()
                     .global_env
                     .borrow()
                     .get("RegExp")
@@ -5891,7 +5891,7 @@ impl Interpreter {
                 // Create iterator
                 let iter_obj = interp.create_object();
                 iter_obj.borrow_mut().class_name = "RegExp String Iterator".to_string();
-                if let Some(ref ip) = interp.iterator_prototype {
+                if let Some(ref ip) = interp.realm().iterator_prototype {
                     iter_obj.borrow_mut().prototype = Some(ip.clone());
                 }
 
@@ -6441,7 +6441,7 @@ impl Interpreter {
                         _ => JsValue::Undefined,
                     };
                     // Get the active function object (RegExp constructor)
-                    let regexp_fn = interp
+                    let regexp_fn = interp.realm()
                         .global_env
                         .borrow()
                         .get("RegExp")
@@ -6902,12 +6902,12 @@ impl Interpreter {
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), regexp_ctor.clone());
         }
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("RegExp", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("RegExp", regexp_ctor);
+        let _ = self.realm().global_env.borrow_mut().set("RegExp", regexp_ctor);
 
-        self.regexp_prototype = Some(regexp_proto);
+        self.realm_mut().regexp_prototype = Some(regexp_proto);
     }
 
     pub(crate) fn get_symbol_key(&self, name: &str) -> Option<String> {

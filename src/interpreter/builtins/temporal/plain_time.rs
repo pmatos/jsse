@@ -486,7 +486,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
                     Some(v) => v,
                     None => {
                         let result = format_plain_time(h, m, s, ms, us, ns, None);
@@ -526,7 +526,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("valueOf".to_string(), value_of_fn);
 
-        self.temporal_plain_time_prototype = Some(proto.clone());
+        self.realm_mut().temporal_plain_time_prototype = Some(proto.clone());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -868,7 +868,7 @@ pub(super) fn create_plain_time_result(
 ) -> Completion {
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainTime".to_string();
-    if let Some(ref proto) = interp.temporal_plain_time_prototype {
+    if let Some(ref proto) = interp.realm().temporal_plain_time_prototype {
         obj.borrow_mut().prototype = Some(proto.clone());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainTime {

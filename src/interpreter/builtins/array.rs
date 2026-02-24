@@ -815,7 +815,7 @@ impl Interpreter {
                     return interp.call_function(&join_fn, &o, &[]);
                 }
                 // Fall back to %Object.prototype.toString%
-                if let Some(proto) = &interp.object_prototype {
+                if let Some(proto) = &interp.realm().object_prototype {
                     let proto_ref = proto.clone();
                     let ts = proto_ref.borrow().get_property("toString");
                     if interp.is_callable(&ts) {
@@ -2762,7 +2762,7 @@ impl Interpreter {
                 } else if matches!(source, JsValue::String(_)) {
                     // Strings are iterable
                     if let Some(key) = interp.get_symbol_key("iterator") {
-                        if let Some(sp) = interp.string_prototype.clone() {
+                        if let Some(sp) = interp.realm().string_prototype.clone() {
                             let sp_id = sp.borrow().id.unwrap();
                             match interp.get_object_property(sp_id, &key, &source) {
                                 Completion::Normal(v)
@@ -3370,7 +3370,7 @@ impl Interpreter {
         ));
 
         // Set Array statics on the Array constructor
-        let array_val = self.global_env.borrow().get("Array");
+        let array_val = self.realm().global_env.borrow().get("Array");
         if let Some(array_val) = array_val
             && let JsValue::Object(o) = &array_val
             && let Some(obj) = self.get_object(o.id)
@@ -3450,15 +3450,15 @@ impl Interpreter {
             );
         }
 
-        self.array_prototype = Some(proto);
+        self.realm_mut().array_prototype = Some(proto);
     }
 
     pub(crate) fn create_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype = self.realm()
             .array_prototype
             .clone()
-            .or(self.object_prototype.clone());
+            .or(self.realm().object_prototype.clone());
         obj_data.class_name = "Array".to_string();
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_value(i.to_string(), v.clone());
@@ -3476,10 +3476,10 @@ impl Interpreter {
     pub(crate) fn create_array_with_holes(&mut self, items: Vec<Option<JsValue>>) -> JsValue {
         let len = items.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype = self.realm()
             .array_prototype
             .clone()
-            .or(self.object_prototype.clone());
+            .or(self.realm().object_prototype.clone());
         obj_data.class_name = "Array".to_string();
         let mut array_elements = Vec::with_capacity(len);
         for (i, item) in items.into_iter().enumerate() {

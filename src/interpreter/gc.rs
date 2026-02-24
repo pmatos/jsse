@@ -23,92 +23,13 @@ impl Interpreter {
         let obj_count = self.objects.len();
         let mut marks = vec![false; obj_count];
 
-        // Collect roots
+        // Collect roots from all realms
         let mut worklist: Vec<u64> = Vec::new();
-        Self::collect_env_roots(&self.global_env, &mut worklist);
-        for proto in [
-            &self.object_prototype,
-            &self.array_prototype,
-            &self.string_prototype,
-            &self.number_prototype,
-            &self.boolean_prototype,
-            &self.regexp_prototype,
-            &self.iterator_prototype,
-            &self.array_iterator_prototype,
-            &self.string_iterator_prototype,
-            &self.map_prototype,
-            &self.map_iterator_prototype,
-            &self.set_prototype,
-            &self.set_iterator_prototype,
-            &self.date_prototype,
-            &self.generator_prototype,
-            &self.function_prototype,
-            &self.generator_function_prototype,
-            &self.async_iterator_prototype,
-            &self.async_generator_prototype,
-            &self.async_generator_function_prototype,
-            &self.async_function_prototype,
-            &self.weakmap_prototype,
-            &self.weakset_prototype,
-            &self.weakref_prototype,
-            &self.finalization_registry_prototype,
-            &self.bigint_prototype,
-            &self.symbol_prototype,
-            &self.arraybuffer_prototype,
-            &self.shared_arraybuffer_prototype,
-            &self.typed_array_prototype,
-            &self.int8array_prototype,
-            &self.uint8array_prototype,
-            &self.uint8clampedarray_prototype,
-            &self.int16array_prototype,
-            &self.uint16array_prototype,
-            &self.int32array_prototype,
-            &self.uint32array_prototype,
-            &self.float32array_prototype,
-            &self.float64array_prototype,
-            &self.bigint64array_prototype,
-            &self.biguint64array_prototype,
-            &self.dataview_prototype,
-            &self.promise_prototype,
-            &self.aggregate_error_prototype,
-            &self.temporal_duration_prototype,
-            &self.temporal_instant_prototype,
-            &self.temporal_plain_date_prototype,
-            &self.temporal_plain_time_prototype,
-            &self.temporal_plain_date_time_prototype,
-            &self.temporal_plain_year_month_prototype,
-            &self.temporal_plain_month_day_prototype,
-            &self.temporal_zoned_date_time_prototype,
-            &self.intl_locale_prototype,
-            &self.intl_collator_prototype,
-            &self.intl_number_format_prototype,
-            &self.intl_plural_rules_prototype,
-            &self.intl_list_format_prototype,
-            &self.intl_segmenter_prototype,
-            &self.intl_relative_time_format_prototype,
-            &self.intl_display_names_prototype,
-            &self.intl_duration_format_prototype,
-            &self.intl_date_time_format_prototype,
-        ] {
-            if let Some(p) = proto
-                && let Some(id) = p.borrow().id
-            {
-                worklist.push(id);
-            }
-        }
-        for ctor in [&self.intl_number_format_ctor, &self.intl_date_time_format_ctor, &self.intl_duration_format_ctor] {
-            if let Some(JsValue::Object(o)) = ctor {
-                worklist.push(o.id);
-            }
+        for realm in &self.realms {
+            realm.collect_roots(&mut worklist);
         }
         if let Some(JsValue::Object(o)) = &self.new_target {
             worklist.push(o.id);
-        }
-        if let Some(JsValue::Object(o)) = &self.throw_type_error {
-            worklist.push(o.id);
-        }
-        for &obj_id in self.template_cache.values() {
-            worklist.push(obj_id);
         }
         // Root from module environments (not reachable from global_env)
         for module in self.module_registry.values() {
@@ -401,6 +322,7 @@ impl Interpreter {
             if !mark && self.objects[i].is_some() {
                 self.objects[i] = None;
                 self.free_list.push(i);
+                self.function_realm_map.remove(&(i as u64));
             }
         }
 
@@ -452,7 +374,7 @@ impl Interpreter {
         }
     }
 
-    fn collect_env_roots(env: &EnvRef, worklist: &mut Vec<u64>) {
+    pub(crate) fn collect_env_roots(env: &EnvRef, worklist: &mut Vec<u64>) {
         let mut current = Some(env.clone());
         let mut seen = std::collections::HashSet::new();
         while let Some(e) = current {

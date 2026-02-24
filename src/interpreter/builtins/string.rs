@@ -1682,7 +1682,7 @@ impl Interpreter {
         }
 
         // Set String.prototype on the String constructor and wire constructor back
-        if let Some(str_val) = self.global_env.borrow().get("String")
+        if let Some(str_val) = self.realm().global_env.borrow().get("String")
             && let JsValue::Object(o) = &str_val
             && let Some(str_obj) = self.get_object(o.id)
         {
@@ -1698,7 +1698,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), str_val.clone());
         }
 
-        self.string_prototype = Some(proto);
+        self.realm_mut().string_prototype = Some(proto);
     }
 }
 

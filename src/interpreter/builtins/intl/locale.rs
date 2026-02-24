@@ -168,7 +168,7 @@ fn build_intl_data_from_locale(locale: &IcuLocale) -> IntlData {
 
 fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -> JsValue {
     let obj = interp.create_object();
-    if let Some(ref proto) = interp.intl_locale_prototype {
+    if let Some(ref proto) = interp.realm().intl_locale_prototype {
         obj.borrow_mut().prototype = Some(proto.clone());
     }
     obj.borrow_mut().class_name = "Intl.Locale".to_string();
@@ -203,7 +203,7 @@ where
 impl Interpreter {
     pub(crate) fn setup_intl_locale(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.object_prototype {
+        if let Some(ref op) = self.realm().object_prototype {
             proto.borrow_mut().prototype = Some(op.clone());
         }
         proto.borrow_mut().class_name = "Intl.Locale".to_string();
@@ -829,7 +829,7 @@ impl Interpreter {
                     };
 
                     let info_obj = interp.create_object();
-                    if let Some(ref op) = interp.object_prototype {
+                    if let Some(ref op) = interp.realm().object_prototype {
                         info_obj.borrow_mut().prototype = Some(op.clone());
                     }
                     info_obj.borrow_mut().insert_property(
@@ -971,7 +971,7 @@ impl Interpreter {
                     weekend_days.sort();
 
                     let info_obj = interp.create_object();
-                    if let Some(ref op) = interp.object_prototype {
+                    if let Some(ref op) = interp.realm().object_prototype {
                         info_obj.borrow_mut().prototype = Some(op.clone());
                     }
                     info_obj.borrow_mut().insert_property(
@@ -1009,7 +1009,7 @@ impl Interpreter {
             .insert_builtin("getWeekInfo".to_string(), get_week_info_fn);
 
         // Store the prototype
-        self.intl_locale_prototype = Some(proto.clone());
+        self.realm_mut().intl_locale_prototype = Some(proto.clone());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
