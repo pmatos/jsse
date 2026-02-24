@@ -67,7 +67,7 @@ Implement error handling extensions, the memory model for shared memory, and all
 - [ ] Interrupt/timeout support
 
 ## test262 Tests
-- `test262/test/annexB/` — 1,377 scenarios (1,246 passing, 90.5%)
+- `test262/test/annexB/` — 1,377 scenarios (1,264 passing, 91.8%)
 - `test262/test/intl402/Temporal/` — 3,838 scenarios (3,838 passing, 100.00%)
 - `test262/test/intl402/` (non-Temporal) — varies (optional)
 - `test262/test/staging/` — experimental/proposal tests (optional)
