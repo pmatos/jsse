@@ -86,7 +86,7 @@ Ordered roughly by dependency and importance.
   - [x] Most methods: `abs`, `acos`, `acosh`, `asin`, `asinh`, `atan`, `atanh`, `atan2`, `cbrt`, `ceil`, `clz32`, `cos`, `cosh`, `exp`, `expm1`, `floor`, `fround`, `hypot`, `imul`, `log`, `log1p`, `log10`, `log2`, `max`, `min`, `pow`, `random`, `round`, `sign`, `sin`, `sinh`, `sqrt`, `tan`, `tanh`, `trunc`
   - [x] `f16round`, `sumPrecise`
   - [x] `Math[@@toStringTag]` = `"Math"`
-- [x] **Date** (§21.4) — 95% pass rate (1,124/1,188 scenarios)
+- [x] **Date** (§21.4) — 95% pass rate (1,130/1,188 scenarios)
   - [x] `Date()` constructor (multiple overloads)
   - [x] `Date.now()`, `Date.parse()`, `Date.UTC()`
   - [x] All prototype get/set methods (getFullYear, getMonth, getDate, getHours, getMinutes, getSeconds, getMilliseconds, getDay, getTime, getTimezoneOffset, and all `setX`/`getUTCX` variants)
@@ -96,14 +96,14 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/Number/` (335), `built-ins/BigInt/` (75), `built-ins/Math/` (327), `built-ins/Date/` (594)
 
 ### 9.4 Text Processing (§22)
-- [x] **String** (§22.1) — 92% pass rate (1,120/1,215 tests)
+- [x] **String** (§22.1) — 97% pass rate (2,362/2,427 scenarios)
   - [x] `String()` constructor (spec-compliant ToString via ToPrimitive, Symbol coercion)
   - [x] `String.fromCharCode()`, `String.fromCodePoint()`, `String.raw()`
   - [x] `String.prototype` methods: `at`, `charAt`, `charCodeAt`, `codePointAt`, `concat`, `endsWith`, `includes`, `indexOf`, `lastIndexOf`, `match`, `matchAll`, `padEnd`, `padStart`, `repeat`, `replace`, `replaceAll`, `search`, `slice`, `split`, `startsWith`, `substring`, `toLowerCase`, `toLocaleLowerCase`, `toLocaleUpperCase`, `toString`, `toUpperCase`, `trim`, `trimEnd`, `trimStart`, `valueOf`, `normalize`, `localeCompare`, `isWellFormed`, `toWellFormed`
   - [x] RequireObjectCoercible on `this` for all methods, UTF-16 code unit indexing, proper argument coercion via ToPrimitive
   - [ ] `String.prototype[@@iterator]`
   - [ ] String HTML methods (Annex B): `anchor`, `big`, `blink`, `bold`, `fixed`, `fontcolor`, `fontsize`, `italics`, `link`, `small`, `strike`, `sub`, `sup`
-- [x] **RegExp** (§22.2) — 3,481/3,756 (92.7%)
+- [x] **RegExp** (§22.2) — 3,680/3,756 (98.0%)
   - [x] `RegExp()` constructor
   - [x] `RegExp.prototype.exec()` (TypeError for non-object `this`)
   - [x] `RegExp.prototype.test()` (TypeError for non-object `this`)
@@ -127,7 +127,7 @@ Ordered roughly by dependency and importance.
 **Tests:** `built-ins/String/` (1,215), `built-ins/RegExp/` (1,947), `built-ins/StringIteratorPrototype/` (7), `built-ins/RegExpStringIteratorPrototype/` (17)
 
 ### 9.5 Indexed Collections (§23)
-- [x] **Array** (§23.1) — 89% pass rate (2,734/3,079 tests)
+- [x] **Array** (§23.1) — 96% pass rate (5,862/6,111 scenarios)
   - [x] `Array()` constructor
   - [x] `Array.from()`, `Array.isArray()`, `Array.of()`
   - [x] `Array.prototype` methods: `at`, `concat`, `copyWithin`, `entries`, `every`, `fill`, `filter`, `find`, `findIndex`, `findLast`, `findLastIndex`, `flat`, `flatMap`, `forEach`, `includes`, `indexOf`, `join`, `keys`, `lastIndexOf`, `map`, `pop`, `push`, `reduce`, `reduceRight`, `reverse`, `shift`, `slice`, `some`, `sort`, `splice`, `toReversed`, `toSorted`, `toSpliced`, `toString`, `unshift`, `values`, `with`
@@ -136,7 +136,7 @@ Ordered roughly by dependency and importance.
   - [ ] `toLocaleString`, `[@@unscopables]`
   - [ ] Array species (`@@species`)
   - [ ] Array groupBy
-- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (2,380/2,860 = 83.2%, 1,116/1,442 constructors = 77.4%)
+- [x] **TypedArray** (§23.2) — **IMPLEMENTED** (2,732/2,860 = 95.5%, 1,256/1,442 constructors = 87.1%)
   - [x] `%TypedArray%` intrinsic (abstract base) with shared prototype methods
   - [x] `%TypedArray%` constructor wiring: `.prototype`, `.constructor`, `@@species`, prototype chain inheritance
   - [x] All concrete constructors: `Int8Array`, `Uint8Array`, `Uint8ClampedArray`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `Float32Array`, `Float64Array`, `BigInt64Array`, `BigUint64Array`
@@ -176,7 +176,7 @@ Ordered roughly by dependency and importance.
 - [ ] **SharedArrayBuffer** (§25.2)
   - [ ] `SharedArrayBuffer()` constructor
   - [ ] `grow`, `growable`, `byteLength`, `maxByteLength`, `slice`
-- [x] **DataView** (§25.3) — **IMPLEMENTED** (476/561 = 84.8%)
+- [x] **DataView** (§25.3) — **IMPLEMENTED** (1,090/1,122 = 97.1%)
   - [x] `DataView()` constructor
   - [x] All get/set methods for each numeric type (Int8 through BigUint64, with endianness)
 - [ ] **Atomics** (§25.4)

@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 91,986 (48,002 files, dual strict/non-strict per spec)
-**Current pass rate:** 87,842 / 91,986 (95.49%)
+**Current pass rate:** 88,004 / 91,986 (95.67%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -33,30 +33,28 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 
 | Built-in | Pass Rate | Scenarios |
 |----------|-----------|-----------|
-| Temporal | 100% | 8,964/8,964 |
 | Reflect | 100% | 306/306 |
-| block-scope | 100% | 287/287 |
 | Map | 100% | 403/405 |
+| Temporal | 99% | 8,898/8,964 |
 | Number | 99% | 662/670 |
+| RegExp | 98% | 3,680/3,756 |
 | FinalizationRegistry | 98% | 92/94 |
+| String | 97% | 2,362/2,427 |
+| DataView | 97% | 1,090/1,122 |
 | Set | 97% | 742/764 |
 | Math | 97% | 632/654 |
 | WeakRef | 97% | 56/58 |
-| Iterator | 96% | 980/1,020 |
-| Promise | 96% | 1,220/1,272 |
-| String | 95% | 2,312/2,427 |
-| Date | 95% | 1,124/1,188 |
-| for-in | 95% | 188/198 |
 | Object | 97% | 6,565/6,802 |
-| Function | 94% | 839/893 |
-| Array | 96% | 5,846/6,111 |
-| DataView | 91% | 1,016/1,122 |
+| Promise | 96% | 1,224/1,272 |
+| Iterator | 96% | 980/1,020 |
+| Array | 96% | 5,862/6,111 |
 | TypedArray | 96% | 2,732/2,860 |
-| RegExp | 98% | 3,674/3,756 |
-| Proxy | 79% | 478/607 |
+| Date | 95% | 1,130/1,188 |
+| Function | 94% | 843/893 |
+| annexB | 90% | 1,246/1,377 |
 | TypedArrayConstructors | 87% | 1,256/1,442 |
+| Proxy | 79% | 478/607 |
 | Symbol | 77% | 142/184 |
-| annexB | 75% | 1,038/1,377 |
 
 ---
 
@@ -222,15 +220,16 @@ These are tracked across all phases:
 | `language/types` | 113 | |
 | `language/asi` | 102 | |
 | `language/` (other) | ~400 | white-space, comments, keywords, etc. |
-| `built-ins/Temporal` | 8,964 | 8,964 (100%) |
+| `built-ins/Temporal` | 8,964 | 8,898 (99.3%) |
 | `built-ins/Object` | 6,802 | 6,565 (96.5%) |
-| `built-ins/Array` | 6,111 | 5,846 (95.7%) |
-| `built-ins/RegExp` | 4,012 | 3,846 (95.9%) |
-| `built-ins/TypedArray` | 2,860 | 2,558 (89.4%) |
-| `built-ins/TypedArrayConstructors` | 1,442 | 1,122 (77.8%) |
-| `built-ins/String` | 2,427 | 2,312 (95.3%) |
+| `built-ins/Array` | 6,111 | 5,862 (95.9%) |
+| `built-ins/RegExp` | 3,756 | 3,680 (98.0%) |
+| `built-ins/TypedArray` | 2,860 | 2,732 (95.5%) |
+| `built-ins/TypedArrayConstructors` | 1,442 | 1,256 (87.1%) |
+| `built-ins/String` | 2,427 | 2,362 (97.3%) |
+| `built-ins/DataView` | 1,122 | 1,090 (97.1%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
-| `annexB` | 1,377 | 1,038 (75.4%) |
+| `annexB` | 1,377 | 1,246 (90.5%) |
 | `intl402/Temporal` | 3,838 | 3,838 (100.00%) |
 | `intl402` | varies | Internationalization — optional |
 
@@ -249,5 +248,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 85,441 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,004 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |
