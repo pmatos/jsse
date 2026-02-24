@@ -21,76 +21,9 @@ pub(crate) mod generator_transform;
 
 #[allow(clippy::type_complexity)]
 pub struct Interpreter {
-    global_env: EnvRef,
+    pub(crate) realms: Vec<Realm>,
+    pub(crate) current_realm_id: usize,
     objects: Vec<Option<Rc<RefCell<JsObjectData>>>>,
-    object_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    string_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    number_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    boolean_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    regexp_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    array_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    string_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    map_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    map_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    set_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    set_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    weakmap_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    weakset_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    weakref_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    finalization_registry_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    date_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    function_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    async_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    async_generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    async_generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    async_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    bigint_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    symbol_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    arraybuffer_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    shared_arraybuffer_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    typed_array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    typed_array_constructor: Option<JsValue>,
-    int8array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    uint8array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    uint8clampedarray_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    int16array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    uint16array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    int32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    uint32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    float32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    float64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    bigint64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    biguint64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    dataview_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    promise_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) aggregate_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    temporal_duration_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    temporal_instant_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    temporal_plain_date_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    temporal_plain_time_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    temporal_plain_date_time_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    temporal_plain_year_month_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    temporal_plain_month_day_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    temporal_zoned_date_time_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_collator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_number_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_date_time_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_plural_rules_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_relative_time_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_list_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_segmenter_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_segments_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_segment_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_display_names_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_locale_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_duration_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    intl_number_format_ctor: Option<JsValue>,
-    intl_date_time_format_ctor: Option<JsValue>,
-    intl_duration_format_ctor: Option<JsValue>,
     global_symbol_registry: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
@@ -100,10 +33,8 @@ pub struct Interpreter {
     pub(crate) destructuring_yield: bool,
     microtask_queue: Vec<Box<dyn FnOnce(&mut Interpreter) -> Completion>>,
     cached_has_instance_key: Option<String>,
-    template_cache: HashMap<usize, u64>,
     module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
-    throw_type_error: Option<JsValue>,
     last_call_had_explicit_return: bool,
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
@@ -119,6 +50,7 @@ pub struct Interpreter {
     pub(crate) regexp_legacy_right_context: String,
     pub(crate) regexp_legacy_parens: [String; 9],
     pub(crate) regexp_constructor_id: Option<u64>,
+    pub(crate) function_realm_map: HashMap<u64, usize>,
 }
 
 pub struct LoadedModule {
@@ -151,77 +83,12 @@ impl Interpreter {
             }
         }
 
+        let realm = Realm::new(0, global);
+
         let mut interp = Self {
-            global_env: global,
+            realms: vec![realm],
+            current_realm_id: 0,
             objects: Vec::new(),
-            object_prototype: None,
-            array_prototype: None,
-            string_prototype: None,
-            number_prototype: None,
-            boolean_prototype: None,
-            regexp_prototype: None,
-            iterator_prototype: None,
-            array_iterator_prototype: None,
-            string_iterator_prototype: None,
-            map_prototype: None,
-            map_iterator_prototype: None,
-            set_prototype: None,
-            set_iterator_prototype: None,
-            weakmap_prototype: None,
-            weakset_prototype: None,
-            weakref_prototype: None,
-            finalization_registry_prototype: None,
-            date_prototype: None,
-            generator_prototype: None,
-            function_prototype: None,
-            generator_function_prototype: None,
-            async_iterator_prototype: None,
-            async_generator_prototype: None,
-            async_generator_function_prototype: None,
-            async_function_prototype: None,
-            bigint_prototype: None,
-            symbol_prototype: None,
-            arraybuffer_prototype: None,
-            shared_arraybuffer_prototype: None,
-            typed_array_prototype: None,
-            typed_array_constructor: None,
-            int8array_prototype: None,
-            uint8array_prototype: None,
-            uint8clampedarray_prototype: None,
-            int16array_prototype: None,
-            uint16array_prototype: None,
-            int32array_prototype: None,
-            uint32array_prototype: None,
-            float32array_prototype: None,
-            float64array_prototype: None,
-            bigint64array_prototype: None,
-            biguint64array_prototype: None,
-            dataview_prototype: None,
-            promise_prototype: None,
-            aggregate_error_prototype: None,
-            temporal_duration_prototype: None,
-            temporal_instant_prototype: None,
-            temporal_plain_date_prototype: None,
-            temporal_plain_time_prototype: None,
-            temporal_plain_date_time_prototype: None,
-            temporal_plain_year_month_prototype: None,
-            temporal_plain_month_day_prototype: None,
-            temporal_zoned_date_time_prototype: None,
-            intl_collator_prototype: None,
-            intl_number_format_prototype: None,
-            intl_date_time_format_prototype: None,
-            intl_plural_rules_prototype: None,
-            intl_relative_time_format_prototype: None,
-            intl_list_format_prototype: None,
-            intl_segmenter_prototype: None,
-            intl_segments_prototype: None,
-            intl_segment_iterator_prototype: None,
-            intl_display_names_prototype: None,
-            intl_locale_prototype: None,
-            intl_duration_format_prototype: None,
-            intl_number_format_ctor: None,
-            intl_date_time_format_ctor: None,
-            intl_duration_format_ctor: None,
             global_symbol_registry: HashMap::new(),
             next_symbol_id: 1,
             new_target: None,
@@ -231,10 +98,8 @@ impl Interpreter {
             destructuring_yield: false,
             microtask_queue: Vec::new(),
             cached_has_instance_key: None,
-            template_cache: HashMap::new(),
             module_registry: HashMap::new(),
             current_module_path: None,
-            throw_type_error: None,
             last_call_had_explicit_return: false,
             last_call_this_value: None,
             constructing_derived: false,
@@ -250,9 +115,155 @@ impl Interpreter {
             regexp_legacy_right_context: String::new(),
             regexp_legacy_parens: Default::default(),
             regexp_constructor_id: None,
+            function_realm_map: HashMap::new(),
         };
         interp.setup_globals();
         interp
+    }
+
+    #[inline(always)]
+    pub(crate) fn realm(&self) -> &Realm {
+        &self.realms[self.current_realm_id]
+    }
+
+    #[inline(always)]
+    pub(crate) fn realm_mut(&mut self) -> &mut Realm {
+        &mut self.realms[self.current_realm_id]
+    }
+
+    pub(crate) fn create_new_realm(&mut self) -> usize {
+        let new_id = self.realms.len();
+        let new_global_env = Environment::new(None);
+        {
+            let mut env = new_global_env.borrow_mut();
+            for (name, value) in [
+                ("undefined", JsValue::Undefined),
+                ("NaN", JsValue::Number(f64::NAN)),
+                ("Infinity", JsValue::Number(f64::INFINITY)),
+            ] {
+                env.bindings.insert(
+                    name.to_string(),
+                    Binding {
+                        value,
+                        kind: BindingKind::Const,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+            }
+        }
+        let realm = Realm::new(new_id, new_global_env);
+        self.realms.push(realm);
+
+        let old_realm = self.current_realm_id;
+        self.current_realm_id = new_id;
+        self.setup_globals();
+        self.current_realm_id = old_realm;
+        new_id
+    }
+
+    pub(crate) fn create_dollar_262(&mut self, realm_id: usize) -> JsValue {
+        let dollar_262 = self.create_object();
+        let dollar_262_id = dollar_262.borrow().id.unwrap();
+
+        // $262.detachArrayBuffer
+        let detach_fn = self.create_function(JsFunction::native(
+            "detachArrayBuffer".to_string(),
+            1,
+            |interp, _this, args| {
+                let buf = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.detach_arraybuffer(&buf)
+            },
+        ));
+        dollar_262
+            .borrow_mut()
+            .insert_builtin("detachArrayBuffer".to_string(), detach_fn);
+
+        // $262.gc
+        let gc_fn = self.create_function(JsFunction::native(
+            "gc".to_string(),
+            0,
+            |interp, _this, _args| {
+                interp.maybe_gc();
+                Completion::Normal(JsValue::Undefined)
+            },
+        ));
+        dollar_262
+            .borrow_mut()
+            .insert_builtin("gc".to_string(), gc_fn);
+
+        // $262.global — reference to the realm's global object
+        let global_env = self.realms[realm_id].global_env.clone();
+        let global_obj = global_env.borrow().global_object.clone();
+        if let Some(ref go) = global_obj {
+            let go_id = go.borrow().id.unwrap();
+            dollar_262.borrow_mut().insert_builtin(
+                "global".to_string(),
+                JsValue::Object(crate::types::JsObject { id: go_id }),
+            );
+        }
+
+        // $262.createRealm
+        let create_realm_fn = self.create_function(JsFunction::native(
+            "createRealm".to_string(),
+            0,
+            |interp, _this, _args| {
+                let new_realm_id = interp.create_new_realm();
+                let new_dollar_262 = interp.create_dollar_262(new_realm_id);
+                Completion::Normal(new_dollar_262)
+            },
+        ));
+        dollar_262
+            .borrow_mut()
+            .insert_builtin("createRealm".to_string(), create_realm_fn);
+
+        // $262.evalScript — parse and execute code in this $262's realm
+        let eval_realm_id = realm_id;
+        let eval_script_fn = self.create_function(JsFunction::native(
+            "evalScript".to_string(),
+            1,
+            move |interp, _this, args| {
+                let code_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let code = if let JsValue::String(ref s) = code_val {
+                    crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
+                } else {
+                    match interp.to_string_value(&code_val) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                };
+                let mut p = match crate::parser::Parser::new(&code) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return Completion::Throw(
+                            interp.create_error("SyntaxError", "Invalid eval source"),
+                        );
+                    }
+                };
+                let program = match p.parse_program() {
+                    Ok(prog) => prog,
+                    Err(e) => {
+                        return Completion::Throw(
+                            interp.create_error("SyntaxError", &format!("{}", e)),
+                        );
+                    }
+                };
+                let old_realm = interp.current_realm_id;
+                interp.current_realm_id = eval_realm_id;
+                let result = interp.run(&program);
+                interp.current_realm_id = old_realm;
+                match result {
+                    Completion::Normal(v) => Completion::Normal(v),
+                    Completion::Empty => Completion::Normal(JsValue::Undefined),
+                    other => other,
+                }
+            },
+        ));
+        dollar_262
+            .borrow_mut()
+            .insert_builtin("evalScript".to_string(), eval_script_fn);
+
+        JsValue::Object(crate::types::JsObject { id: dollar_262_id })
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -280,8 +291,36 @@ impl Interpreter {
         }
     }
 
-    // GetPrototypeFromConstructor for built-in constructors.
-    // Returns the prototype to use, or an error if the getter throws.
+    // GetFunctionRealm — §10.2.4
+    pub(crate) fn get_function_realm(&self, func_val: &JsValue) -> usize {
+        if let JsValue::Object(o) = func_val
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let obj_ref = obj.borrow();
+            // Bound function: recurse on [[BoundTargetFunction]]
+            if let Some(ref target) = obj_ref.bound_target_function {
+                let target_clone = target.clone();
+                drop(obj_ref);
+                return self.get_function_realm(&target_clone);
+            }
+            // Proxy: recurse on [[ProxyTarget]]
+            if let Some(ref target) = obj_ref.proxy_target
+                && !obj_ref.proxy_revoked
+            {
+                let target_id = target.borrow().id.unwrap();
+                drop(obj_ref);
+                return self.get_function_realm(&JsValue::Object(crate::types::JsObject { id: target_id }));
+            }
+            drop(obj_ref);
+            // Check function_realm_map
+            if let Some(&realm_id) = self.function_realm_map.get(&o.id) {
+                return realm_id;
+            }
+        }
+        self.current_realm_id
+    }
+
+    // GetPrototypeFromConstructor — §10.2.4
     pub(crate) fn get_prototype_from_new_target(
         &mut self,
         default_proto: &Option<Rc<RefCell<JsObjectData>>>,
@@ -307,8 +346,9 @@ impl Interpreter {
 
     fn register_global_fn(&mut self, name: &str, kind: BindingKind, func: JsFunction) {
         let val = self.create_function(func);
-        self.global_env.borrow_mut().declare(name, kind);
-        let _ = self.global_env.borrow_mut().set(name, val);
+        let global_env = self.realm().global_env.clone();
+        global_env.borrow_mut().declare(name, kind);
+        let _ = global_env.borrow_mut().set(name, val);
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -436,7 +476,7 @@ impl Interpreter {
 
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
         let mut data = JsObjectData::new();
-        data.prototype = self.object_prototype.clone();
+        data.prototype = self.realm().object_prototype.clone();
         let obj = Rc::new(RefCell::new(data));
         self.allocate_object_slot(obj.clone());
         obj
@@ -506,21 +546,21 @@ impl Interpreter {
         };
         let mut obj_data = JsObjectData::new();
         obj_data.prototype = if is_async_gen {
-            self.async_generator_function_prototype
+            self.realm().async_generator_function_prototype
                 .clone()
-                .or(self.object_prototype.clone())
+                .or(self.realm().object_prototype.clone())
         } else if is_gen {
-            self.generator_function_prototype
+            self.realm().generator_function_prototype
                 .clone()
-                .or(self.object_prototype.clone())
+                .or(self.realm().object_prototype.clone())
         } else if is_async_non_gen {
-            self.async_function_prototype
+            self.realm().async_function_prototype
                 .clone()
-                .or(self.object_prototype.clone())
+                .or(self.realm().object_prototype.clone())
         } else {
-            self.function_prototype
+            self.realm().function_prototype
                 .clone()
-                .or(self.object_prototype.clone())
+                .or(self.realm().object_prototype.clone())
         };
         obj_data.callable = Some(func);
         obj_data.class_name = if is_async_gen {
@@ -585,9 +625,9 @@ impl Interpreter {
         if needs_prototype {
             let proto = self.create_object();
             if is_async_gen {
-                proto.borrow_mut().prototype = self.async_generator_prototype.clone();
+                proto.borrow_mut().prototype = self.realm().async_generator_prototype.clone();
             } else if is_gen {
-                proto.borrow_mut().prototype = self.generator_prototype.clone();
+                proto.borrow_mut().prototype = self.realm().generator_prototype.clone();
             }
             let proto_id = proto.borrow().id.unwrap();
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
@@ -598,6 +638,7 @@ impl Interpreter {
         }
         let obj = Rc::new(RefCell::new(obj_data));
         let func_id = self.allocate_object_slot(obj.clone());
+        self.function_realm_map.insert(func_id, self.current_realm_id);
         let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
         // Set prototype.constructor = func (not for generators)
         if is_constructable
@@ -718,7 +759,7 @@ impl Interpreter {
 
         // Unmapped (strict OR non-simple params): callee is a throw accessor
         if func_env.is_none() {
-            let thrower = self
+            let thrower = self.realm()
                 .throw_type_error
                 .clone()
                 .unwrap_or_else(|| self.create_thrower_function());
@@ -774,7 +815,7 @@ impl Interpreter {
             // Extract the well-known name (e.g. "toStringTag" from "Symbol(Symbol.toStringTag)")
             let inner = &key[7..key.len() - 1]; // "Symbol.toStringTag"
             let name = &inner[7..]; // "toStringTag"
-            if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+            if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
                 && let JsValue::Object(so) = sym_val
                 && let Some(sobj) = self.get_object(so.id)
             {
@@ -817,7 +858,7 @@ impl Interpreter {
     pub fn run(&mut self, program: &Program) -> Completion {
         self.maybe_gc();
         let result = match program.source_type {
-            SourceType::Script => self.exec_statements(&program.body, &self.global_env.clone()),
+            SourceType::Script => self.exec_statements(&program.body, &self.realm().global_env.clone()),
             SourceType::Module => self.run_module(program, None),
         };
         self.drain_microtasks();
@@ -830,7 +871,7 @@ impl Interpreter {
             SourceType::Script => {
                 let prev = self.current_module_path.take();
                 self.current_module_path = Some(path.to_path_buf());
-                let r = self.exec_statements(&program.body, &self.global_env.clone());
+                let r = self.exec_statements(&program.body, &self.realm().global_env.clone());
                 self.current_module_path = prev;
                 r
             }
@@ -849,7 +890,7 @@ impl Interpreter {
         let prev_module_path = self.current_module_path.take();
         self.current_module_path = module_path.clone();
 
-        let module_env = Environment::new_function_scope(Some(self.global_env.clone()));
+        let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         {
             let mut env = module_env.borrow_mut();
@@ -1130,7 +1171,7 @@ impl Interpreter {
         })?;
 
         // Create module environment
-        let module_env = Environment::new_function_scope(Some(self.global_env.clone()));
+        let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         {
             let mut env = module_env.borrow_mut();

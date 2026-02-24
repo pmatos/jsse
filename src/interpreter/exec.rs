@@ -9,6 +9,15 @@ impl Interpreter {
         let var_scope = Environment::find_var_scope(env);
         let is_global = var_scope.borrow().global_object.is_some();
         let is_block_scope = !Rc::ptr_eq(env, &var_scope);
+
+        // §16.1.7 GlobalDeclarationInstantiation: pre-check CanDeclareGlobalFunction
+        // and CanDeclareGlobalVar before any hoisting takes place.
+        if is_global {
+            if let Some(err) = self.check_global_declarations(stmts, env) {
+                return err;
+            }
+        }
+
         for stmt in stmts {
             // Recursively hoist var declarations from all sub-statements
             self.hoist_vars_from_stmt(stmt, &var_scope, is_global);
@@ -121,6 +130,88 @@ impl Interpreter {
             Statement::Labeled(_, inner) => Self::unwrap_labeled_function(inner),
             _ => None,
         }
+    }
+
+    /// §9.1.1.4.16 CanDeclareGlobalFunction
+    fn can_declare_global_function(
+        global_obj: &Rc<RefCell<JsObjectData>>,
+        name: &str,
+    ) -> bool {
+        let gb = global_obj.borrow();
+        if let Some(desc) = gb.properties.get(name) {
+            if desc.configurable == Some(true) {
+                return true;
+            }
+            if desc.value.is_some()
+                && desc.writable == Some(true)
+                && desc.enumerable == Some(true)
+            {
+                return true;
+            }
+            false
+        } else {
+            gb.extensible
+        }
+    }
+
+    /// §9.1.1.4.15 CanDeclareGlobalVar
+    fn can_declare_global_var(
+        global_obj: &Rc<RefCell<JsObjectData>>,
+        name: &str,
+    ) -> bool {
+        let gb = global_obj.borrow();
+        if gb.properties.contains_key(name) {
+            return true;
+        }
+        gb.extensible
+    }
+
+    /// Pre-check all global function/var declarations per §16.1.7.
+    /// Returns Some(Completion::Throw) if any check fails, None if all OK.
+    fn check_global_declarations(
+        &mut self,
+        stmts: &[Statement],
+        env: &EnvRef,
+    ) -> Option<Completion> {
+        let global_obj = env.borrow().global_object.clone();
+        let global_obj = match global_obj {
+            Some(g) => g,
+            None => return None,
+        };
+
+        // Collect function declaration names (step 10)
+        let mut declared_function_names: Vec<String> = Vec::new();
+        for stmt in stmts.iter().rev() {
+            if let Some(f) = Self::unwrap_labeled_function(stmt) {
+                if !declared_function_names.contains(&f.name) {
+                    if !Self::can_declare_global_function(&global_obj, &f.name) {
+                        let err = self.create_type_error(&format!(
+                            "Cannot declare global function '{}'",
+                            f.name
+                        ));
+                        return Some(Completion::Throw(err));
+                    }
+                    declared_function_names.push(f.name.clone());
+                }
+            }
+        }
+
+        // Collect var declaration names (step 12)
+        let mut var_names = std::collections::HashSet::new();
+        Self::collect_var_names_from_stmts(stmts, &mut var_names);
+        for name in &var_names {
+            if !declared_function_names.contains(name) {
+                if !Self::can_declare_global_var(&global_obj, name) {
+                    let err = self.create_type_error(&format!(
+                        "Cannot declare global variable '{}'",
+                        name
+                    ));
+                    return Some(Completion::Throw(err));
+                }
+            }
+        }
+
+        None
     }
 
     fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef, is_global: bool) {
@@ -1821,7 +1912,7 @@ impl Interpreter {
         existing: Option<JsValue>,
     ) -> JsValue {
         if let Some(existing_err) = existing {
-            let env = self.global_env.clone();
+            let env = self.realm().global_env.clone();
             let args = vec![new_error, existing_err];
             match self.call_global_constructor("SuppressedError", &args, &env) {
                 Completion::Normal(v) => v,

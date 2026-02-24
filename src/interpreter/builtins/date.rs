@@ -126,7 +126,7 @@ fn date_to_locale_string(
     let opt_val = JsValue::Object(crate::types::JsObject { id: opt_id });
 
     // Use the built-in DateTimeFormat constructor directly (not through user-visible Intl property)
-    let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+    let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
         Some(v) => v,
         None => {
             return Completion::Normal(JsValue::String(JsString::from_str(
@@ -1220,7 +1220,7 @@ impl Interpreter {
                 Completion::Throw(e)
             },
         ));
-        if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+        if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
             && let Some(sym_data) = self.get_object(sym_obj.id)
         {
@@ -1462,10 +1462,10 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("constructor".to_string(), date_ctor.clone());
 
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Date", BindingKind::Var);
-        let _ = self.global_env.borrow_mut().set("Date", date_ctor);
+        let _ = self.realm().global_env.borrow_mut().set("Date", date_ctor);
 
         // Annex B: getYear()
         let get_year_fn = self.create_function(JsFunction::Native(
@@ -1532,7 +1532,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toGMTString".to_string(), to_gmt);
 
-        self.date_prototype = Some(proto);
+        self.realm_mut().date_prototype = Some(proto);
     }
 
     pub(crate) fn create_range_error(&mut self, msg: &str) -> JsValue {
@@ -1544,7 +1544,7 @@ impl Interpreter {
     }
 
     pub(crate) fn create_error(&mut self, name: &str, msg: &str) -> JsValue {
-        let env = self.global_env.borrow();
+        let env = self.realm().global_env.borrow();
         let error_proto = env.get(name).and_then(|v| {
             if let JsValue::Object(o) = &v {
                 self.get_object(o.id).and_then(|ctor| {

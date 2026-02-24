@@ -659,7 +659,7 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
     }
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.ZonedDateTime".to_string();
-    if let Some(ref proto) = interp.temporal_zoned_date_time_prototype {
+    if let Some(ref proto) = interp.realm().temporal_zoned_date_time_prototype {
         obj.borrow_mut().prototype = Some(proto.clone());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::ZonedDateTime {
@@ -1946,7 +1946,7 @@ impl Interpreter {
             Completion::Normal(JsValue::Undefined)
         });
 
-        self.temporal_zoned_date_time_prototype = Some(proto.clone());
+        self.realm_mut().temporal_zoned_date_time_prototype = Some(proto.clone());
 
         // --- Methods ---
 
@@ -2014,7 +2014,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                    let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
                         Some(v) => v,
                         None => {
                             let result = zdt_to_string(&ns, &tz, &_cal, "auto", "auto", "auto", None, "trunc");
@@ -2039,7 +2039,7 @@ impl Interpreter {
                     // Inject timeZone from ZDT into options
                     let effective_opts = {
                         let opts_obj = interp.create_object();
-                        if let Some(ref op) = interp.object_prototype {
+                        if let Some(ref op) = interp.realm().object_prototype {
                             opts_obj.borrow_mut().prototype = Some(op.clone());
                         }
                         // Copy properties from user options if present
@@ -2191,7 +2191,7 @@ impl Interpreter {
                     };
                     let obj = interp.create_object();
                     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
-                    if let Some(ref proto) = interp.temporal_instant_prototype {
+                    if let Some(ref proto) = interp.realm().temporal_instant_prototype {
                         obj.borrow_mut().prototype = Some(proto.clone());
                     }
                     obj.borrow_mut().temporal_data = Some(TemporalData::Instant {

@@ -535,10 +535,10 @@ impl Interpreter {
         }
 
         let atomics_val = JsValue::Object(crate::types::JsObject { id: atomics_id });
-        self.global_env
+        self.realm().global_env
             .borrow_mut()
             .declare("Atomics", BindingKind::Const);
-        let _ = self.global_env.borrow_mut().set("Atomics", atomics_val);
+        let _ = self.realm().global_env.borrow_mut().set("Atomics", atomics_val);
     }
 }
 

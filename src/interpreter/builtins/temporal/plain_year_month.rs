@@ -20,7 +20,7 @@ pub(super) fn create_plain_year_month_result(
     }
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainYearMonth".to_string();
-    if let Some(ref proto) = interp.temporal_plain_year_month_prototype {
+    if let Some(ref proto) = interp.realm().temporal_plain_year_month_prototype {
         obj.borrow_mut().prototype = Some(proto.clone());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainYearMonth {
@@ -1032,7 +1032,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
                     Some(v) => v,
                     None => {
                         return Completion::Normal(JsValue::String(JsString::from_str(&format_year_month(
@@ -1142,7 +1142,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toPlainDate".to_string(), to_pd_fn);
 
-        self.temporal_plain_year_month_prototype = Some(proto.clone());
+        self.realm_mut().temporal_plain_year_month_prototype = Some(proto.clone());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(

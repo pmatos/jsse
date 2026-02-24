@@ -2210,7 +2210,7 @@ impl Interpreter {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
-                let df_val = match interp.intl_duration_format_ctor.clone() {
+                let df_val = match interp.realm().intl_duration_format_ctor.clone() {
                     Some(v) => v,
                     None => {
                         let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
@@ -2268,7 +2268,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("valueOf".to_string(), value_of_fn);
 
-        self.temporal_duration_prototype = Some(proto.clone());
+        self.realm_mut().temporal_duration_prototype = Some(proto.clone());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -2658,7 +2658,7 @@ pub(crate) fn create_duration_result(
     }
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.Duration".to_string();
-    if let Some(ref proto) = interp.temporal_duration_prototype {
+    if let Some(ref proto) = interp.realm().temporal_duration_prototype {
         obj.borrow_mut().prototype = Some(proto.clone());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::Duration {

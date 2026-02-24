@@ -240,7 +240,7 @@ impl Interpreter {
             false,
         ));
         // Get the @@toPrimitive well-known symbol key
-        if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+        if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
             && let Some(sym_data) = self.get_object(sym_obj.id)
         {
@@ -258,7 +258,7 @@ impl Interpreter {
         }
 
         // [Symbol.toStringTag] = "Symbol"
-        if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+        if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
             && let Some(sym_data) = self.get_object(sym_obj.id)
         {
@@ -284,7 +284,7 @@ impl Interpreter {
         }
 
         // Set Symbol.prototype on the Symbol constructor
-        if let Some(sym_val) = self.global_env.borrow().get("Symbol")
+        if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
             && let JsValue::Object(o) = &sym_val
             && let Some(sym_obj) = self.get_object(o.id)
         {
@@ -302,7 +302,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), ctor_val);
         }
 
-        self.symbol_prototype = Some(proto);
+        self.realm_mut().symbol_prototype = Some(proto);
     }
 
     pub(crate) fn setup_number_prototype(&mut self) {
@@ -545,7 +545,7 @@ impl Interpreter {
         }
 
         // Set Number.prototype on the Number constructor
-        if let Some(num_val) = self.global_env.borrow().get("Number")
+        if let Some(num_val) = self.realm().global_env.borrow().get("Number")
             && let JsValue::Object(o) = &num_val
             && let Some(num_obj) = self.get_object(o.id)
         {
@@ -561,7 +561,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), num_val);
         }
 
-        self.number_prototype = Some(proto);
+        self.realm_mut().number_prototype = Some(proto);
     }
 
     pub(crate) fn setup_boolean_prototype(&mut self) {
@@ -628,7 +628,7 @@ impl Interpreter {
         }
 
         // Set Boolean.prototype on the Boolean constructor
-        if let Some(bool_val) = self.global_env.borrow().get("Boolean")
+        if let Some(bool_val) = self.realm().global_env.borrow().get("Boolean")
             && let JsValue::Object(o) = &bool_val
             && let Some(bool_obj) = self.get_object(o.id)
         {
@@ -644,6 +644,6 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), bool_val);
         }
 
-        self.boolean_prototype = Some(proto);
+        self.realm_mut().boolean_prototype = Some(proto);
     }
 }

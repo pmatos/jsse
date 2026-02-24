@@ -3395,7 +3395,7 @@ impl Interpreter {
         intl_obj: &Rc<RefCell<JsObjectData>>,
     ) {
         let proto = self.create_object();
-        if let Some(ref op) = self.object_prototype {
+        if let Some(ref op) = self.realm().object_prototype {
             proto.borrow_mut().prototype = Some(op.clone());
         }
         proto.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
@@ -3600,7 +3600,7 @@ impl Interpreter {
                     .into_iter()
                     .map(|(ptype, value)| {
                         let part_obj = interp.create_object();
-                        if let Some(ref op) = interp.object_prototype {
+                        if let Some(ref op) = interp.realm().object_prototype {
                             part_obj.borrow_mut().prototype = Some(op.clone());
                         }
                         part_obj.borrow_mut().insert_property(
@@ -3820,7 +3820,7 @@ impl Interpreter {
                     .into_iter()
                     .map(|(ptype, value, source)| {
                         let part_obj = interp.create_object();
-                        if let Some(ref op) = interp.object_prototype {
+                        if let Some(ref op) = interp.realm().object_prototype {
                             part_obj.borrow_mut().prototype = Some(op.clone());
                         }
                         part_obj.borrow_mut().insert_property(
@@ -3873,7 +3873,7 @@ impl Interpreter {
                 };
 
                 let result = interp.create_object();
-                if let Some(ref op) = interp.object_prototype {
+                if let Some(ref op) = interp.realm().object_prototype {
                     result.borrow_mut().prototype = Some(op.clone());
                 }
 
@@ -3961,7 +3961,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.intl_date_time_format_prototype = Some(proto.clone());
+        self.realm_mut().intl_date_time_format_prototype = Some(proto.clone());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
@@ -4412,7 +4412,7 @@ impl Interpreter {
         );
 
         // Save built-in constructor for internal use (e.g. Date.toLocaleString)
-        self.intl_date_time_format_ctor = Some(dtf_ctor.clone());
+        self.realm_mut().intl_date_time_format_ctor = Some(dtf_ctor.clone());
 
         // Register Intl.DateTimeFormat on the Intl namespace
         intl_obj.borrow_mut().insert_property(

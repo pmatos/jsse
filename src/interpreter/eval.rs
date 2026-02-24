@@ -594,7 +594,7 @@ impl Interpreter {
                     }
 
                     let mut current = Some(env.clone());
-                    let global_env = self.global_env.clone();
+                    let global_env = self.realm().global_env.clone();
                     while let Some(ref e) = current {
                         if std::rc::Rc::ptr_eq(e, &global_env) {
                             break;
@@ -620,7 +620,7 @@ impl Interpreter {
                     }
 
                     // At global level — check global object property descriptor
-                    let global_obj = self.global_env.borrow().global_object.clone();
+                    let global_obj = self.realm().global_env.borrow().global_object.clone();
                     if let Some(ref global) = global_obj {
                         let gb = global.borrow();
                         if let Some(desc) = gb.properties.get(name) {
@@ -630,12 +630,12 @@ impl Interpreter {
                             drop(gb);
                             global.borrow_mut().properties.remove(name);
                             global.borrow_mut().property_order.retain(|k| k != name);
-                            self.global_env.borrow_mut().bindings.remove(name);
+                            self.realm().global_env.borrow_mut().bindings.remove(name);
                             return Completion::Normal(JsValue::Boolean(true));
                         }
                     }
                     // Check if it's a binding in the global env (var declaration not on global object)
-                    if self.global_env.borrow().bindings.contains_key(name) {
+                    if self.realm().global_env.borrow().bindings.contains_key(name) {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
                     // Unresolvable reference — return true per spec
@@ -1101,21 +1101,21 @@ impl Interpreter {
                     } else {
                         Completion::Normal(JsValue::Undefined)
                     }
-                } else if let Some(ref sp) = self.string_prototype {
+                } else if let Some(ref sp) = self.realm().string_prototype {
                     Completion::Normal(sp.borrow().get_property(name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Number(_) => {
-                if let Some(ref np) = self.number_prototype {
+                if let Some(ref np) = self.realm().number_prototype {
                     Completion::Normal(np.borrow().get_property(name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Boolean(_) => {
-                if let Some(ref bp) = self.boolean_prototype {
+                if let Some(ref bp) = self.realm().boolean_prototype {
                     Completion::Normal(bp.borrow().get_property(name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
@@ -1281,7 +1281,7 @@ impl Interpreter {
 
     fn get_template_object(&mut self, tmpl: &TemplateLiteral) -> JsValue {
         let cache_key = tmpl as *const TemplateLiteral as usize;
-        if let Some(&obj_id) = self.template_cache.get(&cache_key)
+        if let Some(&obj_id) = self.realm().template_cache.get(&cache_key)
             && self.get_object(obj_id).is_some()
         {
             return JsValue::Object(crate::types::JsObject { id: obj_id });
@@ -1314,7 +1314,7 @@ impl Interpreter {
         }
 
         if let JsValue::Object(o) = &template_arr {
-            self.template_cache.insert(cache_key, o.id);
+            self.realm_mut().template_cache.insert(cache_key, o.id);
         }
 
         template_arr
@@ -1323,10 +1323,10 @@ impl Interpreter {
     fn create_frozen_template_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let len = values.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype = self.realm()
             .array_prototype
             .clone()
-            .or(self.object_prototype.clone());
+            .or(self.realm().object_prototype.clone());
         obj_data.class_name = "Array".to_string();
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_property(
@@ -1371,10 +1371,10 @@ impl Interpreter {
             }
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();
-                obj.prototype = self
+                obj.prototype = self.realm()
                     .regexp_prototype
                     .clone()
-                    .or(self.object_prototype.clone());
+                    .or(self.realm().object_prototype.clone());
                 obj.class_name = "RegExp".to_string();
                 let source_js = if pattern.is_empty() {
                     JsString::from_str("(?:)")
@@ -1423,10 +1423,10 @@ impl Interpreter {
 
     pub(crate) fn create_regexp(&mut self, pattern: &str, flags: &str) -> JsValue {
         let mut obj = JsObjectData::new();
-        obj.prototype = self
+        obj.prototype = self.realm()
             .regexp_prototype
             .clone()
-            .or(self.object_prototype.clone());
+            .or(self.realm().object_prototype.clone());
         obj.class_name = "RegExp".to_string();
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
         obj.insert_property(
@@ -1557,38 +1557,38 @@ impl Interpreter {
                 match val {
                     JsValue::String(_) => {
                         obj_data.class_name = "String".to_string();
-                        if let Some(ref sp) = self.string_prototype {
+                        if let Some(ref sp) = self.realm().string_prototype {
                             obj_data.prototype = Some(sp.clone());
                         }
                     }
                     JsValue::Number(_) => {
                         obj_data.class_name = "Number".to_string();
-                        if let Some(ref np) = self.number_prototype {
+                        if let Some(ref np) = self.realm().number_prototype {
                             obj_data.prototype = Some(np.clone());
                         }
                     }
                     JsValue::Boolean(_) => {
                         obj_data.class_name = "Boolean".to_string();
-                        if let Some(ref bp) = self.boolean_prototype {
+                        if let Some(ref bp) = self.realm().boolean_prototype {
                             obj_data.prototype = Some(bp.clone());
                         }
                     }
                     JsValue::Symbol(_) => {
                         obj_data.class_name = "Symbol".to_string();
-                        if let Some(ref sp) = self.symbol_prototype {
+                        if let Some(ref sp) = self.realm().symbol_prototype {
                             obj_data.prototype = Some(sp.clone());
                         }
                     }
                     JsValue::BigInt(_) => {
                         obj_data.class_name = "BigInt".to_string();
-                        if let Some(ref bp) = self.bigint_prototype {
+                        if let Some(ref bp) = self.realm().bigint_prototype {
                             obj_data.prototype = Some(bp.clone());
                         }
                     }
                     _ => unreachable!(),
                 }
                 if obj_data.prototype.is_none() {
-                    obj_data.prototype = self.object_prototype.clone();
+                    obj_data.prototype = self.realm().object_prototype.clone();
                 }
                 let obj = Rc::new(RefCell::new(obj_data));
                 let id = self.allocate_object_slot(obj);
@@ -4113,17 +4113,17 @@ impl Interpreter {
                         other => return other,
                     }
                 } else if let JsValue::String(_) = &obj_val {
-                    if let Some(ref sp) = self.string_prototype {
+                    if let Some(ref sp) = self.realm().string_prototype {
                         let method = sp.borrow().get_property(&key);
                         (method, obj_val)
                     } else {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::Number(_)) {
-                    let proto = self
+                    let proto = self.realm()
                         .number_prototype
                         .clone()
-                        .or(self.object_prototype.clone());
+                        .or(self.realm().object_prototype.clone());
                     if let Some(ref p) = proto {
                         let method = p.borrow().get_property(&key);
                         (method, obj_val)
@@ -4131,10 +4131,10 @@ impl Interpreter {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::Boolean(_)) {
-                    let proto = self
+                    let proto = self.realm()
                         .boolean_prototype
                         .clone()
-                        .or(self.object_prototype.clone());
+                        .or(self.realm().object_prototype.clone());
                     if let Some(ref p) = proto {
                         let method = p.borrow().get_property(&key);
                         (method, obj_val)
@@ -4142,7 +4142,7 @@ impl Interpreter {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::Symbol(_)) {
-                    if let Some(ref p) = self.symbol_prototype {
+                    if let Some(ref p) = self.realm().symbol_prototype {
                         let desc = p.borrow().get_property_descriptor(&key);
                         let method = match desc {
                             Some(ref d) if d.get.is_some() => {
@@ -4160,10 +4160,10 @@ impl Interpreter {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::BigInt(_)) {
-                    let proto = self
+                    let proto = self.realm()
                         .bigint_prototype
                         .clone()
-                        .or(self.object_prototype.clone());
+                        .or(self.realm().object_prototype.clone());
                     if let Some(ref p) = proto {
                         let method = p.borrow().get_property(&key);
                         (method, obj_val)
@@ -7588,7 +7588,7 @@ impl Interpreter {
                             }
                             if !proto_set {
                                 gen_obj.borrow_mut().prototype =
-                                    self.async_generator_prototype.clone();
+                                    self.realm().async_generator_prototype.clone();
                             }
                             gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
                             // Create persistent function environment
@@ -7813,7 +7813,7 @@ impl Interpreter {
                             } else {
                                 let effective_this = if !is_strict && !closure_strict {
                                     if matches!(_this_val, JsValue::Undefined | JsValue::Null) {
-                                        self.global_env
+                                        self.realm().global_env
                                             .borrow()
                                             .get("this")
                                             .unwrap_or(_this_val.clone())
@@ -8025,11 +8025,11 @@ impl Interpreter {
     }
 
     fn is_builtin_eval(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id)
-            && let Some(ref func) = obj.borrow().callable
-        {
-            return matches!(func, JsFunction::Native(name, _, _, _) if name == "eval");
+        if let JsValue::Object(o) = val {
+            // Direct eval must be the CURRENT realm's eval
+            if let Some(eval_id) = self.realm().builtin_eval_id {
+                return o.id == eval_id;
+            }
         }
         false
     }
@@ -8323,11 +8323,8 @@ impl Interpreter {
         // Determine varEnv and lexEnv per spec PerformEval / EvalDeclarationInstantiation
         let (var_env, lex_env) = if is_strict {
             // Strict eval: both var and lex are a new function scope
-            let base = if direct {
-                caller_env.clone()
-            } else {
-                self.global_env.clone()
-            };
+            // For indirect eval, caller_env is already the eval's realm's global env
+            let base = caller_env.clone();
             let new_env = Environment::new_function_scope(Some(base));
             new_env.borrow_mut().strict = true;
             (new_env.clone(), new_env)
@@ -8339,9 +8336,10 @@ impl Interpreter {
             (var_env, lex_env)
         } else {
             // Non-strict indirect eval: var is global, lex is new child of global
-            let lex_env = Environment::new(Some(self.global_env.clone()));
+            // For cross-realm eval, caller_env is already the eval function's realm's global env
+            let lex_env = Environment::new(Some(caller_env.clone()));
             lex_env.borrow_mut().strict = false;
-            (self.global_env.clone(), lex_env)
+            (caller_env.clone(), lex_env)
         };
 
         // EvalDeclarationInstantiation
@@ -10779,14 +10777,14 @@ impl Interpreter {
                         }
                         None => Completion::Normal(JsValue::Undefined),
                     }
-                } else if let Some(ref sp) = self.string_prototype {
+                } else if let Some(ref sp) = self.realm().string_prototype {
                     Completion::Normal(sp.borrow().get_property(&key))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Symbol(_) => {
-                if let Some(ref sp) = self.symbol_prototype {
+                if let Some(ref sp) = self.realm().symbol_prototype {
                     let desc = sp.borrow().get_property_descriptor(&key);
                     match desc {
                         Some(ref d) if d.get.is_some() => {
@@ -10803,21 +10801,21 @@ impl Interpreter {
                 }
             }
             JsValue::Number(_) => {
-                if let Some(ref np) = self.number_prototype {
+                if let Some(ref np) = self.realm().number_prototype {
                     Completion::Normal(np.borrow().get_property(&key))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Boolean(_) => {
-                if let Some(ref bp) = self.boolean_prototype {
+                if let Some(ref bp) = self.realm().boolean_prototype {
                     Completion::Normal(bp.borrow().get_property(&key))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::BigInt(_) => {
-                if let Some(ref bp) = self.bigint_prototype {
+                if let Some(ref bp) = self.realm().bigint_prototype {
                     Completion::Normal(bp.borrow().get_property(&key))
                 } else {
                     Completion::Normal(JsValue::Undefined)
@@ -11590,7 +11588,7 @@ impl Interpreter {
 
     fn eval_object_literal(&mut self, props: &[Property], env: &EnvRef) -> Completion {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.object_prototype.clone();
+        obj_data.prototype = self.realm().object_prototype.clone();
         for prop in props {
             let (key, fn_name_for_key) = match &prop.key {
                 PropertyKey::Identifier(n) => (n.clone(), n.clone()),
@@ -11812,7 +11810,7 @@ impl Interpreter {
                 && !closure_strict
                 && matches!(this_val, JsValue::Undefined | JsValue::Null)
             {
-                self.global_env
+                self.realm().global_env
                     .borrow()
                     .get("this")
                     .unwrap_or(this_val.clone())

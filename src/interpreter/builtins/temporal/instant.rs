@@ -501,7 +501,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let dtf_val = match interp.intl_date_time_format_ctor.clone() {
+                let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
                     Some(v) => v,
                     None => {
                         let result = instant_to_string_with_tz(&_ns, "UTC", 0, None, false);
@@ -563,7 +563,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toZonedDateTimeISO".to_string(), to_zdt_fn);
 
-        self.temporal_instant_prototype = Some(proto.clone());
+        self.realm_mut().temporal_instant_prototype = Some(proto.clone());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -822,7 +822,7 @@ fn get_instant_ns(interp: &mut Interpreter, this: &JsValue) -> Result<BigInt, Co
 fn create_instant_result(interp: &mut Interpreter, epoch_ns: BigInt) -> Completion {
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
-    if let Some(ref proto) = interp.temporal_instant_prototype {
+    if let Some(ref proto) = interp.realm().temporal_instant_prototype {
         obj.borrow_mut().prototype = Some(proto.clone());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::Instant {

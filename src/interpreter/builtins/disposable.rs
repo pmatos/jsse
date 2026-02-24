@@ -3,7 +3,7 @@ use super::*;
 impl Interpreter {
     pub(crate) fn setup_disposable_stack(&mut self) {
         let ds_proto = self.create_object();
-        if let Some(ref op) = self.object_prototype {
+        if let Some(ref op) = self.realm().object_prototype {
             ds_proto.borrow_mut().prototype = Some(op.clone());
         }
 
@@ -290,7 +290,7 @@ impl Interpreter {
                     let new_obj = interp.create_object();
                     {
                         // Get DisposableStack prototype
-                        let env = interp.global_env.borrow();
+                        let env = interp.realm().global_env.borrow();
                         if let Some(ctor_val) = env.get("DisposableStack")
                             && let JsValue::Object(ctor) = &ctor_val
                             && let Some(ctor_obj) = interp.get_object(ctor.id)
@@ -351,7 +351,7 @@ impl Interpreter {
 
         // Wire up constructor and prototype
         {
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             if let Some(ctor_val) = env.get("DisposableStack") {
                 ds_proto
                     .borrow_mut()
@@ -359,7 +359,7 @@ impl Interpreter {
             }
         }
         {
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             if let Some(ctor_val) = env.get("DisposableStack")
                 && let JsValue::Object(o) = &ctor_val
                 && let Some(ctor_obj) = self.get_object(o.id)
@@ -423,7 +423,7 @@ impl Interpreter {
 
     pub(crate) fn setup_async_disposable_stack(&mut self) {
         let ads_proto = self.create_object();
-        if let Some(ref op) = self.object_prototype {
+        if let Some(ref op) = self.realm().object_prototype {
             ads_proto.borrow_mut().prototype = Some(op.clone());
         }
 
@@ -713,7 +713,7 @@ impl Interpreter {
                     };
                     let new_obj = interp.create_object();
                     {
-                        let env = interp.global_env.borrow();
+                        let env = interp.realm().global_env.borrow();
                         if let Some(ctor_val) = env.get("AsyncDisposableStack")
                             && let JsValue::Object(ctor) = &ctor_val
                             && let Some(ctor_obj) = interp.get_object(ctor.id)
@@ -774,7 +774,7 @@ impl Interpreter {
 
         // Wire up
         {
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             if let Some(ctor_val) = env.get("AsyncDisposableStack") {
                 ads_proto
                     .borrow_mut()
@@ -782,7 +782,7 @@ impl Interpreter {
             }
         }
         {
-            let env = self.global_env.borrow();
+            let env = self.realm().global_env.borrow();
             if let Some(ctor_val) = env.get("AsyncDisposableStack")
                 && let JsValue::Object(o) = &ctor_val
                 && let Some(ctor_obj) = self.get_object(o.id)

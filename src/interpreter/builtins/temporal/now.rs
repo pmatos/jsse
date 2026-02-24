@@ -43,7 +43,7 @@ impl Interpreter {
                 let ns = current_epoch_nanoseconds();
                 let obj = interp.create_object();
                 obj.borrow_mut().class_name = "Temporal.Instant".to_string();
-                if let Some(ref proto) = interp.temporal_instant_prototype {
+                if let Some(ref proto) = interp.realm().temporal_instant_prototype {
                     obj.borrow_mut().prototype = Some(proto.clone());
                 }
                 obj.borrow_mut().temporal_data = Some(TemporalData::Instant {
@@ -130,7 +130,7 @@ impl Interpreter {
                 let ns = current_epoch_nanoseconds();
                 let obj = interp.create_object();
                 obj.borrow_mut().class_name = "Temporal.ZonedDateTime".to_string();
-                if let Some(ref proto) = interp.temporal_zoned_date_time_prototype {
+                if let Some(ref proto) = interp.realm().temporal_zoned_date_time_prototype {
                     obj.borrow_mut().prototype = Some(proto.clone());
                 }
                 obj.borrow_mut().temporal_data = Some(TemporalData::ZonedDateTime {
