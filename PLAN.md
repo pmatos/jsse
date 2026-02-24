@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,114 (48,066 files, dual strict/non-strict per spec)
-**Current pass rate:** 88,416 / 92,114 (95.99%)
+**Current pass rate:** 88,474 / 92,114 (96.05%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -177,6 +177,8 @@ These features block significant numbers of tests:
 
 68. ~~**Conformance batch: TypedArray, import, destructuring, for-of**~~ — ✅ Done (+340 new passes, 95.13% → 95.49%). Ten fixes across three areas: (1) TypedArray: spec-correct modular integer conversion (to_int32/to_uint32 etc. use wrapping instead of saturation), [[HasProperty]] canonical numeric index check, [[Delete]] strict mode TypeError, [[OwnPropertyKeys]] virtual index synthesis. TypedArrayConstructors: 1,228→1,256/1,442 (87%). (2) Dynamic import: import.defer()/import.source() parsing and runtime, import() options validation (TypeError for non-object), module this=undefined. dynamic-import/catch: 202→266/336 (79%). (3) Destructuring/iteration: compound assignment null/undefined base evaluation order, destructuring pattern validation (rest-before-element, multiple rest, rest-with-initializer), for-of TDZ in head expression. assignment: 747→759/850 (89%), compound-assignment: 720→764/786 (97%), for-of: 1,332→1,344/1,442 (93%).
 
+69. ~~**`using`/`await-using` (Explicit Resource Management) bug fixes**~~ — ✅ Done (+58 new passes, 95.99% → 96.05%). Five targeted bug fixes: (1) Parser: `parse_try_statement` now sets `in_block_or_function=true` for try/catch/finally bodies so `using` declarations are recognized inside try blocks. (2) `add_disposable_resource`: replaced raw `get_property` with getter-aware `get_object_property` for `Symbol.dispose` lookup — fixes objects with `get [Symbol.dispose]()` accessors. (3) `exec_for`: restructured with Rust labeled block to call `dispose_resources` after all loop exit paths (break/normal/throw). (4) `call_function`: added `dispose_resources` call after `exec_statements` for sync function body disposal. (5) `call_async_function`: added `dispose_resources` call after `exec_statements` for async function body disposal. Parser: `for (using x = init; test; update)` regular for loop support, `for (await using x = init; test; update)` support, `is_using_declaration()` extended to recognize `await`/`yield`/`let`/`static`/`async` keyword tokens. Class static blocks: set `in_block_or_function=true`. `check_for_in_of_early_errors` extended to reject `let` binding in `using`/`await-using` declarations. using/await-using: 246→300/336 (89.3%).
+
 ---
 
 ## Cross-Cutting Concerns
@@ -249,5 +251,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,160 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,474 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |

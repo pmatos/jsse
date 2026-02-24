@@ -393,8 +393,8 @@ impl<'a> Parser<'a> {
         if let Some(d) = decls.first() {
             Self::bound_names_from_pattern(&d.pattern, &mut bound);
         }
-        // "let" cannot be a bound name in let/const declarations
-        if kind == VarKind::Let || kind == VarKind::Const {
+        // "let" cannot be a bound name in let/const/using declarations
+        if matches!(kind, VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing) {
             for name in &bound {
                 if name == "let" {
                     return Err(ParseError {
@@ -551,7 +551,7 @@ impl<'a> Parser<'a> {
         };
         self.eat(&Token::LeftParen)?;
 
-        // for (using x of expr)
+        // for (using x of expr) or for (using x = expr; test; update)
         if matches!(&self.current, Token::Identifier(n) if n == "using")
             && self.is_using_declaration()
         {
@@ -565,20 +565,163 @@ impl<'a> Parser<'a> {
                 let right = self.parse_assignment_expression()?;
                 self.eat(&Token::RightParen)?;
                 let body = self.parse_iteration_body()?;
+                let decls = vec![VariableDeclarator {
+                    pattern: Pattern::Identifier(ident),
+                    init: None,
+                }];
+                Self::check_for_in_of_early_errors(VarKind::Using, &decls, &body)?;
                 return Ok(Statement::ForOf(ForOfStatement {
                     left: ForInOfLeft::Variable(VariableDeclaration {
                         kind: VarKind::Using,
-                        declarations: vec![VariableDeclarator {
-                            pattern: Pattern::Identifier(ident),
-                            init: None,
-                        }],
+                        declarations: decls,
                     }),
                     right,
                     body,
                     is_await,
                 }));
             }
-            return Err(self.error("using in for statement only valid with for-of"));
+            // for (using x = init; test; update)
+            if self.current != Token::Assign {
+                return Err(self.error("using declaration requires an initializer"));
+            }
+            self.advance()?;
+            self.no_in = true;
+            let first_init = self.parse_assignment_expression()?;
+            self.no_in = false;
+            let mut decls = vec![VariableDeclarator {
+                pattern: Pattern::Identifier(ident),
+                init: Some(first_init),
+            }];
+            while self.current == Token::Comma {
+                self.advance()?;
+                let name = self
+                    .current_identifier_name()
+                    .ok_or_else(|| self.error("Expected identifier in using declaration"))?;
+                self.advance()?;
+                if self.current != Token::Assign {
+                    return Err(self.error("using declaration requires an initializer"));
+                }
+                self.advance()?;
+                self.no_in = true;
+                let init = self.parse_assignment_expression()?;
+                self.no_in = false;
+                decls.push(VariableDeclarator {
+                    pattern: Pattern::Identifier(name),
+                    init: Some(init),
+                });
+            }
+            // Fall through to ForStatement init
+            let init = Some(ForInit::Variable(VariableDeclaration {
+                kind: VarKind::Using,
+                declarations: decls,
+            }));
+            self.eat(&Token::Semicolon)?;
+            let test = if self.current == Token::Semicolon {
+                None
+            } else {
+                Some(self.parse_expression()?)
+            };
+            self.eat(&Token::Semicolon)?;
+            let update = if self.current == Token::RightParen {
+                None
+            } else {
+                Some(self.parse_expression()?)
+            };
+            self.eat(&Token::RightParen)?;
+            let body = self.parse_iteration_body()?;
+            return Ok(Statement::For(ForStatement {
+                init,
+                test,
+                update,
+                body,
+            }));
+        }
+
+        // for (await using x of expr) or for (await using x = expr; test; update)
+        if matches!(&self.current, Token::Keyword(Keyword::Await))
+            && self.in_async
+            && self.is_await_using_declaration()
+        {
+            self.advance()?; // await
+            self.advance()?; // using
+            let ident = self
+                .current_identifier_name()
+                .ok_or_else(|| self.error("Expected identifier in await using declaration"))?;
+            self.advance()?;
+            if self.current == Token::Keyword(Keyword::Of) {
+                self.advance()?;
+                let right = self.parse_assignment_expression()?;
+                self.eat(&Token::RightParen)?;
+                let body = self.parse_iteration_body()?;
+                let decls = vec![VariableDeclarator {
+                    pattern: Pattern::Identifier(ident),
+                    init: None,
+                }];
+                Self::check_for_in_of_early_errors(VarKind::AwaitUsing, &decls, &body)?;
+                return Ok(Statement::ForOf(ForOfStatement {
+                    left: ForInOfLeft::Variable(VariableDeclaration {
+                        kind: VarKind::AwaitUsing,
+                        declarations: decls,
+                    }),
+                    right,
+                    body,
+                    is_await: true,
+                }));
+            }
+            // for (await using x = init; test; update)
+            if self.current != Token::Assign {
+                return Err(self.error("await using declaration requires an initializer"));
+            }
+            self.advance()?;
+            self.no_in = true;
+            let first_init = self.parse_assignment_expression()?;
+            self.no_in = false;
+            let mut decls = vec![VariableDeclarator {
+                pattern: Pattern::Identifier(ident),
+                init: Some(first_init),
+            }];
+            while self.current == Token::Comma {
+                self.advance()?;
+                let name = self
+                    .current_identifier_name()
+                    .ok_or_else(|| self.error("Expected identifier in await using declaration"))?;
+                self.advance()?;
+                if self.current != Token::Assign {
+                    return Err(self.error("await using declaration requires an initializer"));
+                }
+                self.advance()?;
+                self.no_in = true;
+                let init = self.parse_assignment_expression()?;
+                self.no_in = false;
+                decls.push(VariableDeclarator {
+                    pattern: Pattern::Identifier(name),
+                    init: Some(init),
+                });
+            }
+            let init = Some(ForInit::Variable(VariableDeclaration {
+                kind: VarKind::AwaitUsing,
+                declarations: decls,
+            }));
+            self.eat(&Token::Semicolon)?;
+            let test = if self.current == Token::Semicolon {
+                None
+            } else {
+                Some(self.parse_expression()?)
+            };
+            self.eat(&Token::Semicolon)?;
+            let update = if self.current == Token::RightParen {
+                None
+            } else {
+                Some(self.parse_expression()?)
+            };
+            self.eat(&Token::RightParen)?;
+            let body = self.parse_iteration_body()?;
+            return Ok(Statement::For(ForStatement {
+                init,
+                test,
+                update,
+                body,
+            }));
         }
 
         // for (init; test; update)
@@ -954,10 +1097,16 @@ impl<'a> Parser<'a> {
     fn parse_try_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // try
         self.eat(&Token::LeftBrace)?;
+        let prev_block = self.in_block_or_function;
+        let prev_sc = self.in_switch_case;
+        self.in_block_or_function = true;
+        self.in_switch_case = false;
         let mut block = Vec::new();
         while self.current != Token::RightBrace {
             block.push(self.parse_statement_or_declaration()?);
         }
+        self.in_block_or_function = prev_block;
+        self.in_switch_case = prev_sc;
         self.eat(&Token::RightBrace)?;
 
         let handler = if self.current == Token::Keyword(Keyword::Catch) {
@@ -971,10 +1120,16 @@ impl<'a> Parser<'a> {
                 None
             };
             self.eat(&Token::LeftBrace)?;
+            let prev_block = self.in_block_or_function;
+            let prev_sc = self.in_switch_case;
+            self.in_block_or_function = true;
+            self.in_switch_case = false;
             let mut body = Vec::new();
             while self.current != Token::RightBrace {
                 body.push(self.parse_statement_or_declaration()?);
             }
+            self.in_block_or_function = prev_block;
+            self.in_switch_case = prev_sc;
             self.eat(&Token::RightBrace)?;
             Some(CatchClause { param, body })
         } else {
@@ -984,10 +1139,16 @@ impl<'a> Parser<'a> {
         let finalizer = if self.current == Token::Keyword(Keyword::Finally) {
             self.advance()?;
             self.eat(&Token::LeftBrace)?;
+            let prev_block = self.in_block_or_function;
+            let prev_sc = self.in_switch_case;
+            self.in_block_or_function = true;
+            self.in_switch_case = false;
             let mut body = Vec::new();
             while self.current != Token::RightBrace {
                 body.push(self.parse_statement_or_declaration()?);
             }
+            self.in_block_or_function = prev_block;
+            self.in_switch_case = prev_sc;
             self.eat(&Token::RightBrace)?;
             Some(body)
         } else {
@@ -1074,7 +1235,18 @@ impl<'a> Parser<'a> {
             Err(_) => return false,
         };
         let lt = self.prev_line_terminator;
-        let is_using = !lt && matches!(&self.current, Token::Identifier(_));
+        let is_using = !lt
+            && (matches!(&self.current, Token::Identifier(_))
+                || matches!(
+                    &self.current,
+                    Token::Keyword(
+                        Keyword::Await
+                            | Keyword::Yield
+                            | Keyword::Let
+                            | Keyword::Static
+                            | Keyword::Async
+                    )
+                ));
         self.push_back(self.current.clone(), self.prev_line_terminator);
         self.current = saved;
         self.prev_line_terminator = saved_lt;

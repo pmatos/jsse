@@ -7964,6 +7964,7 @@ impl Interpreter {
                         self.call_stack_envs.push(exec_env.clone());
                         let result = self.exec_statements(&body, &exec_env);
                         self.call_stack_envs.pop();
+                        let result = self.dispose_resources(&exec_env, result);
                         self.last_call_this_value = func_env.borrow().get("this");
                         match result {
                             Completion::Return(v) => {
@@ -11902,6 +11903,7 @@ impl Interpreter {
         }
 
         let result = self.exec_statements(body, &func_env);
+        let result = self.dispose_resources(&func_env, result);
         match result {
             Completion::Return(v) | Completion::Normal(v) => {
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);

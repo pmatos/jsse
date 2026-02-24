@@ -624,6 +624,8 @@ impl<'a> Parser<'a> {
                 let prev_in_switch = self.in_switch;
                 let prev_in_static_block = self.in_static_block;
                 let prev_allow_super_call = self.allow_super_call;
+                let prev_block = self.in_block_or_function;
+                let prev_sc = self.in_switch_case;
                 self.allow_super_property = true;
                 self.allow_super_call = false;
                 self.in_function = 0;
@@ -632,6 +634,8 @@ impl<'a> Parser<'a> {
                 self.in_iteration = 0;
                 self.in_switch = 0;
                 self.in_static_block = true;
+                self.in_block_or_function = true;
+                self.in_switch_case = false;
                 let prev_labels = std::mem::take(&mut self.labels);
                 let mut stmts = Vec::new();
                 let mut lexical_names: Vec<String> = Vec::new();
@@ -662,6 +666,8 @@ impl<'a> Parser<'a> {
                 self.in_iteration = prev_in_iteration;
                 self.in_switch = prev_in_switch;
                 self.in_static_block = prev_in_static_block;
+                self.in_block_or_function = prev_block;
+                self.in_switch_case = prev_sc;
                 if Self::stmts_contain_arguments(&stmts) {
                     return Err(self.error("'arguments' is not allowed in class static blocks"));
                 }

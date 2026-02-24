@@ -1285,6 +1285,7 @@ impl Interpreter {
                     };
                     let comp = self.exec_variable_declaration(decl, decl_env);
                     if comp.is_abrupt() {
+                        // Init failed — no resources were registered, skip disposal.
                         return comp;
                     }
                 }
@@ -1297,42 +1298,45 @@ impl Interpreter {
             }
         }
         let mut v = JsValue::Undefined;
-        loop {
-            if let Some(test) = &f.test {
-                let val = match self.eval_expr(test, &for_env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if !self.to_boolean_val(&val) {
-                    break;
-                }
-            }
-            match self.exec_statement(&f.body, &for_env) {
-                Completion::Normal(val) => {
-                    v = val;
-                }
-                Completion::Empty => {}
-                Completion::Continue(None, cont_val) => {
-                    if let Some(val) = cont_val {
-                        v = val;
+        let result = 'for_loop: {
+            loop {
+                if let Some(test) = &f.test {
+                    let val = match self.eval_expr(test, &for_env) {
+                        Completion::Normal(v) => v,
+                        other => break 'for_loop other,
+                    };
+                    if !self.to_boolean_val(&val) {
+                        break;
                     }
                 }
-                Completion::Break(None, break_val) => {
-                    if let Some(val) = break_val {
+                match self.exec_statement(&f.body, &for_env) {
+                    Completion::Normal(val) => {
                         v = val;
                     }
-                    return Completion::Normal(v);
+                    Completion::Empty => {}
+                    Completion::Continue(None, cont_val) => {
+                        if let Some(val) = cont_val {
+                            v = val;
+                        }
+                    }
+                    Completion::Break(None, break_val) => {
+                        if let Some(val) = break_val {
+                            v = val;
+                        }
+                        break;
+                    }
+                    other => break 'for_loop other,
                 }
-                other => return other,
-            }
-            if let Some(update) = &f.update {
-                let comp = self.eval_expr(update, &for_env);
-                if comp.is_abrupt() {
-                    return comp;
+                if let Some(update) = &f.update {
+                    let comp = self.eval_expr(update, &for_env);
+                    if comp.is_abrupt() {
+                        break 'for_loop comp;
+                    }
                 }
             }
-        }
-        Completion::Normal(v)
+            Completion::Normal(v)
+        };
+        self.dispose_resources(&for_env, result)
     }
 
     fn exec_for_in(&mut self, fi: &ForInStatement, env: &EnvRef) -> Completion {
@@ -1906,23 +1910,32 @@ impl Interpreter {
 
         if let Some(ref key) = sym_key
             && let JsValue::Object(o) = value
-            && let Some(obj) = self.get_object(o.id)
         {
-            let val = obj.borrow().get_property(key);
-            if !matches!(val, JsValue::Undefined) {
-                method = val;
+            let obj_id = o.id;
+            match self.get_object_property(obj_id, key, value) {
+                Completion::Normal(v) if !matches!(v, JsValue::Undefined | JsValue::Null) => {
+                    method = v;
+                }
+                Completion::Throw(e) => return Err(e),
+                _ => {}
             }
         }
 
         if matches!(method, JsValue::Undefined)
             && hint == DisposeHint::Async
-            && let Some(sync_key) = self.get_symbol_key("dispose")
-            && let JsValue::Object(o) = value
-            && let Some(obj) = self.get_object(o.id)
         {
-            let val = obj.borrow().get_property(&sync_key);
-            if !matches!(val, JsValue::Undefined) {
-                method = val;
+            let sync_key = self.get_symbol_key("dispose");
+            if let Some(ref key) = sync_key
+                && let JsValue::Object(o) = value
+            {
+                let obj_id = o.id;
+                match self.get_object_property(obj_id, key, value) {
+                    Completion::Normal(v) if !matches!(v, JsValue::Undefined | JsValue::Null) => {
+                        method = v;
+                    }
+                    Completion::Throw(e) => return Err(e),
+                    _ => {}
+                }
             }
         }
 
