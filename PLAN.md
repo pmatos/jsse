@@ -51,7 +51,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Function | 94% | 839/893 |
 | Array | 96% | 5,846/6,111 |
 | DataView | 91% | 1,016/1,122 |
-| TypedArray | 90% | 2,572/2,860 |
+| TypedArray | 96% | 2,732/2,860 |
 | RegExp | 98% | 3,674/3,756 |
 | Proxy | 79% | 478/607 |
 | TypedArrayConstructors | 87% | 1,256/1,442 |
