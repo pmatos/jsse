@@ -880,6 +880,7 @@ impl Interpreter {
                 }
                 let mut done = false;
                 let mut error: Option<JsValue> = None;
+
                 for elem in elements {
                     if let Some(elem) = elem {
                         match elem {
@@ -909,6 +910,7 @@ impl Interpreter {
                                 };
                                 if let Err(e) = self.bind_pattern(p, item, kind, env) {
                                     error = Some(e);
+
                                     break;
                                 }
                             }
@@ -972,20 +974,19 @@ impl Interpreter {
                         s.gc_temp_roots.remove(pos);
                     }
                 };
-                if !done {
-                    if let Some(err) = error {
+                if let Some(err) = error {
+                    if !done {
                         let _ = self.iterator_close_result(&iterator);
-                        unroot_iter(self);
-                        return Err(err);
                     }
+                    unroot_iter(self);
+                    return Err(err);
+                }
+                if !done {
                     let r = self.iterator_close_result(&iterator);
                     unroot_iter(self);
                     return r;
                 }
                 unroot_iter(self);
-                if let Some(err) = error {
-                    return Err(err);
-                }
                 Ok(())
             }
             Pattern::Object(props) => {
@@ -1328,13 +1329,75 @@ impl Interpreter {
         Completion::Normal(v)
     }
 
+    fn collect_for_decl_bound_names(left: &ForInOfLeft) -> Vec<String> {
+        let mut names = Vec::new();
+        if let ForInOfLeft::Variable(decl) = left {
+            if matches!(
+                decl.kind,
+                VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+            ) {
+                for d in &decl.declarations {
+                    Self::collect_pattern_bound_names(&d.pattern, &mut names);
+                }
+            }
+        }
+        names
+    }
+
+    fn collect_pattern_bound_names(pat: &Pattern, names: &mut Vec<String>) {
+        match pat {
+            Pattern::Identifier(n) => names.push(n.clone()),
+            Pattern::Array(elems) => {
+                for elem in elems.iter().flatten() {
+                    match elem {
+                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                            Self::collect_pattern_bound_names(p, names);
+                        }
+                    }
+                }
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                            Self::collect_pattern_bound_names(p, names);
+                        }
+                        ObjectPatternProperty::Shorthand(n) => names.push(n.clone()),
+                    }
+                }
+            }
+            Pattern::Assign(p, _) | Pattern::Rest(p) => Self::collect_pattern_bound_names(p, names),
+            Pattern::MemberExpression(_) => {}
+        }
+    }
+
     fn exec_for_of(
         &mut self,
         fo: &ForOfStatement,
         env: &EnvRef,
         label: Option<&str>,
     ) -> Completion {
-        let iterable = match self.eval_expr(&fo.right, env) {
+        // §14.7.5.12 ForIn/OfHeadEvaluation: create TDZ env for bound names
+        let tdz_names = Self::collect_for_decl_bound_names(&fo.left);
+        let eval_env = if !tdz_names.is_empty() {
+            let tdz_env = Environment::new(Some(env.clone()));
+            for name in &tdz_names {
+                tdz_env.borrow_mut().bindings.insert(
+                    name.clone(),
+                    Binding {
+                        value: JsValue::Undefined,
+                        kind: BindingKind::Let,
+                        initialized: false,
+                        deletable: false,
+                    },
+                );
+            }
+            tdz_env
+        } else {
+            env.clone()
+        };
+
+        let iterable = match self.eval_expr(&fo.right, &eval_env) {
             Completion::Normal(v) => v,
             other => return other,
         };

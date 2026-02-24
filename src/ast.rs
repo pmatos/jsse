@@ -160,6 +160,8 @@ pub enum Expression {
     Delete(Box<Expression>),
     Sequence(Vec<Expression>),
     Import(Box<Expression>, Option<Box<Expression>>), // dynamic import(specifier, options?)
+    ImportDefer(Box<Expression>, Option<Box<Expression>>), // import.defer(specifier, options?)
+    ImportSource(Box<Expression>, Option<Box<Expression>>), // import.source(specifier, options?)
     ImportMeta,
     NewTarget,
     PrivateIdentifier(String),

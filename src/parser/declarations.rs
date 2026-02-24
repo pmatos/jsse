@@ -537,7 +537,9 @@ impl<'a> Parser<'a> {
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 exprs.iter().any(Self::expr_has_direct_super)
             }
-            Expression::Import(inner, opts) => {
+            Expression::Import(inner, opts)
+            | Expression::ImportDefer(inner, opts)
+            | Expression::ImportSource(inner, opts) => {
                 Self::expr_has_direct_super(inner)
                     || opts.as_ref().is_some_and(|e| Self::expr_has_direct_super(e))
             }

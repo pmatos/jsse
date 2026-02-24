@@ -851,6 +851,10 @@ impl Interpreter {
 
         let module_env = Environment::new_function_scope(Some(self.global_env.clone()));
         module_env.borrow_mut().strict = true;
+        {
+            let mut env = module_env.borrow_mut();
+            env.declare("this", BindingKind::Var);
+        }
 
         // Register entry-point module in registry to handle self-imports
         let canon_path_entry = module_path
@@ -1128,6 +1132,10 @@ impl Interpreter {
         // Create module environment
         let module_env = Environment::new_function_scope(Some(self.global_env.clone()));
         module_env.borrow_mut().strict = true;
+        {
+            let mut env = module_env.borrow_mut();
+            env.declare("this", BindingKind::Var);
+        }
 
         // Register module early to handle circular imports
         let loaded_module = Rc::new(RefCell::new(LoadedModule {

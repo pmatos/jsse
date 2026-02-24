@@ -1410,6 +1410,13 @@ impl JsObjectData {
     }
 
     pub fn has_property(&self, key: &str) -> bool {
+        // §10.4.5.2 TypedArray [[HasProperty]]: canonical numeric index strings
+        // never consult the prototype chain
+        if let Some(ref ta) = self.typed_array_info {
+            if let Some(index) = canonical_numeric_index_string(key) {
+                return is_valid_integer_index(ta, index);
+            }
+        }
         if self.has_own_property(key) {
             return true;
         }
@@ -2075,11 +2082,33 @@ fn to_number(v: &JsValue) -> f64 {
     }
 }
 
+fn to_uint32_modular(n: f64) -> u32 {
+    if n.is_nan() || n.is_infinite() || n == 0.0 {
+        return 0;
+    }
+    let n = n.trunc();
+    let n = n % 4294967296.0; // 2^32
+    let n = if n < 0.0 { n + 4294967296.0 } else { n };
+    n as u32
+}
+fn to_int32_modular(n: f64) -> i32 {
+    if n.is_nan() || n.is_infinite() || n == 0.0 {
+        return 0;
+    }
+    let n = n.trunc();
+    let n = n % 4294967296.0; // 2^32
+    let n = if n < 0.0 { n + 4294967296.0 } else { n };
+    if n >= 2147483648.0 {
+        (n - 4294967296.0) as i32
+    } else {
+        n as i32
+    }
+}
 fn to_int8(v: &JsValue) -> i8 {
-    to_number(v) as i32 as i8
+    to_int32_modular(to_number(v)) as i8
 }
 fn to_uint8(v: &JsValue) -> u8 {
-    to_number(v) as i32 as u8
+    to_uint32_modular(to_number(v)) as u8
 }
 fn to_uint8_clamped(v: &JsValue) -> u8 {
     let n = to_number(v);
@@ -2092,16 +2121,16 @@ fn to_uint8_clamped(v: &JsValue) -> u8 {
     }
 }
 fn to_int16(v: &JsValue) -> i16 {
-    to_number(v) as i32 as i16
+    to_int32_modular(to_number(v)) as i16
 }
 fn to_uint16(v: &JsValue) -> u16 {
-    to_number(v) as i32 as u16
+    to_uint32_modular(to_number(v)) as u16
 }
 fn to_int32(v: &JsValue) -> i32 {
-    to_number(v) as i32
+    to_int32_modular(to_number(v))
 }
 fn to_uint32(v: &JsValue) -> u32 {
-    to_number(v) as u32
+    to_uint32_modular(to_number(v))
 }
 fn to_bigint64(v: &JsValue) -> i64 {
     match v {

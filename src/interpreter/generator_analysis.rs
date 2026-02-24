@@ -565,7 +565,9 @@ fn analyze_expression(
             analyze_expression(inner, analysis, ctx, true);
         }
 
-        Expression::Import(source, opts) => {
+        Expression::Import(source, opts)
+        | Expression::ImportDefer(source, opts)
+        | Expression::ImportSource(source, opts) => {
             analyze_expression(source, analysis, ctx, true);
             if let Some(opts_expr) = opts {
                 analyze_expression(opts_expr, analysis, ctx, true);
@@ -715,7 +717,9 @@ pub fn expr_contains_yield(expr: &Expression) -> bool {
         | Expression::Spread(e)
         | Expression::Await(e)
         | Expression::Update(_, _, e) => expr_contains_yield(e),
-        Expression::Import(e, opts) => {
+        Expression::Import(e, opts)
+        | Expression::ImportDefer(e, opts)
+        | Expression::ImportSource(e, opts) => {
             expr_contains_yield(e) || opts.as_ref().is_some_and(|o| expr_contains_yield(o))
         }
         Expression::Binary(_, l, r)

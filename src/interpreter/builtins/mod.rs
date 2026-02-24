@@ -4,6 +4,7 @@ pub(crate) mod bigint;
 mod collections;
 mod date;
 mod disposable;
+mod intl;
 mod iterators;
 mod number;
 mod promise;
@@ -12,7 +13,6 @@ mod regexp_lookbehind;
 mod string;
 mod temporal;
 mod typedarray;
-mod intl;
 
 use super::*;
 
@@ -4478,6 +4478,33 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
+                        // TypedArray [[OwnPropertyKeys]]: virtual index keys
+                        {
+                            let b = obj.borrow();
+                            if let Some(ref ta) = b.typed_array_info {
+                                let len = crate::interpreter::types::typed_array_length(ta);
+                                let property_order = b.property_order.clone();
+                                drop(b);
+                                let mut names: Vec<JsValue> = Vec::new();
+                                for i in 0..len {
+                                    names.push(JsValue::String(JsString::from_str(&i.to_string())));
+                                }
+                                for k in &property_order {
+                                    if k.starts_with("Symbol(") {
+                                        continue;
+                                    }
+                                    if let Ok(n) = k.parse::<u64>()
+                                        && n < 0xFFFFFFFF
+                                        && n.to_string() == *k
+                                    {
+                                        continue; // skip numeric indices
+                                    }
+                                    names.push(JsValue::String(JsString::from_str(k)));
+                                }
+                                let arr = interp.create_array(names);
+                                return Completion::Normal(arr);
+                            }
+                        }
                         let names: Vec<JsValue> = obj
                             .borrow()
                             .property_order
@@ -5899,6 +5926,41 @@ impl Interpreter {
                                 return Completion::Normal(arr);
                             }
                             Err(e) => return Completion::Throw(e),
+                        }
+                    }
+                    // TypedArray [[OwnPropertyKeys]]: §10.4.5.6
+                    {
+                        let b = obj.borrow();
+                        if let Some(ref ta) = b.typed_array_info {
+                            let len = crate::interpreter::types::typed_array_length(ta);
+                            let property_order = b.property_order.clone();
+                            drop(b);
+                            let mut keys: Vec<JsValue> = Vec::new();
+                            for i in 0..len {
+                                keys.push(JsValue::String(JsString::from_str(&i.to_string())));
+                            }
+                            let mut strings: Vec<(String, usize)> = Vec::new();
+                            let mut symbols: Vec<(String, usize)> = Vec::new();
+                            for (pos, k) in property_order.iter().enumerate() {
+                                if k.starts_with("Symbol(") {
+                                    symbols.push((k.clone(), pos));
+                                } else if let Ok(n) = k.parse::<u64>()
+                                    && n < 0xFFFFFFFF
+                                    && n.to_string() == *k
+                                {
+                                    // Skip numeric indices, already handled above
+                                } else {
+                                    strings.push((k.clone(), pos));
+                                }
+                            }
+                            for (s, _) in &strings {
+                                keys.push(JsValue::String(JsString::from_str(s)));
+                            }
+                            for (sym_key, _) in &symbols {
+                                keys.push(interp.symbol_key_to_jsvalue(sym_key));
+                            }
+                            let arr = interp.create_array(keys);
+                            return Completion::Normal(arr);
                         }
                     }
                     // Collect virtual own keys for String exotic objects

@@ -545,6 +545,15 @@ impl Interpreter {
                                 && let Some(index) = canonical_numeric_index_string(&key)
                             {
                                 if is_valid_integer_index(ta, index) {
+                                    drop(obj_borrow);
+                                    let is_strict = env.borrow().strict;
+                                    if is_strict {
+                                        return Completion::Throw(self.create_type_error(
+                                            &format!(
+                                                "Cannot delete property '{key}' of a TypedArray"
+                                            ),
+                                        ));
+                                    }
                                     return Completion::Normal(JsValue::Boolean(false));
                                 }
                                 return Completion::Normal(JsValue::Boolean(true));
@@ -793,7 +802,29 @@ impl Interpreter {
                 // Evaluate options expression if present (abrupt completions propagate directly)
                 if let Some(opts_expr) = options_expr {
                     match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(_opts_val) => {}
+                        Completion::Normal(opts_val) => {
+                            // Steps 9-10: If options is not undefined, validate it
+                            if !opts_val.is_undefined() {
+                                if !matches!(opts_val, JsValue::Object(_)) {
+                                    let err = self.create_type_error(
+                                        "The second argument to import() must be an object",
+                                    );
+                                    return self.create_rejected_promise(err);
+                                }
+                                // Step 11: Get "with" property
+                                if let JsValue::Object(o) = &opts_val {
+                                    if let Some(obj) = self.get_object(o.id) {
+                                        let wv = obj.borrow().get_property("with");
+                                        if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
+                                            let err = self.create_type_error(
+                                                "The 'with' option must be an object",
+                                            );
+                                            return self.create_rejected_promise(err);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         other => return other,
                     }
                 }
@@ -803,6 +834,81 @@ impl Interpreter {
                     Err(e) => return self.create_rejected_promise(e),
                 };
                 self.dynamic_import(&source)
+            }
+            Expression::ImportDefer(source_expr, options_expr) => {
+                let source_val = match self.eval_expr(source_expr, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if let Some(opts_expr) = options_expr {
+                    match self.eval_expr(opts_expr, env) {
+                        Completion::Normal(opts_val) => {
+                            if !opts_val.is_undefined() {
+                                if !matches!(opts_val, JsValue::Object(_)) {
+                                    let err = self.create_type_error(
+                                        "The second argument to import.defer() must be an object",
+                                    );
+                                    return self.create_rejected_promise(err);
+                                }
+                                if let JsValue::Object(o) = &opts_val {
+                                    if let Some(obj) = self.get_object(o.id) {
+                                        let wv = obj.borrow().get_property("with");
+                                        if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
+                                            let err = self.create_type_error(
+                                                "The 'with' option must be an object",
+                                            );
+                                            return self.create_rejected_promise(err);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        other => return other,
+                    }
+                }
+                let source = match self.to_string_value(&source_val) {
+                    Ok(s) => s,
+                    Err(e) => return self.create_rejected_promise(e),
+                };
+                self.dynamic_import(&source)
+            }
+            Expression::ImportSource(source_expr, options_expr) => {
+                let source_val = match self.eval_expr(source_expr, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if let Some(opts_expr) = options_expr {
+                    match self.eval_expr(opts_expr, env) {
+                        Completion::Normal(opts_val) => {
+                            if !opts_val.is_undefined() {
+                                if !matches!(opts_val, JsValue::Object(_)) {
+                                    let err = self.create_type_error(
+                                        "The second argument to import.source() must be an object",
+                                    );
+                                    return self.create_rejected_promise(err);
+                                }
+                                if let JsValue::Object(o) = &opts_val {
+                                    if let Some(obj) = self.get_object(o.id) {
+                                        let wv = obj.borrow().get_property("with");
+                                        if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
+                                            let err = self.create_type_error(
+                                                "The 'with' option must be an object",
+                                            );
+                                            return self.create_rejected_promise(err);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        other => return other,
+                    }
+                }
+                let source = match self.to_string_value(&source_val) {
+                    Ok(s) => s,
+                    Err(e) => return self.create_rejected_promise(e),
+                };
+                let err = self.create_type_error("import.source is not yet supported");
+                self.create_rejected_promise(err)
             }
             Expression::Template(tmpl) => {
                 let mut s = String::new();
@@ -2465,28 +2571,54 @@ impl Interpreter {
                     _ => None,
                 };
                 // For compound ops, compute property key and get current value before RHS
-                let (key, lval_for_compound) = if op != AssignOp::Assign {
-                    let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
-                        MemberProperty::Computed(_) => {
-                            match self.to_property_key(key_val.as_ref().unwrap()) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
+                let (key, lval_for_compound) =
+                    if op != AssignOp::Assign {
+                        // §6.2.5.5 GetValue: if base is null/undefined, throw TypeError
+                        // before ToPropertyKey (§13.3.3 EvaluatePropertyAccessWithExpressionKey
+                        // stores the uncoerced key in the Reference)
+                        if obj_val.is_null() || obj_val.is_undefined() {
+                            let base_str = if obj_val.is_null() {
+                                "null"
+                            } else {
+                                "undefined"
+                            };
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot read properties of {base_str}"
+                            )));
                         }
-                        MemberProperty::Private(_) => unreachable!(),
-                    };
-                    let lval = if let JsValue::Object(ref o) = obj_val
-                        && let Some(obj) = self.get_object(o.id)
-                    {
-                        obj.borrow().get_property(&key)
+                        let key = match prop {
+                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Computed(_) => {
+                                match self.to_property_key(key_val.as_ref().unwrap()) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                            MemberProperty::Private(_) => unreachable!(),
+                        };
+                        let lval = if let JsValue::Object(ref o) = obj_val
+                            && let Some(obj) = self.get_object(o.id)
+                        {
+                            obj.borrow().get_property(&key)
+                        } else {
+                            match self.to_object(&obj_val) {
+                                Completion::Normal(wrapped) => {
+                                    if let JsValue::Object(ref o) = wrapped
+                                        && let Some(obj) = self.get_object(o.id)
+                                    {
+                                        obj.borrow().get_property(&key)
+                                    } else {
+                                        JsValue::Undefined
+                                    }
+                                }
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
+                            }
+                        };
+                        (key, Some(lval))
                     } else {
-                        JsValue::Undefined
+                        (String::new(), None) // key computed after RHS for simple assign
                     };
-                    (key, Some(lval))
-                } else {
-                    (String::new(), None) // key computed after RHS for simple assign
-                };
                 // Now evaluate RHS
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
@@ -2737,13 +2869,16 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         let uint32 = num as u32;
-                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite() {
+                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite()
+                        {
                             return Completion::Throw(
                                 self.create_error("RangeError", "Invalid array length"),
                             );
                         }
                         let length_val = JsValue::Number(uint32 as f64);
-                        let success = obj.borrow_mut().set_property_value(&key, length_val.clone());
+                        let success = obj
+                            .borrow_mut()
+                            .set_property_value(&key, length_val.clone());
                         if !success && env.borrow().strict {
                             return Completion::Throw(self.create_type_error(&format!(
                                 "Cannot assign to read only property '{key}'"
@@ -3086,7 +3221,8 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         let uint32 = num as u32;
-                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite() {
+                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite()
+                        {
                             return Completion::Throw(
                                 self.create_error("RangeError", "Invalid array length"),
                             );
@@ -3560,7 +3696,9 @@ impl Interpreter {
                         let arr = self.create_array(rest);
                         match self.put_value_to_target(inner, arr, env) {
                             Completion::Normal(_) | Completion::Empty => {}
-                            Completion::Throw(e) => error = Some(e),
+                            Completion::Throw(e) => {
+                                error = Some(e);
+                            }
                             Completion::Yield(v) => {
                                 yield_val = Some(v);
                             }
@@ -3615,6 +3753,7 @@ impl Interpreter {
                                 }
                                 Completion::Throw(e) => {
                                     error = Some(e);
+
                                     break;
                                 }
                                 Completion::Yield(v) => {
@@ -3659,7 +3798,7 @@ impl Interpreter {
             return Completion::Yield(yv);
         }
 
-        // IteratorClose: if iterator is not done, call return()
+        // §13.15.5.2: IteratorClose when done is false
         if !done {
             if let Some(err) = error {
                 let _ = self.iterator_close_result(&iterator);

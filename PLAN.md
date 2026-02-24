@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 91,986 (48,002 files, dual strict/non-strict per spec)
-**Current pass rate:** 87,502 / 91,986 (95.13%)
+**Current pass rate:** 87,842 / 91,986 (95.49%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -51,10 +51,10 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Function | 94% | 839/893 |
 | Array | 96% | 5,846/6,111 |
 | DataView | 91% | 1,016/1,122 |
-| TypedArray | 89% | 2,558/2,860 |
+| TypedArray | 90% | 2,572/2,860 |
 | RegExp | 98% | 3,674/3,756 |
 | Proxy | 79% | 478/607 |
-| TypedArrayConstructors | 78% | 1,122/1,442 |
+| TypedArrayConstructors | 87% | 1,256/1,442 |
 | Symbol | 77% | 142/184 |
 | annexB | 75% | 1,038/1,377 |
 
@@ -176,6 +176,8 @@ These features block significant numbers of tests:
 66. ~~**Array exotic [[DefineOwnProperty]] + ArraySetLength**~~ — ✅ Done (+116 new passes, 94.84% → 94.96%). Implemented spec-compliant Array exotic [[DefineOwnProperty]] (§10.4.2.1) and ArraySetLength (§10.4.2.4) as centralized methods on Interpreter. Refactored Object.defineProperty to use these methods (removing ~120 lines of inline Array logic). Updated Object.defineProperties to route Array targets through array_define_own_property(). Fixed set_property_value writable check for Array length. Object/defineProperty: 2250/2250 (100%), Object/defineProperties: 1262/1264 (99.84%), Object: 6,565/6,802 (97%), Array: 5,846/6,111 (96%).
 
 67. ~~**RegExp compliance fixes**~~ — ✅ Done (+160 new passes, 94.96% → 95.12%). Eight fixes across lexer, validator, translator, and parser: (1) LS/PS rejection in regex literals — lexer now rejects U+2028/U+2029 as line terminators (+42 passes). (2) `/u` flag escape validation — incomplete `\x`/`\u`/`\c` escapes, bare `{`/`}`, identity escape restrictions, char class range validation (+104 passes). (3) Quantifiers on assertions — reject `*`/`+`/`?`/`{n}` after lookahead/lookbehind in `/u` mode and lookbehinds always (+26 passes). (4) Named group ZWNJ/ZWJ — sanitize non-ASCII group names for Rust regex crate, decode `\uXXXX` escapes in group names (+14 passes). (5) Duplicate group capture clearing — conditional backreferences via `fancy-regex` `(?(group)...)` syntax (+2 passes). (6) Non-Unicode case folding — guard problematic chars (long-s, Kelvin sign, etc.) with `(?-i:...)` (+4 passes). (7) Forward/undefined backreferences — emit empty match for forward refs, conditionals for backward refs (+50 passes). (8) ASI after regex re-lex — parser now tracks line terminators during regex re-lexing (+6 passes). RegExp: 3,481→3,674/3,756 (98%), language/literals/regexp: 378→470/476 (99%), annexB/built-ins/RegExp: 108→110/124 (89%).
+
+68. ~~**Conformance batch: TypedArray, import, destructuring, for-of**~~ — ✅ Done (+340 new passes, 95.13% → 95.49%). Ten fixes across three areas: (1) TypedArray: spec-correct modular integer conversion (to_int32/to_uint32 etc. use wrapping instead of saturation), [[HasProperty]] canonical numeric index check, [[Delete]] strict mode TypeError, [[OwnPropertyKeys]] virtual index synthesis. TypedArrayConstructors: 1,228→1,256/1,442 (87%). (2) Dynamic import: import.defer()/import.source() parsing and runtime, import() options validation (TypeError for non-object), module this=undefined. dynamic-import/catch: 202→266/336 (79%). (3) Destructuring/iteration: compound assignment null/undefined base evaluation order, destructuring pattern validation (rest-before-element, multiple rest, rest-with-initializer), for-of TDZ in head expression. assignment: 747→759/850 (89%), compound-assignment: 720→764/786 (97%), for-of: 1,332→1,344/1,442 (93%).
 
 ---
 

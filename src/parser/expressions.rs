@@ -79,6 +79,7 @@ impl<'a> Parser<'a> {
         simple_only: bool,
     ) -> Result<(), ParseError> {
         if !simple_only && matches!(expr, Expression::Array(_) | Expression::Object(_)) {
+            self.validate_destructuring_pattern(expr)?;
             return Ok(());
         }
         if Self::is_simple_assignment_target(expr) {
@@ -91,6 +92,73 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         Err(self.error("Invalid left-hand side in assignment"))
+    }
+
+    fn validate_destructuring_pattern(&self, expr: &Expression) -> Result<(), ParseError> {
+        match expr {
+            Expression::Array(elements) => {
+                let mut saw_rest = false;
+                for elem in elements {
+                    if let Some(e) = elem {
+                        if saw_rest {
+                            return Err(self.error(
+                                "Rest element must be last element in array destructuring pattern",
+                            ));
+                        }
+                        if let Expression::Spread(inner) = e {
+                            saw_rest = true;
+                            // Rest element cannot have initializer: [...x = 1]
+                            if matches!(inner.as_ref(), Expression::Assign(AssignOp::Assign, _, _))
+                            {
+                                return Err(
+                                    self.error("Rest element may not have a default initializer")
+                                );
+                            }
+                            self.validate_destructuring_target(inner)?;
+                        } else if let Expression::Assign(AssignOp::Assign, target, _) = e {
+                            self.validate_destructuring_target(target)?;
+                        } else {
+                            self.validate_destructuring_target(e)?;
+                        }
+                    } else {
+                        // Elision after rest is also invalid
+                        if saw_rest {
+                            return Err(self.error(
+                                "Rest element must be last element in array destructuring pattern",
+                            ));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Expression::Object(props) => {
+                let mut saw_rest = false;
+                for prop in props {
+                    if saw_rest {
+                        return Err(self.error(
+                            "Rest element must be last element in object destructuring pattern",
+                        ));
+                    }
+                    if let Expression::Spread(_) = &prop.value {
+                        saw_rest = true;
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_destructuring_target(&self, expr: &Expression) -> Result<(), ParseError> {
+        match expr {
+            Expression::Array(_) | Expression::Object(_) => {
+                self.validate_destructuring_pattern(expr)
+            }
+            Expression::Sequence(_) | Expression::Comma(_) => {
+                Err(self.error("Invalid destructuring assignment target"))
+            }
+            _ => Ok(()),
+        }
     }
 
     pub(super) fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
@@ -692,7 +760,6 @@ impl<'a> Parser<'a> {
             Token::Keyword(Keyword::Import) => {
                 self.advance()?;
                 if self.current == Token::Dot {
-                    // import.meta
                     self.advance()?;
                     match &self.current {
                         Token::Identifier(name) if name == "meta" => {
@@ -702,11 +769,44 @@ impl<'a> Parser<'a> {
                             self.advance()?;
                             Ok(Expression::ImportMeta)
                         }
-                        _ => Err(self.error("Expected 'meta' after 'import.'")),
+                        Token::Identifier(name) if name == "defer" || name == "source" => {
+                            let is_defer = name == "defer";
+                            self.advance()?;
+                            self.eat(&Token::LeftParen)?;
+                            let old_no_in = self.no_in;
+                            self.no_in = false;
+                            let source = self.parse_assignment_expression()?;
+                            let options = if self.current == Token::Comma {
+                                self.advance()?;
+                                if self.current == Token::RightParen {
+                                    None
+                                } else {
+                                    let opts = self.parse_assignment_expression()?;
+                                    if self.current == Token::Comma {
+                                        self.advance()?;
+                                    }
+                                    Some(Box::new(opts))
+                                }
+                            } else {
+                                None
+                            };
+                            self.no_in = old_no_in;
+                            self.eat(&Token::RightParen)?;
+                            if is_defer {
+                                Ok(Expression::ImportDefer(Box::new(source), options))
+                            } else {
+                                Ok(Expression::ImportSource(Box::new(source), options))
+                            }
+                        }
+                        _ => {
+                            Err(self.error("Expected 'meta', 'defer', or 'source' after 'import.'"))
+                        }
                     }
                 } else if self.current == Token::LeftParen {
                     // import(source [, options] [,]) - dynamic import
                     self.advance()?;
+                    let old_no_in = self.no_in;
+                    self.no_in = false;
                     let source = self.parse_assignment_expression()?;
                     let options = if self.current == Token::Comma {
                         self.advance()?;
@@ -724,6 +824,7 @@ impl<'a> Parser<'a> {
                     } else {
                         None
                     };
+                    self.no_in = old_no_in;
                     self.eat(&Token::RightParen)?;
                     Ok(Expression::Import(Box::new(source), options))
                 } else {

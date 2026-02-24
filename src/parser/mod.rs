@@ -491,7 +491,9 @@ impl<'a> Parser<'a> {
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
                 exprs.iter().any(Self::contains_arguments)
             }
-            Expression::Import(inner, opts) => {
+            Expression::Import(inner, opts)
+            | Expression::ImportDefer(inner, opts)
+            | Expression::ImportSource(inner, opts) => {
                 Self::contains_arguments(inner)
                     || opts.as_ref().is_some_and(|e| Self::contains_arguments(e))
             }
