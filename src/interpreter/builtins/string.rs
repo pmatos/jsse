@@ -113,7 +113,7 @@ fn is_regexp(interp: &mut Interpreter, obj_id: u64, obj_val: &JsValue) -> Result
     if let Some(match_key) = interp.get_symbol_key("match") {
         match interp.get_object_property(obj_id, &match_key, obj_val) {
             Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
-                return Ok(to_boolean(&v));
+                return Ok(interp.to_boolean_val(&v));
             }
             Completion::Normal(_) => {}
             Completion::Throw(e) => return Err(e),
@@ -566,9 +566,8 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let resolved = interp.intl_resolve_locale(&locale_list);
-                    let langid: icu::locale::LanguageIdentifier = resolved
-                        .parse()
-                        .unwrap_or_else(|_| "und".parse().unwrap());
+                    let langid: icu::locale::LanguageIdentifier =
+                        resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
                     let cm = icu::casemap::CaseMapper::new();
                     let result = cm.lowercase_to_string(&s, &langid);
                     Completion::Normal(JsValue::String(JsString::from_str(&result)))
@@ -588,9 +587,8 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let resolved = interp.intl_resolve_locale(&locale_list);
-                    let langid: icu::locale::LanguageIdentifier = resolved
-                        .parse()
-                        .unwrap_or_else(|_| "und".parse().unwrap());
+                    let langid: icu::locale::LanguageIdentifier =
+                        resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
                     let cm = icu::casemap::CaseMapper::new();
                     let result = cm.uppercase_to_string(&s, &langid);
                     Completion::Normal(JsValue::String(JsString::from_str(&result)))
@@ -1027,7 +1025,7 @@ impl Interpreter {
                         let is_regexp = if let Some(match_key) = interp.get_symbol_key("match") {
                             match interp.get_object_property(o.id, &match_key, &search_value) {
                                 Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
-                                    to_boolean(&v)
+                                    interp.to_boolean_val(&v)
                                 }
                                 Completion::Normal(_) => interp
                                     .get_object(o.id)
@@ -1338,7 +1336,7 @@ impl Interpreter {
                         let is_regexp = if let Some(match_key) = interp.get_symbol_key("match") {
                             match interp.get_object_property(o.id, &match_key, &regexp) {
                                 Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
-                                    to_boolean(&v)
+                                    interp.to_boolean_val(&v)
                                 }
                                 Completion::Normal(_) => interp
                                     .get_object(o.id)
@@ -1633,9 +1631,9 @@ impl Interpreter {
                         _ => units.len(),
                     };
                     let end = (start + result_len).min(units.len());
-                    Completion::Normal(JsValue::String(JsString::from_str(&utf16_substring(
-                        &units, start, end,
-                    ))))
+                    Completion::Normal(JsValue::String(JsString {
+                        code_units: units[start..end].to_vec(),
+                    }))
                 }),
                 false,
             ));

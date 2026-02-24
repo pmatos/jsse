@@ -3,8 +3,7 @@ use fixed_decimal::{CompactDecimal, Decimal};
 use icu::locale::Locale as IcuLocale;
 use icu::plurals::{
     PluralCategory, PluralOperands, PluralRuleType, PluralRules as IcuPluralRules,
-    PluralRulesOptions as IcuPluralRulesOptions, PluralRulesPreferences,
-    PluralRulesWithRanges,
+    PluralRulesOptions as IcuPluralRulesOptions, PluralRulesPreferences, PluralRulesWithRanges,
 };
 
 fn plural_category_to_str(cat: PluralCategory) -> &'static str {
@@ -68,8 +67,7 @@ fn number_to_plural_operands_with_notation(n: f64, notation: &str) -> PluralOper
             let sig_str = format!("{}", significand);
             let mut dec: Decimal = sig_str.parse().unwrap_or_else(|_| Decimal::from(0i32));
             dec.multiply_pow10(0);
-            let compact =
-                CompactDecimal::from_significand_and_exponent(dec, abs_exponent);
+            let compact = CompactDecimal::from_significand_and_exponent(dec, abs_exponent);
             PluralOperands::from(&compact)
         }
         _ => number_to_plural_operands(n),
@@ -108,10 +106,7 @@ fn base_locale(locale_str: &str) -> String {
     }
 }
 
-fn get_plural_categories_sorted(
-    locale_str: &str,
-    plural_type: &str,
-) -> Vec<&'static str> {
+fn get_plural_categories_sorted(locale_str: &str, plural_type: &str) -> Vec<&'static str> {
     let base = base_locale(locale_str);
     let icu_locale: IcuLocale = base.parse().unwrap_or_else(|_| "en".parse().unwrap());
     let prefs = PluralRulesPreferences::from(&icu_locale);
@@ -216,8 +211,7 @@ impl Interpreter {
                                 }
                             };
 
-                            let operands =
-                                number_to_plural_operands_with_notation(n, notation);
+                            let operands = number_to_plural_operands_with_notation(n, notation);
                             let cat = rules.category_for(operands);
                             return Completion::Normal(JsValue::String(JsString::from_str(
                                 plural_category_to_str(cat),
@@ -291,15 +285,14 @@ impl Interpreter {
                                 PluralRuleType::Cardinal
                             });
 
-                            let range_rules =
-                                match PluralRulesWithRanges::try_new(prefs, opts) {
-                                    Ok(r) => r,
-                                    Err(_) => {
-                                        return Completion::Normal(JsValue::String(
-                                            JsString::from_str("other"),
-                                        ));
-                                    }
-                                };
+                            let range_rules = match PluralRulesWithRanges::try_new(prefs, opts) {
+                                Ok(r) => r,
+                                Err(_) => {
+                                    return Completion::Normal(JsValue::String(
+                                        JsString::from_str("other"),
+                                    ));
+                                }
+                            };
 
                             let start_ops = number_to_plural_operands(start_n);
                             let end_ops = number_to_plural_operands(end_n);
@@ -359,28 +352,36 @@ impl Interpreter {
                                 "locale".to_string(),
                                 PropertyDescriptor::data(
                                     JsValue::String(JsString::from_str(&locale)),
-                                    true, true, true,
+                                    true,
+                                    true,
+                                    true,
                                 ),
                             );
                             result.borrow_mut().insert_property(
                                 "type".to_string(),
                                 PropertyDescriptor::data(
                                     JsValue::String(JsString::from_str(&plural_type)),
-                                    true, true, true,
+                                    true,
+                                    true,
+                                    true,
                                 ),
                             );
                             result.borrow_mut().insert_property(
                                 "notation".to_string(),
                                 PropertyDescriptor::data(
                                     JsValue::String(JsString::from_str(&notation)),
-                                    true, true, true,
+                                    true,
+                                    true,
+                                    true,
                                 ),
                             );
                             result.borrow_mut().insert_property(
                                 "minimumIntegerDigits".to_string(),
                                 PropertyDescriptor::data(
                                     JsValue::Number(minimum_integer_digits as f64),
-                                    true, true, true,
+                                    true,
+                                    true,
+                                    true,
                                 ),
                             );
 
@@ -390,14 +391,18 @@ impl Interpreter {
                                     "minimumFractionDigits".to_string(),
                                     PropertyDescriptor::data(
                                         JsValue::Number(minimum_fraction_digits as f64),
-                                        true, true, true,
+                                        true,
+                                        true,
+                                        true,
                                     ),
                                 );
                                 result.borrow_mut().insert_property(
                                     "maximumFractionDigits".to_string(),
                                     PropertyDescriptor::data(
                                         JsValue::Number(maximum_fraction_digits as f64),
-                                        true, true, true,
+                                        true,
+                                        true,
+                                        true,
                                     ),
                                 );
                             } else {
@@ -407,14 +412,18 @@ impl Interpreter {
                                         "minimumFractionDigits".to_string(),
                                         PropertyDescriptor::data(
                                             JsValue::Number(minimum_fraction_digits as f64),
-                                            true, true, true,
+                                            true,
+                                            true,
+                                            true,
                                         ),
                                     );
                                     result.borrow_mut().insert_property(
                                         "maximumFractionDigits".to_string(),
                                         PropertyDescriptor::data(
                                             JsValue::Number(maximum_fraction_digits as f64),
-                                            true, true, true,
+                                            true,
+                                            true,
+                                            true,
                                         ),
                                     );
                                 }
@@ -425,7 +434,9 @@ impl Interpreter {
                                     "minimumSignificantDigits".to_string(),
                                     PropertyDescriptor::data(
                                         JsValue::Number(min_sd as f64),
-                                        true, true, true,
+                                        true,
+                                        true,
+                                        true,
                                     ),
                                 );
                             }
@@ -434,7 +445,9 @@ impl Interpreter {
                                     "maximumSignificantDigits".to_string(),
                                     PropertyDescriptor::data(
                                         JsValue::Number(max_sd as f64),
-                                        true, true, true,
+                                        true,
+                                        true,
+                                        true,
                                     ),
                                 );
                             }
@@ -455,28 +468,36 @@ impl Interpreter {
                                 "roundingIncrement".to_string(),
                                 PropertyDescriptor::data(
                                     JsValue::Number(rounding_increment as f64),
-                                    true, true, true,
+                                    true,
+                                    true,
+                                    true,
                                 ),
                             );
                             result.borrow_mut().insert_property(
                                 "roundingMode".to_string(),
                                 PropertyDescriptor::data(
                                     JsValue::String(JsString::from_str(&rounding_mode)),
-                                    true, true, true,
+                                    true,
+                                    true,
+                                    true,
                                 ),
                             );
                             result.borrow_mut().insert_property(
                                 "roundingPriority".to_string(),
                                 PropertyDescriptor::data(
                                     JsValue::String(JsString::from_str(&rounding_priority)),
-                                    true, true, true,
+                                    true,
+                                    true,
+                                    true,
                                 ),
                             );
                             result.borrow_mut().insert_property(
                                 "trailingZeroDisplay".to_string(),
                                 PropertyDescriptor::data(
                                     JsValue::String(JsString::from_str(&trailing_zero_display)),
-                                    true, true, true,
+                                    true,
+                                    true,
+                                    true,
                                 ),
                             );
 

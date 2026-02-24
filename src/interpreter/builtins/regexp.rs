@@ -138,9 +138,7 @@ fn js_string_to_regex_input_mode(code_units: &[u16], unicode: bool) -> String {
     while i < code_units.len() {
         let cu = code_units[i];
         if (0xD800..=0xDBFF).contains(&cu) {
-            if unicode
-                && i + 1 < code_units.len()
-                && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
+            if unicode && i + 1 < code_units.len() && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
             {
                 let cp =
                     ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
@@ -1142,6 +1140,78 @@ pub(super) struct TranslationResult {
     group_name_order: Vec<String>,
 }
 
+/// Parse a quantifier starting at `pos` in `chars` and return
+/// (min_is_zero, end_pos) where end_pos is the index after the full quantifier
+/// (including optional trailing `?` for lazy).
+fn parse_quantifier_min(chars: &[char], pos: usize, len: usize) -> (bool, usize) {
+    let c = chars[pos];
+    let mut end = pos + 1;
+    let min_is_zero = match c {
+        '*' => true,
+        '+' => false,
+        '?' => true,
+        '{' => {
+            let mut j = pos + 1;
+            let num_start = j;
+            while j < len && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > num_start && j < len && (chars[j] == '}' || chars[j] == ',') {
+                let num_str: String = chars[num_start..j].iter().collect();
+                let min_val: u32 = num_str.parse().unwrap_or(1);
+                while j < len && chars[j] != '}' {
+                    j += 1;
+                }
+                if j < len {
+                    j += 1;
+                }
+                end = j;
+                min_val == 0
+            } else {
+                end = pos + 1;
+                false
+            }
+        }
+        _ => {
+            return (false, pos + 1);
+        }
+    };
+    if c != '{' {
+        end = pos + 1;
+    }
+    if end < len && chars[end] == '?' {
+        end += 1;
+    }
+    (min_is_zero, end)
+}
+
+/// Find the start of a lookahead assertion `(?=` or `(?!` in the result string
+/// by scanning backwards from the end, tracking nested parentheses.
+fn find_lookahead_start_in_result(result: &str) -> Option<usize> {
+    let bytes = result.as_bytes();
+    let mut depth = 0;
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        if bytes[i] == b')' {
+            depth += 1;
+        } else if bytes[i] == b'(' {
+            if depth > 0 {
+                depth -= 1;
+            } else {
+                if i + 2 < bytes.len()
+                    && bytes[i + 1] == b'?'
+                    && (bytes[i + 2] == b'=' || bytes[i + 2] == b'!')
+                {
+                    return Some(i);
+                }
+                return None;
+            }
+        }
+    }
+    None
+}
+
 fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     translate_js_pattern_ex(source, flags).map(|r| r.pattern)
 }
@@ -1162,6 +1232,7 @@ pub(super) fn translate_js_pattern_ex(
     let len = chars.len();
     let mut i = 0;
     let mut in_char_class = false;
+    let mut cc_prev_was_class_escape = false;
     let mut groups_seen: u32 = 0;
     let mut open_groups: Vec<u32> = Vec::new();
     let mut open_group_names: Vec<Option<String>> = Vec::new();
@@ -1170,6 +1241,7 @@ pub(super) fn translate_js_pattern_ex(
     let mut group_is_capturing: Vec<bool> = Vec::new();
     let mut lookbehind_depth: u32 = 0;
     let mut is_lookbehind_group: Vec<bool> = Vec::new();
+    let mut is_lookahead_group: Vec<bool> = Vec::new();
     // For capturing groups inside lookbehinds, track the position of '(' in result
     let mut group_result_start: Vec<Option<usize>> = Vec::new();
     let dot_all_base = flags.contains('s');
@@ -1296,6 +1368,7 @@ pub(super) fn translate_js_pattern_ex(
         }
         if c == ']' && in_char_class {
             in_char_class = false;
+            cc_prev_was_class_escape = false;
             result.push(c);
             i += 1;
             continue;
@@ -1304,12 +1377,31 @@ pub(super) fn translate_js_pattern_ex(
         // but fancy_regex interprets it as a nested class. Escape it.
         if c == '[' && in_char_class {
             result.push_str("\\[");
+            cc_prev_was_class_escape = false;
             i += 1;
             continue;
         }
 
+        // Annex B: inside character classes in non-unicode mode, when '-' is between
+        // a class escape (\d,\D,\w,\W,\s,\S) and another atom (or vice versa),
+        // treat '-' as literal rather than forming a range.
+        if c == '-' && in_char_class && !unicode {
+            let next_is_class_escape = i + 2 < len
+                && chars[i + 1] == '\\'
+                && matches!(chars[i + 2], 'd' | 'D' | 'w' | 'W' | 's' | 'S');
+            if cc_prev_was_class_escape || next_is_class_escape {
+                result.push_str("\\-");
+                cc_prev_was_class_escape = false;
+                i += 1;
+                continue;
+            }
+        }
+
         if c == '\\' && i + 1 < len {
             let next = chars[i + 1];
+            if in_char_class {
+                cc_prev_was_class_escape = false;
+            }
             match next {
                 // Named backreference: \k<name> → (?P=name) or alternation for duplicates
                 'k' if !in_char_class && i + 2 < len && chars[i + 2] == '<' => {
@@ -1409,7 +1501,17 @@ pub(super) fn translate_js_pattern_ex(
                     result.push(ctrl);
                     i += 3;
                 }
-                // Annex B: \c + non-letter → match literal backslash + c
+                // Annex B: \c inside character class with digit or underscore
+                'c' if !unicode
+                    && in_char_class
+                    && i + 2 < len
+                    && (chars[i + 2].is_ascii_digit() || chars[i + 2] == '_') =>
+                {
+                    let ctrl = (chars[i + 2] as u8 % 32) as char;
+                    push_literal_char(&mut result, ctrl, in_char_class);
+                    i += 3;
+                }
+                // Annex B: \c + non-letter outside class → match literal backslash + c
                 'c' if !unicode => {
                     push_literal_char(&mut result, '\\', in_char_class);
                     push_literal_char(&mut result, 'c', in_char_class);
@@ -1470,7 +1572,8 @@ pub(super) fn translate_js_pattern_ex(
                     {
                         let hex: String = chars[i + 2..i + 6].iter().collect();
                         if let Ok(cp) = u32::from_str_radix(&hex, 16) {
-                            if unicode && (0xD800..=0xDBFF).contains(&cp)
+                            if unicode
+                                && (0xD800..=0xDBFF).contains(&cp)
                                 && i + 11 < len
                                 && chars[i + 6] == '\\'
                                 && chars[i + 7] == 'u'
@@ -1483,14 +1586,19 @@ pub(super) fn translate_js_pattern_ex(
                                 if let Ok(trail) = u32::from_str_radix(&trail_hex, 16)
                                     && (0xDC00..=0xDFFF).contains(&trail)
                                 {
-                                    let combined = 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
+                                    let combined =
+                                        0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
                                     if let Some(ch) = char::from_u32(combined) {
                                         push_literal_char(&mut result, ch, in_char_class);
                                     }
                                     i += 12;
                                 } else {
                                     if is_surrogate(cp) {
-                                        push_literal_char(&mut result, surrogate_to_pua(cp), in_char_class);
+                                        push_literal_char(
+                                            &mut result,
+                                            surrogate_to_pua(cp),
+                                            in_char_class,
+                                        );
                                     } else if let Some(ch) = char::from_u32(cp) {
                                         push_literal_char(&mut result, ch, in_char_class);
                                     }
@@ -1578,6 +1686,9 @@ pub(super) fn translate_js_pattern_ex(
                         result.push('\\');
                         result.push(next);
                     }
+                    if in_char_class && matches!(next, 'd' | 'D' | 'w' | 'W' | 's' | 'S') {
+                        cc_prev_was_class_escape = true;
+                    }
                     i += 2;
                 }
                 // Numeric backreferences and octal escapes
@@ -1637,61 +1748,51 @@ pub(super) fn translate_js_pattern_ex(
                         }
                         i = ref_end;
                     } else if !flags.contains('u') && !flags.contains('v') {
-                        // Annex B: octal escape (non-Unicode mode)
-                        // Parse up to 3 octal digits
-                        let mut octal_end = i + 1;
-                        let mut octal_count = 0;
-                        while octal_end < len
-                            && octal_count < 3
-                            && chars[octal_end] >= '0'
-                            && chars[octal_end] <= '7'
-                        {
-                            octal_end += 1;
-                            octal_count += 1;
-                        }
-                        if octal_count > 0 {
-                            let octal_str: String = chars[i + 1..octal_end].iter().collect();
-                            if let Ok(val) = u32::from_str_radix(&octal_str, 8) {
-                                if val <= 0xFF {
-                                    if let Some(ch) = char::from_u32(val) {
-                                        if non_unicode_icase(icase)
-                                            && !in_char_class
-                                            && needs_case_fold_guard(ch)
-                                        {
-                                            push_case_fold_guarded(&mut result, ch, false);
-                                        } else {
-                                            push_literal_char(&mut result, ch, in_char_class);
-                                        }
-                                        i = octal_end;
-                                    } else {
-                                        result.push('\\');
-                                        result.push(next);
-                                        i += 2;
-                                    }
-                                } else {
-                                    // Value too large, just match first digit as octal
-                                    let single_val = (next as u32) - ('0' as u32);
-                                    if let Some(ch) = char::from_u32(single_val) {
-                                        if non_unicode_icase(icase)
-                                            && !in_char_class
-                                            && needs_case_fold_guard(ch)
-                                        {
-                                            push_case_fold_guarded(&mut result, ch, false);
-                                        } else {
-                                            push_literal_char(&mut result, ch, in_char_class);
-                                        }
-                                    }
-                                    i += 2;
-                                }
+                        // Annex B: LegacyOctalEscapeSequence or identity escape
+                        if next == '8' || next == '9' {
+                            // \8 and \9 are identity escapes (not valid octal)
+                            if non_unicode_icase(icase)
+                                && !in_char_class
+                                && needs_case_fold_guard(next)
+                            {
+                                push_case_fold_guarded(&mut result, next, false);
                             } else {
-                                result.push('\\');
-                                result.push(next);
+                                push_literal_char(&mut result, next, in_char_class);
+                            }
+                            i += 2;
+                        } else {
+                            // LegacyOctalEscapeSequence grammar:
+                            //   ZeroToThree OctalDigit OctalDigit  (3 digits max for 0-3)
+                            //   FourToSeven OctalDigit             (2 digits max for 4-7)
+                            let first_digit = next;
+                            let max_digits = if first_digit <= '3' { 3 } else { 2 };
+                            let mut octal_end = i + 1;
+                            let mut octal_count = 0;
+                            while octal_end < len
+                                && octal_count < max_digits
+                                && chars[octal_end] >= '0'
+                                && chars[octal_end] <= '7'
+                            {
+                                octal_end += 1;
+                                octal_count += 1;
+                            }
+                            let octal_str: String = chars[i + 1..octal_end].iter().collect();
+                            if let Ok(val) = u32::from_str_radix(&octal_str, 8)
+                                && let Some(ch) = char::from_u32(val)
+                            {
+                                if non_unicode_icase(icase)
+                                    && !in_char_class
+                                    && needs_case_fold_guard(ch)
+                                {
+                                    push_case_fold_guarded(&mut result, ch, false);
+                                } else {
+                                    push_literal_char(&mut result, ch, in_char_class);
+                                }
+                                i = octal_end;
+                            } else {
+                                push_literal_char(&mut result, next, in_char_class);
                                 i += 2;
                             }
-                        } else {
-                            result.push('\\');
-                            result.push(next);
-                            i += 2;
                         }
                     } else {
                         // Unicode mode: pass through (will error in regex engine)
@@ -1788,6 +1889,7 @@ pub(super) fn translate_js_pattern_ex(
                 icase_stack.push(None);
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(true);
+                is_lookahead_group.push(false);
                 group_result_start.push(None);
                 open_group_names.push(None);
                 result.push_str("(?<");
@@ -1799,6 +1901,7 @@ pub(super) fn translate_js_pattern_ex(
                 open_groups.push(groups_seen);
                 group_is_capturing.push(true);
                 is_lookbehind_group.push(false);
+                is_lookahead_group.push(false);
                 group_result_start.push(if lookbehind_depth > 0 {
                     Some(result.len())
                 } else {
@@ -1900,6 +2003,7 @@ pub(super) fn translate_js_pattern_ex(
                 icase_stack.push(Some(prev_icase));
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(false);
+                is_lookahead_group.push(false);
                 group_result_start.push(None);
                 open_group_names.push(None);
 
@@ -1943,6 +2047,7 @@ pub(super) fn translate_js_pattern_ex(
             }
             let was_capturing = matches!(group_is_capturing.pop(), Some(true));
             let was_lookbehind = matches!(is_lookbehind_group.pop(), Some(true));
+            let was_lookahead = matches!(is_lookahead_group.pop(), Some(true));
             let grp_start = group_result_start.pop().flatten();
             open_group_names.pop();
             if was_capturing {
@@ -1950,6 +2055,31 @@ pub(super) fn translate_js_pattern_ex(
             }
             if was_lookbehind {
                 lookbehind_depth -= 1;
+            }
+
+            // Annex B: quantified lookaheads in non-unicode mode.
+            // fancy-regex doesn't handle quantified lookaheads correctly,
+            // so we translate them:
+            //   min >= 1: keep just the assertion (strip quantifier)
+            //   min == 0: remove the assertion entirely
+            if was_lookahead && !unicode && i + 1 < len {
+                let qc = chars[i + 1];
+                let is_quant = qc == '*' || qc == '+' || qc == '?' || qc == '{';
+                if is_quant {
+                    let (min_is_zero, quant_end) = parse_quantifier_min(&chars, i + 1, len);
+                    if min_is_zero {
+                        let la_start = find_lookahead_start_in_result(&result);
+                        if let Some(start) = la_start {
+                            result.truncate(start);
+                        } else {
+                            result.push(')');
+                        }
+                    } else {
+                        result.push(')');
+                    }
+                    i = quant_end;
+                    continue;
+                }
             }
 
             // RTL capture fix: if this is a capturing group inside a lookbehind
@@ -1999,6 +2129,7 @@ pub(super) fn translate_js_pattern_ex(
                 open_groups.push(groups_seen);
                 group_is_capturing.push(true);
                 is_lookbehind_group.push(false);
+                is_lookahead_group.push(false);
                 open_group_names.push(None);
                 if lookbehind_depth > 0 {
                     group_result_start.push(Some(result.len()));
@@ -2006,8 +2137,10 @@ pub(super) fn translate_js_pattern_ex(
                     group_result_start.push(None);
                 }
             } else {
+                let is_la = i + 2 < len && (chars[i + 2] == '=' || chars[i + 2] == '!');
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(false);
+                is_lookahead_group.push(is_la);
                 group_result_start.push(None);
                 open_group_names.push(None);
             }
@@ -2045,6 +2178,9 @@ pub(super) fn translate_js_pattern_ex(
             push_case_fold_guarded(&mut result, c, false);
         } else {
             result.push(c);
+        }
+        if in_char_class {
+            cc_prev_was_class_escape = false;
         }
         i += 1;
     }
@@ -6261,7 +6397,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if to_boolean(&val) {
+                    if interp.to_boolean_val(&val) {
                         result.push(*ch);
                     }
                 }
@@ -6410,7 +6546,7 @@ impl Interpreter {
                             _ => JsValue::Undefined,
                         };
                         if !matches!(matcher, JsValue::Undefined) {
-                            to_boolean(&matcher)
+                            interp.to_boolean_val(&matcher)
                         } else {
                             // Symbol.match is undefined, check [[RegExpMatcher]]
                             if let Some(obj) = interp.get_object(o.id) {

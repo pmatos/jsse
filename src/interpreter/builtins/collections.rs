@@ -1306,7 +1306,7 @@ impl Interpreter {
                 }
             };
             let done = match interp.get_object_property(result_id, "done", &next_result) {
-                Completion::Normal(v) => to_boolean(&v),
+                Completion::Normal(v) => interp.to_boolean_val(&v),
                 other => return Err(other),
             };
             if done {
@@ -1417,7 +1417,7 @@ impl Interpreter {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            if to_boolean(&has_result) {
+                            if interp.to_boolean_val(&has_result) {
                                 new_entries.push(Some(canonicalize_key(entry.clone())));
                             }
                         }
@@ -1481,7 +1481,7 @@ impl Interpreter {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            if !to_boolean(&has_result) {
+                            if !interp.to_boolean_val(&has_result) {
                                 new_entries.push(Some(entry.clone()));
                             }
                         }
@@ -1612,7 +1612,7 @@ impl Interpreter {
                                     Completion::Normal(v) => v,
                                     other => return other,
                                 };
-                            if !to_boolean(&has_result) {
+                            if !interp.to_boolean_val(&has_result) {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
                         }
@@ -1708,7 +1708,7 @@ impl Interpreter {
                                         Completion::Normal(v) => v,
                                         other => return other,
                                     };
-                                if to_boolean(&has_result) {
+                                if interp.to_boolean_val(&has_result) {
                                     return Completion::Normal(JsValue::Boolean(false));
                                 }
                             }

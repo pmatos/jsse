@@ -1,9 +1,13 @@
 use super::super::super::*;
-use icu::list::options::{ListFormatterOptions, ListLength};
 use icu::list::ListFormatter;
+use icu::list::options::{ListFormatterOptions, ListLength};
 use icu::locale::Locale as IcuLocale;
 
-pub(crate) fn create_list_formatter(locale_str: &str, list_type: &str, style: &str) -> ListFormatter {
+pub(crate) fn create_list_formatter(
+    locale_str: &str,
+    list_type: &str,
+    style: &str,
+) -> ListFormatter {
     let locale: IcuLocale = locale_str.parse().unwrap_or_else(|_| "en".parse().unwrap());
     let length = match style {
         "short" => ListLength::Short,
@@ -48,8 +52,7 @@ fn string_list_from_iterable(
                 if let JsValue::String(s) = &value {
                     list.push(s.to_rust_string());
                 } else {
-                    let err =
-                        interp.create_type_error("Iterable yielded a non-string value");
+                    let err = interp.create_type_error("Iterable yielded a non-string value");
                     interp.iterator_close(&iterator, err.clone());
                     return Err(err);
                 }
@@ -59,10 +62,7 @@ fn string_list_from_iterable(
     Ok(list)
 }
 
-fn format_list_to_parts(
-    formatter: &ListFormatter,
-    elements: &[String],
-) -> Vec<(String, String)> {
+fn format_list_to_parts(formatter: &ListFormatter, elements: &[String]) -> Vec<(String, String)> {
     if elements.is_empty() {
         return Vec::new();
     }
@@ -78,8 +78,7 @@ fn format_list_to_parts(
         .map(|i| format!("{}{}{}", placeholder_prefix, i, placeholder_suffix))
         .collect();
 
-    let formatted_with_ph = formatter
-        .format_to_string(placeholders.iter().map(|s| s.as_str()));
+    let formatted_with_ph = formatter.format_to_string(placeholders.iter().map(|s| s.as_str()));
 
     let mut parts: Vec<(String, String)> = Vec::new();
     let mut remaining = formatted_with_ph.as_str();
@@ -143,8 +142,7 @@ impl Interpreter {
                 }
 
                 let formatter = create_list_formatter(&locale, &list_type, &style);
-                let result = formatter
-                    .format_to_string(string_list.iter().map(|s| s.as_str()));
+                let result = formatter.format_to_string(string_list.iter().map(|s| s.as_str()));
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -386,7 +384,5 @@ fn extract_list_format_data(
             }
         }
     }
-    Err(interp.create_type_error(
-        "Intl.ListFormat method called on incompatible receiver",
-    ))
+    Err(interp.create_type_error("Intl.ListFormat method called on incompatible receiver"))
 }

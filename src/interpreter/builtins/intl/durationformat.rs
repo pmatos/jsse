@@ -332,7 +332,11 @@ fn format_one_unit(
         )
     } else {
         // Numeric or 2-digit: plain number formatting
-        let mid = if style == "2-digit" { 2 } else { min_integer_digits };
+        let mid = if style == "2-digit" {
+            2
+        } else {
+            min_integer_digits
+        };
 
         let actual_value = if let Some(vs) = value_str {
             vs.parse::<f64>().unwrap_or(value)
@@ -418,7 +422,11 @@ fn format_one_unit_parts(
             numbering_system,
         )
     } else {
-        let mid = if style == "2-digit" { 2 } else { min_integer_digits };
+        let mid = if style == "2-digit" {
+            2
+        } else {
+            min_integer_digits
+        };
 
         format_to_parts_internal(
             actual_value,
@@ -561,10 +569,7 @@ fn format_duration(data: &DurationFormatData, dur: &DurationRecord) -> String {
     }
 
     // Join all groups into strings
-    let strings: Vec<String> = result
-        .iter()
-        .map(|parts| parts.join(""))
-        .collect();
+    let strings: Vec<String> = result.iter().map(|parts| parts.join("")).collect();
 
     if strings.is_empty() {
         return String::new();
@@ -585,7 +590,10 @@ fn format_duration(data: &DurationFormatData, dur: &DurationRecord) -> String {
     formatter.format_to_string(strings.iter().map(|s| s.as_str()))
 }
 
-fn to_duration_record(interp: &mut Interpreter, input: &JsValue) -> Result<DurationRecord, JsValue> {
+fn to_duration_record(
+    interp: &mut Interpreter,
+    input: &JsValue,
+) -> Result<DurationRecord, JsValue> {
     // Step 1-2: If input is a string, parse as ISO 8601 duration
     if let JsValue::String(s) = input {
         let dur_str = s.to_rust_string();
@@ -600,14 +608,26 @@ fn to_duration_record(interp: &mut Interpreter, input: &JsValue) -> Result<Durat
         return Err(interp.create_type_error("Duration must be an object or string"));
     }
 
-    let obj_id = if let JsValue::Object(o) = input { o.id } else { unreachable!() };
+    let obj_id = if let JsValue::Object(o) = input {
+        o.id
+    } else {
+        unreachable!()
+    };
 
     // Check for Temporal.Duration
     if let Some(obj_data) = interp.get_object(obj_id) {
         let b = obj_data.borrow();
         if let Some(TemporalData::Duration {
-            years, months, weeks, days, hours, minutes, seconds,
-            milliseconds, microseconds, nanoseconds,
+            years,
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+            microseconds,
+            nanoseconds,
         }) = &b.temporal_data
         {
             let rec = DurationRecord {
@@ -630,37 +650,36 @@ fn to_duration_record(interp: &mut Interpreter, input: &JsValue) -> Result<Durat
 
     let mut has_relevant_field = false;
 
-    let get_field = |interp: &mut Interpreter, name: &str, has: &mut bool| -> Result<f64, JsValue> {
-        let val = match interp.get_object_property(obj_id, name, input) {
-            Completion::Normal(v) => v,
-            Completion::Throw(e) => return Err(e),
-            _ => JsValue::Undefined,
+    let get_field =
+        |interp: &mut Interpreter, name: &str, has: &mut bool| -> Result<f64, JsValue> {
+            let val = match interp.get_object_property(obj_id, name, input) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+
+            if matches!(val, JsValue::Undefined) {
+                return Ok(0.0);
+            }
+
+            *has = true;
+
+            let num = interp.to_number_value(&val)?;
+            if num.is_nan() || num.is_infinite() {
+                return Err(interp
+                    .create_range_error(&format!("Invalid duration value for {}: {}", name, num)));
+            }
+
+            // All duration values must be integers
+            if num != num.trunc() {
+                return Err(interp.create_range_error(&format!(
+                    "Duration {} must be an integer, got {}",
+                    name, num
+                )));
+            }
+
+            Ok(num)
         };
-
-        if matches!(val, JsValue::Undefined) {
-            return Ok(0.0);
-        }
-
-        *has = true;
-
-        let num = interp.to_number_value(&val)?;
-        if num.is_nan() || num.is_infinite() {
-            return Err(interp.create_range_error(&format!(
-                "Invalid duration value for {}: {}",
-                name, num
-            )));
-        }
-
-        // All duration values must be integers
-        if num != num.trunc() {
-            return Err(interp.create_range_error(&format!(
-                "Duration {} must be an integer, got {}",
-                name, num
-            )));
-        }
-
-        Ok(num)
-    };
 
     let years = normalize_zero(get_field(interp, "years", &mut has_relevant_field)?);
     let months = normalize_zero(get_field(interp, "months", &mut has_relevant_field)?);
@@ -674,7 +693,9 @@ fn to_duration_record(interp: &mut Interpreter, input: &JsValue) -> Result<Durat
     let nanoseconds = normalize_zero(get_field(interp, "nanoseconds", &mut has_relevant_field)?);
 
     if !has_relevant_field {
-        return Err(interp.create_type_error("Duration object must have at least one duration property"));
+        return Err(
+            interp.create_type_error("Duration object must have at least one duration property")
+        );
     }
 
     let rec = DurationRecord {
@@ -699,9 +720,16 @@ fn validate_duration_record(interp: &mut Interpreter, rec: &DurationRecord) -> R
     let mut has_positive = false;
     let mut has_negative = false;
     let fields = [
-        rec.years, rec.months, rec.weeks, rec.days,
-        rec.hours, rec.minutes, rec.seconds,
-        rec.milliseconds, rec.microseconds, rec.nanoseconds,
+        rec.years,
+        rec.months,
+        rec.weeks,
+        rec.days,
+        rec.hours,
+        rec.minutes,
+        rec.seconds,
+        rec.milliseconds,
+        rec.microseconds,
+        rec.nanoseconds,
     ];
     for &v in &fields {
         if v > 0.0 {
@@ -712,7 +740,9 @@ fn validate_duration_record(interp: &mut Interpreter, rec: &DurationRecord) -> R
         }
     }
     if has_positive && has_negative {
-        return Err(interp.create_range_error("Duration cannot have mixed positive and negative values"));
+        return Err(
+            interp.create_range_error("Duration cannot have mixed positive and negative values")
+        );
     }
 
     // Check abs(years|months|weeks) < 2^32
@@ -741,7 +771,8 @@ fn validate_duration_record(interp: &mut Interpreter, rec: &DurationRecord) -> R
     // limit: 2^53 seconds = 2^53 * 10^9 nanoseconds
     let limit_ns: i128 = 9_007_199_254_740_992_000_000_000;
     if total_ns.abs() >= limit_ns {
-        return Err(interp.create_range_error("Duration value out of range: normalizedSeconds exceeds 2^53"));
+        return Err(interp
+            .create_range_error("Duration value out of range: normalizedSeconds exceeds 2^53"));
     }
 
     Ok(())
@@ -792,7 +823,9 @@ fn parse_duration_string(interp: &mut Interpreter, s: &str) -> Result<DurationRe
         }
 
         // Parse number
-        let num_end = rest.find(|c: char| !c.is_ascii_digit() && c != '.').unwrap_or(rest.len());
+        let num_end = rest
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(rest.len());
         if num_end == 0 {
             return Err(interp.create_range_error("Invalid duration string"));
         }
@@ -800,7 +833,9 @@ fn parse_duration_string(interp: &mut Interpreter, s: &str) -> Result<DurationRe
         rest = &rest[num_end..];
 
         if rest.is_empty() {
-            return Err(interp.create_range_error("Invalid duration string: missing unit designator"));
+            return Err(
+                interp.create_range_error("Invalid duration string: missing unit designator")
+            );
         }
 
         let designator = rest.chars().next().unwrap();
@@ -824,9 +859,9 @@ fn parse_duration_string(interp: &mut Interpreter, s: &str) -> Result<DurationRe
             microseconds = us_str.parse::<f64>().unwrap_or(0.0);
             nanoseconds = ns_str.parse::<f64>().unwrap_or(0.0);
         } else {
-            let val: f64 = num_str.parse().map_err(|_| {
-                interp.create_range_error("Invalid number in duration string")
-            })?;
+            let val: f64 = num_str
+                .parse()
+                .map_err(|_| interp.create_range_error("Invalid number in duration string"))?;
 
             match (in_time, designator) {
                 (false, 'Y') => years = val,
@@ -860,8 +895,16 @@ fn parse_duration_string(interp: &mut Interpreter, s: &str) -> Result<DurationRe
     }
 
     let rec = DurationRecord {
-        years, months, weeks, days, hours, minutes, seconds,
-        milliseconds, microseconds, nanoseconds,
+        years,
+        months,
+        weeks,
+        days,
+        hours,
+        minutes,
+        seconds,
+        milliseconds,
+        microseconds,
+        nanoseconds,
     };
     validate_duration_record(interp, &rec)?;
     Ok(rec)
@@ -930,13 +973,14 @@ fn extract_duration_format_data(
             }
         }
     }
-    Err(interp.create_type_error(
-        "Intl.DurationFormat method called on incompatible receiver",
-    ))
+    Err(interp.create_type_error("Intl.DurationFormat method called on incompatible receiver"))
 }
 
 // Returns (type, value, unit) triples. unit is empty string for literal separators.
-fn format_to_parts_duration(data: &DurationFormatData, dur: &DurationRecord) -> Vec<(String, String, String)> {
+fn format_to_parts_duration(
+    data: &DurationFormatData,
+    dur: &DurationRecord,
+) -> Vec<(String, String, String)> {
     let time_separator = ":";
     // Each group is a list of (type, value, unit) parts
     let mut result_groups: Vec<Vec<(String, String, String)>> = Vec::new();
@@ -1032,7 +1076,11 @@ fn format_to_parts_duration(data: &DurationFormatData, dur: &DurationRecord) -> 
 
             if need_separator {
                 if let Some(last) = result_groups.last_mut() {
-                    last.push(("literal".to_string(), time_separator.to_string(), String::new()));
+                    last.push((
+                        "literal".to_string(),
+                        time_separator.to_string(),
+                        String::new(),
+                    ));
                     last.extend(tagged_parts);
                 }
             } else {
@@ -1054,7 +1102,11 @@ fn format_to_parts_duration(data: &DurationFormatData, dur: &DurationRecord) -> 
         return Vec::new();
     }
 
-    let list_style = if data.style == "digital" { "short" } else { &data.style };
+    let list_style = if data.style == "digital" {
+        "short"
+    } else {
+        &data.style
+    };
 
     if result_groups.len() == 1 {
         return result_groups.into_iter().next().unwrap();
@@ -1084,7 +1136,11 @@ fn format_to_parts_duration(data: &DurationFormatData, dur: &DurationRecord) -> 
         let ph = &placeholders[idx];
         if let Some(pos) = remaining.find(ph.as_str()) {
             if pos > 0 {
-                parts.push(("literal".to_string(), remaining[..pos].to_string(), String::new()));
+                parts.push((
+                    "literal".to_string(),
+                    remaining[..pos].to_string(),
+                    String::new(),
+                ));
             }
             for part in group {
                 parts.push(part.clone());
@@ -1227,28 +1283,76 @@ impl Interpreter {
 
                 let mut props: Vec<(&str, JsValue)> = vec![
                     ("locale", JsValue::String(JsString::from_str(&data.locale))),
-                    ("numberingSystem", JsValue::String(JsString::from_str(&data.numbering_system))),
+                    (
+                        "numberingSystem",
+                        JsValue::String(JsString::from_str(&data.numbering_system)),
+                    ),
                     ("style", JsValue::String(JsString::from_str(&data.style))),
                     ("years", JsValue::String(JsString::from_str(&data.years))),
-                    ("yearsDisplay", JsValue::String(JsString::from_str(&data.years_display))),
+                    (
+                        "yearsDisplay",
+                        JsValue::String(JsString::from_str(&data.years_display)),
+                    ),
                     ("months", JsValue::String(JsString::from_str(&data.months))),
-                    ("monthsDisplay", JsValue::String(JsString::from_str(&data.months_display))),
+                    (
+                        "monthsDisplay",
+                        JsValue::String(JsString::from_str(&data.months_display)),
+                    ),
                     ("weeks", JsValue::String(JsString::from_str(&data.weeks))),
-                    ("weeksDisplay", JsValue::String(JsString::from_str(&data.weeks_display))),
+                    (
+                        "weeksDisplay",
+                        JsValue::String(JsString::from_str(&data.weeks_display)),
+                    ),
                     ("days", JsValue::String(JsString::from_str(&data.days))),
-                    ("daysDisplay", JsValue::String(JsString::from_str(&data.days_display))),
+                    (
+                        "daysDisplay",
+                        JsValue::String(JsString::from_str(&data.days_display)),
+                    ),
                     ("hours", JsValue::String(JsString::from_str(&data.hours))),
-                    ("hoursDisplay", JsValue::String(JsString::from_str(&data.hours_display))),
-                    ("minutes", JsValue::String(JsString::from_str(&data.minutes))),
-                    ("minutesDisplay", JsValue::String(JsString::from_str(&data.minutes_display))),
-                    ("seconds", JsValue::String(JsString::from_str(&data.seconds))),
-                    ("secondsDisplay", JsValue::String(JsString::from_str(&data.seconds_display))),
-                    ("milliseconds", JsValue::String(JsString::from_str(&data.milliseconds))),
-                    ("millisecondsDisplay", JsValue::String(JsString::from_str(&data.milliseconds_display))),
-                    ("microseconds", JsValue::String(JsString::from_str(&data.microseconds))),
-                    ("microsecondsDisplay", JsValue::String(JsString::from_str(&data.microseconds_display))),
-                    ("nanoseconds", JsValue::String(JsString::from_str(&data.nanoseconds))),
-                    ("nanosecondsDisplay", JsValue::String(JsString::from_str(&data.nanoseconds_display))),
+                    (
+                        "hoursDisplay",
+                        JsValue::String(JsString::from_str(&data.hours_display)),
+                    ),
+                    (
+                        "minutes",
+                        JsValue::String(JsString::from_str(&data.minutes)),
+                    ),
+                    (
+                        "minutesDisplay",
+                        JsValue::String(JsString::from_str(&data.minutes_display)),
+                    ),
+                    (
+                        "seconds",
+                        JsValue::String(JsString::from_str(&data.seconds)),
+                    ),
+                    (
+                        "secondsDisplay",
+                        JsValue::String(JsString::from_str(&data.seconds_display)),
+                    ),
+                    (
+                        "milliseconds",
+                        JsValue::String(JsString::from_str(&data.milliseconds)),
+                    ),
+                    (
+                        "millisecondsDisplay",
+                        JsValue::String(JsString::from_str(&data.milliseconds_display)),
+                    ),
+                    (
+                        "microseconds",
+                        JsValue::String(JsString::from_str(&data.microseconds)),
+                    ),
+                    (
+                        "microsecondsDisplay",
+                        JsValue::String(JsString::from_str(&data.microseconds_display)),
+                    ),
+                    (
+                        "nanoseconds",
+                        JsValue::String(JsString::from_str(&data.nanoseconds)),
+                    ),
+                    (
+                        "nanosecondsDisplay",
+                        JsValue::String(JsString::from_str(&data.nanoseconds_display)),
+                    ),
                 ];
 
                 if let Some(fd) = data.fractional_digits {
@@ -1311,24 +1415,17 @@ impl Interpreter {
                 };
 
                 // Read numberingSystem
-                let numbering_system_opt = match interp.intl_get_option(
-                    &options,
-                    "numberingSystem",
-                    &[],
-                    None,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let numbering_system_opt =
+                    match interp.intl_get_option(&options, "numberingSystem", &[], None) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
                 // Validate numberingSystem if provided
                 if let Some(ref ns) = numbering_system_opt {
                     if !is_valid_numbering_system(ns) {
                         return Completion::Throw(
-                            interp.create_range_error(&format!(
-                                "Invalid numberingSystem: {}",
-                                ns
-                            )),
+                            interp.create_range_error(&format!("Invalid numberingSystem: {}", ns)),
                         );
                     }
                 }
@@ -1357,12 +1454,7 @@ impl Interpreter {
                     let valid = &["long", "short", "narrow"];
 
                     // GetDurationUnitOptions: compute style and displayDefault
-                    let explicit_style = match interp.intl_get_option(
-                        &options,
-                        unit,
-                        valid,
-                        None,
-                    ) {
+                    let explicit_style = match interp.intl_get_option(&options, unit, valid, None) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -1373,27 +1465,29 @@ impl Interpreter {
                         display_default = "always";
                         unit_style = s;
                         // Validate: if prevStyle is numeric/2-digit, unit style must also be numeric/2-digit
-                        if (prev_style == "numeric" || prev_style == "2-digit" || prev_style == "fractional")
-                            && unit_style != "numeric" && unit_style != "2-digit"
+                        if (prev_style == "numeric"
+                            || prev_style == "2-digit"
+                            || prev_style == "fractional")
+                            && unit_style != "numeric"
+                            && unit_style != "2-digit"
                         {
-                            return Completion::Throw(
-                                interp.create_range_error(&format!(
-                                    "{} style must be numeric or 2-digit when following a numeric unit",
-                                    unit
-                                )),
-                            );
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "{} style must be numeric or 2-digit when following a numeric unit",
+                                unit
+                            )));
                         }
                     } else if style == "digital" {
                         unit_style = digital_base.to_string();
                         // Date-like units are not hours/minutes/seconds
                         display_default = "auto";
-                    } else if prev_style == "numeric" || prev_style == "2-digit" || prev_style == "fractional" {
-                        return Completion::Throw(
-                            interp.create_range_error(&format!(
-                                "Cannot use non-numeric style for {} after numeric unit",
-                                unit
-                            )),
-                        );
+                    } else if prev_style == "numeric"
+                        || prev_style == "2-digit"
+                        || prev_style == "fractional"
+                    {
+                        return Completion::Throw(interp.create_range_error(&format!(
+                            "Cannot use non-numeric style for {} after numeric unit",
+                            unit
+                        )));
                     } else {
                         unit_style = style.clone();
                         display_default = "auto";
@@ -1421,12 +1515,7 @@ impl Interpreter {
                     let digital_base = "numeric";
                     let valid = &["long", "short", "narrow", "numeric", "2-digit"];
 
-                    let explicit_style = match interp.intl_get_option(
-                        &options,
-                        unit,
-                        valid,
-                        None,
-                    ) {
+                    let explicit_style = match interp.intl_get_option(&options, unit, valid, None) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -1437,21 +1526,25 @@ impl Interpreter {
                         display_default = "always";
                         unit_style = s;
                         // Validate: if prevStyle is numeric/2-digit, unit style must be numeric/2-digit
-                        if (prev_style == "numeric" || prev_style == "2-digit" || prev_style == "fractional")
-                            && unit_style != "numeric" && unit_style != "2-digit"
+                        if (prev_style == "numeric"
+                            || prev_style == "2-digit"
+                            || prev_style == "fractional")
+                            && unit_style != "numeric"
+                            && unit_style != "2-digit"
                         {
-                            return Completion::Throw(
-                                interp.create_range_error(&format!(
-                                    "{} style must be numeric or 2-digit when following a numeric unit",
-                                    unit
-                                )),
-                            );
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "{} style must be numeric or 2-digit when following a numeric unit",
+                                unit
+                            )));
                         }
                     } else if style == "digital" {
                         unit_style = digital_base.to_string();
                         // hours/minutes/seconds in digital: displayDefault stays "always"
                         display_default = "always";
-                    } else if prev_style == "numeric" || prev_style == "2-digit" || prev_style == "fractional" {
+                    } else if prev_style == "numeric"
+                        || prev_style == "2-digit"
+                        || prev_style == "fractional"
+                    {
                         unit_style = "numeric".to_string();
                         // minutes/seconds keep "always", hours gets "auto"
                         if *unit == "minutes" || *unit == "seconds" {
@@ -1468,7 +1561,9 @@ impl Interpreter {
                     // (not applicable for hours/minutes/seconds, but kept for completeness)
 
                     // Force 2-digit for minutes/seconds when following numeric/2-digit
-                    if (prev_style == "numeric" || prev_style == "2-digit" || prev_style == "fractional")
+                    if (prev_style == "numeric"
+                        || prev_style == "2-digit"
+                        || prev_style == "fractional")
                         && (*unit == "minutes" || *unit == "seconds")
                         && unit_style == "numeric"
                     {
@@ -1497,12 +1592,7 @@ impl Interpreter {
                     let digital_base = "numeric";
                     let valid = &["long", "short", "narrow", "numeric"];
 
-                    let explicit_style = match interp.intl_get_option(
-                        &options,
-                        unit,
-                        valid,
-                        None,
-                    ) {
+                    let explicit_style = match interp.intl_get_option(&options, unit, valid, None) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -1512,21 +1602,25 @@ impl Interpreter {
                         display_default = "always";
                         unit_style = s;
                         // Validate
-                        if (prev_style == "numeric" || prev_style == "2-digit" || prev_style == "fractional")
-                            && unit_style != "numeric" && unit_style != "2-digit"
+                        if (prev_style == "numeric"
+                            || prev_style == "2-digit"
+                            || prev_style == "fractional")
+                            && unit_style != "numeric"
+                            && unit_style != "2-digit"
                         {
-                            return Completion::Throw(
-                                interp.create_range_error(&format!(
-                                    "{} style must be numeric when following a numeric unit",
-                                    unit
-                                )),
-                            );
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "{} style must be numeric when following a numeric unit",
+                                unit
+                            )));
                         }
                     } else if style == "digital" {
                         unit_style = digital_base.to_string();
                         // Sub-second units are not hours/minutes/seconds
                         display_default = "auto";
-                    } else if prev_style == "numeric" || prev_style == "2-digit" || prev_style == "fractional" {
+                    } else if prev_style == "numeric"
+                        || prev_style == "2-digit"
+                        || prev_style == "fractional"
+                    {
                         unit_style = "numeric".to_string();
                         // Sub-second units are not minutes/seconds
                         display_default = "auto";
@@ -1558,7 +1652,11 @@ impl Interpreter {
                     };
 
                     // Track prevStyle as "fractional" for cascade, store "numeric" for format
-                    prev_style = if is_fractional { "fractional".to_string() } else { unit_style.clone() };
+                    prev_style = if is_fractional {
+                        "fractional".to_string()
+                    } else {
+                        unit_style.clone()
+                    };
                     unit_styles.push((unit_style, unit_display));
                 }
 

@@ -75,6 +75,22 @@ impl Interpreter {
                     if is_param {
                         continue;
                     }
+                    // Annex B: skip if non-simple params and name matches a parent binding
+                    if !env.borrow().has_simple_params {
+                        let has_parent_binding = env
+                            .borrow()
+                            .parent
+                            .as_ref()
+                            .map(|p| p.borrow().bindings.contains_key(&name))
+                            .unwrap_or(false);
+                        if has_parent_binding {
+                            continue;
+                        }
+                    }
+                    // Annex B: skip "arguments" in function scope
+                    if name == "arguments" && !is_global && env.borrow().is_function_scope {
+                        continue;
+                    }
                     if !env.borrow().bindings.contains_key(&name) {
                         if is_global {
                             env.borrow_mut().declare_global_var(&name);
@@ -545,9 +561,16 @@ impl Interpreter {
                             names.push(f.name.clone());
                         }
                     }
-                    // Recurse with block lexicals added to blocked set
+                    // Recurse with block lexicals and function decl names added to blocked set
                     let prev_len = blocked.len();
                     blocked.extend(block_lexicals);
+                    for s in inner {
+                        if let Statement::FunctionDeclaration(f) = s {
+                            if !blocked.contains(&f.name) {
+                                blocked.push(f.name.clone());
+                            }
+                        }
+                    }
                     Self::collect_annexb_function_names(inner, names, blocked);
                     blocked.truncate(prev_len);
                 }
@@ -719,7 +742,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if to_boolean(&test) {
+                if self.to_boolean_val(&test) {
                     self.exec_statement(&if_stmt.consequent, env)
                         .update_empty(JsValue::Undefined)
                 } else if let Some(alt) = &if_stmt.alternate {
@@ -798,6 +821,8 @@ impl Interpreter {
                             class_private_names: None,
                             is_field_initializer: false,
                             arguments_immutable: false,
+                            has_simple_params: true,
+                            is_simple_catch_scope: false,
                         }));
                         self.exec_statement(body, &with_env)
                     } else {
@@ -823,8 +848,29 @@ impl Interpreter {
                             .map(|names| names.contains(&f.name))
                             .unwrap_or(false);
                         if is_registered {
-                            let val = env.borrow().get(&f.name).unwrap_or(JsValue::Undefined);
-                            let _ = var_scope.borrow_mut().set(&f.name, val);
+                            // Check intermediate scopes between env's parent and var_scope;
+                            // if any has a binding for the same name (except simple catch scopes),
+                            // skip the Annex B write.
+                            let mut blocked_by_intermediate = false;
+                            let mut cursor = env.borrow().parent.clone();
+                            while let Some(cur) = cursor {
+                                if Rc::ptr_eq(&cur, &var_scope) {
+                                    break;
+                                }
+                                let cur_b = cur.borrow();
+                                if cur_b.bindings.contains_key(&f.name)
+                                    && !cur_b.is_simple_catch_scope
+                                {
+                                    blocked_by_intermediate = true;
+                                    break;
+                                }
+                                cursor = cur_b.parent.clone();
+                            }
+                            if !blocked_by_intermediate {
+                                let val =
+                                    env.borrow().get(&f.name).unwrap_or(JsValue::Undefined);
+                                let _ = var_scope.borrow_mut().set(&f.name, val);
+                            }
                         }
                     }
                 }
@@ -1169,7 +1215,7 @@ impl Interpreter {
                 Completion::Normal(v) => v,
                 other => return other,
             };
-            if !to_boolean(&test) {
+            if !self.to_boolean_val(&test) {
                 break;
             }
             match self.exec_statement(&w.body, env) {
@@ -1219,7 +1265,7 @@ impl Interpreter {
                 Completion::Normal(v) => v,
                 other => return other,
             };
-            if !to_boolean(&test) {
+            if !self.to_boolean_val(&test) {
                 break;
             }
         }
@@ -1257,7 +1303,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if !to_boolean(&val) {
+                if !self.to_boolean_val(&val) {
                     break;
                 }
             }
@@ -1290,6 +1336,21 @@ impl Interpreter {
     }
 
     fn exec_for_in(&mut self, fi: &ForInStatement, env: &EnvRef) -> Completion {
+        // Annex B: for-in initializer (sloppy mode var declarations only)
+        if let ForInOfLeft::Variable(decl) = &fi.left
+            && decl.kind == VarKind::Var
+            && let Some(d) = decl.declarations.first()
+            && let Some(init_expr) = &d.init
+        {
+            let init_val = match self.eval_expr(init_expr, env) {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
+            if let Pattern::Identifier(name) = &d.pattern {
+                let _ = env.borrow_mut().set(name, init_val);
+            }
+        }
+
         // Per spec 14.7.5.6 ForIn/OfHeadEvaluation:
         // If the LHS is a lexical declaration, create TDZ bindings before evaluating RHS
         let is_lexical =
@@ -1395,6 +1456,15 @@ impl Interpreter {
                             }
                         }
                     },
+                    ForInOfLeft::Expression(expr) => {
+                        match self.eval_expr(expr, env) {
+                            Completion::Normal(_) => {}
+                            other => return other,
+                        }
+                        return Completion::Throw(
+                            self.create_reference_error("Invalid left-hand side in for-in loop"),
+                        );
+                    }
                 }
                 let result = self.exec_statement(&fi.body, &for_env);
                 match result {
@@ -1590,6 +1660,19 @@ impl Interpreter {
                     }
                     other => return other,
                 },
+                ForInOfLeft::Expression(expr) => {
+                    match self.eval_expr(expr, env) {
+                        Completion::Normal(_) => {}
+                        Completion::Throw(e) => {
+                            self.iterator_close(iterator, e.clone());
+                            return Completion::Throw(e);
+                        }
+                        other => return other,
+                    }
+                    let e = self.create_reference_error("Invalid left-hand side in for-of loop");
+                    self.iterator_close(iterator, e.clone());
+                    return Completion::Throw(e);
+                }
             }
             let body_result = self.exec_statement(&fo.body, &for_env);
             let body_result = self.dispose_resources(&for_env, body_result);
@@ -1653,10 +1736,15 @@ impl Interpreter {
             Completion::Throw(val) => {
                 if let Some(handler) = &t.handler {
                     let catch_env = Environment::new(Some(env.clone()));
-                    if let Some(param) = &handler.param
-                        && let Err(e) = self.bind_pattern(param, val, BindingKind::Let, &catch_env)
-                    {
-                        return Completion::Throw(e);
+                    if let Some(param) = &handler.param {
+                        if matches!(param, Pattern::Identifier(_)) {
+                            catch_env.borrow_mut().is_simple_catch_scope = true;
+                        }
+                        if let Err(e) =
+                            self.bind_pattern(param, val, BindingKind::Let, &catch_env)
+                        {
+                            return Completion::Throw(e);
+                        }
                     }
                     self.exec_statements(&handler.body, &catch_env)
                 } else {

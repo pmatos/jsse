@@ -256,7 +256,9 @@ fn is_valid_timezone(tz: &str) -> bool {
     if tz.chars().any(|c| !c.is_ascii()) {
         return false;
     }
-    let valid_chars = tz.chars().all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '_' || c == '-' || c == '+');
+    let valid_chars = tz
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '_' || c == '-' || c == '+');
     if !valid_chars {
         return false;
     }
@@ -266,9 +268,22 @@ fn is_valid_timezone(tz: &str) -> bool {
             let region_upper = parts[0].to_uppercase();
             return matches!(
                 region_upper.as_str(),
-                "AFRICA" | "AMERICA" | "ANTARCTICA" | "ARCTIC" | "ASIA" | "ATLANTIC"
-                | "AUSTRALIA" | "BRAZIL" | "CANADA" | "CHILE" | "ETC" | "EUROPE"
-                | "INDIAN" | "MEXICO" | "PACIFIC" | "US"
+                "AFRICA"
+                    | "AMERICA"
+                    | "ANTARCTICA"
+                    | "ARCTIC"
+                    | "ASIA"
+                    | "ATLANTIC"
+                    | "AUSTRALIA"
+                    | "BRAZIL"
+                    | "CANADA"
+                    | "CHILE"
+                    | "ETC"
+                    | "EUROPE"
+                    | "INDIAN"
+                    | "MEXICO"
+                    | "PACIFIC"
+                    | "US"
             );
         }
     }
@@ -277,175 +292,602 @@ fn is_valid_timezone(tz: &str) -> bool {
 
 fn canonicalize_timezone(tz: &str) -> String {
     static KNOWN_TZ: &[&str] = &[
-        "Africa/Abidjan","Africa/Accra","Africa/Addis_Ababa","Africa/Algiers","Africa/Asmara",
-        "Africa/Asmera","Africa/Bamako","Africa/Bangui","Africa/Banjul","Africa/Bissau",
-        "Africa/Blantyre","Africa/Brazzaville","Africa/Bujumbura","Africa/Cairo",
-        "Africa/Casablanca","Africa/Ceuta","Africa/Conakry","Africa/Dakar",
-        "Africa/Dar_es_Salaam","Africa/Djibouti","Africa/Douala","Africa/El_Aaiun",
-        "Africa/Freetown","Africa/Gaborone","Africa/Harare","Africa/Johannesburg",
-        "Africa/Juba","Africa/Kampala","Africa/Khartoum","Africa/Kigali","Africa/Kinshasa",
-        "Africa/Lagos","Africa/Libreville","Africa/Lome","Africa/Luanda",
-        "Africa/Lubumbashi","Africa/Lusaka","Africa/Malabo","Africa/Maputo",
-        "Africa/Maseru","Africa/Mbabane","Africa/Mogadishu","Africa/Monrovia",
-        "Africa/Nairobi","Africa/Ndjamena","Africa/Niamey","Africa/Nouakchott",
-        "Africa/Ouagadougou","Africa/Porto-Novo","Africa/Sao_Tome","Africa/Timbuktu",
-        "Africa/Tripoli","Africa/Tunis","Africa/Windhoek",
-        "America/Adak","America/Anchorage","America/Anguilla","America/Antigua",
-        "America/Araguaina","America/Argentina/Buenos_Aires","America/Argentina/Catamarca",
-        "America/Argentina/ComodRivadavia","America/Argentina/Cordoba",
-        "America/Argentina/Jujuy","America/Argentina/La_Rioja",
-        "America/Argentina/Mendoza","America/Argentina/Rio_Gallegos",
-        "America/Argentina/Salta","America/Argentina/San_Juan",
-        "America/Argentina/San_Luis","America/Argentina/Tucuman",
-        "America/Argentina/Ushuaia","America/Aruba","America/Asuncion",
-        "America/Atikokan","America/Atka","America/Bahia","America/Bahia_Banderas",
-        "America/Barbados","America/Belem","America/Belize","America/Blanc-Sablon",
-        "America/Boa_Vista","America/Bogota","America/Boise","America/Buenos_Aires",
-        "America/Cambridge_Bay","America/Campo_Grande","America/Cancun",
-        "America/Caracas","America/Catamarca","America/Cayenne","America/Cayman",
-        "America/Chicago","America/Chihuahua","America/Ciudad_Juarez",
-        "America/Coral_Harbour","America/Cordoba","America/Costa_Rica",
-        "America/Creston","America/Cuiaba","America/Curacao","America/Danmarkshavn",
-        "America/Dawson","America/Dawson_Creek","America/Denver","America/Detroit",
-        "America/Dominica","America/Edmonton","America/Eirunepe",
-        "America/El_Salvador","America/Ensenada","America/Fort_Nelson",
-        "America/Fort_Wayne","America/Fortaleza","America/Glace_Bay",
-        "America/Godthab","America/Goose_Bay","America/Grand_Turk",
-        "America/Grenada","America/Guadeloupe","America/Guatemala",
-        "America/Guayaquil","America/Guyana","America/Halifax","America/Havana",
-        "America/Hermosillo","America/Indiana/Indianapolis","America/Indiana/Knox",
-        "America/Indiana/Marengo","America/Indiana/Petersburg",
-        "America/Indiana/Tell_City","America/Indiana/Vevay",
-        "America/Indiana/Vincennes","America/Indiana/Winamac",
-        "America/Indianapolis","America/Inuvik","America/Iqaluit",
-        "America/Jamaica","America/Jujuy","America/Juneau",
-        "America/Kentucky/Louisville","America/Kentucky/Monticello",
-        "America/Knox_IN","America/Kralendijk","America/La_Paz","America/Lima",
-        "America/Los_Angeles","America/Louisville","America/Lower_Princes",
-        "America/Maceio","America/Managua","America/Manaus","America/Marigot",
-        "America/Martinique","America/Matamoros","America/Mazatlan",
-        "America/Mendoza","America/Menominee","America/Merida",
-        "America/Metlakatla","America/Mexico_City","America/Miquelon",
-        "America/Moncton","America/Monterrey","America/Montevideo",
-        "America/Montreal","America/Montserrat","America/Nassau",
-        "America/New_York","America/Nipigon","America/Nome","America/Noronha",
-        "America/North_Dakota/Beulah","America/North_Dakota/Center",
-        "America/North_Dakota/New_Salem","America/Nuuk","America/Ojinaga",
-        "America/Panama","America/Pangnirtung","America/Paramaribo",
-        "America/Phoenix","America/Port-au-Prince","America/Port_of_Spain",
-        "America/Porto_Acre","America/Porto_Velho","America/Puerto_Rico",
-        "America/Punta_Arenas","America/Rainy_River","America/Rankin_Inlet",
-        "America/Recife","America/Regina","America/Resolute",
-        "America/Rio_Branco","America/Rosario","America/Santa_Isabel",
-        "America/Santarem","America/Santiago","America/Santo_Domingo",
-        "America/Sao_Paulo","America/Scoresbysund","America/Shiprock",
-        "America/Sitka","America/St_Barthelemy","America/St_Johns",
-        "America/St_Kitts","America/St_Lucia","America/St_Thomas",
-        "America/St_Vincent","America/Swift_Current","America/Tegucigalpa",
-        "America/Thule","America/Thunder_Bay","America/Tijuana",
-        "America/Toronto","America/Tortola","America/Vancouver",
-        "America/Virgin","America/Whitehorse","America/Winnipeg",
-        "America/Yakutat","America/Yellowknife",
-        "Antarctica/Casey","Antarctica/Davis","Antarctica/DumontDUrville",
-        "Antarctica/Macquarie","Antarctica/Mawson","Antarctica/McMurdo",
-        "Antarctica/Palmer","Antarctica/Rothera","Antarctica/South_Pole",
-        "Antarctica/Syowa","Antarctica/Troll","Antarctica/Vostok",
+        "Africa/Abidjan",
+        "Africa/Accra",
+        "Africa/Addis_Ababa",
+        "Africa/Algiers",
+        "Africa/Asmara",
+        "Africa/Asmera",
+        "Africa/Bamako",
+        "Africa/Bangui",
+        "Africa/Banjul",
+        "Africa/Bissau",
+        "Africa/Blantyre",
+        "Africa/Brazzaville",
+        "Africa/Bujumbura",
+        "Africa/Cairo",
+        "Africa/Casablanca",
+        "Africa/Ceuta",
+        "Africa/Conakry",
+        "Africa/Dakar",
+        "Africa/Dar_es_Salaam",
+        "Africa/Djibouti",
+        "Africa/Douala",
+        "Africa/El_Aaiun",
+        "Africa/Freetown",
+        "Africa/Gaborone",
+        "Africa/Harare",
+        "Africa/Johannesburg",
+        "Africa/Juba",
+        "Africa/Kampala",
+        "Africa/Khartoum",
+        "Africa/Kigali",
+        "Africa/Kinshasa",
+        "Africa/Lagos",
+        "Africa/Libreville",
+        "Africa/Lome",
+        "Africa/Luanda",
+        "Africa/Lubumbashi",
+        "Africa/Lusaka",
+        "Africa/Malabo",
+        "Africa/Maputo",
+        "Africa/Maseru",
+        "Africa/Mbabane",
+        "Africa/Mogadishu",
+        "Africa/Monrovia",
+        "Africa/Nairobi",
+        "Africa/Ndjamena",
+        "Africa/Niamey",
+        "Africa/Nouakchott",
+        "Africa/Ouagadougou",
+        "Africa/Porto-Novo",
+        "Africa/Sao_Tome",
+        "Africa/Timbuktu",
+        "Africa/Tripoli",
+        "Africa/Tunis",
+        "Africa/Windhoek",
+        "America/Adak",
+        "America/Anchorage",
+        "America/Anguilla",
+        "America/Antigua",
+        "America/Araguaina",
+        "America/Argentina/Buenos_Aires",
+        "America/Argentina/Catamarca",
+        "America/Argentina/ComodRivadavia",
+        "America/Argentina/Cordoba",
+        "America/Argentina/Jujuy",
+        "America/Argentina/La_Rioja",
+        "America/Argentina/Mendoza",
+        "America/Argentina/Rio_Gallegos",
+        "America/Argentina/Salta",
+        "America/Argentina/San_Juan",
+        "America/Argentina/San_Luis",
+        "America/Argentina/Tucuman",
+        "America/Argentina/Ushuaia",
+        "America/Aruba",
+        "America/Asuncion",
+        "America/Atikokan",
+        "America/Atka",
+        "America/Bahia",
+        "America/Bahia_Banderas",
+        "America/Barbados",
+        "America/Belem",
+        "America/Belize",
+        "America/Blanc-Sablon",
+        "America/Boa_Vista",
+        "America/Bogota",
+        "America/Boise",
+        "America/Buenos_Aires",
+        "America/Cambridge_Bay",
+        "America/Campo_Grande",
+        "America/Cancun",
+        "America/Caracas",
+        "America/Catamarca",
+        "America/Cayenne",
+        "America/Cayman",
+        "America/Chicago",
+        "America/Chihuahua",
+        "America/Ciudad_Juarez",
+        "America/Coral_Harbour",
+        "America/Cordoba",
+        "America/Costa_Rica",
+        "America/Creston",
+        "America/Cuiaba",
+        "America/Curacao",
+        "America/Danmarkshavn",
+        "America/Dawson",
+        "America/Dawson_Creek",
+        "America/Denver",
+        "America/Detroit",
+        "America/Dominica",
+        "America/Edmonton",
+        "America/Eirunepe",
+        "America/El_Salvador",
+        "America/Ensenada",
+        "America/Fort_Nelson",
+        "America/Fort_Wayne",
+        "America/Fortaleza",
+        "America/Glace_Bay",
+        "America/Godthab",
+        "America/Goose_Bay",
+        "America/Grand_Turk",
+        "America/Grenada",
+        "America/Guadeloupe",
+        "America/Guatemala",
+        "America/Guayaquil",
+        "America/Guyana",
+        "America/Halifax",
+        "America/Havana",
+        "America/Hermosillo",
+        "America/Indiana/Indianapolis",
+        "America/Indiana/Knox",
+        "America/Indiana/Marengo",
+        "America/Indiana/Petersburg",
+        "America/Indiana/Tell_City",
+        "America/Indiana/Vevay",
+        "America/Indiana/Vincennes",
+        "America/Indiana/Winamac",
+        "America/Indianapolis",
+        "America/Inuvik",
+        "America/Iqaluit",
+        "America/Jamaica",
+        "America/Jujuy",
+        "America/Juneau",
+        "America/Kentucky/Louisville",
+        "America/Kentucky/Monticello",
+        "America/Knox_IN",
+        "America/Kralendijk",
+        "America/La_Paz",
+        "America/Lima",
+        "America/Los_Angeles",
+        "America/Louisville",
+        "America/Lower_Princes",
+        "America/Maceio",
+        "America/Managua",
+        "America/Manaus",
+        "America/Marigot",
+        "America/Martinique",
+        "America/Matamoros",
+        "America/Mazatlan",
+        "America/Mendoza",
+        "America/Menominee",
+        "America/Merida",
+        "America/Metlakatla",
+        "America/Mexico_City",
+        "America/Miquelon",
+        "America/Moncton",
+        "America/Monterrey",
+        "America/Montevideo",
+        "America/Montreal",
+        "America/Montserrat",
+        "America/Nassau",
+        "America/New_York",
+        "America/Nipigon",
+        "America/Nome",
+        "America/Noronha",
+        "America/North_Dakota/Beulah",
+        "America/North_Dakota/Center",
+        "America/North_Dakota/New_Salem",
+        "America/Nuuk",
+        "America/Ojinaga",
+        "America/Panama",
+        "America/Pangnirtung",
+        "America/Paramaribo",
+        "America/Phoenix",
+        "America/Port-au-Prince",
+        "America/Port_of_Spain",
+        "America/Porto_Acre",
+        "America/Porto_Velho",
+        "America/Puerto_Rico",
+        "America/Punta_Arenas",
+        "America/Rainy_River",
+        "America/Rankin_Inlet",
+        "America/Recife",
+        "America/Regina",
+        "America/Resolute",
+        "America/Rio_Branco",
+        "America/Rosario",
+        "America/Santa_Isabel",
+        "America/Santarem",
+        "America/Santiago",
+        "America/Santo_Domingo",
+        "America/Sao_Paulo",
+        "America/Scoresbysund",
+        "America/Shiprock",
+        "America/Sitka",
+        "America/St_Barthelemy",
+        "America/St_Johns",
+        "America/St_Kitts",
+        "America/St_Lucia",
+        "America/St_Thomas",
+        "America/St_Vincent",
+        "America/Swift_Current",
+        "America/Tegucigalpa",
+        "America/Thule",
+        "America/Thunder_Bay",
+        "America/Tijuana",
+        "America/Toronto",
+        "America/Tortola",
+        "America/Vancouver",
+        "America/Virgin",
+        "America/Whitehorse",
+        "America/Winnipeg",
+        "America/Yakutat",
+        "America/Yellowknife",
+        "Antarctica/Casey",
+        "Antarctica/Davis",
+        "Antarctica/DumontDUrville",
+        "Antarctica/Macquarie",
+        "Antarctica/Mawson",
+        "Antarctica/McMurdo",
+        "Antarctica/Palmer",
+        "Antarctica/Rothera",
+        "Antarctica/South_Pole",
+        "Antarctica/Syowa",
+        "Antarctica/Troll",
+        "Antarctica/Vostok",
         "Arctic/Longyearbyen",
-        "Asia/Aden","Asia/Almaty","Asia/Amman","Asia/Anadyr","Asia/Aqtau",
-        "Asia/Aqtobe","Asia/Ashgabat","Asia/Ashkhabad","Asia/Atyrau",
-        "Asia/Baghdad","Asia/Bahrain","Asia/Baku","Asia/Bangkok","Asia/Barnaul",
-        "Asia/Beirut","Asia/Bishkek","Asia/Brunei","Asia/Calcutta","Asia/Chita",
-        "Asia/Choibalsan","Asia/Chongqing","Asia/Chungking","Asia/Colombo",
-        "Asia/Dacca","Asia/Damascus","Asia/Dhaka","Asia/Dili","Asia/Dubai",
-        "Asia/Dushanbe","Asia/Famagusta","Asia/Gaza","Asia/Harbin",
-        "Asia/Hebron","Asia/Ho_Chi_Minh","Asia/Hong_Kong","Asia/Hovd",
-        "Asia/Irkutsk","Asia/Istanbul","Asia/Jakarta","Asia/Jayapura",
-        "Asia/Jerusalem","Asia/Kabul","Asia/Kamchatka","Asia/Karachi",
-        "Asia/Kashgar","Asia/Kathmandu","Asia/Katmandu","Asia/Khandyga",
-        "Asia/Kolkata","Asia/Krasnoyarsk","Asia/Kuala_Lumpur","Asia/Kuching",
-        "Asia/Kuwait","Asia/Macao","Asia/Macau","Asia/Magadan","Asia/Makassar",
-        "Asia/Manila","Asia/Muscat","Asia/Nicosia","Asia/Novokuznetsk",
-        "Asia/Novosibirsk","Asia/Omsk","Asia/Oral","Asia/Phnom_Penh",
-        "Asia/Pontianak","Asia/Pyongyang","Asia/Qatar","Asia/Qostanay",
-        "Asia/Qyzylorda","Asia/Rangoon","Asia/Riyadh","Asia/Saigon",
-        "Asia/Sakhalin","Asia/Samarkand","Asia/Seoul","Asia/Shanghai",
-        "Asia/Singapore","Asia/Srednekolymsk","Asia/Taipei","Asia/Tashkent",
-        "Asia/Tbilisi","Asia/Tehran","Asia/Tel_Aviv","Asia/Thimbu",
-        "Asia/Thimphu","Asia/Tokyo","Asia/Tomsk","Asia/Ujung_Pandang",
-        "Asia/Ulaanbaatar","Asia/Ulan_Bator","Asia/Urumqi","Asia/Ust-Nera",
-        "Asia/Vientiane","Asia/Vladivostok","Asia/Yakutsk","Asia/Yangon",
-        "Asia/Yekaterinburg","Asia/Yerevan",
-        "Atlantic/Azores","Atlantic/Bermuda","Atlantic/Canary",
-        "Atlantic/Cape_Verde","Atlantic/Faeroe","Atlantic/Faroe",
-        "Atlantic/Jan_Mayen","Atlantic/Madeira","Atlantic/Reykjavik",
-        "Atlantic/South_Georgia","Atlantic/St_Helena","Atlantic/Stanley",
-        "Australia/ACT","Australia/Adelaide","Australia/Brisbane",
-        "Australia/Broken_Hill","Australia/Canberra","Australia/Currie",
-        "Australia/Darwin","Australia/Eucla","Australia/Hobart","Australia/LHI",
-        "Australia/Lindeman","Australia/Lord_Howe","Australia/Melbourne",
-        "Australia/NSW","Australia/North","Australia/Perth",
-        "Australia/Queensland","Australia/South","Australia/Sydney",
-        "Australia/Tasmania","Australia/Victoria","Australia/West",
+        "Asia/Aden",
+        "Asia/Almaty",
+        "Asia/Amman",
+        "Asia/Anadyr",
+        "Asia/Aqtau",
+        "Asia/Aqtobe",
+        "Asia/Ashgabat",
+        "Asia/Ashkhabad",
+        "Asia/Atyrau",
+        "Asia/Baghdad",
+        "Asia/Bahrain",
+        "Asia/Baku",
+        "Asia/Bangkok",
+        "Asia/Barnaul",
+        "Asia/Beirut",
+        "Asia/Bishkek",
+        "Asia/Brunei",
+        "Asia/Calcutta",
+        "Asia/Chita",
+        "Asia/Choibalsan",
+        "Asia/Chongqing",
+        "Asia/Chungking",
+        "Asia/Colombo",
+        "Asia/Dacca",
+        "Asia/Damascus",
+        "Asia/Dhaka",
+        "Asia/Dili",
+        "Asia/Dubai",
+        "Asia/Dushanbe",
+        "Asia/Famagusta",
+        "Asia/Gaza",
+        "Asia/Harbin",
+        "Asia/Hebron",
+        "Asia/Ho_Chi_Minh",
+        "Asia/Hong_Kong",
+        "Asia/Hovd",
+        "Asia/Irkutsk",
+        "Asia/Istanbul",
+        "Asia/Jakarta",
+        "Asia/Jayapura",
+        "Asia/Jerusalem",
+        "Asia/Kabul",
+        "Asia/Kamchatka",
+        "Asia/Karachi",
+        "Asia/Kashgar",
+        "Asia/Kathmandu",
+        "Asia/Katmandu",
+        "Asia/Khandyga",
+        "Asia/Kolkata",
+        "Asia/Krasnoyarsk",
+        "Asia/Kuala_Lumpur",
+        "Asia/Kuching",
+        "Asia/Kuwait",
+        "Asia/Macao",
+        "Asia/Macau",
+        "Asia/Magadan",
+        "Asia/Makassar",
+        "Asia/Manila",
+        "Asia/Muscat",
+        "Asia/Nicosia",
+        "Asia/Novokuznetsk",
+        "Asia/Novosibirsk",
+        "Asia/Omsk",
+        "Asia/Oral",
+        "Asia/Phnom_Penh",
+        "Asia/Pontianak",
+        "Asia/Pyongyang",
+        "Asia/Qatar",
+        "Asia/Qostanay",
+        "Asia/Qyzylorda",
+        "Asia/Rangoon",
+        "Asia/Riyadh",
+        "Asia/Saigon",
+        "Asia/Sakhalin",
+        "Asia/Samarkand",
+        "Asia/Seoul",
+        "Asia/Shanghai",
+        "Asia/Singapore",
+        "Asia/Srednekolymsk",
+        "Asia/Taipei",
+        "Asia/Tashkent",
+        "Asia/Tbilisi",
+        "Asia/Tehran",
+        "Asia/Tel_Aviv",
+        "Asia/Thimbu",
+        "Asia/Thimphu",
+        "Asia/Tokyo",
+        "Asia/Tomsk",
+        "Asia/Ujung_Pandang",
+        "Asia/Ulaanbaatar",
+        "Asia/Ulan_Bator",
+        "Asia/Urumqi",
+        "Asia/Ust-Nera",
+        "Asia/Vientiane",
+        "Asia/Vladivostok",
+        "Asia/Yakutsk",
+        "Asia/Yangon",
+        "Asia/Yekaterinburg",
+        "Asia/Yerevan",
+        "Atlantic/Azores",
+        "Atlantic/Bermuda",
+        "Atlantic/Canary",
+        "Atlantic/Cape_Verde",
+        "Atlantic/Faeroe",
+        "Atlantic/Faroe",
+        "Atlantic/Jan_Mayen",
+        "Atlantic/Madeira",
+        "Atlantic/Reykjavik",
+        "Atlantic/South_Georgia",
+        "Atlantic/St_Helena",
+        "Atlantic/Stanley",
+        "Australia/ACT",
+        "Australia/Adelaide",
+        "Australia/Brisbane",
+        "Australia/Broken_Hill",
+        "Australia/Canberra",
+        "Australia/Currie",
+        "Australia/Darwin",
+        "Australia/Eucla",
+        "Australia/Hobart",
+        "Australia/LHI",
+        "Australia/Lindeman",
+        "Australia/Lord_Howe",
+        "Australia/Melbourne",
+        "Australia/NSW",
+        "Australia/North",
+        "Australia/Perth",
+        "Australia/Queensland",
+        "Australia/South",
+        "Australia/Sydney",
+        "Australia/Tasmania",
+        "Australia/Victoria",
+        "Australia/West",
         "Australia/Yancowinna",
-        "Brazil/Acre","Brazil/DeNoronha","Brazil/East","Brazil/West",
-        "CET","CST6CDT",
-        "Canada/Atlantic","Canada/Central","Canada/Eastern","Canada/Mountain",
-        "Canada/Newfoundland","Canada/Pacific","Canada/Saskatchewan","Canada/Yukon",
-        "Chile/Continental","Chile/EasterIsland","Cuba",
-        "EET","EST","EST5EDT",
-        "Egypt","Eire",
-        "Etc/GMT","Etc/GMT+0","Etc/GMT+1","Etc/GMT+10","Etc/GMT+11","Etc/GMT+12",
-        "Etc/GMT+2","Etc/GMT+3","Etc/GMT+4","Etc/GMT+5","Etc/GMT+6","Etc/GMT+7",
-        "Etc/GMT+8","Etc/GMT+9","Etc/GMT-0","Etc/GMT-1","Etc/GMT-10","Etc/GMT-11",
-        "Etc/GMT-12","Etc/GMT-13","Etc/GMT-14","Etc/GMT-2","Etc/GMT-3","Etc/GMT-4",
-        "Etc/GMT-5","Etc/GMT-6","Etc/GMT-7","Etc/GMT-8","Etc/GMT-9","Etc/GMT0",
-        "Etc/Greenwich","Etc/UCT","Etc/UTC","Etc/Universal","Etc/Zulu",
-        "Europe/Amsterdam","Europe/Andorra","Europe/Astrakhan","Europe/Athens",
-        "Europe/Belfast","Europe/Belgrade","Europe/Berlin","Europe/Bratislava",
-        "Europe/Brussels","Europe/Bucharest","Europe/Budapest","Europe/Busingen",
-        "Europe/Chisinau","Europe/Copenhagen","Europe/Dublin","Europe/Gibraltar",
-        "Europe/Guernsey","Europe/Helsinki","Europe/Isle_of_Man","Europe/Istanbul",
-        "Europe/Jersey","Europe/Kaliningrad","Europe/Kiev","Europe/Kirov",
-        "Europe/Kyiv","Europe/Lisbon","Europe/Ljubljana","Europe/London",
-        "Europe/Luxembourg","Europe/Madrid","Europe/Malta","Europe/Mariehamn",
-        "Europe/Minsk","Europe/Monaco","Europe/Moscow","Europe/Nicosia",
-        "Europe/Oslo","Europe/Paris","Europe/Podgorica","Europe/Prague",
-        "Europe/Riga","Europe/Rome","Europe/Samara","Europe/San_Marino",
-        "Europe/Sarajevo","Europe/Saratov","Europe/Simferopol","Europe/Skopje",
-        "Europe/Sofia","Europe/Stockholm","Europe/Tallinn","Europe/Tirane",
-        "Europe/Tiraspol","Europe/Ulyanovsk","Europe/Uzhgorod","Europe/Vaduz",
-        "Europe/Vatican","Europe/Vienna","Europe/Vilnius","Europe/Volgograd",
-        "Europe/Warsaw","Europe/Zagreb","Europe/Zaporozhye","Europe/Zurich",
-        "GB","GB-Eire","GMT","GMT+0","GMT-0","GMT0","Greenwich",
-        "HST","Hongkong",
+        "Brazil/Acre",
+        "Brazil/DeNoronha",
+        "Brazil/East",
+        "Brazil/West",
+        "CET",
+        "CST6CDT",
+        "Canada/Atlantic",
+        "Canada/Central",
+        "Canada/Eastern",
+        "Canada/Mountain",
+        "Canada/Newfoundland",
+        "Canada/Pacific",
+        "Canada/Saskatchewan",
+        "Canada/Yukon",
+        "Chile/Continental",
+        "Chile/EasterIsland",
+        "Cuba",
+        "EET",
+        "EST",
+        "EST5EDT",
+        "Egypt",
+        "Eire",
+        "Etc/GMT",
+        "Etc/GMT+0",
+        "Etc/GMT+1",
+        "Etc/GMT+10",
+        "Etc/GMT+11",
+        "Etc/GMT+12",
+        "Etc/GMT+2",
+        "Etc/GMT+3",
+        "Etc/GMT+4",
+        "Etc/GMT+5",
+        "Etc/GMT+6",
+        "Etc/GMT+7",
+        "Etc/GMT+8",
+        "Etc/GMT+9",
+        "Etc/GMT-0",
+        "Etc/GMT-1",
+        "Etc/GMT-10",
+        "Etc/GMT-11",
+        "Etc/GMT-12",
+        "Etc/GMT-13",
+        "Etc/GMT-14",
+        "Etc/GMT-2",
+        "Etc/GMT-3",
+        "Etc/GMT-4",
+        "Etc/GMT-5",
+        "Etc/GMT-6",
+        "Etc/GMT-7",
+        "Etc/GMT-8",
+        "Etc/GMT-9",
+        "Etc/GMT0",
+        "Etc/Greenwich",
+        "Etc/UCT",
+        "Etc/UTC",
+        "Etc/Universal",
+        "Etc/Zulu",
+        "Europe/Amsterdam",
+        "Europe/Andorra",
+        "Europe/Astrakhan",
+        "Europe/Athens",
+        "Europe/Belfast",
+        "Europe/Belgrade",
+        "Europe/Berlin",
+        "Europe/Bratislava",
+        "Europe/Brussels",
+        "Europe/Bucharest",
+        "Europe/Budapest",
+        "Europe/Busingen",
+        "Europe/Chisinau",
+        "Europe/Copenhagen",
+        "Europe/Dublin",
+        "Europe/Gibraltar",
+        "Europe/Guernsey",
+        "Europe/Helsinki",
+        "Europe/Isle_of_Man",
+        "Europe/Istanbul",
+        "Europe/Jersey",
+        "Europe/Kaliningrad",
+        "Europe/Kiev",
+        "Europe/Kirov",
+        "Europe/Kyiv",
+        "Europe/Lisbon",
+        "Europe/Ljubljana",
+        "Europe/London",
+        "Europe/Luxembourg",
+        "Europe/Madrid",
+        "Europe/Malta",
+        "Europe/Mariehamn",
+        "Europe/Minsk",
+        "Europe/Monaco",
+        "Europe/Moscow",
+        "Europe/Nicosia",
+        "Europe/Oslo",
+        "Europe/Paris",
+        "Europe/Podgorica",
+        "Europe/Prague",
+        "Europe/Riga",
+        "Europe/Rome",
+        "Europe/Samara",
+        "Europe/San_Marino",
+        "Europe/Sarajevo",
+        "Europe/Saratov",
+        "Europe/Simferopol",
+        "Europe/Skopje",
+        "Europe/Sofia",
+        "Europe/Stockholm",
+        "Europe/Tallinn",
+        "Europe/Tirane",
+        "Europe/Tiraspol",
+        "Europe/Ulyanovsk",
+        "Europe/Uzhgorod",
+        "Europe/Vaduz",
+        "Europe/Vatican",
+        "Europe/Vienna",
+        "Europe/Vilnius",
+        "Europe/Volgograd",
+        "Europe/Warsaw",
+        "Europe/Zagreb",
+        "Europe/Zaporozhye",
+        "Europe/Zurich",
+        "GB",
+        "GB-Eire",
+        "GMT",
+        "GMT+0",
+        "GMT-0",
+        "GMT0",
+        "Greenwich",
+        "HST",
+        "Hongkong",
         "Iceland",
-        "Indian/Antananarivo","Indian/Chagos","Indian/Christmas","Indian/Cocos",
-        "Indian/Comoro","Indian/Kerguelen","Indian/Mahe","Indian/Maldives",
-        "Indian/Mauritius","Indian/Mayotte","Indian/Reunion",
-        "Iran","Israel","Jamaica","Japan","Kwajalein","Libya",
-        "MET","MST","MST7MDT",
-        "Mexico/BajaNorte","Mexico/BajaSur","Mexico/General",
-        "NZ","NZ-CHAT","Navajo",
-        "PRC","PST8PDT",
-        "Pacific/Apia","Pacific/Auckland","Pacific/Bougainville","Pacific/Chatham",
-        "Pacific/Chuuk","Pacific/Easter","Pacific/Efate","Pacific/Enderbury",
-        "Pacific/Fakaofo","Pacific/Fiji","Pacific/Funafuti","Pacific/Galapagos",
-        "Pacific/Gambier","Pacific/Guadalcanal","Pacific/Guam","Pacific/Honolulu",
-        "Pacific/Johnston","Pacific/Kanton","Pacific/Kiritimati","Pacific/Kosrae",
-        "Pacific/Kwajalein","Pacific/Majuro","Pacific/Marquesas","Pacific/Midway",
-        "Pacific/Nauru","Pacific/Niue","Pacific/Norfolk","Pacific/Noumea",
-        "Pacific/Pago_Pago","Pacific/Palau","Pacific/Pitcairn",
-        "Pacific/Pohnpei","Pacific/Ponape","Pacific/Port_Moresby",
-        "Pacific/Rarotonga","Pacific/Saipan","Pacific/Samoa","Pacific/Tahiti",
-        "Pacific/Tarawa","Pacific/Tongatapu","Pacific/Truk","Pacific/Wake",
-        "Pacific/Wallis","Pacific/Yap",
-        "Poland","Portugal",
-        "ROC","ROK",
-        "Singapore","Turkey",
-        "UCT","US/Alaska","US/Aleutian","US/Arizona","US/Central",
-        "US/East-Indiana","US/Eastern","US/Hawaii","US/Indiana-Starke",
-        "US/Michigan","US/Mountain","US/Pacific","US/Samoa",
-        "UTC","Universal","W-SU","WET","Zulu",
+        "Indian/Antananarivo",
+        "Indian/Chagos",
+        "Indian/Christmas",
+        "Indian/Cocos",
+        "Indian/Comoro",
+        "Indian/Kerguelen",
+        "Indian/Mahe",
+        "Indian/Maldives",
+        "Indian/Mauritius",
+        "Indian/Mayotte",
+        "Indian/Reunion",
+        "Iran",
+        "Israel",
+        "Jamaica",
+        "Japan",
+        "Kwajalein",
+        "Libya",
+        "MET",
+        "MST",
+        "MST7MDT",
+        "Mexico/BajaNorte",
+        "Mexico/BajaSur",
+        "Mexico/General",
+        "NZ",
+        "NZ-CHAT",
+        "Navajo",
+        "PRC",
+        "PST8PDT",
+        "Pacific/Apia",
+        "Pacific/Auckland",
+        "Pacific/Bougainville",
+        "Pacific/Chatham",
+        "Pacific/Chuuk",
+        "Pacific/Easter",
+        "Pacific/Efate",
+        "Pacific/Enderbury",
+        "Pacific/Fakaofo",
+        "Pacific/Fiji",
+        "Pacific/Funafuti",
+        "Pacific/Galapagos",
+        "Pacific/Gambier",
+        "Pacific/Guadalcanal",
+        "Pacific/Guam",
+        "Pacific/Honolulu",
+        "Pacific/Johnston",
+        "Pacific/Kanton",
+        "Pacific/Kiritimati",
+        "Pacific/Kosrae",
+        "Pacific/Kwajalein",
+        "Pacific/Majuro",
+        "Pacific/Marquesas",
+        "Pacific/Midway",
+        "Pacific/Nauru",
+        "Pacific/Niue",
+        "Pacific/Norfolk",
+        "Pacific/Noumea",
+        "Pacific/Pago_Pago",
+        "Pacific/Palau",
+        "Pacific/Pitcairn",
+        "Pacific/Pohnpei",
+        "Pacific/Ponape",
+        "Pacific/Port_Moresby",
+        "Pacific/Rarotonga",
+        "Pacific/Saipan",
+        "Pacific/Samoa",
+        "Pacific/Tahiti",
+        "Pacific/Tarawa",
+        "Pacific/Tongatapu",
+        "Pacific/Truk",
+        "Pacific/Wake",
+        "Pacific/Wallis",
+        "Pacific/Yap",
+        "Poland",
+        "Portugal",
+        "ROC",
+        "ROK",
+        "Singapore",
+        "Turkey",
+        "UCT",
+        "US/Alaska",
+        "US/Aleutian",
+        "US/Arizona",
+        "US/Central",
+        "US/East-Indiana",
+        "US/Eastern",
+        "US/Hawaii",
+        "US/Indiana-Starke",
+        "US/Michigan",
+        "US/Mountain",
+        "US/Pacific",
+        "US/Samoa",
+        "UTC",
+        "Universal",
+        "W-SU",
+        "WET",
+        "Zulu",
     ];
 
     for &known in KNOWN_TZ {
@@ -534,8 +976,8 @@ fn is_supported_numbering_system(ns: &str) -> bool {
 
 struct DateComponents {
     year: i32,
-    month: u32, // 1-12
-    day: u32,   // 1-31
+    month: u32,   // 1-12
+    day: u32,     // 1-31
     weekday: u32, // 0=Sunday, 1=Monday, ... 6=Saturday
     hour: u32,
     minute: u32,
@@ -585,41 +1027,37 @@ fn calendar_month_name_en(calendar_id: &str, month_code: &str) -> String {
                 _ => month_code.to_string(),
             }
         }
-        "hebrew" => {
-            match month_code {
-                "M01" => "Tishri".to_string(),
-                "M02" => "Heshvan".to_string(),
-                "M03" => "Kislev".to_string(),
-                "M04" => "Tevet".to_string(),
-                "M05" => "Shevat".to_string(),
-                "M05L" => "Adar I".to_string(),
-                "M06" => "Adar".to_string(),
-                "M07" => "Nisan".to_string(),
-                "M08" => "Iyar".to_string(),
-                "M09" => "Sivan".to_string(),
-                "M10" => "Tamuz".to_string(),
-                "M11" => "Av".to_string(),
-                "M12" => "Elul".to_string(),
-                _ => month_code.to_string(),
-            }
-        }
-        "persian" => {
-            match month_code {
-                "M01" => "Farvardin".to_string(),
-                "M02" => "Ordibehesht".to_string(),
-                "M03" => "Khordad".to_string(),
-                "M04" => "Tir".to_string(),
-                "M05" => "Mordad".to_string(),
-                "M06" => "Shahrivar".to_string(),
-                "M07" => "Mehr".to_string(),
-                "M08" => "Aban".to_string(),
-                "M09" => "Azar".to_string(),
-                "M10" => "Dey".to_string(),
-                "M11" => "Bahman".to_string(),
-                "M12" => "Esfand".to_string(),
-                _ => month_code.to_string(),
-            }
-        }
+        "hebrew" => match month_code {
+            "M01" => "Tishri".to_string(),
+            "M02" => "Heshvan".to_string(),
+            "M03" => "Kislev".to_string(),
+            "M04" => "Tevet".to_string(),
+            "M05" => "Shevat".to_string(),
+            "M05L" => "Adar I".to_string(),
+            "M06" => "Adar".to_string(),
+            "M07" => "Nisan".to_string(),
+            "M08" => "Iyar".to_string(),
+            "M09" => "Sivan".to_string(),
+            "M10" => "Tamuz".to_string(),
+            "M11" => "Av".to_string(),
+            "M12" => "Elul".to_string(),
+            _ => month_code.to_string(),
+        },
+        "persian" => match month_code {
+            "M01" => "Farvardin".to_string(),
+            "M02" => "Ordibehesht".to_string(),
+            "M03" => "Khordad".to_string(),
+            "M04" => "Tir".to_string(),
+            "M05" => "Mordad".to_string(),
+            "M06" => "Shahrivar".to_string(),
+            "M07" => "Mehr".to_string(),
+            "M08" => "Aban".to_string(),
+            "M09" => "Azar".to_string(),
+            "M10" => "Dey".to_string(),
+            "M11" => "Bahman".to_string(),
+            "M12" => "Esfand".to_string(),
+            _ => month_code.to_string(),
+        },
         _ => {
             // For other calendars (Chinese, etc.) use Gregorian names as fallback
             if let Ok(num) = month_code[1..].replace('L', "").parse::<u32>() {
@@ -733,19 +1171,11 @@ fn era_long(year: i32) -> &'static str {
 }
 
 fn era_short(year: i32) -> &'static str {
-    if year > 0 {
-        "AD"
-    } else {
-        "BC"
-    }
+    if year > 0 { "AD" } else { "BC" }
 }
 
 fn era_narrow(year: i32) -> &'static str {
-    if year > 0 {
-        "A"
-    } else {
-        "B"
-    }
+    if year > 0 { "A" } else { "B" }
 }
 
 fn day_period_text(hour: u32, style: &str) -> &'static str {
@@ -806,9 +1236,9 @@ fn locale_default_hour_cycle(locale: &str) -> &'static str {
     match lang {
         "en" | "ar" | "ko" | "hi" | "bn" => "h12",
         "ja" => "h23",
-        "zh" | "de" | "fr" | "it" | "es" | "pt" | "ru" | "nl" | "sv" | "da" | "nb"
-        | "fi" | "pl" | "cs" | "hu" | "ro" | "tr" | "uk" | "hr" | "sk" | "sl" | "bg"
-        | "el" | "he" | "th" | "vi" | "id" | "ms" => "h23",
+        "zh" | "de" | "fr" | "it" | "es" | "pt" | "ru" | "nl" | "sv" | "da" | "nb" | "fi"
+        | "pl" | "cs" | "hu" | "ro" | "tr" | "uk" | "hr" | "sk" | "sl" | "bg" | "el" | "he"
+        | "th" | "vi" | "id" | "ms" => "h23",
         _ => "h12",
     }
 }
@@ -881,7 +1311,10 @@ fn format_2digit(n: u32) -> String {
 }
 
 fn format_date_style(c: &DateComponents, style: &str, tz: &str) -> String {
-    let ml = c.cal_month_name.as_deref().unwrap_or(month_name_long(c.month));
+    let ml = c
+        .cal_month_name
+        .as_deref()
+        .unwrap_or(month_name_long(c.month));
     let ms = if c.cal_month_name.is_some() {
         // For non-Gregorian calendars, use numeric abbreviation in short style
         month_name_short(c.month)
@@ -903,8 +1336,17 @@ fn format_date_style(c: &DateComponents, style: &str, tz: &str) -> String {
     }
 }
 
-fn format_reduced_date_style(c: &DateComponents, style: &str, has_year: bool, has_month: bool, has_day: bool) -> String {
-    let ml = c.cal_month_name.as_deref().unwrap_or(month_name_long(c.month));
+fn format_reduced_date_style(
+    c: &DateComponents,
+    style: &str,
+    has_year: bool,
+    has_month: bool,
+    has_day: bool,
+) -> String {
+    let ml = c
+        .cal_month_name
+        .as_deref()
+        .unwrap_or(month_name_long(c.month));
     if has_year && has_month && !has_day {
         match style {
             "full" | "long" => format!("{} {}", ml, c.year),
@@ -948,18 +1390,12 @@ fn format_time_style(c: &DateComponents, style: &str, hc: &str, tz: &str, epoch_
                     hour_str, c.minute, c.second, period, short_tz
                 )
             } else {
-                format!(
-                    "{}:{:02}:{:02} {}",
-                    hour_str, c.minute, c.second, short_tz
-                )
+                format!("{}:{:02}:{:02} {}", hour_str, c.minute, c.second, short_tz)
             }
         }
         "medium" => {
             if uses_period {
-                format!(
-                    "{}:{:02}:{:02} {}",
-                    hour_str, c.minute, c.second, period
-                )
+                format!("{}:{:02}:{:02} {}", hour_str, c.minute, c.second, period)
             } else {
                 format!("{}:{:02}:{:02}", hour_str, c.minute, c.second)
             }
@@ -973,10 +1409,7 @@ fn format_time_style(c: &DateComponents, style: &str, hc: &str, tz: &str, epoch_
         }
         _ => {
             if uses_period {
-                format!(
-                    "{}:{:02}:{:02} {}",
-                    hour_str, c.minute, c.second, period
-                )
+                format!("{}:{:02}:{:02} {}", hour_str, c.minute, c.second, period)
             } else {
                 format!("{}:{:02}:{:02}", hour_str, c.minute, c.second)
             }
@@ -990,24 +1423,24 @@ fn transliterate_digits(s: &str, ns: &str) -> String {
         return s.to_string();
     }
     let zero_char: char = match ns {
-        "arab" => '\u{0660}',      // ٠
-        "arabext" => '\u{06F0}',   // ۰
+        "arab" => '\u{0660}',     // ٠
+        "arabext" => '\u{06F0}',  // ۰
         "beng" => '\u{09E6}',     // ০
         "deva" => '\u{0966}',     // ०
         "fullwide" => '\u{FF10}', // ０
-        "gujr" => '\u{0AE6}',    // ૦
-        "guru" => '\u{0A66}',    // ੦
-        "khmr" => '\u{17E0}',    // ០
-        "knda" => '\u{0CE6}',    // ೦
-        "laoo" => '\u{0ED0}',    // ໐
-        "mlym" => '\u{0D66}',    // ൦
-        "mong" => '\u{1810}',    // ᠐
-        "mymr" => '\u{1040}',    // ၀
-        "orya" => '\u{0B66}',    // ୦
-        "tamldec" => '\u{0BE6}', // ௦
-        "telu" => '\u{0C66}',   // ౦
-        "thai" => '\u{0E50}',   // ๐
-        "tibt" => '\u{0F20}',   // ༠
+        "gujr" => '\u{0AE6}',     // ૦
+        "guru" => '\u{0A66}',     // ੦
+        "khmr" => '\u{17E0}',     // ០
+        "knda" => '\u{0CE6}',     // ೦
+        "laoo" => '\u{0ED0}',     // ໐
+        "mlym" => '\u{0D66}',     // ൦
+        "mong" => '\u{1810}',     // ᠐
+        "mymr" => '\u{1040}',     // ၀
+        "orya" => '\u{0B66}',     // ୦
+        "tamldec" => '\u{0BE6}',  // ௦
+        "telu" => '\u{0C66}',     // ౦
+        "thai" => '\u{0E50}',     // ๐
+        "tibt" => '\u{0F20}',     // ༠
         "hanidec" => {
             let han_digits = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
             let mut result = String::with_capacity(s.len() * 3);
@@ -1057,12 +1490,12 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
     let hc = resolve_hour_cycle(opts);
 
     // For non-Gregorian calendars with dateStyle, convert to calendar fields
-    if opts.date_style.is_some()
-        && opts.calendar != "gregory"
-        && opts.calendar != "iso8601"
-    {
+    if opts.date_style.is_some() && opts.calendar != "gregory" && opts.calendar != "iso8601" {
         if let Some(cf) = crate::interpreter::builtins::temporal::iso_to_calendar_fields(
-            c.year, c.month as u8, c.day as u8, &opts.calendar,
+            c.year,
+            c.month as u8,
+            c.day as u8,
+            &opts.calendar,
         ) {
             c.year = cf.year;
             c.month = cf.month_ordinal as u32;
@@ -1075,7 +1508,10 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
     if opts.date_style.is_some() || opts.time_style.is_some() {
         // Check if Temporal type requires reduced date formatting
         let need_reduced_date = opts.date_style.is_some()
-            && matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth) | Some(TemporalType::PlainMonthDay));
+            && matches!(
+                opts.temporal_type,
+                Some(TemporalType::PlainYearMonth) | Some(TemporalType::PlainMonthDay)
+            );
 
         let date_part = if need_reduced_date {
             None
@@ -1088,11 +1524,14 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         let effective_time_style = opts.time_style.as_ref().map(|ts| {
             let is_plain_temporal = matches!(
                 opts.temporal_type,
-                Some(TemporalType::PlainTime) | Some(TemporalType::PlainDateTime)
-                    | Some(TemporalType::PlainDate) | Some(TemporalType::PlainYearMonth)
+                Some(TemporalType::PlainTime)
+                    | Some(TemporalType::PlainDateTime)
+                    | Some(TemporalType::PlainDate)
+                    | Some(TemporalType::PlainYearMonth)
                     | Some(TemporalType::PlainMonthDay)
             );
-            if is_plain_temporal && opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
+            if is_plain_temporal && opts.time_zone_name.is_none() && (ts == "long" || ts == "full")
+            {
                 "medium".to_string()
             } else {
                 ts.clone()
@@ -1105,7 +1544,8 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         if need_reduced_date {
             let ds = opts.date_style.as_deref().unwrap_or("short");
             let is_ym = matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth));
-            let reduced = format_reduced_date_style(&c, ds, is_ym || opts.year.is_some(), true, !is_ym);
+            let reduced =
+                format_reduced_date_style(&c, ds, is_ym || opts.year.is_some(), true, !is_ym);
             return match time_part {
                 Some(t) => format!("{}, {}", reduced, t),
                 None => reduced,
@@ -1162,13 +1602,13 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
     });
 
     // Build date portion based on available components
-    let has_date =
-        opts.year.is_some() || opts.month.is_some() || opts.day.is_some();
+    let has_date = opts.year.is_some() || opts.month.is_some() || opts.day.is_some();
 
     if has_date {
-        let month_is_text = opts.month.as_ref().is_some_and(|m| {
-            matches!(m.as_str(), "long" | "short" | "narrow")
-        });
+        let month_is_text = opts
+            .month
+            .as_ref()
+            .is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"));
 
         if month_is_text {
             // Use text-style formatting: "January 15, 2024" or "Jan 15, 2024"
@@ -1245,23 +1685,39 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
 
         if let Some(ref h) = opts.hour {
             let h_str = match h.as_str() {
-                "2-digit" => format_2digit(
-                    match hc {
-                        "h12" => {
-                            let v = if c.hour == 0 { 12 } else if c.hour > 12 { c.hour - 12 } else { c.hour };
-                            v
-                        }
-                        "h11" => c.hour % 12,
-                        "h23" => c.hour,
-                        "h24" => if c.hour == 0 { 24 } else { c.hour },
-                        _ => c.hour,
+                "2-digit" => format_2digit(match hc {
+                    "h12" => {
+                        let v = if c.hour == 0 {
+                            12
+                        } else if c.hour > 12 {
+                            c.hour - 12
+                        } else {
+                            c.hour
+                        };
+                        v
                     }
-                ),
+                    "h11" => c.hour % 12,
+                    "h23" => c.hour,
+                    "h24" => {
+                        if c.hour == 0 {
+                            24
+                        } else {
+                            c.hour
+                        }
+                    }
+                    _ => c.hour,
+                }),
                 _ => {
                     // h23/h24: always use 2-digit padding per ICU convention
                     if hc == "h23" || hc == "h24" {
                         format_2digit(match hc {
-                            "h24" => if c.hour == 0 { 24 } else { c.hour },
+                            "h24" => {
+                                if c.hour == 0 {
+                                    24
+                                } else {
+                                    c.hour
+                                }
+                            }
                             _ => c.hour,
                         })
                     } else {
@@ -1399,11 +1855,7 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
 
 const RANGE_SEP: &str = "\u{2009}\u{2013}\u{2009}";
 
-fn format_range_with_options(
-    start_ms: f64,
-    end_ms: f64,
-    opts: &DtfOptions,
-) -> String {
+fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> String {
     let start_str = format_with_options(start_ms, opts);
     let end_str = format_with_options(end_ms, opts);
 
@@ -1415,7 +1867,10 @@ fn format_range_with_options(
     if opts.date_style.is_none()
         && opts.time_style.is_none()
         && opts.hour.is_none()
-        && opts.month.as_ref().is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"))
+        && opts
+            .month
+            .as_ref()
+            .is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"))
         && opts.year.is_some()
         && opts.day.is_some()
     {
@@ -1430,10 +1885,18 @@ fn format_range_with_options(
         };
 
         let day_fn = |d: u32, opt: &str| -> String {
-            if opt == "2-digit" { format_2digit(d) } else { d.to_string() }
+            if opt == "2-digit" {
+                format_2digit(d)
+            } else {
+                d.to_string()
+            }
         };
         let year_fn = |y: i32, opt: &str| -> String {
-            if opt == "2-digit" { format_2digit((y.unsigned_abs() % 100) as u32) } else { y.to_string() }
+            if opt == "2-digit" {
+                format_2digit((y.unsigned_abs() % 100) as u32)
+            } else {
+                y.to_string()
+            }
         };
 
         let d_opt = opts.day.as_ref().unwrap().as_str();
@@ -1447,7 +1910,11 @@ fn format_range_with_options(
                 day_fn(sc.day, d_opt),
                 RANGE_SEP,
                 day_fn(ec.day, d_opt),
-                if opts.year.is_some() { format!(", {}", year_fn(sc.year, y_opt)) } else { String::new() }
+                if opts.year.is_some() {
+                    format!(", {}", year_fn(sc.year, y_opt))
+                } else {
+                    String::new()
+                }
             );
         } else if sc.year == ec.year {
             // Same year, different month: "Jan 3 – Mar 4, 2019"
@@ -1457,7 +1924,11 @@ fn format_range_with_options(
                 day_fn(sc.day, d_opt),
                 RANGE_SEP,
                 format!("{} {}", month_fn(ec.month), day_fn(ec.day, d_opt)),
-                if opts.year.is_some() { format!(", {}", year_fn(sc.year, y_opt)) } else { String::new() }
+                if opts.year.is_some() {
+                    format!(", {}", year_fn(sc.year, y_opt))
+                } else {
+                    String::new()
+                }
             );
         }
         // Different year: full "Jan 3, 2019 – Mar 4, 2020"
@@ -1468,16 +1939,23 @@ fn format_range_with_options(
     let end_parts = format_to_parts_with_options(end_ms, opts);
     let date_types = ["year", "month", "day", "weekday", "era", "relatedYear"];
     let time_types = ["hour", "minute", "second", "fractionalSecond", "dayPeriod"];
-    let start_date: Vec<_> = start_parts.iter()
+    let start_date: Vec<_> = start_parts
+        .iter()
         .filter(|(t, _)| date_types.contains(&t.as_str()))
         .collect();
-    let end_date: Vec<_> = end_parts.iter()
+    let end_date: Vec<_> = end_parts
+        .iter()
         .filter(|(t, _)| date_types.contains(&t.as_str()))
         .collect();
-    let has_time = start_parts.iter().any(|(t, _)| time_types.contains(&t.as_str()));
+    let has_time = start_parts
+        .iter()
+        .any(|(t, _)| time_types.contains(&t.as_str()));
 
     if has_time && start_date == end_date && start_parts != end_parts {
-        if let Some(time_start) = start_parts.iter().position(|(t, _)| time_types.contains(&t.as_str())) {
+        if let Some(time_start) = start_parts
+            .iter()
+            .position(|(t, _)| time_types.contains(&t.as_str()))
+        {
             let shared_end = if time_start > 0 && start_parts[time_start - 1].0 == "literal" {
                 time_start - 1
             } else {
@@ -1494,7 +1972,9 @@ fn format_range_with_options(
                 result.push_str(v);
             }
             result.push_str(RANGE_SEP);
-            let end_time_start = end_parts.iter().position(|(t, _)| time_types.contains(&t.as_str()))
+            let end_time_start = end_parts
+                .iter()
+                .position(|(t, _)| time_types.contains(&t.as_str()))
                 .unwrap_or(0);
             for (_, v) in &end_parts[end_time_start..] {
                 result.push_str(v);
@@ -1525,7 +2005,10 @@ fn format_range_to_parts_with_options(
     if opts.date_style.is_none()
         && opts.time_style.is_none()
         && opts.hour.is_none()
-        && opts.month.as_ref().is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"))
+        && opts
+            .month
+            .as_ref()
+            .is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"))
         && opts.year.is_some()
         && opts.day.is_some()
     {
@@ -1540,10 +2023,18 @@ fn format_range_to_parts_with_options(
         };
 
         let day_fn = |d: u32, opt: &str| -> String {
-            if opt == "2-digit" { format_2digit(d) } else { d.to_string() }
+            if opt == "2-digit" {
+                format_2digit(d)
+            } else {
+                d.to_string()
+            }
         };
         let year_fn = |y: i32, opt: &str| -> String {
-            if opt == "2-digit" { format_2digit((y.unsigned_abs() % 100) as u32) } else { y.to_string() }
+            if opt == "2-digit" {
+                format_2digit((y.unsigned_abs() % 100) as u32)
+            } else {
+                y.to_string()
+            }
         };
 
         let d_opt = opts.day.as_ref().unwrap().as_str();
@@ -1553,25 +2044,85 @@ fn format_range_to_parts_with_options(
 
         if sc.year == ec.year && sc.month == ec.month {
             // "Jan 3 – 5, 2019" -- month shared, days differ, year shared
-            all.push(("month".to_string(), month_fn(sc.month).to_string(), "shared".to_string()));
+            all.push((
+                "month".to_string(),
+                month_fn(sc.month).to_string(),
+                "shared".to_string(),
+            ));
             all.push(("literal".to_string(), " ".to_string(), "shared".to_string()));
-            all.push(("day".to_string(), day_fn(sc.day, d_opt), "startRange".to_string()));
-            all.push(("literal".to_string(), RANGE_SEP.to_string(), "shared".to_string()));
-            all.push(("day".to_string(), day_fn(ec.day, d_opt), "endRange".to_string()));
-            all.push(("literal".to_string(), ", ".to_string(), "shared".to_string()));
-            all.push(("year".to_string(), year_fn(sc.year, y_opt), "shared".to_string()));
+            all.push((
+                "day".to_string(),
+                day_fn(sc.day, d_opt),
+                "startRange".to_string(),
+            ));
+            all.push((
+                "literal".to_string(),
+                RANGE_SEP.to_string(),
+                "shared".to_string(),
+            ));
+            all.push((
+                "day".to_string(),
+                day_fn(ec.day, d_opt),
+                "endRange".to_string(),
+            ));
+            all.push((
+                "literal".to_string(),
+                ", ".to_string(),
+                "shared".to_string(),
+            ));
+            all.push((
+                "year".to_string(),
+                year_fn(sc.year, y_opt),
+                "shared".to_string(),
+            ));
             return all;
         } else if sc.year == ec.year {
             // "Jan 3 – Mar 4, 2019" -- months/days differ, year shared
-            all.push(("month".to_string(), month_fn(sc.month).to_string(), "startRange".to_string()));
-            all.push(("literal".to_string(), " ".to_string(), "startRange".to_string()));
-            all.push(("day".to_string(), day_fn(sc.day, d_opt), "startRange".to_string()));
-            all.push(("literal".to_string(), RANGE_SEP.to_string(), "shared".to_string()));
-            all.push(("month".to_string(), month_fn(ec.month).to_string(), "endRange".to_string()));
-            all.push(("literal".to_string(), " ".to_string(), "endRange".to_string()));
-            all.push(("day".to_string(), day_fn(ec.day, d_opt), "endRange".to_string()));
-            all.push(("literal".to_string(), ", ".to_string(), "shared".to_string()));
-            all.push(("year".to_string(), year_fn(sc.year, y_opt), "shared".to_string()));
+            all.push((
+                "month".to_string(),
+                month_fn(sc.month).to_string(),
+                "startRange".to_string(),
+            ));
+            all.push((
+                "literal".to_string(),
+                " ".to_string(),
+                "startRange".to_string(),
+            ));
+            all.push((
+                "day".to_string(),
+                day_fn(sc.day, d_opt),
+                "startRange".to_string(),
+            ));
+            all.push((
+                "literal".to_string(),
+                RANGE_SEP.to_string(),
+                "shared".to_string(),
+            ));
+            all.push((
+                "month".to_string(),
+                month_fn(ec.month).to_string(),
+                "endRange".to_string(),
+            ));
+            all.push((
+                "literal".to_string(),
+                " ".to_string(),
+                "endRange".to_string(),
+            ));
+            all.push((
+                "day".to_string(),
+                day_fn(ec.day, d_opt),
+                "endRange".to_string(),
+            ));
+            all.push((
+                "literal".to_string(),
+                ", ".to_string(),
+                "shared".to_string(),
+            ));
+            all.push((
+                "year".to_string(),
+                year_fn(sc.year, y_opt),
+                "shared".to_string(),
+            ));
             return all;
         }
         // Different years: fall through to default (no collapsing)
@@ -1581,17 +2132,23 @@ fn format_range_to_parts_with_options(
     let date_types = ["year", "month", "day", "weekday", "era", "relatedYear"];
     let time_types = ["hour", "minute", "second", "fractionalSecond", "dayPeriod"];
 
-    let start_date: Vec<_> = start_parts.iter()
+    let start_date: Vec<_> = start_parts
+        .iter()
         .filter(|(t, _)| date_types.contains(&t.as_str()))
         .collect();
-    let end_date: Vec<_> = end_parts.iter()
+    let end_date: Vec<_> = end_parts
+        .iter()
         .filter(|(t, _)| date_types.contains(&t.as_str()))
         .collect();
-    let has_time = start_parts.iter().any(|(t, _)| time_types.contains(&t.as_str()));
+    let has_time = start_parts
+        .iter()
+        .any(|(t, _)| time_types.contains(&t.as_str()));
 
     if has_time && start_date == end_date && start_parts != end_parts {
         // Find where time parts begin in the start_parts list
-        let first_time_idx = start_parts.iter().position(|(t, _)| time_types.contains(&t.as_str()));
+        let first_time_idx = start_parts
+            .iter()
+            .position(|(t, _)| time_types.contains(&t.as_str()));
         if let Some(time_start) = first_time_idx {
             // Walk back to include the preceding literal separator (e.g. ", ")
             let shared_end = if time_start > 0 && start_parts[time_start - 1].0 == "literal" {
@@ -1618,10 +2175,16 @@ fn format_range_to_parts_with_options(
             }
 
             // Range separator
-            all.push(("literal".to_string(), RANGE_SEP.to_string(), "shared".to_string()));
+            all.push((
+                "literal".to_string(),
+                RANGE_SEP.to_string(),
+                "shared".to_string(),
+            ));
 
             // Find where time parts begin in end_parts
-            let end_time_start = end_parts.iter().position(|(t, _)| time_types.contains(&t.as_str()))
+            let end_time_start = end_parts
+                .iter()
+                .position(|(t, _)| time_types.contains(&t.as_str()))
                 .unwrap_or(0);
             for (t, v) in &end_parts[end_time_start..] {
                 all.push((t.clone(), v.clone(), "endRange".to_string()));
@@ -1636,7 +2199,11 @@ fn format_range_to_parts_with_options(
     for (t, v) in &start_parts {
         all.push((t.clone(), v.clone(), "startRange".to_string()));
     }
-    all.push(("literal".to_string(), RANGE_SEP.to_string(), "shared".to_string()));
+    all.push((
+        "literal".to_string(),
+        RANGE_SEP.to_string(),
+        "shared".to_string(),
+    ));
     for (t, v) in &end_parts {
         all.push((t.clone(), v.clone(), "endRange".to_string()));
     }
@@ -1646,9 +2213,24 @@ fn format_range_to_parts_with_options(
 fn is_utc_equivalent(tz: &str) -> bool {
     matches!(
         tz,
-        "UTC" | "Etc/UTC" | "Etc/GMT" | "GMT" | "Etc/GMT+0" | "Etc/GMT-0" | "Etc/GMT0"
-        | "Etc/Greenwich" | "Etc/UCT" | "Etc/Universal" | "Etc/Zulu"
-        | "GMT+0" | "GMT-0" | "GMT0" | "Greenwich" | "UCT" | "Universal" | "Zulu"
+        "UTC"
+            | "Etc/UTC"
+            | "Etc/GMT"
+            | "GMT"
+            | "Etc/GMT+0"
+            | "Etc/GMT-0"
+            | "Etc/GMT0"
+            | "Etc/Greenwich"
+            | "Etc/UCT"
+            | "Etc/Universal"
+            | "Etc/Zulu"
+            | "GMT+0"
+            | "GMT-0"
+            | "GMT0"
+            | "Greenwich"
+            | "UCT"
+            | "Universal"
+            | "Zulu"
     )
 }
 
@@ -1666,9 +2248,10 @@ fn tz_lookup(tz: &str) -> Option<TzInfo> {
     let (long, short, oh, om) = match lower.as_str() {
         // UTC equivalents
         "utc" | "etc/utc" | "etc/gmt" | "gmt" | "etc/gmt+0" | "etc/gmt-0" | "etc/gmt0"
-        | "etc/greenwich" | "etc/uct" | "etc/universal" | "etc/zulu"
-        | "gmt+0" | "gmt-0" | "gmt0" | "greenwich" | "uct" | "universal" | "zulu" =>
-            ("Coordinated Universal Time", "UTC", 0, 0),
+        | "etc/greenwich" | "etc/uct" | "etc/universal" | "etc/zulu" | "gmt+0" | "gmt-0"
+        | "gmt0" | "greenwich" | "uct" | "universal" | "zulu" => {
+            ("Coordinated Universal Time", "UTC", 0, 0)
+        }
 
         // Etc/GMT offsets (note: Etc/GMT+N means UTC-N)
         "etc/gmt+1" => ("GMT-01:00", "GMT-1", -1, 0),
@@ -1699,659 +2282,646 @@ fn tz_lookup(tz: &str) -> Option<TzInfo> {
         "etc/gmt-14" => ("GMT+14:00", "GMT+14", 14, 0),
 
         // US zones
-        "america/new_york" | "america/detroit" | "america/indiana/indianapolis"
-        | "america/indiana/vevay" | "america/indiana/vincennes" | "america/indiana/winamac"
-        | "america/indiana/marengo" | "america/indiana/petersburg"
-        | "america/kentucky/louisville" | "america/kentucky/monticello"
-        | "america/indianapolis" | "america/fort_wayne" | "america/louisville"
-        | "us/eastern" | "us/east-indiana" | "us/michigan" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "america/new_york"
+        | "america/detroit"
+        | "america/indiana/indianapolis"
+        | "america/indiana/vevay"
+        | "america/indiana/vincennes"
+        | "america/indiana/winamac"
+        | "america/indiana/marengo"
+        | "america/indiana/petersburg"
+        | "america/kentucky/louisville"
+        | "america/kentucky/monticello"
+        | "america/indianapolis"
+        | "america/fort_wayne"
+        | "america/louisville"
+        | "us/eastern"
+        | "us/east-indiana"
+        | "us/michigan" => ("Eastern Standard Time", "EST", -5, 0),
 
-        "america/chicago" | "america/indiana/knox" | "america/indiana/tell_city"
-        | "america/menominee" | "america/north_dakota/beulah"
-        | "america/north_dakota/center" | "america/north_dakota/new_salem"
-        | "america/knox_in" | "us/central" | "us/indiana-starke"
-        | "america/mexico_city" | "mexico/general" | "america/matamoros"
-        | "america/monterrey" | "america/merida" =>
-            ("Central Standard Time", "CST", -6, 0),
+        "america/chicago"
+        | "america/indiana/knox"
+        | "america/indiana/tell_city"
+        | "america/menominee"
+        | "america/north_dakota/beulah"
+        | "america/north_dakota/center"
+        | "america/north_dakota/new_salem"
+        | "america/knox_in"
+        | "us/central"
+        | "us/indiana-starke"
+        | "america/mexico_city"
+        | "mexico/general"
+        | "america/matamoros"
+        | "america/monterrey"
+        | "america/merida" => ("Central Standard Time", "CST", -6, 0),
 
-        "america/denver" | "america/boise" | "america/shiprock" | "navajo"
-        | "us/mountain" | "america/ojinaga" | "america/ciudad_juarez" =>
-            ("Mountain Standard Time", "MST", -7, 0),
+        "america/denver"
+        | "america/boise"
+        | "america/shiprock"
+        | "navajo"
+        | "us/mountain"
+        | "america/ojinaga"
+        | "america/ciudad_juarez" => ("Mountain Standard Time", "MST", -7, 0),
 
-        "america/phoenix" | "america/creston" | "us/arizona" | "mst" | "mst7mdt" =>
-            ("Mountain Standard Time", "MST", -7, 0),
+        "america/phoenix" | "america/creston" | "us/arizona" | "mst" | "mst7mdt" => {
+            ("Mountain Standard Time", "MST", -7, 0)
+        }
 
-        "america/los_angeles" | "us/pacific" | "america/tijuana"
-        | "america/vancouver" | "america/santa_isabel" | "mexico/bajanorte"
-        | "pst8pdt" =>
-            ("Pacific Standard Time", "PST", -8, 0),
+        "america/los_angeles"
+        | "us/pacific"
+        | "america/tijuana"
+        | "america/vancouver"
+        | "america/santa_isabel"
+        | "mexico/bajanorte"
+        | "pst8pdt" => ("Pacific Standard Time", "PST", -8, 0),
 
         "america/anchorage" | "america/juneau" | "america/sitka" | "america/yakutat"
-        | "america/nome" | "america/metlakatla" | "us/alaska" =>
-            ("Alaska Standard Time", "AKST", -9, 0),
+        | "america/nome" | "america/metlakatla" | "us/alaska" => {
+            ("Alaska Standard Time", "AKST", -9, 0)
+        }
 
-        "america/adak" | "america/atka" | "us/aleutian" =>
-            ("Hawaii-Aleutian Standard Time", "HST", -10, 0),
+        "america/adak" | "america/atka" | "us/aleutian" => {
+            ("Hawaii-Aleutian Standard Time", "HST", -10, 0)
+        }
 
-        "pacific/honolulu" | "us/hawaii" | "hst" =>
-            ("Hawaii-Aleutian Standard Time", "HST", -10, 0),
+        "pacific/honolulu" | "us/hawaii" | "hst" => {
+            ("Hawaii-Aleutian Standard Time", "HST", -10, 0)
+        }
 
         // Canada
-        "america/toronto" | "america/nipigon" | "america/thunder_bay"
-        | "america/iqaluit" | "america/pangnirtung" | "america/montreal"
-        | "canada/eastern" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "america/toronto"
+        | "america/nipigon"
+        | "america/thunder_bay"
+        | "america/iqaluit"
+        | "america/pangnirtung"
+        | "america/montreal"
+        | "canada/eastern" => ("Eastern Standard Time", "EST", -5, 0),
 
-        "america/winnipeg" | "america/rainy_river" | "america/rankin_inlet"
-        | "america/resolute" | "canada/central" =>
-            ("Central Standard Time", "CST", -6, 0),
+        "america/winnipeg"
+        | "america/rainy_river"
+        | "america/rankin_inlet"
+        | "america/resolute"
+        | "canada/central" => ("Central Standard Time", "CST", -6, 0),
 
-        "america/edmonton" | "america/cambridge_bay" | "america/inuvik"
-        | "america/yellowknife" | "canada/mountain" =>
-            ("Mountain Standard Time", "MST", -7, 0),
+        "america/edmonton"
+        | "america/cambridge_bay"
+        | "america/inuvik"
+        | "america/yellowknife"
+        | "canada/mountain" => ("Mountain Standard Time", "MST", -7, 0),
 
-        "america/whitehorse" | "america/dawson" | "canada/yukon" =>
-            ("Mountain Standard Time", "MST", -7, 0),
+        "america/whitehorse" | "america/dawson" | "canada/yukon" => {
+            ("Mountain Standard Time", "MST", -7, 0)
+        }
 
-        "america/halifax" | "america/glace_bay" | "america/moncton"
-        | "canada/atlantic" =>
-            ("Atlantic Standard Time", "AST", -4, 0),
+        "america/halifax" | "america/glace_bay" | "america/moncton" | "canada/atlantic" => {
+            ("Atlantic Standard Time", "AST", -4, 0)
+        }
 
-        "america/st_johns" | "canada/newfoundland" =>
-            ("Newfoundland Standard Time", "NST", -3, -30),
+        "america/st_johns" | "canada/newfoundland" => {
+            ("Newfoundland Standard Time", "NST", -3, -30)
+        }
 
-        "america/regina" | "america/swift_current" | "canada/saskatchewan" =>
-            ("Central Standard Time", "CST", -6, 0),
+        "america/regina" | "america/swift_current" | "canada/saskatchewan" => {
+            ("Central Standard Time", "CST", -6, 0)
+        }
 
         "canada/pacific" => ("Pacific Standard Time", "PST", -8, 0),
 
         // Europe
         "europe/london" | "europe/belfast" | "europe/guernsey" | "europe/isle_of_man"
-        | "europe/jersey" | "gb" | "gb-eire" =>
-            ("Greenwich Mean Time", "GMT", 0, 0),
+        | "europe/jersey" | "gb" | "gb-eire" => ("Greenwich Mean Time", "GMT", 0, 0),
 
-        "europe/dublin" | "eire" =>
-            ("Greenwich Mean Time", "GMT", 0, 0),
+        "europe/dublin" | "eire" => ("Greenwich Mean Time", "GMT", 0, 0),
 
-        "atlantic/reykjavik" | "iceland" =>
-            ("Greenwich Mean Time", "GMT", 0, 0),
+        "atlantic/reykjavik" | "iceland" => ("Greenwich Mean Time", "GMT", 0, 0),
 
-        "europe/lisbon" | "portugal" | "atlantic/madeira" =>
-            ("Western European Standard Time", "WET", 0, 0),
+        "europe/lisbon" | "portugal" | "atlantic/madeira" => {
+            ("Western European Standard Time", "WET", 0, 0)
+        }
 
-        "europe/paris" | "europe/brussels" | "europe/amsterdam" | "europe/luxembourg"
-        | "europe/monaco" | "europe/zurich" | "europe/vaduz" | "europe/berlin"
-        | "europe/copenhagen" | "europe/oslo" | "europe/stockholm"
-        | "europe/vienna" | "europe/prague" | "europe/bratislava"
-        | "europe/budapest" | "europe/warsaw" | "europe/belgrade"
-        | "europe/ljubljana" | "europe/sarajevo" | "europe/zagreb"
-        | "europe/skopje" | "europe/podgorica" | "europe/rome"
-        | "europe/vatican" | "europe/san_marino" | "europe/malta"
-        | "europe/andorra" | "europe/gibraltar" | "europe/tirane"
-        | "europe/madrid" | "europe/busingen" | "cet" | "met"
-        | "poland" | "arctic/longyearbyen" | "atlantic/jan_mayen" =>
-            ("Central European Standard Time", "GMT+1", 1, 0),
+        "europe/paris"
+        | "europe/brussels"
+        | "europe/amsterdam"
+        | "europe/luxembourg"
+        | "europe/monaco"
+        | "europe/zurich"
+        | "europe/vaduz"
+        | "europe/berlin"
+        | "europe/copenhagen"
+        | "europe/oslo"
+        | "europe/stockholm"
+        | "europe/vienna"
+        | "europe/prague"
+        | "europe/bratislava"
+        | "europe/budapest"
+        | "europe/warsaw"
+        | "europe/belgrade"
+        | "europe/ljubljana"
+        | "europe/sarajevo"
+        | "europe/zagreb"
+        | "europe/skopje"
+        | "europe/podgorica"
+        | "europe/rome"
+        | "europe/vatican"
+        | "europe/san_marino"
+        | "europe/malta"
+        | "europe/andorra"
+        | "europe/gibraltar"
+        | "europe/tirane"
+        | "europe/madrid"
+        | "europe/busingen"
+        | "cet"
+        | "met"
+        | "poland"
+        | "arctic/longyearbyen"
+        | "atlantic/jan_mayen" => ("Central European Standard Time", "GMT+1", 1, 0),
 
         "europe/athens" | "europe/bucharest" | "europe/sofia" | "europe/helsinki"
         | "europe/tallinn" | "europe/riga" | "europe/vilnius" | "europe/mariehamn"
         | "europe/kiev" | "europe/kyiv" | "europe/uzhgorod" | "europe/zaporozhye"
-        | "europe/chisinau" | "europe/tiraspol" | "eet" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        | "europe/chisinau" | "europe/tiraspol" | "eet" => {
+            ("Eastern European Standard Time", "GMT+2", 2, 0)
+        }
 
-        "europe/istanbul" | "asia/istanbul" | "turkey" =>
-            ("Turkey Time", "GMT+3", 3, 0),
+        "europe/istanbul" | "asia/istanbul" | "turkey" => ("Turkey Time", "GMT+3", 3, 0),
 
-        "europe/moscow" | "europe/kirov" | "europe/simferopol" | "europe/volgograd"
-        | "w-su" =>
-            ("Moscow Standard Time", "GMT+3", 3, 0),
+        "europe/moscow" | "europe/kirov" | "europe/simferopol" | "europe/volgograd" | "w-su" => {
+            ("Moscow Standard Time", "GMT+3", 3, 0)
+        }
 
-        "europe/samara" | "europe/astrakhan" | "europe/saratov" | "europe/ulyanovsk" =>
-            ("Samara Standard Time", "GMT+4", 4, 0),
+        "europe/samara" | "europe/astrakhan" | "europe/saratov" | "europe/ulyanovsk" => {
+            ("Samara Standard Time", "GMT+4", 4, 0)
+        }
 
-        "europe/kaliningrad" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        "europe/kaliningrad" => ("Eastern European Standard Time", "GMT+2", 2, 0),
 
-        "europe/minsk" =>
-            ("Moscow Standard Time", "GMT+3", 3, 0),
+        "europe/minsk" => ("Moscow Standard Time", "GMT+3", 3, 0),
 
         // Asia
-        "asia/kolkata" | "asia/calcutta" =>
-            ("India Standard Time", "GMT+5:30", 5, 30),
+        "asia/kolkata" | "asia/calcutta" => ("India Standard Time", "GMT+5:30", 5, 30),
 
-        "asia/tokyo" | "japan" =>
-            ("Japan Standard Time", "GMT+9", 9, 0),
+        "asia/tokyo" | "japan" => ("Japan Standard Time", "GMT+9", 9, 0),
 
-        "asia/shanghai" | "asia/chongqing" | "asia/chungking" | "asia/harbin"
-        | "prc" =>
-            ("China Standard Time", "GMT+8", 8, 0),
+        "asia/shanghai" | "asia/chongqing" | "asia/chungking" | "asia/harbin" | "prc" => {
+            ("China Standard Time", "GMT+8", 8, 0)
+        }
 
-        "asia/hong_kong" | "hongkong" =>
-            ("Hong Kong Standard Time", "GMT+8", 8, 0),
+        "asia/hong_kong" | "hongkong" => ("Hong Kong Standard Time", "GMT+8", 8, 0),
 
-        "asia/taipei" | "roc" =>
-            ("Taipei Standard Time", "GMT+8", 8, 0),
+        "asia/taipei" | "roc" => ("Taipei Standard Time", "GMT+8", 8, 0),
 
-        "asia/seoul" | "rok" =>
-            ("Korean Standard Time", "GMT+9", 9, 0),
+        "asia/seoul" | "rok" => ("Korean Standard Time", "GMT+9", 9, 0),
 
-        "asia/singapore" | "singapore" =>
-            ("Singapore Standard Time", "GMT+8", 8, 0),
+        "asia/singapore" | "singapore" => ("Singapore Standard Time", "GMT+8", 8, 0),
 
-        "asia/kuala_lumpur" | "asia/kuching" =>
-            ("Malaysia Time", "GMT+8", 8, 0),
+        "asia/kuala_lumpur" | "asia/kuching" => ("Malaysia Time", "GMT+8", 8, 0),
 
-        "asia/bangkok" | "asia/phnom_penh" | "asia/vientiane" =>
-            ("Indochina Time", "GMT+7", 7, 0),
+        "asia/bangkok" | "asia/phnom_penh" | "asia/vientiane" => ("Indochina Time", "GMT+7", 7, 0),
 
-        "asia/ho_chi_minh" | "asia/saigon" =>
-            ("Indochina Time", "GMT+7", 7, 0),
+        "asia/ho_chi_minh" | "asia/saigon" => ("Indochina Time", "GMT+7", 7, 0),
 
-        "asia/jakarta" | "asia/pontianak" =>
-            ("Western Indonesia Time", "GMT+7", 7, 0),
+        "asia/jakarta" | "asia/pontianak" => ("Western Indonesia Time", "GMT+7", 7, 0),
 
-        "asia/makassar" | "asia/ujung_pandang" =>
-            ("Central Indonesia Time", "GMT+8", 8, 0),
+        "asia/makassar" | "asia/ujung_pandang" => ("Central Indonesia Time", "GMT+8", 8, 0),
 
-        "asia/jayapura" =>
-            ("Eastern Indonesia Time", "GMT+9", 9, 0),
+        "asia/jayapura" => ("Eastern Indonesia Time", "GMT+9", 9, 0),
 
-        "asia/dubai" | "asia/muscat" =>
-            ("Gulf Standard Time", "GMT+4", 4, 0),
+        "asia/dubai" | "asia/muscat" => ("Gulf Standard Time", "GMT+4", 4, 0),
 
-        "asia/riyadh" | "asia/aden" | "asia/bahrain" | "asia/kuwait" | "asia/qatar" =>
-            ("Arabian Standard Time", "GMT+3", 3, 0),
+        "asia/riyadh" | "asia/aden" | "asia/bahrain" | "asia/kuwait" | "asia/qatar" => {
+            ("Arabian Standard Time", "GMT+3", 3, 0)
+        }
 
-        "asia/tehran" | "iran" =>
-            ("Iran Standard Time", "GMT+3:30", 3, 30),
+        "asia/tehran" | "iran" => ("Iran Standard Time", "GMT+3:30", 3, 30),
 
-        "asia/karachi" =>
-            ("Pakistan Standard Time", "GMT+5", 5, 0),
+        "asia/karachi" => ("Pakistan Standard Time", "GMT+5", 5, 0),
 
-        "asia/dhaka" | "asia/dacca" =>
-            ("Bangladesh Standard Time", "GMT+6", 6, 0),
+        "asia/dhaka" | "asia/dacca" => ("Bangladesh Standard Time", "GMT+6", 6, 0),
 
-        "asia/yangon" | "asia/rangoon" =>
-            ("Myanmar Time", "GMT+6:30", 6, 30),
+        "asia/yangon" | "asia/rangoon" => ("Myanmar Time", "GMT+6:30", 6, 30),
 
-        "asia/kathmandu" | "asia/katmandu" =>
-            ("Nepal Time", "GMT+5:45", 5, 45),
+        "asia/kathmandu" | "asia/katmandu" => ("Nepal Time", "GMT+5:45", 5, 45),
 
-        "asia/colombo" =>
-            ("India Standard Time", "GMT+5:30", 5, 30),
+        "asia/colombo" => ("India Standard Time", "GMT+5:30", 5, 30),
 
-        "asia/tashkent" | "asia/samarkand" =>
-            ("Uzbekistan Standard Time", "GMT+5", 5, 0),
+        "asia/tashkent" | "asia/samarkand" => ("Uzbekistan Standard Time", "GMT+5", 5, 0),
 
-        "asia/almaty" | "asia/qostanay" =>
-            ("East Kazakhstan Time", "GMT+6", 6, 0),
+        "asia/almaty" | "asia/qostanay" => ("East Kazakhstan Time", "GMT+6", 6, 0),
 
-        "asia/aqtobe" | "asia/aqtau" | "asia/atyrau" | "asia/oral" | "asia/qyzylorda" =>
-            ("West Kazakhstan Time", "GMT+5", 5, 0),
+        "asia/aqtobe" | "asia/aqtau" | "asia/atyrau" | "asia/oral" | "asia/qyzylorda" => {
+            ("West Kazakhstan Time", "GMT+5", 5, 0)
+        }
 
-        "asia/yekaterinburg" =>
-            ("Yekaterinburg Standard Time", "GMT+5", 5, 0),
+        "asia/yekaterinburg" => ("Yekaterinburg Standard Time", "GMT+5", 5, 0),
 
-        "asia/omsk" =>
-            ("Omsk Standard Time", "GMT+6", 6, 0),
+        "asia/omsk" => ("Omsk Standard Time", "GMT+6", 6, 0),
 
         "asia/novosibirsk" | "asia/novokuznetsk" | "asia/barnaul" | "asia/tomsk"
-        | "asia/krasnoyarsk" =>
-            ("Krasnoyarsk Standard Time", "GMT+7", 7, 0),
+        | "asia/krasnoyarsk" => ("Krasnoyarsk Standard Time", "GMT+7", 7, 0),
 
-        "asia/irkutsk" =>
-            ("Irkutsk Standard Time", "GMT+8", 8, 0),
+        "asia/irkutsk" => ("Irkutsk Standard Time", "GMT+8", 8, 0),
 
-        "asia/yakutsk" | "asia/chita" | "asia/khandyga" =>
-            ("Yakutsk Standard Time", "GMT+9", 9, 0),
+        "asia/yakutsk" | "asia/chita" | "asia/khandyga" => ("Yakutsk Standard Time", "GMT+9", 9, 0),
 
-        "asia/vladivostok" | "asia/ust-nera" =>
-            ("Vladivostok Standard Time", "GMT+10", 10, 0),
+        "asia/vladivostok" | "asia/ust-nera" => ("Vladivostok Standard Time", "GMT+10", 10, 0),
 
-        "asia/magadan" | "asia/sakhalin" | "asia/srednekolymsk" =>
-            ("Magadan Standard Time", "GMT+11", 11, 0),
+        "asia/magadan" | "asia/sakhalin" | "asia/srednekolymsk" => {
+            ("Magadan Standard Time", "GMT+11", 11, 0)
+        }
 
-        "asia/kamchatka" | "asia/anadyr" =>
-            ("Kamchatka Standard Time", "GMT+12", 12, 0),
+        "asia/kamchatka" | "asia/anadyr" => ("Kamchatka Standard Time", "GMT+12", 12, 0),
 
-        "asia/jerusalem" | "asia/tel_aviv" | "israel" =>
-            ("Israel Standard Time", "GMT+2", 2, 0),
+        "asia/jerusalem" | "asia/tel_aviv" | "israel" => ("Israel Standard Time", "GMT+2", 2, 0),
 
-        "asia/beirut" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        "asia/beirut" => ("Eastern European Standard Time", "GMT+2", 2, 0),
 
-        "asia/damascus" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        "asia/damascus" => ("Eastern European Standard Time", "GMT+2", 2, 0),
 
-        "asia/amman" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        "asia/amman" => ("Eastern European Standard Time", "GMT+2", 2, 0),
 
-        "asia/baghdad" =>
-            ("Arabian Standard Time", "GMT+3", 3, 0),
+        "asia/baghdad" => ("Arabian Standard Time", "GMT+3", 3, 0),
 
-        "asia/kabul" =>
-            ("Afghanistan Time", "GMT+4:30", 4, 30),
+        "asia/kabul" => ("Afghanistan Time", "GMT+4:30", 4, 30),
 
-        "asia/baku" =>
-            ("Azerbaijan Standard Time", "GMT+4", 4, 0),
+        "asia/baku" => ("Azerbaijan Standard Time", "GMT+4", 4, 0),
 
-        "asia/tbilisi" =>
-            ("Georgia Standard Time", "GMT+4", 4, 0),
+        "asia/tbilisi" => ("Georgia Standard Time", "GMT+4", 4, 0),
 
-        "asia/yerevan" =>
-            ("Armenia Standard Time", "GMT+4", 4, 0),
+        "asia/yerevan" => ("Armenia Standard Time", "GMT+4", 4, 0),
 
-        "asia/dushanbe" =>
-            ("Tajikistan Time", "GMT+5", 5, 0),
+        "asia/dushanbe" => ("Tajikistan Time", "GMT+5", 5, 0),
 
-        "asia/ashgabat" | "asia/ashkhabad" =>
-            ("Turkmenistan Standard Time", "GMT+5", 5, 0),
+        "asia/ashgabat" | "asia/ashkhabad" => ("Turkmenistan Standard Time", "GMT+5", 5, 0),
 
-        "asia/bishkek" =>
-            ("Kyrgyzstan Time", "GMT+6", 6, 0),
+        "asia/bishkek" => ("Kyrgyzstan Time", "GMT+6", 6, 0),
 
-        "asia/brunei" =>
-            ("Brunei Darussalam Time", "GMT+8", 8, 0),
+        "asia/brunei" => ("Brunei Darussalam Time", "GMT+8", 8, 0),
 
-        "asia/thimphu" | "asia/thimbu" =>
-            ("Bhutan Time", "GMT+6", 6, 0),
+        "asia/thimphu" | "asia/thimbu" => ("Bhutan Time", "GMT+6", 6, 0),
 
-        "asia/dili" =>
-            ("East Timor Time", "GMT+9", 9, 0),
+        "asia/dili" => ("East Timor Time", "GMT+9", 9, 0),
 
-        "asia/manila" =>
-            ("Philippine Standard Time", "GMT+8", 8, 0),
+        "asia/manila" => ("Philippine Standard Time", "GMT+8", 8, 0),
 
-        "asia/ulaanbaatar" | "asia/ulan_bator" | "asia/choibalsan" | "asia/hovd" =>
-            ("Ulaanbaatar Standard Time", "GMT+8", 8, 0),
+        "asia/ulaanbaatar" | "asia/ulan_bator" | "asia/choibalsan" | "asia/hovd" => {
+            ("Ulaanbaatar Standard Time", "GMT+8", 8, 0)
+        }
 
-        "asia/pyongyang" =>
-            ("Korean Standard Time", "GMT+9", 9, 0),
+        "asia/pyongyang" => ("Korean Standard Time", "GMT+9", 9, 0),
 
-        "asia/urumqi" | "asia/kashgar" =>
-            ("China Standard Time", "GMT+6", 6, 0),
+        "asia/urumqi" | "asia/kashgar" => ("China Standard Time", "GMT+6", 6, 0),
 
-        "asia/gaza" | "asia/hebron" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        "asia/gaza" | "asia/hebron" => ("Eastern European Standard Time", "GMT+2", 2, 0),
 
-        "asia/famagusta" | "asia/nicosia" | "europe/nicosia" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        "asia/famagusta" | "asia/nicosia" | "europe/nicosia" => {
+            ("Eastern European Standard Time", "GMT+2", 2, 0)
+        }
 
-        "asia/macao" | "asia/macau" =>
-            ("China Standard Time", "GMT+8", 8, 0),
+        "asia/macao" | "asia/macau" => ("China Standard Time", "GMT+8", 8, 0),
 
         // Africa
-        "africa/cairo" | "egypt" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        "africa/cairo" | "egypt" => ("Eastern European Standard Time", "GMT+2", 2, 0),
 
-        "africa/johannesburg" | "africa/harare" | "africa/lusaka" | "africa/maputo"
-        | "africa/blantyre" | "africa/bujumbura" | "africa/gaborone"
-        | "africa/kigali" | "africa/lubumbashi" | "africa/maseru" | "africa/mbabane"
-        | "africa/windhoek" =>
-            ("South Africa Standard Time", "GMT+2", 2, 0),
+        "africa/johannesburg"
+        | "africa/harare"
+        | "africa/lusaka"
+        | "africa/maputo"
+        | "africa/blantyre"
+        | "africa/bujumbura"
+        | "africa/gaborone"
+        | "africa/kigali"
+        | "africa/lubumbashi"
+        | "africa/maseru"
+        | "africa/mbabane"
+        | "africa/windhoek" => ("South Africa Standard Time", "GMT+2", 2, 0),
 
         "africa/lagos" | "africa/bangui" | "africa/brazzaville" | "africa/douala"
-        | "africa/kinshasa" | "africa/libreville" | "africa/luanda"
-        | "africa/malabo" | "africa/ndjamena" | "africa/niamey"
-        | "africa/porto-novo" =>
-            ("West Africa Standard Time", "GMT+1", 1, 0),
+        | "africa/kinshasa" | "africa/libreville" | "africa/luanda" | "africa/malabo"
+        | "africa/ndjamena" | "africa/niamey" | "africa/porto-novo" => {
+            ("West Africa Standard Time", "GMT+1", 1, 0)
+        }
 
-        "africa/nairobi" | "africa/addis_ababa" | "africa/asmara" | "africa/asmera"
-        | "africa/dar_es_salaam" | "africa/djibouti" | "africa/kampala"
-        | "africa/mogadishu" | "indian/antananarivo" | "indian/comoro"
-        | "indian/mayotte" =>
-            ("East Africa Time", "GMT+3", 3, 0),
+        "africa/nairobi"
+        | "africa/addis_ababa"
+        | "africa/asmara"
+        | "africa/asmera"
+        | "africa/dar_es_salaam"
+        | "africa/djibouti"
+        | "africa/kampala"
+        | "africa/mogadishu"
+        | "indian/antananarivo"
+        | "indian/comoro"
+        | "indian/mayotte" => ("East Africa Time", "GMT+3", 3, 0),
 
-        "africa/casablanca" =>
-            ("Western European Standard Time", "WET", 0, 0),
+        "africa/casablanca" => ("Western European Standard Time", "WET", 0, 0),
 
-        "africa/algiers" =>
-            ("Central European Standard Time", "GMT+1", 1, 0),
+        "africa/algiers" => ("Central European Standard Time", "GMT+1", 1, 0),
 
-        "africa/tunis" =>
-            ("Central European Standard Time", "GMT+1", 1, 0),
+        "africa/tunis" => ("Central European Standard Time", "GMT+1", 1, 0),
 
-        "africa/tripoli" | "libya" =>
-            ("Eastern European Standard Time", "GMT+2", 2, 0),
+        "africa/tripoli" | "libya" => ("Eastern European Standard Time", "GMT+2", 2, 0),
 
-        "africa/khartoum" | "africa/juba" =>
-            ("Central Africa Time", "GMT+2", 2, 0),
+        "africa/khartoum" | "africa/juba" => ("Central Africa Time", "GMT+2", 2, 0),
 
-        "africa/abidjan" | "africa/accra" | "africa/bamako" | "africa/banjul"
-        | "africa/bissau" | "africa/conakry" | "africa/dakar" | "africa/freetown"
-        | "africa/lome" | "africa/monrovia" | "africa/nouakchott"
-        | "africa/ouagadougou" | "africa/sao_tome" | "africa/timbuktu"
-        | "africa/el_aaiun" =>
-            ("Greenwich Mean Time", "GMT", 0, 0),
+        "africa/abidjan" | "africa/accra" | "africa/bamako" | "africa/banjul" | "africa/bissau"
+        | "africa/conakry" | "africa/dakar" | "africa/freetown" | "africa/lome"
+        | "africa/monrovia" | "africa/nouakchott" | "africa/ouagadougou" | "africa/sao_tome"
+        | "africa/timbuktu" | "africa/el_aaiun" => ("Greenwich Mean Time", "GMT", 0, 0),
 
         // Australia
-        "australia/sydney" | "australia/melbourne" | "australia/act"
-        | "australia/canberra" | "australia/nsw" | "australia/victoria"
-        | "australia/currie" | "australia/hobart" | "australia/tasmania" =>
-            ("Australian Eastern Standard Time", "GMT+10", 10, 0),
+        "australia/sydney"
+        | "australia/melbourne"
+        | "australia/act"
+        | "australia/canberra"
+        | "australia/nsw"
+        | "australia/victoria"
+        | "australia/currie"
+        | "australia/hobart"
+        | "australia/tasmania" => ("Australian Eastern Standard Time", "GMT+10", 10, 0),
 
-        "australia/brisbane" | "australia/queensland" | "australia/lindeman" =>
-            ("Australian Eastern Standard Time", "GMT+10", 10, 0),
+        "australia/brisbane" | "australia/queensland" | "australia/lindeman" => {
+            ("Australian Eastern Standard Time", "GMT+10", 10, 0)
+        }
 
-        "australia/adelaide" | "australia/south" | "australia/broken_hill"
-        | "australia/yancowinna" =>
-            ("Australian Central Standard Time", "GMT+9:30", 9, 30),
+        "australia/adelaide"
+        | "australia/south"
+        | "australia/broken_hill"
+        | "australia/yancowinna" => ("Australian Central Standard Time", "GMT+9:30", 9, 30),
 
-        "australia/darwin" | "australia/north" =>
-            ("Australian Central Standard Time", "GMT+9:30", 9, 30),
+        "australia/darwin" | "australia/north" => {
+            ("Australian Central Standard Time", "GMT+9:30", 9, 30)
+        }
 
-        "australia/perth" | "australia/west" =>
-            ("Australian Western Standard Time", "GMT+8", 8, 0),
+        "australia/perth" | "australia/west" => ("Australian Western Standard Time", "GMT+8", 8, 0),
 
-        "australia/eucla" =>
-            ("Australian Central Western Standard Time", "GMT+8:45", 8, 45),
+        "australia/eucla" => (
+            "Australian Central Western Standard Time",
+            "GMT+8:45",
+            8,
+            45,
+        ),
 
-        "australia/lord_howe" | "australia/lhi" =>
-            ("Lord Howe Standard Time", "GMT+10:30", 10, 30),
+        "australia/lord_howe" | "australia/lhi" => ("Lord Howe Standard Time", "GMT+10:30", 10, 30),
 
         // Pacific
-        "pacific/auckland" | "nz" | "antarctica/mcmurdo" | "antarctica/south_pole" =>
-            ("New Zealand Standard Time", "GMT+12", 12, 0),
+        "pacific/auckland" | "nz" | "antarctica/mcmurdo" | "antarctica/south_pole" => {
+            ("New Zealand Standard Time", "GMT+12", 12, 0)
+        }
 
-        "pacific/chatham" | "nz-chat" =>
-            ("Chatham Standard Time", "GMT+12:45", 12, 45),
+        "pacific/chatham" | "nz-chat" => ("Chatham Standard Time", "GMT+12:45", 12, 45),
 
-        "pacific/fiji" =>
-            ("Fiji Standard Time", "GMT+12", 12, 0),
+        "pacific/fiji" => ("Fiji Standard Time", "GMT+12", 12, 0),
 
-        "pacific/tongatapu" =>
-            ("Tonga Standard Time", "GMT+13", 13, 0),
+        "pacific/tongatapu" => ("Tonga Standard Time", "GMT+13", 13, 0),
 
-        "pacific/guam" | "pacific/saipan" =>
-            ("Chamorro Standard Time", "GMT+10", 10, 0),
+        "pacific/guam" | "pacific/saipan" => ("Chamorro Standard Time", "GMT+10", 10, 0),
 
-        "pacific/noumea" =>
-            ("New Caledonia Standard Time", "GMT+11", 11, 0),
+        "pacific/noumea" => ("New Caledonia Standard Time", "GMT+11", 11, 0),
 
-        "pacific/port_moresby" =>
-            ("Papua New Guinea Time", "GMT+10", 10, 0),
+        "pacific/port_moresby" => ("Papua New Guinea Time", "GMT+10", 10, 0),
 
-        "pacific/guadalcanal" =>
-            ("Solomon Islands Time", "GMT+11", 11, 0),
+        "pacific/guadalcanal" => ("Solomon Islands Time", "GMT+11", 11, 0),
 
-        "pacific/efate" =>
-            ("Vanuatu Standard Time", "GMT+11", 11, 0),
+        "pacific/efate" => ("Vanuatu Standard Time", "GMT+11", 11, 0),
 
-        "pacific/tarawa" | "pacific/majuro" | "pacific/kwajalein" | "kwajalein" =>
-            ("Marshall Islands Time", "GMT+12", 12, 0),
+        "pacific/tarawa" | "pacific/majuro" | "pacific/kwajalein" | "kwajalein" => {
+            ("Marshall Islands Time", "GMT+12", 12, 0)
+        }
 
-        "pacific/nauru" =>
-            ("Nauru Time", "GMT+12", 12, 0),
+        "pacific/nauru" => ("Nauru Time", "GMT+12", 12, 0),
 
-        "pacific/funafuti" | "pacific/wallis" | "pacific/wake" =>
-            ("Tuvalu Time", "GMT+12", 12, 0),
+        "pacific/funafuti" | "pacific/wallis" | "pacific/wake" => ("Tuvalu Time", "GMT+12", 12, 0),
 
-        "pacific/kiritimati" =>
-            ("Line Islands Time", "GMT+14", 14, 0),
+        "pacific/kiritimati" => ("Line Islands Time", "GMT+14", 14, 0),
 
-        "pacific/kanton" | "pacific/enderbury" =>
-            ("Phoenix Islands Time", "GMT+13", 13, 0),
+        "pacific/kanton" | "pacific/enderbury" => ("Phoenix Islands Time", "GMT+13", 13, 0),
 
-        "pacific/pago_pago" | "pacific/midway" | "pacific/samoa" | "us/samoa" =>
-            ("Samoa Standard Time", "GMT-11", -11, 0),
+        "pacific/pago_pago" | "pacific/midway" | "pacific/samoa" | "us/samoa" => {
+            ("Samoa Standard Time", "GMT-11", -11, 0)
+        }
 
-        "pacific/niue" =>
-            ("Niue Time", "GMT-11", -11, 0),
+        "pacific/niue" => ("Niue Time", "GMT-11", -11, 0),
 
-        "pacific/rarotonga" =>
-            ("Cook Islands Standard Time", "GMT-10", -10, 0),
+        "pacific/rarotonga" => ("Cook Islands Standard Time", "GMT-10", -10, 0),
 
-        "pacific/tahiti" | "pacific/gambier" | "pacific/marquesas" =>
-            ("Tahiti Time", "GMT-10", -10, 0),
+        "pacific/tahiti" | "pacific/gambier" | "pacific/marquesas" => {
+            ("Tahiti Time", "GMT-10", -10, 0)
+        }
 
-        "pacific/pitcairn" =>
-            ("Pitcairn Time", "GMT-8", -8, 0),
+        "pacific/pitcairn" => ("Pitcairn Time", "GMT-8", -8, 0),
 
-        "pacific/galapagos" =>
-            ("Galapagos Time", "GMT-6", -6, 0),
+        "pacific/galapagos" => ("Galapagos Time", "GMT-6", -6, 0),
 
-        "pacific/easter" | "chile/easterisland" =>
-            ("Easter Island Standard Time", "GMT-6", -6, 0),
+        "pacific/easter" | "chile/easterisland" => ("Easter Island Standard Time", "GMT-6", -6, 0),
 
-        "pacific/norfolk" =>
-            ("Norfolk Island Standard Time", "GMT+11", 11, 0),
+        "pacific/norfolk" => ("Norfolk Island Standard Time", "GMT+11", 11, 0),
 
-        "pacific/palau" =>
-            ("Palau Time", "GMT+9", 9, 0),
+        "pacific/palau" => ("Palau Time", "GMT+9", 9, 0),
 
-        "pacific/chuuk" | "pacific/truk" | "pacific/yap" =>
-            ("Chuuk Time", "GMT+10", 10, 0),
+        "pacific/chuuk" | "pacific/truk" | "pacific/yap" => ("Chuuk Time", "GMT+10", 10, 0),
 
-        "pacific/pohnpei" | "pacific/ponape" =>
-            ("Pohnpei Standard Time", "GMT+11", 11, 0),
+        "pacific/pohnpei" | "pacific/ponape" => ("Pohnpei Standard Time", "GMT+11", 11, 0),
 
-        "pacific/kosrae" =>
-            ("Kosrae Time", "GMT+11", 11, 0),
+        "pacific/kosrae" => ("Kosrae Time", "GMT+11", 11, 0),
 
-        "pacific/bougainville" =>
-            ("Bougainville Standard Time", "GMT+11", 11, 0),
+        "pacific/bougainville" => ("Bougainville Standard Time", "GMT+11", 11, 0),
 
-        "pacific/apia" =>
-            ("Apia Standard Time", "GMT+13", 13, 0),
+        "pacific/apia" => ("Apia Standard Time", "GMT+13", 13, 0),
 
-        "pacific/fakaofo" =>
-            ("Tokelau Time", "GMT+13", 13, 0),
+        "pacific/fakaofo" => ("Tokelau Time", "GMT+13", 13, 0),
 
         // Americas (non-US/Canada)
         "america/sao_paulo" | "america/fortaleza" | "america/recife" | "america/belem"
-        | "america/maceio" | "america/bahia" | "america/santarem"
-        | "america/araguaina" | "brazil/east" =>
-            ("Brasilia Standard Time", "GMT-3", -3, 0),
+        | "america/maceio" | "america/bahia" | "america/santarem" | "america/araguaina"
+        | "brazil/east" => ("Brasilia Standard Time", "GMT-3", -3, 0),
 
-        "america/manaus" | "america/porto_velho" | "america/boa_vista"
-        | "america/campo_grande" | "america/cuiaba" | "brazil/west" =>
-            ("Amazon Standard Time", "GMT-4", -4, 0),
+        "america/manaus"
+        | "america/porto_velho"
+        | "america/boa_vista"
+        | "america/campo_grande"
+        | "america/cuiaba"
+        | "brazil/west" => ("Amazon Standard Time", "GMT-4", -4, 0),
 
-        "america/noronha" | "brazil/denoronha" =>
-            ("Fernando de Noronha Standard Time", "GMT-2", -2, 0),
+        "america/noronha" | "brazil/denoronha" => {
+            ("Fernando de Noronha Standard Time", "GMT-2", -2, 0)
+        }
 
-        "america/rio_branco" | "america/eirunepe" | "america/porto_acre"
-        | "brazil/acre" =>
-            ("Acre Standard Time", "GMT-5", -5, 0),
+        "america/rio_branco" | "america/eirunepe" | "america/porto_acre" | "brazil/acre" => {
+            ("Acre Standard Time", "GMT-5", -5, 0)
+        }
 
-        "america/argentina/buenos_aires" | "america/argentina/cordoba"
-        | "america/argentina/salta" | "america/argentina/jujuy"
-        | "america/argentina/tucuman" | "america/argentina/catamarca"
-        | "america/argentina/la_rioja" | "america/argentina/san_juan"
-        | "america/argentina/san_luis" | "america/argentina/mendoza"
-        | "america/argentina/rio_gallegos" | "america/argentina/ushuaia"
+        "america/argentina/buenos_aires"
+        | "america/argentina/cordoba"
+        | "america/argentina/salta"
+        | "america/argentina/jujuy"
+        | "america/argentina/tucuman"
+        | "america/argentina/catamarca"
+        | "america/argentina/la_rioja"
+        | "america/argentina/san_juan"
+        | "america/argentina/san_luis"
+        | "america/argentina/mendoza"
+        | "america/argentina/rio_gallegos"
+        | "america/argentina/ushuaia"
         | "america/argentina/comodrivadavia"
-        | "america/buenos_aires" | "america/catamarca" | "america/cordoba"
-        | "america/jujuy" | "america/mendoza" | "america/rosario" =>
-            ("Argentina Standard Time", "GMT-3", -3, 0),
+        | "america/buenos_aires"
+        | "america/catamarca"
+        | "america/cordoba"
+        | "america/jujuy"
+        | "america/mendoza"
+        | "america/rosario" => ("Argentina Standard Time", "GMT-3", -3, 0),
 
-        "america/santiago" | "chile/continental" | "america/punta_arenas" =>
-            ("Chile Standard Time", "GMT-4", -4, 0),
+        "america/santiago" | "chile/continental" | "america/punta_arenas" => {
+            ("Chile Standard Time", "GMT-4", -4, 0)
+        }
 
-        "america/bogota" =>
-            ("Colombia Standard Time", "GMT-5", -5, 0),
+        "america/bogota" => ("Colombia Standard Time", "GMT-5", -5, 0),
 
-        "america/lima" =>
-            ("Peru Standard Time", "GMT-5", -5, 0),
+        "america/lima" => ("Peru Standard Time", "GMT-5", -5, 0),
 
-        "america/caracas" =>
-            ("Venezuela Time", "GMT-4", -4, 0),
+        "america/caracas" => ("Venezuela Time", "GMT-4", -4, 0),
 
-        "america/guayaquil" =>
-            ("Ecuador Time", "GMT-5", -5, 0),
+        "america/guayaquil" => ("Ecuador Time", "GMT-5", -5, 0),
 
-        "america/asuncion" =>
-            ("Paraguay Standard Time", "GMT-4", -4, 0),
+        "america/asuncion" => ("Paraguay Standard Time", "GMT-4", -4, 0),
 
-        "america/montevideo" =>
-            ("Uruguay Standard Time", "GMT-3", -3, 0),
+        "america/montevideo" => ("Uruguay Standard Time", "GMT-3", -3, 0),
 
-        "america/la_paz" =>
-            ("Bolivia Time", "GMT-4", -4, 0),
+        "america/la_paz" => ("Bolivia Time", "GMT-4", -4, 0),
 
-        "america/havana" | "cuba" =>
-            ("Cuba Standard Time", "CST", -5, 0),
+        "america/havana" | "cuba" => ("Cuba Standard Time", "CST", -5, 0),
 
-        "america/jamaica" | "jamaica" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "america/jamaica" | "jamaica" => ("Eastern Standard Time", "EST", -5, 0),
 
-        "america/panama" | "america/cayman" | "america/atikokan"
-        | "america/coral_harbour" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "america/panama" | "america/cayman" | "america/atikokan" | "america/coral_harbour" => {
+            ("Eastern Standard Time", "EST", -5, 0)
+        }
 
-        "america/guatemala" | "america/belize" | "america/el_salvador"
-        | "america/costa_rica" | "america/tegucigalpa" | "america/managua" =>
-            ("Central Standard Time", "CST", -6, 0),
+        "america/guatemala"
+        | "america/belize"
+        | "america/el_salvador"
+        | "america/costa_rica"
+        | "america/tegucigalpa"
+        | "america/managua" => ("Central Standard Time", "CST", -6, 0),
 
-        "america/port-au-prince" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "america/port-au-prince" => ("Eastern Standard Time", "EST", -5, 0),
 
-        "america/santo_domingo" | "america/puerto_rico" | "america/virgin"
-        | "america/st_thomas" | "america/tortola" | "america/anguilla"
-        | "america/antigua" | "america/aruba" | "america/barbados"
-        | "america/curacao" | "america/dominica" | "america/grenada"
-        | "america/guadeloupe" | "america/kralendijk" | "america/lower_princes"
-        | "america/marigot" | "america/martinique" | "america/montserrat"
-        | "america/port_of_spain" | "america/st_barthelemy"
-        | "america/st_kitts" | "america/st_lucia" | "america/st_vincent" =>
-            ("Atlantic Standard Time", "AST", -4, 0),
+        "america/santo_domingo"
+        | "america/puerto_rico"
+        | "america/virgin"
+        | "america/st_thomas"
+        | "america/tortola"
+        | "america/anguilla"
+        | "america/antigua"
+        | "america/aruba"
+        | "america/barbados"
+        | "america/curacao"
+        | "america/dominica"
+        | "america/grenada"
+        | "america/guadeloupe"
+        | "america/kralendijk"
+        | "america/lower_princes"
+        | "america/marigot"
+        | "america/martinique"
+        | "america/montserrat"
+        | "america/port_of_spain"
+        | "america/st_barthelemy"
+        | "america/st_kitts"
+        | "america/st_lucia"
+        | "america/st_vincent" => ("Atlantic Standard Time", "AST", -4, 0),
 
-        "america/cancun" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "america/cancun" => ("Eastern Standard Time", "EST", -5, 0),
 
-        "america/bahia_banderas" | "america/chihuahua" | "america/mazatlan"
-        | "mexico/bajasur" =>
-            ("Mountain Standard Time", "MST", -7, 0),
+        "america/bahia_banderas" | "america/chihuahua" | "america/mazatlan" | "mexico/bajasur" => {
+            ("Mountain Standard Time", "MST", -7, 0)
+        }
 
-        "america/hermosillo" =>
-            ("Mountain Standard Time", "MST", -7, 0),
+        "america/hermosillo" => ("Mountain Standard Time", "MST", -7, 0),
 
-        "america/dawson_creek" | "america/fort_nelson" =>
-            ("Mountain Standard Time", "MST", -7, 0),
+        "america/dawson_creek" | "america/fort_nelson" => ("Mountain Standard Time", "MST", -7, 0),
 
-        "america/paramaribo" =>
-            ("Suriname Time", "GMT-3", -3, 0),
+        "america/paramaribo" => ("Suriname Time", "GMT-3", -3, 0),
 
-        "america/cayenne" =>
-            ("French Guiana Time", "GMT-3", -3, 0),
+        "america/cayenne" => ("French Guiana Time", "GMT-3", -3, 0),
 
-        "america/guyana" =>
-            ("Guyana Time", "GMT-4", -4, 0),
+        "america/guyana" => ("Guyana Time", "GMT-4", -4, 0),
 
-        "america/miquelon" =>
-            ("St. Pierre & Miquelon Standard Time", "GMT-3", -3, 0),
+        "america/miquelon" => ("St. Pierre & Miquelon Standard Time", "GMT-3", -3, 0),
 
-        "america/godthab" | "america/nuuk" =>
-            ("West Greenland Standard Time", "GMT-3", -3, 0),
+        "america/godthab" | "america/nuuk" => ("West Greenland Standard Time", "GMT-3", -3, 0),
 
-        "america/scoresbysund" =>
-            ("East Greenland Standard Time", "GMT-1", -1, 0),
+        "america/scoresbysund" => ("East Greenland Standard Time", "GMT-1", -1, 0),
 
-        "america/danmarkshavn" =>
-            ("Greenwich Mean Time", "GMT", 0, 0),
+        "america/danmarkshavn" => ("Greenwich Mean Time", "GMT", 0, 0),
 
-        "america/thule" =>
-            ("Atlantic Standard Time", "AST", -4, 0),
+        "america/thule" => ("Atlantic Standard Time", "AST", -4, 0),
 
-        "america/blanc-sablon" =>
-            ("Atlantic Standard Time", "AST", -4, 0),
+        "america/blanc-sablon" => ("Atlantic Standard Time", "AST", -4, 0),
 
-        "america/nassau" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "america/nassau" => ("Eastern Standard Time", "EST", -5, 0),
 
-        "america/grand_turk" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "america/grand_turk" => ("Eastern Standard Time", "EST", -5, 0),
 
         // Indian Ocean
-        "indian/mauritius" =>
-            ("Mauritius Standard Time", "GMT+4", 4, 0),
+        "indian/mauritius" => ("Mauritius Standard Time", "GMT+4", 4, 0),
 
-        "indian/reunion" =>
-            ("Reunion Time", "GMT+4", 4, 0),
+        "indian/reunion" => ("Reunion Time", "GMT+4", 4, 0),
 
-        "indian/mahe" =>
-            ("Seychelles Time", "GMT+4", 4, 0),
+        "indian/mahe" => ("Seychelles Time", "GMT+4", 4, 0),
 
-        "indian/maldives" =>
-            ("Maldives Time", "GMT+5", 5, 0),
+        "indian/maldives" => ("Maldives Time", "GMT+5", 5, 0),
 
-        "indian/chagos" =>
-            ("Indian Ocean Time", "GMT+6", 6, 0),
+        "indian/chagos" => ("Indian Ocean Time", "GMT+6", 6, 0),
 
-        "indian/christmas" =>
-            ("Christmas Island Time", "GMT+7", 7, 0),
+        "indian/christmas" => ("Christmas Island Time", "GMT+7", 7, 0),
 
-        "indian/cocos" =>
-            ("Cocos Islands Time", "GMT+6:30", 6, 30),
+        "indian/cocos" => ("Cocos Islands Time", "GMT+6:30", 6, 30),
 
-        "indian/kerguelen" =>
-            ("French Southern & Antarctic Time", "GMT+5", 5, 0),
+        "indian/kerguelen" => ("French Southern & Antarctic Time", "GMT+5", 5, 0),
 
         // Antarctica
-        "antarctica/casey" =>
-            ("Australian Western Standard Time", "GMT+8", 8, 0),
+        "antarctica/casey" => ("Australian Western Standard Time", "GMT+8", 8, 0),
 
-        "antarctica/davis" =>
-            ("Davis Time", "GMT+7", 7, 0),
+        "antarctica/davis" => ("Davis Time", "GMT+7", 7, 0),
 
-        "antarctica/dumontdurville" =>
-            ("Dumont-d'Urville Time", "GMT+10", 10, 0),
+        "antarctica/dumontdurville" => ("Dumont-d'Urville Time", "GMT+10", 10, 0),
 
-        "antarctica/mawson" =>
-            ("Mawson Time", "GMT+5", 5, 0),
+        "antarctica/mawson" => ("Mawson Time", "GMT+5", 5, 0),
 
-        "antarctica/palmer" =>
-            ("Chile Standard Time", "GMT-3", -3, 0),
+        "antarctica/palmer" => ("Chile Standard Time", "GMT-3", -3, 0),
 
-        "antarctica/rothera" =>
-            ("Rothera Time", "GMT-3", -3, 0),
+        "antarctica/rothera" => ("Rothera Time", "GMT-3", -3, 0),
 
-        "antarctica/syowa" =>
-            ("Syowa Time", "GMT+3", 3, 0),
+        "antarctica/syowa" => ("Syowa Time", "GMT+3", 3, 0),
 
-        "antarctica/troll" =>
-            ("Greenwich Mean Time", "GMT", 0, 0),
+        "antarctica/troll" => ("Greenwich Mean Time", "GMT", 0, 0),
 
-        "antarctica/vostok" =>
-            ("Vostok Time", "GMT+6", 6, 0),
+        "antarctica/vostok" => ("Vostok Time", "GMT+6", 6, 0),
 
-        "antarctica/macquarie" =>
-            ("Australian Eastern Standard Time", "GMT+10", 10, 0),
+        "antarctica/macquarie" => ("Australian Eastern Standard Time", "GMT+10", 10, 0),
 
         // Atlantic
-        "atlantic/azores" =>
-            ("Azores Standard Time", "GMT-1", -1, 0),
+        "atlantic/azores" => ("Azores Standard Time", "GMT-1", -1, 0),
 
-        "atlantic/bermuda" =>
-            ("Atlantic Standard Time", "AST", -4, 0),
+        "atlantic/bermuda" => ("Atlantic Standard Time", "AST", -4, 0),
 
-        "atlantic/canary" =>
-            ("Western European Standard Time", "WET", 0, 0),
+        "atlantic/canary" => ("Western European Standard Time", "WET", 0, 0),
 
-        "atlantic/cape_verde" =>
-            ("Cape Verde Standard Time", "GMT-1", -1, 0),
+        "atlantic/cape_verde" => ("Cape Verde Standard Time", "GMT-1", -1, 0),
 
-        "atlantic/faroe" | "atlantic/faeroe" =>
-            ("Western European Standard Time", "WET", 0, 0),
+        "atlantic/faroe" | "atlantic/faeroe" => ("Western European Standard Time", "WET", 0, 0),
 
-        "atlantic/south_georgia" =>
-            ("South Georgia Time", "GMT-2", -2, 0),
+        "atlantic/south_georgia" => ("South Georgia Time", "GMT-2", -2, 0),
 
-        "atlantic/st_helena" =>
-            ("Greenwich Mean Time", "GMT", 0, 0),
+        "atlantic/st_helena" => ("Greenwich Mean Time", "GMT", 0, 0),
 
-        "atlantic/stanley" =>
-            ("Falkland Islands Standard Time", "GMT-3", -3, 0),
+        "atlantic/stanley" => ("Falkland Islands Standard Time", "GMT-3", -3, 0),
 
         // Abbreviation-style zones
-        "cst6cdt" =>
-            ("Central Standard Time", "CST", -6, 0),
+        "cst6cdt" => ("Central Standard Time", "CST", -6, 0),
 
-        "est5edt" | "est" =>
-            ("Eastern Standard Time", "EST", -5, 0),
+        "est5edt" | "est" => ("Eastern Standard Time", "EST", -5, 0),
 
-        "wet" =>
-            ("Western European Standard Time", "WET", 0, 0),
+        "wet" => ("Western European Standard Time", "WET", 0, 0),
 
         _ => return None,
     };
@@ -2368,7 +2938,11 @@ fn format_offset_short(hours: i32, minutes: i32) -> String {
     if hours == 0 && minutes == 0 {
         return "GMT".to_string();
     }
-    let sign = if hours < 0 || (hours == 0 && minutes < 0) { "-" } else { "+" };
+    let sign = if hours < 0 || (hours == 0 && minutes < 0) {
+        "-"
+    } else {
+        "+"
+    };
     let ah = hours.abs();
     let am = minutes.abs();
     if am == 0 {
@@ -2382,7 +2956,11 @@ fn format_offset_long(hours: i32, minutes: i32) -> String {
     if hours == 0 && minutes == 0 {
         return "GMT".to_string();
     }
-    let sign = if hours < 0 || (hours == 0 && minutes < 0) { "-" } else { "+" };
+    let sign = if hours < 0 || (hours == 0 && minutes < 0) {
+        "-"
+    } else {
+        "+"
+    };
     let ah = hours.abs();
     let am = minutes.abs();
     format!("GMT{}{:02}:{:02}", sign, ah, am)
@@ -2514,7 +3092,10 @@ fn format_date_style_to_parts(c: &DateComponents, style: &str) -> Vec<(String, S
     let mut parts: Vec<(String, String)> = Vec::new();
     match style {
         "full" => {
-            parts.push(("weekday".to_string(), weekday_name_long(c.weekday).to_string()));
+            parts.push((
+                "weekday".to_string(),
+                weekday_name_long(c.weekday).to_string(),
+            ));
             parts.push(("literal".to_string(), ", ".to_string()));
             parts.push(("month".to_string(), month_name_long(c.month).to_string()));
             parts.push(("literal".to_string(), " ".to_string()));
@@ -2554,7 +3135,13 @@ fn format_date_style_to_parts(c: &DateComponents, style: &str) -> Vec<(String, S
     parts
 }
 
-fn format_reduced_date_style_to_parts(c: &DateComponents, style: &str, has_year: bool, has_month: bool, has_day: bool) -> Vec<(String, String)> {
+fn format_reduced_date_style_to_parts(
+    c: &DateComponents,
+    style: &str,
+    has_year: bool,
+    has_month: bool,
+    has_day: bool,
+) -> Vec<(String, String)> {
     let mut parts: Vec<(String, String)> = Vec::new();
     if has_year && has_month && !has_day {
         // PlainYearMonth: month + year
@@ -2598,7 +3185,13 @@ fn format_reduced_date_style_to_parts(c: &DateComponents, style: &str, has_year:
     parts
 }
 
-fn format_time_style_to_parts(c: &DateComponents, style: &str, hc: &str, tz: &str, epoch_ms: f64) -> Vec<(String, String)> {
+fn format_time_style_to_parts(
+    c: &DateComponents,
+    style: &str,
+    hc: &str,
+    tz: &str,
+    epoch_ms: f64,
+) -> Vec<(String, String)> {
     let mut parts: Vec<(String, String)> = Vec::new();
     let (hour_str, period) = format_hour(c.hour, hc);
     let uses_period = hc == "h12" || hc == "h11";
@@ -2667,10 +3260,7 @@ fn format_time_style_to_parts(c: &DateComponents, style: &str, hc: &str, tz: &st
     parts
 }
 
-fn format_to_parts_with_options(
-    ms: f64,
-    opts: &DtfOptions,
-) -> Vec<(String, String)> {
+fn format_to_parts_with_options(ms: f64, opts: &DtfOptions) -> Vec<(String, String)> {
     let raw = format_to_parts_with_options_raw(ms, opts);
     if opts.numbering_system == "latn" {
         return raw;
@@ -2686,10 +3276,7 @@ fn format_to_parts_with_options(
         .collect()
 }
 
-fn format_to_parts_with_options_raw(
-    ms: f64,
-    opts: &DtfOptions,
-) -> Vec<(String, String)> {
+fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, String)> {
     let adjusted_ms = ms + tz_offset_ms(&opts.time_zone, ms);
     let c = timestamp_to_components(adjusted_ms);
     let hc = resolve_hour_cycle(opts);
@@ -2697,11 +3284,20 @@ fn format_to_parts_with_options_raw(
 
     if opts.date_style.is_some() || opts.time_style.is_some() {
         let need_reduced = opts.date_style.is_some()
-            && matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth) | Some(TemporalType::PlainMonthDay));
+            && matches!(
+                opts.temporal_type,
+                Some(TemporalType::PlainYearMonth) | Some(TemporalType::PlainMonthDay)
+            );
         if need_reduced {
             let ds = opts.date_style.as_deref().unwrap_or("short");
             let is_ym = matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth));
-            let rp = format_reduced_date_style_to_parts(&c, ds, is_ym || opts.year.is_some(), true, !is_ym);
+            let rp = format_reduced_date_style_to_parts(
+                &c,
+                ds,
+                is_ym || opts.year.is_some(),
+                true,
+                !is_ym,
+            );
             parts.extend(rp);
         } else if let Some(ref ds) = opts.date_style {
             let date_parts = format_date_style_to_parts(&c, ds);
@@ -2710,11 +3306,14 @@ fn format_to_parts_with_options_raw(
         let effective_ts = opts.time_style.as_ref().map(|ts| {
             let is_plain_temporal = matches!(
                 opts.temporal_type,
-                Some(TemporalType::PlainTime) | Some(TemporalType::PlainDateTime)
-                    | Some(TemporalType::PlainDate) | Some(TemporalType::PlainYearMonth)
+                Some(TemporalType::PlainTime)
+                    | Some(TemporalType::PlainDateTime)
+                    | Some(TemporalType::PlainDate)
+                    | Some(TemporalType::PlainYearMonth)
                     | Some(TemporalType::PlainMonthDay)
             );
-            if is_plain_temporal && opts.time_zone_name.is_none() && (ts == "long" || ts == "full") {
+            if is_plain_temporal && opts.time_zone_name.is_none() && (ts == "long" || ts == "full")
+            {
                 "medium".to_string()
             } else {
                 ts.clone()
@@ -2749,9 +3348,10 @@ fn format_to_parts_with_options_raw(
 
     // Date components
     if has_date {
-        let month_is_text = opts.month.as_ref().is_some_and(|m| {
-            matches!(m.as_str(), "long" | "short" | "narrow")
-        });
+        let month_is_text = opts
+            .month
+            .as_ref()
+            .is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"));
 
         let display_year = if opts.era.is_some() && c.year <= 0 {
             1 - c.year
@@ -2858,11 +3458,23 @@ fn format_to_parts_with_options_raw(
                     "2-digit" => {
                         let v = match hc {
                             "h12" => {
-                                if c.hour == 0 { 12 } else if c.hour > 12 { c.hour - 12 } else { c.hour }
+                                if c.hour == 0 {
+                                    12
+                                } else if c.hour > 12 {
+                                    c.hour - 12
+                                } else {
+                                    c.hour
+                                }
                             }
                             "h11" => c.hour % 12,
                             "h23" => c.hour,
-                            "h24" => if c.hour == 0 { 24 } else { c.hour },
+                            "h24" => {
+                                if c.hour == 0 {
+                                    24
+                                } else {
+                                    c.hour
+                                }
+                            }
                             _ => c.hour,
                         };
                         format_2digit(v)
@@ -2944,10 +3556,7 @@ fn format_to_parts_with_options_raw(
     parts
 }
 
-fn extract_dtf_data(
-    interp: &mut Interpreter,
-    this: &JsValue,
-) -> Result<DtfOptions, JsValue> {
+fn extract_dtf_data(interp: &mut Interpreter, this: &JsValue) -> Result<DtfOptions, JsValue> {
     if let JsValue::Object(o) = this {
         if let Some(obj) = interp.get_object(o.id) {
             let b = obj.borrow();
@@ -3000,9 +3609,7 @@ fn extract_dtf_data(
             }
         }
     }
-    Err(interp.create_type_error(
-        "Intl.DateTimeFormat method called on incompatible receiver",
-    ))
+    Err(interp.create_type_error("Intl.DateTimeFormat method called on incompatible receiver"))
 }
 
 fn time_clip(t: f64) -> f64 {
@@ -3092,8 +3699,10 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.time_zone_name = None;
                 adjusted.time_style = None;
                 // If no date components remain, add defaults
-                if adjusted.year.is_none() && adjusted.month.is_none()
-                    && adjusted.day.is_none() && adjusted.weekday.is_none()
+                if adjusted.year.is_none()
+                    && adjusted.month.is_none()
+                    && adjusted.day.is_none()
+                    && adjusted.weekday.is_none()
                     && adjusted.date_style.is_none()
                 {
                     adjusted.year = Some("numeric".to_string());
@@ -3111,9 +3720,12 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.time_zone_name = None;
                 adjusted.date_style = None;
                 // If no time components remain, add defaults
-                if adjusted.hour.is_none() && adjusted.minute.is_none()
-                    && adjusted.second.is_none() && adjusted.fractional_second_digits.is_none()
-                    && adjusted.day_period.is_none() && adjusted.time_style.is_none()
+                if adjusted.hour.is_none()
+                    && adjusted.minute.is_none()
+                    && adjusted.second.is_none()
+                    && adjusted.fractional_second_digits.is_none()
+                    && adjusted.day_period.is_none()
+                    && adjusted.time_style.is_none()
                 {
                     adjusted.hour = Some("numeric".to_string());
                     adjusted.minute = Some("2-digit".to_string());
@@ -3132,7 +3744,8 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.time_zone_name = None;
                 adjusted.time_style = None;
                 // If no year/month remain, add defaults
-                if adjusted.year.is_none() && adjusted.month.is_none()
+                if adjusted.year.is_none()
+                    && adjusted.month.is_none()
                     && adjusted.date_style.is_none()
                 {
                     adjusted.year = Some("numeric".to_string());
@@ -3152,7 +3765,8 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                 adjusted.time_zone_name = None;
                 adjusted.time_style = None;
                 // If no month/day remain, add defaults
-                if adjusted.month.is_none() && adjusted.day.is_none()
+                if adjusted.month.is_none()
+                    && adjusted.day.is_none()
                     && adjusted.date_style.is_none()
                 {
                     adjusted.month = Some("numeric".to_string());
@@ -3162,7 +3776,8 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
             TemporalType::PlainDateTime => {
                 adjusted.time_zone_name = None;
                 // If no date/time components remain, add defaults
-                if !has_explicit_date_time_opts(&adjusted) && adjusted.date_style.is_none()
+                if !has_explicit_date_time_opts(&adjusted)
+                    && adjusted.date_style.is_none()
                     && adjusted.time_style.is_none()
                 {
                     adjusted.year = Some("numeric".to_string());
@@ -3254,7 +3869,10 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
 
 fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
     // Instant and PlainDateTime overlap with everything.
-    if matches!(tt, TemporalType::Instant | TemporalType::PlainDateTime | TemporalType::ZonedDateTime) {
+    if matches!(
+        tt,
+        TemporalType::Instant | TemporalType::PlainDateTime | TemporalType::ZonedDateTime
+    ) {
         return true;
     }
 
@@ -3263,7 +3881,10 @@ fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
         return true;
     }
 
-    let type_has_date = matches!(tt, TemporalType::PlainDate | TemporalType::PlainYearMonth | TemporalType::PlainMonthDay);
+    let type_has_date = matches!(
+        tt,
+        TemporalType::PlainDate | TemporalType::PlainYearMonth | TemporalType::PlainMonthDay
+    );
     let type_has_time = matches!(tt, TemporalType::PlainTime);
 
     // Style-based overlap: at least one style must overlap with the type
@@ -3274,32 +3895,55 @@ fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
     }
 
     // Check explicit component options
-    let has_any_date_opt = opts.year.is_some() || opts.month.is_some() || opts.day.is_some()
-        || opts.weekday.is_some();
-    let has_any_time_opt = opts.hour.is_some() || opts.minute.is_some() || opts.second.is_some()
-        || opts.day_period.is_some() || opts.fractional_second_digits.is_some();
+    let has_any_date_opt =
+        opts.year.is_some() || opts.month.is_some() || opts.day.is_some() || opts.weekday.is_some();
+    let has_any_time_opt = opts.hour.is_some()
+        || opts.minute.is_some()
+        || opts.second.is_some()
+        || opts.day_period.is_some()
+        || opts.fractional_second_digits.is_some();
 
     match tt {
         TemporalType::PlainDate => {
-            if has_any_date_opt { return true; }
-            if has_any_time_opt && !has_any_date_opt { return false; }
+            if has_any_date_opt {
+                return true;
+            }
+            if has_any_time_opt && !has_any_date_opt {
+                return false;
+            }
             true
         }
         TemporalType::PlainTime => {
-            if has_any_time_opt { return true; }
-            if has_any_date_opt && !has_any_time_opt { return false; }
+            if has_any_time_opt {
+                return true;
+            }
+            if has_any_date_opt && !has_any_time_opt {
+                return false;
+            }
             true
         }
         TemporalType::PlainYearMonth => {
-            if opts.year.is_some() || opts.month.is_some() || opts.era.is_some() { return true; }
-            if opts.day.is_some() || opts.weekday.is_some() { return false; }
-            if has_any_time_opt { return false; }
+            if opts.year.is_some() || opts.month.is_some() || opts.era.is_some() {
+                return true;
+            }
+            if opts.day.is_some() || opts.weekday.is_some() {
+                return false;
+            }
+            if has_any_time_opt {
+                return false;
+            }
             true
         }
         TemporalType::PlainMonthDay => {
-            if opts.month.is_some() || opts.day.is_some() { return true; }
-            if opts.year.is_some() || opts.era.is_some() || opts.weekday.is_some() { return false; }
-            if has_any_time_opt { return false; }
+            if opts.month.is_some() || opts.day.is_some() {
+                return true;
+            }
+            if opts.year.is_some() || opts.era.is_some() || opts.weekday.is_some() {
+                return false;
+            }
+            if has_any_time_opt {
+                return false;
+            }
             true
         }
         _ => true,
@@ -3311,10 +3955,11 @@ fn adjust_plain_temporal_ms(ms: f64, tz: &str, tt: TemporalType) -> f64 {
     // The formatter applies tz_offset_ms(tz) to convert from UTC to local.
     // We counteract that by subtracting the offset so the result is the original fields.
     match tt {
-        TemporalType::PlainDate | TemporalType::PlainTime | TemporalType::PlainDateTime
-        | TemporalType::PlainYearMonth | TemporalType::PlainMonthDay => {
-            ms - tz_offset_ms(tz, ms)
-        }
+        TemporalType::PlainDate
+        | TemporalType::PlainTime
+        | TemporalType::PlainDateTime
+        | TemporalType::PlainYearMonth
+        | TemporalType::PlainMonthDay => ms - tz_offset_ms(tz, ms),
         // Instant and ZonedDateTime already encode a real UTC instant
         TemporalType::Instant | TemporalType::ZonedDateTime => ms,
     }
@@ -3327,30 +3972,74 @@ fn bigint_to_epoch_ms(epoch_nanoseconds: &num_bigint::BigInt) -> f64 {
 
 fn temporal_to_epoch_ms(td: &TemporalData) -> Result<f64, JsValue> {
     match td {
-        TemporalData::Instant { epoch_nanoseconds } => {
-            Ok(bigint_to_epoch_ms(epoch_nanoseconds))
-        }
-        TemporalData::ZonedDateTime { epoch_nanoseconds, .. } => {
-            Ok(bigint_to_epoch_ms(epoch_nanoseconds))
-        }
-        TemporalData::PlainDate { iso_year, iso_month, iso_day, .. } => {
+        TemporalData::Instant { epoch_nanoseconds } => Ok(bigint_to_epoch_ms(epoch_nanoseconds)),
+        TemporalData::ZonedDateTime {
+            epoch_nanoseconds, ..
+        } => Ok(bigint_to_epoch_ms(epoch_nanoseconds)),
+        TemporalData::PlainDate {
+            iso_year,
+            iso_month,
+            iso_day,
+            ..
+        } => {
             let ms = date_fields_to_epoch_ms(*iso_year, *iso_month, *iso_day, 0, 0, 0, 0);
             Ok(ms)
         }
-        TemporalData::PlainTime { hour, minute, second, millisecond, .. } => {
+        TemporalData::PlainTime {
+            hour,
+            minute,
+            second,
+            millisecond,
+            ..
+        } => {
             // Use epoch date 1970-01-01
-            let ms = date_fields_to_epoch_ms(1970, 1, 1, *hour as u8, *minute as u8, *second as u8, *millisecond as u16);
+            let ms = date_fields_to_epoch_ms(
+                1970,
+                1,
+                1,
+                *hour as u8,
+                *minute as u8,
+                *second as u8,
+                *millisecond as u16,
+            );
             Ok(ms)
         }
-        TemporalData::PlainDateTime { iso_year, iso_month, iso_day, hour, minute, second, millisecond, .. } => {
-            let ms = date_fields_to_epoch_ms(*iso_year, *iso_month, *iso_day, *hour, *minute, *second, *millisecond);
+        TemporalData::PlainDateTime {
+            iso_year,
+            iso_month,
+            iso_day,
+            hour,
+            minute,
+            second,
+            millisecond,
+            ..
+        } => {
+            let ms = date_fields_to_epoch_ms(
+                *iso_year,
+                *iso_month,
+                *iso_day,
+                *hour,
+                *minute,
+                *second,
+                *millisecond,
+            );
             Ok(ms)
         }
-        TemporalData::PlainYearMonth { iso_year, iso_month, reference_iso_day, .. } => {
+        TemporalData::PlainYearMonth {
+            iso_year,
+            iso_month,
+            reference_iso_day,
+            ..
+        } => {
             let ms = date_fields_to_epoch_ms(*iso_year, *iso_month, *reference_iso_day, 0, 0, 0, 0);
             Ok(ms)
         }
-        TemporalData::PlainMonthDay { iso_month, iso_day, reference_iso_year, .. } => {
+        TemporalData::PlainMonthDay {
+            iso_month,
+            iso_day,
+            reference_iso_year,
+            ..
+        } => {
             let ms = date_fields_to_epoch_ms(*reference_iso_year, *iso_month, *iso_day, 0, 0, 0, 0);
             Ok(ms)
         }
@@ -3360,7 +4049,15 @@ fn temporal_to_epoch_ms(td: &TemporalData) -> Result<f64, JsValue> {
     }
 }
 
-fn date_fields_to_epoch_ms(year: i32, month: u8, day: u8, hour: u8, minute: u8, second: u8, millisecond: u16) -> f64 {
+fn date_fields_to_epoch_ms(
+    year: i32,
+    month: u8,
+    day: u8,
+    hour: u8,
+    minute: u8,
+    second: u8,
+    millisecond: u16,
+) -> f64 {
     // Compute UTC epoch milliseconds from ISO date/time fields
     let y = year as f64;
     let m = month as f64;
@@ -3373,7 +4070,9 @@ fn date_fields_to_epoch_ms(year: i32, month: u8, day: u8, hour: u8, minute: u8, 
         - ((ym - 1901.0) / 100.0).floor()
         + ((ym - 1601.0) / 400.0).floor();
     // Days in months for the target month (cumulative)
-    let month_days: [f64; 12] = [0.0, 31.0, 59.0, 90.0, 120.0, 151.0, 181.0, 212.0, 243.0, 273.0, 304.0, 334.0];
+    let month_days: [f64; 12] = [
+        0.0, 31.0, 59.0, 90.0, 120.0, 151.0, 181.0, 212.0, 243.0, 273.0, 304.0, 334.0,
+    ];
     let md = month_days[mn as usize];
     // Leap day adjustment
     let leap = if mn >= 2.0 && (ym % 4.0 == 0.0 && (ym % 100.0 != 0.0 || ym % 400.0 == 0.0)) {
@@ -3390,10 +4089,7 @@ fn date_fields_to_epoch_ms(year: i32, month: u8, day: u8, hour: u8, minute: u8, 
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_date_time_format(
-        &mut self,
-        intl_obj: &Rc<RefCell<JsObjectData>>,
-    ) {
+    pub(crate) fn setup_intl_date_time_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
         if let Some(ref op) = self.realm().object_prototype {
             proto.borrow_mut().prototype = Some(op.clone());
@@ -3646,7 +4342,8 @@ impl Interpreter {
                 let start_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let end_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
-                if matches!(start_arg, JsValue::Undefined) || matches!(end_arg, JsValue::Undefined) {
+                if matches!(start_arg, JsValue::Undefined) || matches!(end_arg, JsValue::Undefined)
+                {
                     return Completion::Throw(
                         interp.create_type_error("startDate and endDate are required"),
                     );
@@ -3880,7 +4577,10 @@ impl Interpreter {
                 // Properties in spec order
                 let mut props: Vec<(&str, JsValue)> = Vec::new();
                 props.push(("locale", JsValue::String(JsString::from_str(&opts.locale))));
-                props.push(("calendar", JsValue::String(JsString::from_str(&opts.calendar))));
+                props.push((
+                    "calendar",
+                    JsValue::String(JsString::from_str(&opts.calendar)),
+                ));
                 props.push((
                     "numberingSystem",
                     JsValue::String(JsString::from_str(&opts.numbering_system)),
@@ -3891,14 +4591,10 @@ impl Interpreter {
                 ));
 
                 // hourCycle and hour12 only present if hour is used
-                let has_hour = opts.hour.is_some()
-                    || opts.time_style.is_some();
+                let has_hour = opts.hour.is_some() || opts.time_style.is_some();
                 if has_hour {
                     let hc = resolve_hour_cycle(&opts);
-                    props.push((
-                        "hourCycle",
-                        JsValue::String(JsString::from_str(hc)),
-                    ));
+                    props.push(("hourCycle", JsValue::String(JsString::from_str(hc))));
                     let h12 = hc == "h12" || hc == "h11";
                     props.push(("hour12", JsValue::Boolean(h12)));
                 }
@@ -3931,10 +4627,7 @@ impl Interpreter {
                     props.push(("second", JsValue::String(JsString::from_str(v))));
                 }
                 if let Some(v) = opts.fractional_second_digits {
-                    props.push((
-                        "fractionalSecondDigits",
-                        JsValue::Number(v as f64),
-                    ));
+                    props.push(("fractionalSecondDigits", JsValue::Number(v as f64)));
                 }
                 if let Some(ref v) = opts.time_zone_name {
                     props.push(("timeZoneName", JsValue::String(JsString::from_str(v))));
@@ -4005,19 +4698,17 @@ impl Interpreter {
                 let calendar_opt_provided = calendar_opt.is_some();
                 if let Some(ref cal) = calendar_opt {
                     if !is_valid_unicode_type(cal) {
-                        return Completion::Throw(interp.create_range_error(&format!(
-                            "Invalid calendar value: {}",
-                            cal
-                        )));
+                        return Completion::Throw(
+                            interp.create_range_error(&format!("Invalid calendar value: {}", cal)),
+                        );
                     }
                 }
 
                 // Steps 8-10: numberingSystem
-                let ns_opt =
-                    match interp.intl_get_option(&options, "numberingSystem", &[], None) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
+                let ns_opt = match interp.intl_get_option(&options, "numberingSystem", &[], None) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let ns_opt_provided = ns_opt.is_some();
                 if let Some(ref ns) = ns_opt {
                     if !is_valid_unicode_type(ns) {
@@ -4041,7 +4732,7 @@ impl Interpreter {
                 let hour12 = if matches!(hour12_raw, JsValue::Undefined) {
                     None
                 } else {
-                    Some(crate::interpreter::helpers::to_boolean(&hour12_raw))
+                    Some(interp.to_boolean_val(&hour12_raw))
                 };
 
                 // Step 13: hourCycle
@@ -4057,26 +4748,26 @@ impl Interpreter {
                 let hour_cycle_opt_provided = hour_cycle_opt.is_some();
 
                 // Step 29: timeZone
-                let tz_opt =
-                    match interp.intl_get_option(&options, "timeZone", &[], None) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                let time_zone = if let Some(tz) = tz_opt {
-                    if !is_valid_timezone(&tz) {
-                        return Completion::Throw(interp.create_range_error(&format!(
-                            "Invalid time zone specified: {}",
-                            tz
-                        )));
-                    }
-                    if let Some(normalized) = normalize_offset_timezone(&tz) {
-                        normalized
-                    } else {
-                        canonicalize_timezone(&tz)
-                    }
-                } else {
-                    "UTC".to_string()
+                let tz_opt = match interp.intl_get_option(&options, "timeZone", &[], None) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
                 };
+                let time_zone =
+                    if let Some(tz) = tz_opt {
+                        if !is_valid_timezone(&tz) {
+                            return Completion::Throw(interp.create_range_error(&format!(
+                                "Invalid time zone specified: {}",
+                                tz
+                            )));
+                        }
+                        if let Some(normalized) = normalize_offset_timezone(&tz) {
+                            normalized
+                        } else {
+                            canonicalize_timezone(&tz)
+                        }
+                    } else {
+                        "UTC".to_string()
+                    };
 
                 // Step 36: Table 7 component options (in table order)
                 let weekday = match interp.intl_get_option(
@@ -4099,15 +4790,11 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let year_opt = match interp.intl_get_option(
-                    &options,
-                    "year",
-                    &["numeric", "2-digit"],
-                    None,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let year_opt =
+                    match interp.intl_get_option(&options, "year", &["numeric", "2-digit"], None) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
                 let month_opt = match interp.intl_get_option(
                     &options,
@@ -4119,15 +4806,11 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let day_opt = match interp.intl_get_option(
-                    &options,
-                    "day",
-                    &["numeric", "2-digit"],
-                    None,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let day_opt =
+                    match interp.intl_get_option(&options, "day", &["numeric", "2-digit"], None) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
                 let day_period = match interp.intl_get_option(
                     &options,
@@ -4139,35 +4822,25 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let hour_opt = match interp.intl_get_option(
-                    &options,
-                    "hour",
-                    &["numeric", "2-digit"],
-                    None,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let hour_opt =
+                    match interp.intl_get_option(&options, "hour", &["numeric", "2-digit"], None) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
-                let minute_opt = match interp.intl_get_option(
-                    &options,
-                    "minute",
-                    &["numeric", "2-digit"],
-                    None,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let minute_opt =
+                    match interp.intl_get_option(&options, "minute", &["numeric", "2-digit"], None)
+                    {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
-                let second_opt = match interp.intl_get_option(
-                    &options,
-                    "second",
-                    &["numeric", "2-digit"],
-                    None,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let second_opt =
+                    match interp.intl_get_option(&options, "second", &["numeric", "2-digit"], None)
+                    {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
 
                 let fsd_opt = match interp.intl_get_number_option(
                     &options,
@@ -4251,9 +4924,7 @@ impl Interpreter {
 
                 // Default behavior: if no date/time components and no style, default to date
                 // Per spec, timeZoneName alone does NOT prevent defaults
-                let (year, month, day) = if !has_style
-                    && !has_date_time_component
-                {
+                let (year, month, day) = if !has_style && !has_date_time_component {
                     (
                         Some("numeric".to_string()),
                         Some("numeric".to_string()),
@@ -4279,12 +4950,20 @@ impl Interpreter {
                     if is_supported_calendar(co) {
                         co.clone()
                     } else if let Some(ref lc) = locale_ca {
-                        if is_supported_calendar(lc) { lc.clone() } else { "gregory".to_string() }
+                        if is_supported_calendar(lc) {
+                            lc.clone()
+                        } else {
+                            "gregory".to_string()
+                        }
                     } else {
                         "gregory".to_string()
                     }
                 } else if let Some(ref lc) = locale_ca {
-                    if is_supported_calendar(lc) { lc.clone() } else { "gregory".to_string() }
+                    if is_supported_calendar(lc) {
+                        lc.clone()
+                    } else {
+                        "gregory".to_string()
+                    }
                 } else {
                     "gregory".to_string()
                 };
@@ -4296,12 +4975,20 @@ impl Interpreter {
                     if is_supported_numbering_system(no) {
                         no.clone()
                     } else if let Some(ref ln) = locale_nu {
-                        if is_supported_numbering_system(ln) { ln.clone() } else { "latn".to_string() }
+                        if is_supported_numbering_system(ln) {
+                            ln.clone()
+                        } else {
+                            "latn".to_string()
+                        }
                     } else {
                         "latn".to_string()
                     }
                 } else if let Some(ref ln) = locale_nu {
-                    if is_supported_numbering_system(ln) { ln.clone() } else { "latn".to_string() }
+                    if is_supported_numbering_system(ln) {
+                        ln.clone()
+                    } else {
+                        "latn".to_string()
+                    }
                 } else {
                     "latn".to_string()
                 };

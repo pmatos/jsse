@@ -19,23 +19,37 @@ impl<'a> Parser<'a> {
             }
             return self.parse_await_using_declaration();
         }
+        if matches!(&self.current, Token::Keyword(Keyword::Async)) && self.is_async_function() {
+            return self.parse_function_declaration();
+        }
         match &self.current {
             Token::Keyword(Keyword::Function) => self.parse_function_declaration(),
             Token::Keyword(Keyword::Class) => self.parse_class_declaration(),
             Token::Keyword(Keyword::Let) | Token::Keyword(Keyword::Const) => {
                 self.parse_lexical_declaration()
             }
-            Token::Keyword(Keyword::Async) if self.is_async_function() => {
-                self.parse_function_declaration()
-            }
             _ => self.parse_statement(),
         }
     }
 
-    pub(super) fn is_async_function(&self) -> bool {
-        // peek ahead: `async function` without line terminator
-        // simplified: just check if current is async keyword
-        matches!(&self.current, Token::Keyword(Keyword::Async))
+    pub(super) fn is_async_function(&mut self) -> bool {
+        if !matches!(&self.current, Token::Keyword(Keyword::Async)) {
+            return false;
+        }
+        let saved_lt = self.prev_line_terminator;
+        let saved_ts = self.current_token_start;
+        let saved_te = self.current_token_end;
+        let Ok(saved) = self.advance() else {
+            return false;
+        };
+        let result =
+            self.current == Token::Keyword(Keyword::Function) && !self.prev_line_terminator;
+        self.push_back(self.current.clone(), self.prev_line_terminator);
+        self.current = saved;
+        self.prev_line_terminator = saved_lt;
+        self.current_token_start = saved_ts;
+        self.current_token_end = saved_te;
+        result
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
@@ -158,9 +172,15 @@ impl<'a> Parser<'a> {
         self.in_switch_case = false;
         let mut stmts = Vec::new();
         let mut lexical_names: Vec<String> = Vec::new();
+        let mut func_decl_names: Vec<String> = Vec::new();
         while self.current != Token::RightBrace && self.current != Token::Eof {
             let stmt = self.parse_statement_or_declaration()?;
-            Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
+            Self::collect_lexical_names_with_func_names(
+                &stmt,
+                &mut lexical_names,
+                &mut Some(&mut func_decl_names),
+                self.strict,
+            )?;
             stmts.push(stmt);
         }
         // §14.2.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames
@@ -186,7 +206,16 @@ impl<'a> Parser<'a> {
     pub(super) fn collect_lexical_names(
         stmt: &Statement,
         names: &mut Vec<String>,
-        _strict: bool,
+        strict: bool,
+    ) -> Result<(), ParseError> {
+        Self::collect_lexical_names_with_func_names(stmt, names, &mut None, strict)
+    }
+
+    pub(super) fn collect_lexical_names_with_func_names(
+        stmt: &Statement,
+        names: &mut Vec<String>,
+        func_decl_names: &mut Option<&mut Vec<String>>,
+        strict: bool,
     ) -> Result<(), ParseError> {
         let new_names: Vec<String> = match stmt {
             Statement::Variable(decl) if decl.kind != VarKind::Var => {
@@ -200,11 +229,32 @@ impl<'a> Parser<'a> {
             }
             _ => vec![],
         };
+        let is_sloppy_regular_func = !strict
+            && matches!(
+                stmt,
+                Statement::FunctionDeclaration(f) if !f.is_generator && !f.is_async
+            );
         for name in &new_names {
             if names.contains(name) {
-                return Err(ParseError {
-                    message: format!("Identifier '{name}' has already been declared"),
-                });
+                // Annex B: allow duplicate regular function declarations in sloppy mode
+                let prev_is_func = func_decl_names
+                    .as_ref()
+                    .map(|fns| fns.contains(name))
+                    .unwrap_or(false);
+                if !(is_sloppy_regular_func && prev_is_func) {
+                    return Err(ParseError {
+                        message: format!("Identifier '{name}' has already been declared"),
+                    });
+                }
+            }
+        }
+        if is_sloppy_regular_func {
+            if let Some(fns) = func_decl_names {
+                for name in &new_names {
+                    if !fns.contains(name) {
+                        fns.push(name.clone());
+                    }
+                }
             }
         }
         names.extend(new_names);
@@ -624,19 +674,25 @@ impl<'a> Parser<'a> {
                         let right = self.parse_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
-                        return Ok(Statement::ForIn(ForInStatement {
-                            left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
-                            right,
-                            body,
-                        }));
+                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                            ForInOfLeft::Expression(expr)
+                        } else {
+                            ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                        };
+                        return Ok(Statement::ForIn(ForInStatement { left, right, body }));
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
                         self.advance()?;
                         let right = self.parse_assignment_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
+                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                            ForInOfLeft::Expression(expr)
+                        } else {
+                            ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                        };
                         return Ok(Statement::ForOf(ForOfStatement {
-                            left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
+                            left,
                             right,
                             body,
                             is_await,
@@ -781,19 +837,25 @@ impl<'a> Parser<'a> {
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    return Ok(Statement::ForIn(ForInStatement {
-                        left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
-                        right,
-                        body,
-                    }));
+                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                        ForInOfLeft::Expression(expr)
+                    } else {
+                        ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                    };
+                    return Ok(Statement::ForIn(ForInStatement { left, right, body }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
+                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                        ForInOfLeft::Expression(expr)
+                    } else {
+                        ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                    };
                     return Ok(Statement::ForOf(ForOfStatement {
-                        left: ForInOfLeft::Pattern(expr_to_pattern(expr)?),
+                        left,
                         right,
                         body,
                         is_await,
@@ -948,6 +1010,7 @@ impl<'a> Parser<'a> {
         self.in_switch += 1;
         let mut cases = Vec::new();
         let mut lexical_names: Vec<String> = Vec::new();
+        let mut func_decl_names: Vec<String> = Vec::new();
         while self.current != Token::RightBrace {
             let test = if self.current == Token::Keyword(Keyword::Case) {
                 self.advance()?;
@@ -967,7 +1030,12 @@ impl<'a> Parser<'a> {
                 && self.current != Token::Keyword(Keyword::Default)
             {
                 let stmt = self.parse_statement_or_declaration()?;
-                Self::collect_lexical_names(&stmt, &mut lexical_names, self.strict)?;
+                Self::collect_lexical_names_with_func_names(
+                    &stmt,
+                    &mut lexical_names,
+                    &mut Some(&mut func_decl_names),
+                    self.strict,
+                )?;
                 consequent.push(stmt);
             }
             self.in_switch_case = prev_sc;

@@ -8,10 +8,20 @@ use icu::decimal::{DecimalFormatter, DecimalFormatterPreferences};
 use icu::locale::Locale as IcuLocale;
 
 fn locale_nan_string(locale: &str) -> &'static str {
-    let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
     match lang {
         "zh" => {
-            if locale.contains("TW") || locale.contains("Hant") || locale.contains("HK") || locale.contains("MO") {
+            if locale.contains("TW")
+                || locale.contains("Hant")
+                || locale.contains("HK")
+                || locale.contains("MO")
+            {
                 "\u{975E}\u{6578}\u{503C}" // 非數值 (Traditional Chinese)
             } else {
                 "\u{975E}\u{6570}\u{5B57}" // 非数字 (Simplified Chinese)
@@ -29,8 +39,8 @@ fn locale_infinity_string(_locale: &str) -> &'static str {
 fn currency_digits(currency: &str) -> u32 {
     match currency.to_ascii_uppercase().as_str() {
         "BHD" | "IQD" | "JOD" | "KWD" | "LYD" | "OMR" | "TND" => 3,
-        "BIF" | "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "PYG" | "RWF"
-        | "UGX" | "UYI" | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 0,
+        "BIF" | "CLP" | "DJF" | "GNF" | "ISK" | "JPY" | "KMF" | "KRW" | "PYG" | "RWF" | "UGX"
+        | "UYI" | "VND" | "VUV" | "XAF" | "XOF" | "XPF" => 0,
         _ => 2,
     }
 }
@@ -38,16 +48,75 @@ fn currency_digits(currency: &str) -> u32 {
 pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
     matches!(
         ns,
-        "adlm" | "ahom" | "arab" | "arabext" | "bali" | "beng" | "bhks" | "brah"
-            | "cakm" | "cham" | "deva" | "diak" | "fullwide" | "gong" | "gonm"
-            | "gujr" | "guru" | "hanidec" | "hmng" | "hmnp" | "java" | "kali"
-            | "kawi" | "khmr" | "knda" | "lana" | "lanatham" | "laoo" | "latn" | "lepc"
-            | "limb" | "mathbold" | "mathdbl" | "mathmono" | "mathsanb" | "mathsans"
-            | "mlym" | "modi" | "mong" | "mroo" | "mtei" | "mymr" | "mymrshan"
-            | "mymrtlng" | "nagm" | "newa" | "nkoo" | "olck" | "orya" | "osma"
-            | "rohg" | "saur" | "segment" | "shrd" | "sind" | "sinh" | "sora"
-            | "sund" | "takr" | "talu" | "tamldec" | "telu" | "thai" | "tibt"
-            | "tirh" | "tnsa" | "vaii" | "wara" | "wcho"
+        "adlm"
+            | "ahom"
+            | "arab"
+            | "arabext"
+            | "bali"
+            | "beng"
+            | "bhks"
+            | "brah"
+            | "cakm"
+            | "cham"
+            | "deva"
+            | "diak"
+            | "fullwide"
+            | "gong"
+            | "gonm"
+            | "gujr"
+            | "guru"
+            | "hanidec"
+            | "hmng"
+            | "hmnp"
+            | "java"
+            | "kali"
+            | "kawi"
+            | "khmr"
+            | "knda"
+            | "lana"
+            | "lanatham"
+            | "laoo"
+            | "latn"
+            | "lepc"
+            | "limb"
+            | "mathbold"
+            | "mathdbl"
+            | "mathmono"
+            | "mathsanb"
+            | "mathsans"
+            | "mlym"
+            | "modi"
+            | "mong"
+            | "mroo"
+            | "mtei"
+            | "mymr"
+            | "mymrshan"
+            | "mymrtlng"
+            | "nagm"
+            | "newa"
+            | "nkoo"
+            | "olck"
+            | "orya"
+            | "osma"
+            | "rohg"
+            | "saur"
+            | "segment"
+            | "shrd"
+            | "sind"
+            | "sinh"
+            | "sora"
+            | "sund"
+            | "takr"
+            | "talu"
+            | "tamldec"
+            | "telu"
+            | "thai"
+            | "tibt"
+            | "tirh"
+            | "tnsa"
+            | "vaii"
+            | "wara"
+            | "wcho"
     )
 }
 
@@ -187,7 +256,13 @@ fn currency_symbol_locale(currency: &str, display: &str, locale: &str) -> String
     if display == "name" {
         return currency_name(currency);
     }
-    let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
     // symbol or narrowSymbol
     match currency.to_ascii_uppercase().as_str() {
         "USD" => {
@@ -310,7 +385,13 @@ fn unit_symbol(unit: &str, display: &str) -> String {
 // prefix is empty for suffix-only patterns (most cases).
 // For circumfix patterns (ja long, ko long, zh-TW long), prefix is non-empty.
 fn locale_unit_pattern(unit: &str, display: &str, locale: &str, value: f64) -> (String, String) {
-    let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
 
     if unit.contains("-per-") {
         let parts: Vec<&str> = unit.splitn(2, "-per-").collect();
@@ -342,7 +423,13 @@ fn locale_single_unit_symbol(unit: &str, display: &str, lang: &str, value: f64) 
                 "kilometer" => " Kilometer".to_string(),
                 "meter" => " Meter".to_string(),
                 "centimeter" => " Zentimeter".to_string(),
-                "hour" => if is_plural_en(value) { " Stunden".to_string() } else { " Stunde".to_string() },
+                "hour" => {
+                    if is_plural_en(value) {
+                        " Stunden".to_string()
+                    } else {
+                        " Stunde".to_string()
+                    }
+                }
                 _ => single_unit_symbol(unit, display, value),
             },
             _ => single_unit_symbol(unit, display, value),
@@ -387,7 +474,7 @@ fn locale_kph_pattern(lang: &str, display: &str, locale: &str) -> (String, Strin
             "short" => ("".to_string(), " km/h".to_string()),
             "narrow" => ("".to_string(), "km/h".to_string()),
             "long" => (
-                "\u{6642}\u{901F} ".to_string(),  // 時速 (with trailing space)
+                "\u{6642}\u{901F} ".to_string(), // 時速 (with trailing space)
                 " \u{30AD}\u{30ED}\u{30E1}\u{30FC}\u{30C8}\u{30EB}".to_string(), // キロメートル (with leading space)
             ),
             _ => ("".to_string(), " km/h".to_string()),
@@ -395,14 +482,16 @@ fn locale_kph_pattern(lang: &str, display: &str, locale: &str) -> (String, Strin
         "ko" => match display {
             "short" | "narrow" => ("".to_string(), "km/h".to_string()),
             "long" => (
-                "\u{C2DC}\u{C18D} ".to_string(),  // 시속 (with trailing space)
+                "\u{C2DC}\u{C18D} ".to_string(), // 시속 (with trailing space)
                 "\u{D0AC}\u{B85C}\u{BBF8}\u{D130}".to_string(), // 킬로미터 (no leading space)
             ),
             _ => ("".to_string(), "km/h".to_string()),
         },
         "zh" => {
-            let is_traditional = locale.contains("TW") || locale.contains("Hant")
-                || locale.contains("HK") || locale.contains("MO");
+            let is_traditional = locale.contains("TW")
+                || locale.contains("Hant")
+                || locale.contains("HK")
+                || locale.contains("MO");
             if !is_traditional {
                 // Simplified Chinese - use default English-like pattern
                 match display {
@@ -413,16 +502,25 @@ fn locale_kph_pattern(lang: &str, display: &str, locale: &str) -> (String, Strin
                 }
             } else {
                 match display {
-                    "short" => ("".to_string(), " \u{516C}\u{91CC}/\u{5C0F}\u{6642}".to_string()), // 公里/小時
-                    "narrow" => ("".to_string(), "\u{516C}\u{91CC}/\u{5C0F}\u{6642}".to_string()),  // 公里/小時
+                    "short" => (
+                        "".to_string(),
+                        " \u{516C}\u{91CC}/\u{5C0F}\u{6642}".to_string(),
+                    ), // 公里/小時
+                    "narrow" => (
+                        "".to_string(),
+                        "\u{516C}\u{91CC}/\u{5C0F}\u{6642}".to_string(),
+                    ), // 公里/小時
                     "long" => (
-                        "\u{6BCF}\u{5C0F}\u{6642} ".to_string(),  // 每小時 (with trailing space)
-                        " \u{516C}\u{91CC}".to_string(),           // 公里 (with leading space)
+                        "\u{6BCF}\u{5C0F}\u{6642} ".to_string(), // 每小時 (with trailing space)
+                        " \u{516C}\u{91CC}".to_string(),         // 公里 (with leading space)
                     ),
-                    _ => ("".to_string(), " \u{516C}\u{91CC}/\u{5C0F}\u{6642}".to_string()),
+                    _ => (
+                        "".to_string(),
+                        " \u{516C}\u{91CC}/\u{5C0F}\u{6642}".to_string(),
+                    ),
                 }
             }
-        },
+        }
         _ => {
             // English default
             match display {
@@ -748,16 +846,19 @@ pub(crate) fn numbering_system_zero(ns: &str) -> Option<char> {
 pub(crate) fn transliterate_digits(s: &str, ns: &str) -> String {
     if ns == "hanidec" {
         let hanidec_digits: [char; 10] = [
-            '\u{3007}', '\u{4E00}', '\u{4E8C}', '\u{4E09}', '\u{56DB}',
-            '\u{4E94}', '\u{516D}', '\u{4E03}', '\u{516B}', '\u{4E5D}',
+            '\u{3007}', '\u{4E00}', '\u{4E8C}', '\u{4E09}', '\u{56DB}', '\u{4E94}', '\u{516D}',
+            '\u{4E03}', '\u{516B}', '\u{4E5D}',
         ];
-        return s.chars().map(|c| {
-            if let Some(d) = c.to_digit(10) {
-                hanidec_digits[d as usize]
-            } else {
-                c
-            }
-        }).collect();
+        return s
+            .chars()
+            .map(|c| {
+                if let Some(d) = c.to_digit(10) {
+                    hanidec_digits[d as usize]
+                } else {
+                    c
+                }
+            })
+            .collect();
     }
 
     let use_arabic_separators = ns == "arab" || ns == "arabext";
@@ -772,13 +873,16 @@ pub(crate) fn transliterate_digits(s: &str, ns: &str) -> String {
         }
         Some(zero) => {
             let zero_val = zero as u32;
-            let result: String = s.chars().map(|c| {
-                if let Some(d) = c.to_digit(10) {
-                    char::from_u32(zero_val + d).unwrap_or(c)
-                } else {
-                    c
-                }
-            }).collect();
+            let result: String = s
+                .chars()
+                .map(|c| {
+                    if let Some(d) = c.to_digit(10) {
+                        char::from_u32(zero_val + d).unwrap_or(c)
+                    } else {
+                        c
+                    }
+                })
+                .collect();
             if use_arabic_separators {
                 apply_arabic_separators(&result, ns)
             } else {
@@ -847,13 +951,59 @@ fn grouping_strategy_from_str(s: &str) -> GroupingStrategy {
 }
 
 fn currency_position_after(locale: &str) -> bool {
-    let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
-    matches!(lang, "de" | "fr" | "es" | "pt" | "nl" | "it" | "ca" | "da" | "fi" | "nb" | "nn" | "no" | "sv" | "pl" | "cs" | "sk" | "hu" | "ro" | "bg" | "hr" | "sl" | "sr" | "tr" | "el" | "uk" | "ru" | "be" | "et" | "lv" | "lt" | "vi" | "id" | "ms")
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
+    matches!(
+        lang,
+        "de" | "fr"
+            | "es"
+            | "pt"
+            | "nl"
+            | "it"
+            | "ca"
+            | "da"
+            | "fi"
+            | "nb"
+            | "nn"
+            | "no"
+            | "sv"
+            | "pl"
+            | "cs"
+            | "sk"
+            | "hu"
+            | "ro"
+            | "bg"
+            | "hr"
+            | "sl"
+            | "sr"
+            | "tr"
+            | "el"
+            | "uk"
+            | "ru"
+            | "be"
+            | "et"
+            | "lv"
+            | "lt"
+            | "vi"
+            | "id"
+            | "ms"
+    )
 }
 
 fn locale_uses_narrow_currency(locale: &str, cur_code: &str) -> bool {
     if cur_code == "USD" {
-        let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
+        let lang = locale
+            .split('-')
+            .next()
+            .unwrap_or(locale)
+            .split('_')
+            .next()
+            .unwrap_or(locale);
         match lang {
             "en" => false,
             "de" | "fr" | "es" | "pt" | "nl" | "it" => false,
@@ -865,13 +1015,80 @@ fn locale_uses_narrow_currency(locale: &str, cur_code: &str) -> bool {
 }
 
 fn locale_percent_has_space(locale: &str) -> bool {
-    let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
-    matches!(lang, "de" | "fr" | "es" | "pt" | "nl" | "it" | "ca" | "da" | "fi" | "nb" | "nn"
-        | "no" | "sv" | "pl" | "cs" | "sk" | "hu" | "ro" | "bg" | "hr" | "sl" | "sr" | "tr"
-        | "el" | "uk" | "ru" | "be" | "et" | "lv" | "lt" | "ar" | "he" | "fa" | "hi" | "bn"
-        | "ta" | "te" | "mr" | "gu" | "kn" | "ml" | "si" | "th" | "ka" | "hy" | "az" | "kk"
-        | "uz" | "ky" | "mn" | "sq" | "mk" | "bs" | "mt" | "is" | "ga" | "cy" | "eu" | "gl"
-        | "af" | "zu" | "xh" | "sw" | "rw" | "gv")
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
+    matches!(
+        lang,
+        "de" | "fr"
+            | "es"
+            | "pt"
+            | "nl"
+            | "it"
+            | "ca"
+            | "da"
+            | "fi"
+            | "nb"
+            | "nn"
+            | "no"
+            | "sv"
+            | "pl"
+            | "cs"
+            | "sk"
+            | "hu"
+            | "ro"
+            | "bg"
+            | "hr"
+            | "sl"
+            | "sr"
+            | "tr"
+            | "el"
+            | "uk"
+            | "ru"
+            | "be"
+            | "et"
+            | "lv"
+            | "lt"
+            | "ar"
+            | "he"
+            | "fa"
+            | "hi"
+            | "bn"
+            | "ta"
+            | "te"
+            | "mr"
+            | "gu"
+            | "kn"
+            | "ml"
+            | "si"
+            | "th"
+            | "ka"
+            | "hy"
+            | "az"
+            | "kk"
+            | "uz"
+            | "ky"
+            | "mn"
+            | "sq"
+            | "mk"
+            | "bs"
+            | "mt"
+            | "is"
+            | "ga"
+            | "cy"
+            | "eu"
+            | "gl"
+            | "af"
+            | "zu"
+            | "xh"
+            | "sw"
+            | "rw"
+            | "gv"
+    )
 }
 
 fn wrap_style(
@@ -900,13 +1117,17 @@ fn wrap_style(
             } else if after {
                 let sep = "\u{00A0}";
                 if cur_sign == "accounting" && is_neg {
-                    let abs_str = num_str.trim_start_matches('-').trim_start_matches('\u{2212}');
+                    let abs_str = num_str
+                        .trim_start_matches('-')
+                        .trim_start_matches('\u{2212}');
                     format!("-{}{}{}", abs_str, sep, sym)
                 } else {
                     format!("{}{}{}", num_str, sep, sym)
                 }
             } else if cur_sign == "accounting" && is_neg {
-                let abs_str = num_str.trim_start_matches('-').trim_start_matches('\u{2212}');
+                let abs_str = num_str
+                    .trim_start_matches('-')
+                    .trim_start_matches('\u{2212}');
                 format!("({}{})", sym, abs_str)
             } else {
                 if is_neg {
@@ -945,7 +1166,11 @@ fn intl_to_number(interp: &mut Interpreter, val: &JsValue) -> Result<f64, JsValu
     match val {
         JsValue::BigInt(bi) => {
             let s = bi.value.to_string();
-            Ok(s.parse::<f64>().unwrap_or(if s.starts_with('-') { f64::NEG_INFINITY } else { f64::INFINITY }))
+            Ok(s.parse::<f64>().unwrap_or(if s.starts_with('-') {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            }))
         }
         _ => interp.to_number_value(val),
     }
@@ -982,24 +1207,59 @@ pub(crate) fn format_number_internal(
             _ => "",
         };
         let num_str = format!("{}{}", sign_prefix, nan_str);
-        return transliterate_digits(&wrap_style(&num_str, style, currency, currency_display, currency_sign, unit, unit_display, 0.0, locale_str), numbering_system);
+        return transliterate_digits(
+            &wrap_style(
+                &num_str,
+                style,
+                currency,
+                currency_display,
+                currency_sign,
+                unit,
+                unit_display,
+                0.0,
+                locale_str,
+            ),
+            numbering_system,
+        );
     }
     if value.is_infinite() {
         let inf_str = locale_infinity_string(locale_str);
         let sign_prefix = match sign_display {
             "always" | "exceptZero" => {
-                if value > 0.0 { "+" } else { "-" }
+                if value > 0.0 {
+                    "+"
+                } else {
+                    "-"
+                }
             }
             "never" => "",
             "negative" => {
-                if value < 0.0 { "-" } else { "" }
+                if value < 0.0 {
+                    "-"
+                } else {
+                    ""
+                }
             }
-            _ => { // "auto"
+            _ => {
+                // "auto"
                 if value < 0.0 { "-" } else { "" }
             }
         };
         let num_str = format!("{}{}", sign_prefix, inf_str);
-        return transliterate_digits(&wrap_style(&num_str, style, currency, currency_display, currency_sign, unit, unit_display, value, locale_str), numbering_system);
+        return transliterate_digits(
+            &wrap_style(
+                &num_str,
+                style,
+                currency,
+                currency_display,
+                currency_sign,
+                unit,
+                unit_display,
+                value,
+                locale_str,
+            ),
+            numbering_system,
+        );
     }
 
     let work_value = match style {
@@ -1009,43 +1269,49 @@ pub(crate) fn format_number_internal(
 
     // Scientific/engineering notation
     if notation == "scientific" || notation == "engineering" {
-        return transliterate_digits(&format_scientific(
-            work_value,
-            notation,
-            sign_display,
-            minimum_integer_digits,
-            minimum_fraction_digits,
-            maximum_fraction_digits,
-            minimum_significant_digits,
-            maximum_significant_digits,
-            style,
-            currency,
-            currency_display,
-            unit,
-            unit_display,
-            locale_str,
-        ), numbering_system);
+        return transliterate_digits(
+            &format_scientific(
+                work_value,
+                notation,
+                sign_display,
+                minimum_integer_digits,
+                minimum_fraction_digits,
+                maximum_fraction_digits,
+                minimum_significant_digits,
+                maximum_significant_digits,
+                style,
+                currency,
+                currency_display,
+                unit,
+                unit_display,
+                locale_str,
+            ),
+            numbering_system,
+        );
     }
 
     // Compact notation
     if notation == "compact" {
-        return transliterate_digits(&format_compact(
-            work_value,
-            compact_display.as_deref().unwrap_or("short"),
-            sign_display,
-            locale_str,
-            use_grouping,
-            minimum_integer_digits,
-            minimum_fraction_digits,
-            maximum_fraction_digits,
-            minimum_significant_digits,
-            maximum_significant_digits,
-            style,
-            currency,
-            currency_display,
-            unit,
-            unit_display,
-        ), numbering_system);
+        return transliterate_digits(
+            &format_compact(
+                work_value,
+                compact_display.as_deref().unwrap_or("short"),
+                sign_display,
+                locale_str,
+                use_grouping,
+                minimum_integer_digits,
+                minimum_fraction_digits,
+                maximum_fraction_digits,
+                minimum_significant_digits,
+                maximum_significant_digits,
+                style,
+                currency,
+                currency_display,
+                unit,
+                unit_display,
+            ),
+            numbering_system,
+        );
     }
 
     let base = base_locale(locale_str);
@@ -1071,10 +1337,18 @@ pub(crate) fn format_number_internal(
             "ceil" => (scaled / ri).ceil() * ri,
             "floor" => (scaled / ri).floor() * ri,
             "trunc" => {
-                if scaled >= 0.0 { (scaled / ri).floor() * ri } else { (scaled / ri).ceil() * ri }
+                if scaled >= 0.0 {
+                    (scaled / ri).floor() * ri
+                } else {
+                    (scaled / ri).ceil() * ri
+                }
             }
             "expand" => {
-                if scaled >= 0.0 { (scaled / ri).ceil() * ri } else { (scaled / ri).floor() * ri }
+                if scaled >= 0.0 {
+                    (scaled / ri).ceil() * ri
+                } else {
+                    (scaled / ri).floor() * ri
+                }
             }
             "halfFloor" => {
                 let q = scaled / ri;
@@ -1106,8 +1380,15 @@ pub(crate) fn format_number_internal(
                 let hi = q.ceil();
                 let dl = (q - lo).abs();
                 let dh = (hi - q).abs();
-                if dl < dh { lo * ri } else if dh < dl { hi * ri }
-                else if scaled >= 0.0 { lo * ri } else { hi * ri }
+                if dl < dh {
+                    lo * ri
+                } else if dh < dl {
+                    hi * ri
+                } else if scaled >= 0.0 {
+                    lo * ri
+                } else {
+                    hi * ri
+                }
             }
             "halfEven" => {
                 let q = scaled / ri;
@@ -1132,8 +1413,15 @@ pub(crate) fn format_number_internal(
                 let hi = q.ceil();
                 let dl = (q - lo).abs();
                 let dh = (hi - q).abs();
-                if dl < dh { lo * ri } else if dh < dl { hi * ri }
-                else if scaled >= 0.0 { hi * ri } else { lo * ri }
+                if dl < dh {
+                    lo * ri
+                } else if dh < dl {
+                    hi * ri
+                } else if scaled >= 0.0 {
+                    hi * ri
+                } else {
+                    lo * ri
+                }
             }
         };
         rounded / scale
@@ -1141,7 +1429,8 @@ pub(crate) fn format_number_internal(
         work_value
     };
 
-    let (mut dec, used_sd) = if rounding_priority != "auto" && minimum_significant_digits.is_some() {
+    let (mut dec, used_sd) = if rounding_priority != "auto" && minimum_significant_digits.is_some()
+    {
         // roundingPriority: "lessPrecision" or "morePrecision"
         // Format with sig digits
         let min_sd = minimum_significant_digits.unwrap();
@@ -1186,15 +1475,21 @@ pub(crate) fn format_number_internal(
         (if use_sd { dec_sd } else { dec_fd }, rp_used_sd)
     } else if let Some(min_sd) = minimum_significant_digits {
         let max_sd = maximum_significant_digits.unwrap_or(*min_sd);
-        (format_with_significant_digits(work_value, *min_sd, max_sd, rounding_mode), true)
+        (
+            format_with_significant_digits(work_value, *min_sd, max_sd, rounding_mode),
+            true,
+        )
     } else {
-        (match Decimal::try_from_f64(work_value, FloatPrecision::RoundTrip) {
-            Ok(d) => d,
-            Err(_) => match Decimal::try_from_str(&format!("{}", work_value)) {
+        (
+            match Decimal::try_from_f64(work_value, FloatPrecision::RoundTrip) {
                 Ok(d) => d,
-                Err(_) => Decimal::from(0),
+                Err(_) => match Decimal::try_from_str(&format!("{}", work_value)) {
+                    Ok(d) => d,
+                    Err(_) => Decimal::from(0),
+                },
             },
-        }, false)
+            false,
+        )
     };
 
     // Apply rounding to max fraction digits (only when not using sig digits directly)
@@ -1229,7 +1524,8 @@ pub(crate) fn format_number_internal(
     // pad_start doesn't always work correctly for zero values, so handle manually
     if minimum_integer_digits > 1 {
         // Find the position of the first digit character (any script)
-        let first_digit_pos = num_str.char_indices()
+        let first_digit_pos = num_str
+            .char_indices()
             .find(|(_, c)| c.is_numeric())
             .map(|(i, _)| i);
 
@@ -1240,9 +1536,16 @@ pub(crate) fn format_number_internal(
             // Find decimal separator in the digits-only part
             let dec_sep = locale_decimal_separator(locale_str);
             // Also handle Arabic decimal separator U+066B
-            let decimal_pos = digits_part.find(dec_sep)
+            let decimal_pos = digits_part
+                .find(dec_sep)
                 .or_else(|| digits_part.find('\u{066b}'))
-                .or_else(|| if dec_sep != "." { digits_part.find('.') } else { None });
+                .or_else(|| {
+                    if dec_sep != "." {
+                        digits_part.find('.')
+                    } else {
+                        None
+                    }
+                });
 
             let int_part = match decimal_pos {
                 Some(pos) => &digits_part[..pos],
@@ -1258,13 +1561,29 @@ pub(crate) fn format_number_internal(
         }
     }
 
-    transliterate_digits(&wrap_style(&num_str, style, currency, currency_display, currency_sign, unit, unit_display, work_value, locale_str), numbering_system)
+    transliterate_digits(
+        &wrap_style(
+            &num_str,
+            style,
+            currency,
+            currency_display,
+            currency_sign,
+            unit,
+            unit_display,
+            work_value,
+            locale_str,
+        ),
+        numbering_system,
+    )
 }
 
 fn string_needs_decimal_precision(s: &str) -> bool {
     let trimmed = s.trim();
-    if trimmed.is_empty() || trimmed == "Infinity" || trimmed == "-Infinity"
-        || trimmed == "+Infinity" || trimmed == "NaN"
+    if trimmed.is_empty()
+        || trimmed == "Infinity"
+        || trimmed == "-Infinity"
+        || trimmed == "+Infinity"
+        || trimmed == "NaN"
     {
         return false;
     }
@@ -1273,7 +1592,10 @@ fn string_needs_decimal_precision(s: &str) -> bool {
             return false;
         }
         let roundtrip = format!("{}", f);
-        if let (Ok(orig), Ok(rt)) = (Decimal::try_from_str(trimmed), Decimal::try_from_str(&roundtrip)) {
+        if let (Ok(orig), Ok(rt)) = (
+            Decimal::try_from_str(trimmed),
+            Decimal::try_from_str(&roundtrip),
+        ) {
             let mut orig_trimmed = orig;
             orig_trimmed.absolute.trim_end();
             let mut rt_trimmed = rt;
@@ -1306,29 +1628,80 @@ fn format_number_from_string_decimal(
     let trimmed = value_str.trim();
     if trimmed == "Infinity" || trimmed == "+Infinity" {
         return format_number_internal(
-            f64::INFINITY, locale_str, style, currency, currency_display,
-            currency_sign, unit, unit_display, "standard",
-            &None, sign_display, use_grouping, minimum_integer_digits,
-            minimum_fraction_digits, maximum_fraction_digits,
-            &None, &None, "halfExpand", 1, "auto", "auto", numbering_system,
+            f64::INFINITY,
+            locale_str,
+            style,
+            currency,
+            currency_display,
+            currency_sign,
+            unit,
+            unit_display,
+            "standard",
+            &None,
+            sign_display,
+            use_grouping,
+            minimum_integer_digits,
+            minimum_fraction_digits,
+            maximum_fraction_digits,
+            &None,
+            &None,
+            "halfExpand",
+            1,
+            "auto",
+            "auto",
+            numbering_system,
         );
     }
     if trimmed == "-Infinity" {
         return format_number_internal(
-            f64::NEG_INFINITY, locale_str, style, currency, currency_display,
-            currency_sign, unit, unit_display, "standard",
-            &None, sign_display, use_grouping, minimum_integer_digits,
-            minimum_fraction_digits, maximum_fraction_digits,
-            &None, &None, "halfExpand", 1, "auto", "auto", numbering_system,
+            f64::NEG_INFINITY,
+            locale_str,
+            style,
+            currency,
+            currency_display,
+            currency_sign,
+            unit,
+            unit_display,
+            "standard",
+            &None,
+            sign_display,
+            use_grouping,
+            minimum_integer_digits,
+            minimum_fraction_digits,
+            maximum_fraction_digits,
+            &None,
+            &None,
+            "halfExpand",
+            1,
+            "auto",
+            "auto",
+            numbering_system,
         );
     }
     if trimmed == "NaN" {
         return format_number_internal(
-            f64::NAN, locale_str, style, currency, currency_display,
-            currency_sign, unit, unit_display, "standard",
-            &None, sign_display, use_grouping, minimum_integer_digits,
-            minimum_fraction_digits, maximum_fraction_digits,
-            &None, &None, "halfExpand", 1, "auto", "auto", numbering_system,
+            f64::NAN,
+            locale_str,
+            style,
+            currency,
+            currency_display,
+            currency_sign,
+            unit,
+            unit_display,
+            "standard",
+            &None,
+            sign_display,
+            use_grouping,
+            minimum_integer_digits,
+            minimum_fraction_digits,
+            maximum_fraction_digits,
+            &None,
+            &None,
+            "halfExpand",
+            1,
+            "auto",
+            "auto",
+            numbering_system,
         );
     }
 
@@ -1336,19 +1709,53 @@ fn format_number_from_string_decimal(
     if dec_result.is_err() {
         if let Ok(num) = trimmed.parse::<f64>() {
             return format_number_internal(
-                num, locale_str, style, currency, currency_display,
-                currency_sign, unit, unit_display, "standard",
-                &None, sign_display, use_grouping, minimum_integer_digits,
-                minimum_fraction_digits, maximum_fraction_digits,
-                &None, &None, "halfExpand", 1, "auto", "auto", numbering_system,
+                num,
+                locale_str,
+                style,
+                currency,
+                currency_display,
+                currency_sign,
+                unit,
+                unit_display,
+                "standard",
+                &None,
+                sign_display,
+                use_grouping,
+                minimum_integer_digits,
+                minimum_fraction_digits,
+                maximum_fraction_digits,
+                &None,
+                &None,
+                "halfExpand",
+                1,
+                "auto",
+                "auto",
+                numbering_system,
             );
         }
         return format_number_internal(
-            f64::NAN, locale_str, style, currency, currency_display,
-            currency_sign, unit, unit_display, "standard",
-            &None, sign_display, use_grouping, minimum_integer_digits,
-            minimum_fraction_digits, maximum_fraction_digits,
-            &None, &None, "halfExpand", 1, "auto", "auto", numbering_system,
+            f64::NAN,
+            locale_str,
+            style,
+            currency,
+            currency_display,
+            currency_sign,
+            unit,
+            unit_display,
+            "standard",
+            &None,
+            sign_display,
+            use_grouping,
+            minimum_integer_digits,
+            minimum_fraction_digits,
+            maximum_fraction_digits,
+            &None,
+            &None,
+            "halfExpand",
+            1,
+            "auto",
+            "auto",
+            numbering_system,
         );
     }
 
@@ -1362,7 +1769,10 @@ fn format_number_from_string_decimal(
     let formatter = DecimalFormatter::try_new(prefs, opts)
         .unwrap_or_else(|_| DecimalFormatter::try_new(Default::default(), opts).unwrap());
 
-    dec.round_with_mode(-(maximum_fraction_digits as i16), SignedRoundingMode::Unsigned(UnsignedRoundingMode::HalfExpand));
+    dec.round_with_mode(
+        -(maximum_fraction_digits as i16),
+        SignedRoundingMode::Unsigned(UnsignedRoundingMode::HalfExpand),
+    );
     dec.absolute.trim_end();
 
     if minimum_fraction_digits > 0 {
@@ -1372,13 +1782,30 @@ fn format_number_from_string_decimal(
         dec.absolute.pad_start((minimum_integer_digits as i16) - 1);
     }
 
-    let work_value = if dec.sign == fixed_decimal::Sign::Negative { -1.0 } else { 0.0 };
+    let work_value = if dec.sign == fixed_decimal::Sign::Negative {
+        -1.0
+    } else {
+        0.0
+    };
     dec.apply_sign_display(js_sign_display_to_fd(sign_display));
 
     let formatted = formatter.format(&dec);
     let num_str = formatted.to_string();
 
-    transliterate_digits(&wrap_style(&num_str, style, currency, currency_display, currency_sign, unit, unit_display, work_value, locale_str), numbering_system)
+    transliterate_digits(
+        &wrap_style(
+            &num_str,
+            style,
+            currency,
+            currency_display,
+            currency_sign,
+            unit,
+            unit_display,
+            work_value,
+            locale_str,
+        ),
+        numbering_system,
+    )
 }
 
 fn format_with_significant_digits(
@@ -1428,11 +1855,17 @@ fn format_with_significant_digits(
 }
 
 fn locale_decimal_separator(locale: &str) -> &'static str {
-    let lang = locale.split('-').next().unwrap_or(locale).split('_').next().unwrap_or(locale);
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
     match lang {
         "de" | "fr" | "es" | "pt" | "it" | "nl" | "da" | "fi" | "nb" | "nn" | "no" | "sv"
-        | "pl" | "cs" | "sk" | "hu" | "ro" | "bg" | "hr" | "sl" | "sr" | "tr" | "el"
-        | "uk" | "ru" | "be" | "et" | "lv" | "lt" | "vi" | "id" | "ca" | "gl" | "eu" => ",",
+        | "pl" | "cs" | "sk" | "hu" | "ro" | "bg" | "hr" | "sl" | "sr" | "tr" | "el" | "uk"
+        | "ru" | "be" | "et" | "lv" | "lt" | "vi" | "id" | "ca" | "gl" | "eu" => ",",
         _ => ".",
     }
 }
@@ -1481,7 +1914,15 @@ fn format_scientific(
         let dec_sep = locale_decimal_separator(locale_str);
         let localized_mantissa = mantissa.replace('.', dec_sep);
         let result = format!("{}{}E0", sign_prefix, localized_mantissa);
-        return wrap_with_style(&result, style, currency, currency_display, unit, unit_display, locale_str);
+        return wrap_with_style(
+            &result,
+            style,
+            currency,
+            currency_display,
+            unit,
+            unit_display,
+            locale_str,
+        );
     }
 
     let abs_val = value.abs();
@@ -1525,11 +1966,23 @@ fn format_scientific(
     let dec_sep = locale_decimal_separator(locale_str);
     let localized_mantissa = mantissa_str.replace('.', dec_sep);
     let result = format!("{}{}E{}", sign_prefix, localized_mantissa, adjusted_exp);
-    wrap_with_style(&result, style, currency, currency_display, unit, unit_display, locale_str)
+    wrap_with_style(
+        &result,
+        style,
+        currency,
+        currency_display,
+        unit,
+        unit_display,
+        locale_str,
+    )
 }
 
 fn format_mantissa_sig_digits(value: f64, min_sd: u32, max_sd: u32) -> String {
-    let s = format!("{:.prec$}", value, prec = (max_sd as usize).saturating_sub(1));
+    let s = format!(
+        "{:.prec$}",
+        value,
+        prec = (max_sd as usize).saturating_sub(1)
+    );
     // Trim trailing zeros but keep at least min_sd significant digits
     let parts: Vec<&str> = s.split('.').collect();
     if parts.len() == 1 {
@@ -1577,22 +2030,48 @@ fn format_mantissa_frac_digits(value: f64, min_frac: u32, max_frac: u32) -> Stri
     }
 }
 
-fn compact_suffix_and_divisor(abs_val: f64, locale_str: &str, compact_display: &str) -> (f64, String) {
-    let lang = locale_str.split('-').next().unwrap_or(locale_str).split('_').next().unwrap_or(locale_str);
+fn compact_suffix_and_divisor(
+    abs_val: f64,
+    locale_str: &str,
+    compact_display: &str,
+) -> (f64, String) {
+    let lang = locale_str
+        .split('-')
+        .next()
+        .unwrap_or(locale_str)
+        .split('_')
+        .next()
+        .unwrap_or(locale_str);
 
     // Indian English uses lakh/crore system
     if locale_str.contains("IN") && lang == "en" {
         if abs_val >= 1e9 {
-            let s = if compact_display == "long" { " billion" } else { "B" };
+            let s = if compact_display == "long" {
+                " billion"
+            } else {
+                "B"
+            };
             return (1e9, s.to_string());
         } else if abs_val >= 1e7 {
-            let s = if compact_display == "long" { " crore" } else { "Cr" };
+            let s = if compact_display == "long" {
+                " crore"
+            } else {
+                "Cr"
+            };
             return (1e7, s.to_string());
         } else if abs_val >= 1e5 {
-            let s = if compact_display == "long" { " lakh" } else { "L" };
+            let s = if compact_display == "long" {
+                " lakh"
+            } else {
+                "L"
+            };
             return (1e5, s.to_string());
         } else if abs_val >= 1e3 {
-            let s = if compact_display == "long" { " thousand" } else { "K" };
+            let s = if compact_display == "long" {
+                " thousand"
+            } else {
+                "K"
+            };
             return (1e3, s.to_string());
         } else {
             return (1.0, String::new());
@@ -1624,13 +2103,25 @@ fn compact_suffix_and_divisor(abs_val: f64, locale_str: &str, compact_display: &
         }
         "de" => {
             if abs_val >= 1e12 {
-                let s = if compact_display == "long" { " Billionen" } else { "\u{00A0}Bio." };
+                let s = if compact_display == "long" {
+                    " Billionen"
+                } else {
+                    "\u{00A0}Bio."
+                };
                 (1e12, s.to_string())
             } else if abs_val >= 1e9 {
-                let s = if compact_display == "long" { " Milliarden" } else { "\u{00A0}Mrd." };
+                let s = if compact_display == "long" {
+                    " Milliarden"
+                } else {
+                    "\u{00A0}Mrd."
+                };
                 (1e9, s.to_string())
             } else if abs_val >= 1e6 {
-                let s = if compact_display == "long" { " Millionen" } else { "\u{00A0}Mio." };
+                let s = if compact_display == "long" {
+                    " Millionen"
+                } else {
+                    "\u{00A0}Mio."
+                };
                 (1e6, s.to_string())
             } else if abs_val >= 1e3 && compact_display == "long" {
                 (1e3, " Tausend".to_string())
@@ -1641,19 +2132,39 @@ fn compact_suffix_and_divisor(abs_val: f64, locale_str: &str, compact_display: &
         _ => {
             // en-US and other Latin locales
             if abs_val >= 1e15 {
-                let s = if compact_display == "long" { " quadrillion" } else { "Q" };
+                let s = if compact_display == "long" {
+                    " quadrillion"
+                } else {
+                    "Q"
+                };
                 (1e15, s.to_string())
             } else if abs_val >= 1e12 {
-                let s = if compact_display == "long" { " trillion" } else { "T" };
+                let s = if compact_display == "long" {
+                    " trillion"
+                } else {
+                    "T"
+                };
                 (1e12, s.to_string())
             } else if abs_val >= 1e9 {
-                let s = if compact_display == "long" { " billion" } else { "B" };
+                let s = if compact_display == "long" {
+                    " billion"
+                } else {
+                    "B"
+                };
                 (1e9, s.to_string())
             } else if abs_val >= 1e6 {
-                let s = if compact_display == "long" { " million" } else { "M" };
+                let s = if compact_display == "long" {
+                    " million"
+                } else {
+                    "M"
+                };
                 (1e6, s.to_string())
             } else if abs_val >= 1e3 {
-                let s = if compact_display == "long" { " thousand" } else { "K" };
+                let s = if compact_display == "long" {
+                    " thousand"
+                } else {
+                    "K"
+                };
                 (1e3, s.to_string())
             } else {
                 (1.0, String::new())
@@ -1706,7 +2217,10 @@ fn format_compact(
                     Err(_) => Decimal::from(scaled as i64),
                 },
             };
-            d.round_with_mode(0, SignedRoundingMode::Unsigned(UnsignedRoundingMode::HalfExpand));
+            d.round_with_mode(
+                0,
+                SignedRoundingMode::Unsigned(UnsignedRoundingMode::HalfExpand),
+            );
             d.absolute.trim_end();
             d
         } else {
@@ -1721,7 +2235,10 @@ fn format_compact(
                     Err(_) => Decimal::from(scaled as i64),
                 },
             };
-            d.round_with_mode(0, SignedRoundingMode::Unsigned(UnsignedRoundingMode::HalfExpand));
+            d.round_with_mode(
+                0,
+                SignedRoundingMode::Unsigned(UnsignedRoundingMode::HalfExpand),
+            );
             d.absolute.trim_end();
             d
         } else if abs_scaled >= 1.0 {
@@ -1744,7 +2261,15 @@ fn format_compact(
     let num_str = formatter.format(&dec).to_string();
     let result = format!("{}{}", num_str, suffix);
 
-    wrap_with_style(&result, style, currency, currency_display, unit, unit_display, locale_str)
+    wrap_with_style(
+        &result,
+        style,
+        currency,
+        currency_display,
+        unit,
+        unit_display,
+        locale_str,
+    )
 }
 
 fn wrap_with_style(
@@ -1790,7 +2315,11 @@ fn locale_range_separator(locale: &str, is_currency: bool) -> &'static str {
     match lang {
         "pt" | "es" | "it" | "fr" | "ca" | "gl" | "ro" | "oc" => " - ",
         _ => {
-            if is_currency { " \u{2013} " } else { "\u{2013}" }
+            if is_currency {
+                " \u{2013} "
+            } else {
+                "\u{2013}"
+            }
         }
     }
 }
@@ -1832,12 +2361,23 @@ fn format_range_string(
                             let s_rest = &start_num[sign.len()..];
                             let e_rest = &end_num[sign.len()..];
                             // Determine separator between number and currency
-                            let cur_sep = if fmt_start.contains('\u{A0}') { "\u{A0}" } else { " " };
-                            return format!("{}{}{}{}{}{}", sign, s_rest, range_sep, e_rest, cur_sep, sym);
+                            let cur_sep = if fmt_start.contains('\u{A0}') {
+                                "\u{A0}"
+                            } else {
+                                " "
+                            };
+                            return format!(
+                                "{}{}{}{}{}{}",
+                                sign, s_rest, range_sep, e_rest, cur_sep, sym
+                            );
                         }
                     }
                 }
-                let cur_sep = if fmt_start.contains('\u{A0}') { "\u{A0}" } else { " " };
+                let cur_sep = if fmt_start.contains('\u{A0}') {
+                    "\u{A0}"
+                } else {
+                    " "
+                };
                 return format!("{}{}{}{}{}", start_num, range_sep, end_num, cur_sep, sym);
             }
         } else {
@@ -1969,7 +2509,8 @@ pub(crate) fn format_to_parts_internal(
                     parts.push(("minusSign".to_string(), "-".to_string()));
                 }
             }
-            _ => { // "auto"
+            _ => {
+                // "auto"
                 if value < 0.0 {
                     parts.push(("minusSign".to_string(), "-".to_string()));
                 }
@@ -2134,16 +2675,29 @@ pub(crate) fn format_to_parts_internal(
                 let rest: String = chars.clone().collect();
                 if rest.starts_with(&sym) {
                     parts.push(("currency".to_string(), sym.clone()));
-                    for _ in 0..sym.chars().count() { chars.next(); }
+                    for _ in 0..sym.chars().count() {
+                        chars.next();
+                    }
                 }
             } else if work_str.starts_with(&sym) {
                 parts.push(("currency".to_string(), sym.clone()));
-                for _ in 0..sym.chars().count() { chars.next(); }
+                for _ in 0..sym.chars().count() {
+                    chars.next();
+                }
             } else {
                 let first = work_str.chars().next();
-                let is_bidi_prefix = first == Some('\u{061C}') || first == Some('\u{200E}') || first == Some('\u{200F}');
-                let sign_start = if is_bidi_prefix { work_str.chars().nth(1) } else { first };
-                if sign_start == Some('-') || sign_start == Some('+') || sign_start == Some('\u{2212}') {
+                let is_bidi_prefix = first == Some('\u{061C}')
+                    || first == Some('\u{200E}')
+                    || first == Some('\u{200F}');
+                let sign_start = if is_bidi_prefix {
+                    work_str.chars().nth(1)
+                } else {
+                    first
+                };
+                if sign_start == Some('-')
+                    || sign_start == Some('+')
+                    || sign_start == Some('\u{2212}')
+                {
                     let mut sign_str = String::new();
                     if is_bidi_prefix {
                         sign_str.push(chars.next().unwrap());
@@ -2164,7 +2718,9 @@ pub(crate) fn format_to_parts_internal(
                     let rest: String = chars.clone().collect();
                     if rest.starts_with(&sym) {
                         parts.push(("currency".to_string(), sym.clone()));
-                        for _ in 0..sym.chars().count() { chars.next(); }
+                        for _ in 0..sym.chars().count() {
+                            chars.next();
+                        }
                     }
                 }
             }
@@ -2179,7 +2735,10 @@ pub(crate) fn format_to_parts_internal(
             if let Some(&next_c) = chars.peek() {
                 if next_c == '-' || next_c == '+' || next_c == '\u{2212}' {
                     if !current.is_empty() {
-                        parts.push((if past_decimal { "fraction" } else { "integer" }.to_string(), current.clone()));
+                        parts.push((
+                            if past_decimal { "fraction" } else { "integer" }.to_string(),
+                            current.clone(),
+                        ));
                         current.clear();
                     }
                     let sign_char = chars.next().unwrap();
@@ -2203,7 +2762,10 @@ pub(crate) fn format_to_parts_internal(
             }
         } else if c == '-' || c == '+' || c == '\u{2212}' {
             if !current.is_empty() {
-                parts.push((if past_decimal { "fraction" } else { "integer" }.to_string(), current.clone()));
+                parts.push((
+                    if past_decimal { "fraction" } else { "integer" }.to_string(),
+                    current.clone(),
+                ));
                 current.clear();
             }
             let sign_char = chars.next().unwrap();
@@ -2222,7 +2784,11 @@ pub(crate) fn format_to_parts_internal(
             // Determine if this is a decimal separator or group separator
             // Use locale knowledge: de-DE uses comma as decimal, period as group
             let base_loc = base_locale(locale_str);
-            let is_decimal = if base_loc == "de" || base_loc.starts_with("de-") || base_loc == "pt" || base_loc.starts_with("pt-") {
+            let is_decimal = if base_loc == "de"
+                || base_loc.starts_with("de-")
+                || base_loc == "pt"
+                || base_loc.starts_with("pt-")
+            {
                 sep == ','
             } else {
                 sep == '.' || sep == '\u{066B}'
@@ -2235,7 +2801,10 @@ pub(crate) fn format_to_parts_internal(
             }
         } else if c == '%' {
             if !current.is_empty() {
-                parts.push((if past_decimal { "fraction" } else { "integer" }.to_string(), current.clone()));
+                parts.push((
+                    if past_decimal { "fraction" } else { "integer" }.to_string(),
+                    current.clone(),
+                ));
                 current.clear();
             }
             chars.next();
@@ -2246,14 +2815,20 @@ pub(crate) fn format_to_parts_internal(
             }
         } else if c == ')' {
             if !current.is_empty() {
-                parts.push((if past_decimal { "fraction" } else { "integer" }.to_string(), current.clone()));
+                parts.push((
+                    if past_decimal { "fraction" } else { "integer" }.to_string(),
+                    current.clone(),
+                ));
                 current.clear();
             }
             chars.next();
             parts.push(("literal".to_string(), ")".to_string()));
         } else if c == 'E' && (notation == "scientific" || notation == "engineering") {
             if !current.is_empty() {
-                parts.push((if past_decimal { "fraction" } else { "integer" }.to_string(), current.clone()));
+                parts.push((
+                    if past_decimal { "fraction" } else { "integer" }.to_string(),
+                    current.clone(),
+                ));
                 current.clear();
             }
             chars.next();
@@ -2287,7 +2862,10 @@ pub(crate) fn format_to_parts_internal(
         } else {
             // Non-numeric, non-separator char => likely unit/currency suffix or literal
             if !current.is_empty() {
-                parts.push((if past_decimal { "fraction" } else { "integer" }.to_string(), current.clone()));
+                parts.push((
+                    if past_decimal { "fraction" } else { "integer" }.to_string(),
+                    current.clone(),
+                ));
                 current.clear();
             }
             // Collect remaining as literal or unit
@@ -2318,7 +2896,10 @@ pub(crate) fn format_to_parts_internal(
     }
 
     if !current.is_empty() {
-        parts.push((if past_decimal { "fraction" } else { "integer" }.to_string(), current.clone()));
+        parts.push((
+            if past_decimal { "fraction" } else { "integer" }.to_string(),
+            current.clone(),
+        ));
     }
 
     // Append compact suffix
@@ -2927,10 +3508,9 @@ impl Interpreter {
                 ))
             },
         ));
-        proto.borrow_mut().insert_builtin(
-            "formatRangeToParts".to_string(),
-            format_range_to_parts_fn,
-        );
+        proto
+            .borrow_mut()
+            .insert_builtin("formatRangeToParts".to_string(), format_range_to_parts_fn);
 
         // resolvedOptions()
         let resolved_fn = self.create_function(JsFunction::native(
@@ -2973,26 +3553,18 @@ impl Interpreter {
                             }
 
                             let mut props: Vec<(&str, JsValue)> = vec![
-                                (
-                                    "locale",
-                                    JsValue::String(JsString::from_str(&locale)),
-                                ),
+                                ("locale", JsValue::String(JsString::from_str(&locale))),
                                 (
                                     "numberingSystem",
                                     JsValue::String(JsString::from_str(&numbering_system)),
                                 ),
-                                (
-                                    "style",
-                                    JsValue::String(JsString::from_str(&style)),
-                                ),
+                                ("style", JsValue::String(JsString::from_str(&style))),
                             ];
 
                             if style == "currency" {
                                 if let Some(ref c) = currency {
-                                    props.push((
-                                        "currency",
-                                        JsValue::String(JsString::from_str(c)),
-                                    ));
+                                    props
+                                        .push(("currency", JsValue::String(JsString::from_str(c))));
                                 }
                                 if let Some(ref cd) = currency_display {
                                     props.push((
@@ -3010,10 +3582,7 @@ impl Interpreter {
 
                             if style == "unit" {
                                 if let Some(ref u) = unit {
-                                    props.push((
-                                        "unit",
-                                        JsValue::String(JsString::from_str(u)),
-                                    ));
+                                    props.push(("unit", JsValue::String(JsString::from_str(u))));
                                 }
                                 if let Some(ref ud) = unit_display {
                                     props.push((
@@ -3060,10 +3629,8 @@ impl Interpreter {
                             };
                             props.push(("useGrouping", ug_val));
 
-                            props.push((
-                                "notation",
-                                JsValue::String(JsString::from_str(&notation)),
-                            ));
+                            props
+                                .push(("notation", JsValue::String(JsString::from_str(&notation))));
 
                             if notation == "compact" {
                                 if let Some(ref cd) = compact_display {

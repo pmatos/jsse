@@ -114,15 +114,15 @@ impl Interpreter {
                         "WST", "XAF", "XCD", "XOF", "XPF", "YER", "ZAR", "ZMW", "ZWL",
                     ],
                     "numberingSystem" => vec![
-                        "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "brah",
-                        "cakm", "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr",
-                        "guru", "hanidec", "hmng", "hmnp", "java", "kali", "kawi", "khmr",
-                        "knda", "lana", "lanatham", "laoo", "latn", "lepc", "limb", "mathbold",
-                        "mathdbl", "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong",
-                        "mroo", "mtei", "mymr", "mymrshan", "mymrtlng", "nagm", "newa", "nkoo",
-                        "olck", "orya", "osma", "rohg", "saur", "segment", "shrd", "sind",
-                        "sinh", "sora", "sund", "takr", "talu", "tamldec", "telu", "thai",
-                        "tibt", "tirh", "tnsa", "vaii", "wara", "wcho",
+                        "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "brah", "cakm",
+                        "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr", "guru",
+                        "hanidec", "hmng", "hmnp", "java", "kali", "kawi", "khmr", "knda", "lana",
+                        "lanatham", "laoo", "latn", "lepc", "limb", "mathbold", "mathdbl",
+                        "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong", "mroo", "mtei",
+                        "mymr", "mymrshan", "mymrtlng", "nagm", "newa", "nkoo", "olck", "orya",
+                        "osma", "rohg", "saur", "segment", "shrd", "sind", "sinh", "sora", "sund",
+                        "takr", "talu", "tamldec", "telu", "thai", "tibt", "tirh", "tnsa", "vaii",
+                        "wara", "wcho",
                     ],
                     "timeZone" => vec![
                         "Africa/Abidjan",
@@ -395,8 +395,12 @@ impl Interpreter {
         // Timezone aliases (deprecated/alias -> canonical)
         // Must match whole subtag values to avoid false matches
         let tz_aliases: &[(&str, &str)] = &[
-            ("cnckg", "cnsha"), ("eire", "iedub"), ("est", "papty"),
-            ("gmt0", "gmt"), ("uct", "utc"), ("zulu", "utc"),
+            ("cnckg", "cnsha"),
+            ("eire", "iedub"),
+            ("est", "papty"),
+            ("gmt0", "gmt"),
+            ("uct", "utc"),
+            ("zulu", "utc"),
         ];
         for (alias, canonical) in tz_aliases {
             let from = format!("-tz-{}", alias);
@@ -443,10 +447,9 @@ impl Interpreter {
                     if Self::is_structurally_valid_language_tag(&tag) {
                         seen.push(tag.to_ascii_lowercase());
                     } else {
-                        return Err(self.create_range_error(&format!(
-                            "Invalid language tag: {}",
-                            tag
-                        )));
+                        return Err(
+                            self.create_range_error(&format!("Invalid language tag: {}", tag))
+                        );
                     }
                 }
             }
@@ -490,11 +493,7 @@ impl Interpreter {
         let len = if len_num.is_nan() || len_num <= 0.0 {
             0u64
         } else if len_num.is_infinite() {
-            if len_num > 0.0 {
-                (1u64 << 53) - 1
-            } else {
-                0
-            }
+            if len_num > 0.0 { (1u64 << 53) - 1 } else { 0 }
         } else {
             let n = len_num.floor() as u64;
             n.min((1u64 << 53) - 1)
@@ -530,9 +529,7 @@ impl Interpreter {
             match &k_value {
                 JsValue::String(_) | JsValue::Object(_) => {}
                 _ => {
-                    return Err(
-                        self.create_type_error("Language tag must be a string or object"),
-                    );
+                    return Err(self.create_type_error("Language tag must be a string or object"));
                 }
             }
 
@@ -565,10 +562,9 @@ impl Interpreter {
                     if Self::is_structurally_valid_language_tag(&tag) {
                         tag.to_ascii_lowercase()
                     } else {
-                        return Err(self.create_range_error(&format!(
-                            "Invalid language tag: {}",
-                            tag
-                        )));
+                        return Err(
+                            self.create_range_error(&format!("Invalid language tag: {}", tag))
+                        );
                     }
                 }
             };
@@ -741,16 +737,14 @@ impl Interpreter {
                 // Reject locales with no real language subtag (e.g., "zxx", "und")
                 if !lang.is_empty() && lang != "und" {
                     let known_languages = [
-                        "af", "am", "ar", "as", "az", "be", "bg", "bn", "bo", "br",
-                        "bs", "ca", "cs", "cy", "da", "de", "el", "en", "eo", "es",
-                        "et", "eu", "fa", "fi", "fil", "fo", "fr", "ga", "gl", "gu",
-                        "ha", "he", "hi", "hr", "hu", "hy", "id", "ig", "is", "it",
-                        "ja", "ka", "kk", "km", "kn", "ko", "kok", "ku", "ky", "lb",
-                        "ln", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms", "mt", "my",
-                        "nb", "ne", "nl", "nn", "no", "or", "pa", "pl", "ps", "pt",
-                        "ro", "ru", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta",
-                        "te", "th", "tk", "tr", "uk", "ur", "uz", "vi", "wo", "yo",
-                        "zh", "zu",
+                        "af", "am", "ar", "as", "az", "be", "bg", "bn", "bo", "br", "bs", "ca",
+                        "cs", "cy", "da", "de", "el", "en", "eo", "es", "et", "eu", "fa", "fi",
+                        "fil", "fo", "fr", "ga", "gl", "gu", "ha", "he", "hi", "hr", "hu", "hy",
+                        "id", "ig", "is", "it", "ja", "ka", "kk", "km", "kn", "ko", "kok", "ku",
+                        "ky", "lb", "ln", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms", "mt",
+                        "my", "nb", "ne", "nl", "nn", "no", "or", "pa", "pl", "ps", "pt", "ro",
+                        "ru", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta", "te", "th", "tk",
+                        "tr", "uk", "ur", "uz", "vi", "wo", "yo", "zh", "zu",
                     ];
                     if known_languages.contains(&lang.as_str()) {
                         return true;

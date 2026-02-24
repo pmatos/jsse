@@ -263,6 +263,21 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("evalScript".to_string(), eval_script_fn);
 
+        // $262.IsHTMLDDA — B.3.6 [[IsHTMLDDA]] internal slot
+        let htmldda_obj = self.create_object();
+        htmldda_obj.borrow_mut().callable = Some(JsFunction::native(
+            "".to_string(),
+            0,
+            |_interp, _this, _args| Completion::Normal(JsValue::Null),
+        ));
+        htmldda_obj.borrow_mut().is_htmldda = true;
+        let htmldda_val = JsValue::Object(crate::types::JsObject {
+            id: htmldda_obj.borrow().id.unwrap(),
+        });
+        dollar_262
+            .borrow_mut()
+            .insert_builtin("IsHTMLDDA".to_string(), htmldda_val);
+
         JsValue::Object(crate::types::JsObject { id: dollar_262_id })
     }
 
@@ -387,11 +402,11 @@ impl Interpreter {
 
             check_field!(desc, "value", |v: JsValue| desc.value = Some(v));
             check_field!(desc, "writable", |v: JsValue| desc.writable =
-                Some(to_boolean(&v)));
+                Some(self.to_boolean_val(&v)));
             check_field!(desc, "enumerable", |v: JsValue| desc.enumerable =
-                Some(to_boolean(&v)));
+                Some(self.to_boolean_val(&v)));
             check_field!(desc, "configurable", |v: JsValue| desc.configurable =
-                Some(to_boolean(&v)));
+                Some(self.to_boolean_val(&v)));
             check_field!(desc, "get", |v: JsValue| desc.get = Some(v));
             check_field!(desc, "set", |v: JsValue| desc.set = Some(v));
 
@@ -472,6 +487,17 @@ impl Interpreter {
         }
         let id = result.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })
+    }
+
+    pub(crate) fn to_boolean_val(&self, val: &JsValue) -> bool {
+        if let JsValue::Object(o) = val {
+            if let Some(Some(obj)) = self.objects.get(o.id as usize) {
+                if obj.borrow().is_htmldda {
+                    return false;
+                }
+            }
+        }
+        to_boolean(val)
     }
 
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {

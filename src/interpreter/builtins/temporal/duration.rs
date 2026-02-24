@@ -151,7 +151,8 @@ fn to_relative_to_date(
                         {
                             // IANA timezone: validate offset matches
                             let candidates = super::zoned_date_time::get_possible_epoch_ns(
-                                &tz_name_str, local_ns,
+                                &tz_name_str,
+                                local_ns,
                             );
                             let mut matched: Option<i128> = None;
                             for &cand in &candidates {
@@ -193,7 +194,9 @@ fn to_relative_to_date(
                     } else {
                         // No offset → use "compatible" disambiguation
                         super::zoned_date_time::disambiguate_instant(
-                            &tz_name_str, local_ns, "compatible",
+                            &tz_name_str,
+                            local_ns,
+                            "compatible",
                         )
                     };
                     let epoch_ns_bi = num_bigint::BigInt::from(computed_epoch_ns);
@@ -204,13 +207,8 @@ fn to_relative_to_date(
                     }
                     // Derive actual calendar date in the timezone from epoch_ns
                     let (zy, zm, zd, _, _, _, _, _, _) =
-                        super::zoned_date_time::epoch_ns_to_components(
-                            &epoch_ns_bi, &tz_name_str,
-                        );
-                    return Ok(Some((
-                        zy, zm, zd,
-                        Some((computed_epoch_ns, tz_name_str)),
-                    )));
+                        super::zoned_date_time::epoch_ns_to_components(&epoch_ns_bi, &tz_name_str);
+                    return Ok(Some((zy, zm, zd, Some((computed_epoch_ns, tz_name_str)))));
                 }
                 return Err(Completion::Throw(
                     interp.create_range_error(&format!("Invalid relativeTo string: {raw}")),
@@ -262,7 +260,10 @@ fn to_relative_to_date(
             other => return Err(other),
         };
         let cal = super::to_temporal_calendar_slot_value(interp, &cal_val)?;
-        let cal_has_era = matches!(cal.as_str(), "gregory" | "japanese" | "roc" | "coptic" | "ethiopic" | "ethioaa");
+        let cal_has_era = matches!(
+            cal.as_str(),
+            "gregory" | "japanese" | "roc" | "coptic" | "ethiopic" | "ethioaa"
+        );
 
         // 2. day (required, coerce if defined)
         let d_val = match get_prop(interp, val, "day") {
@@ -285,7 +286,9 @@ fn to_relative_to_date(
                 other => return Err(other),
             };
             if !is_undefined(&era_val) {
-                era_str = Some(super::to_primitive_and_require_string(interp, &era_val, "era")?);
+                era_str = Some(super::to_primitive_and_require_string(
+                    interp, &era_val, "era",
+                )?);
             }
 
             // 2c. eraYear (coerce if defined)
@@ -500,7 +503,8 @@ fn to_relative_to_date(
             // Use "compatible" disambiguation
             let epoch_days = iso_date_to_epoch_days(year, month, day) as i128;
             let local_ns = epoch_days * 86_400_000_000_000;
-            let epoch_ns = super::zoned_date_time::disambiguate_instant(&tz, local_ns, "compatible");
+            let epoch_ns =
+                super::zoned_date_time::disambiguate_instant(&tz, local_ns, "compatible");
 
             return Ok(Some((year, month, day, Some((epoch_ns, tz)))));
         } else {
@@ -722,10 +726,21 @@ fn total_relative_duration(
 /// This is the ZDT-aware AddZonedDateTime: adds Y/M/W to date with same wall time,
 /// then adds D days with same wall time, then adds time components.
 fn add_duration_to_zdt_epoch_ns(
-    y: f64, mo: f64, w: f64, d: f64,
-    h: f64, mi: f64, s: f64, ms: f64, us: f64, ns: f64,
-    base_year: i32, base_month: u8, base_day: u8,
-    base_epoch_ns: i128, tz: &str,
+    y: f64,
+    mo: f64,
+    w: f64,
+    d: f64,
+    h: f64,
+    mi: f64,
+    s: f64,
+    ms: f64,
+    us: f64,
+    ns: f64,
+    base_year: i32,
+    base_month: u8,
+    base_day: u8,
+    base_epoch_ns: i128,
+    tz: &str,
 ) -> Result<i128, ()> {
     let time_ns = h as i128 * 3_600_000_000_000
         + mi as i128 * 60_000_000_000
@@ -750,7 +765,9 @@ fn add_duration_to_zdt_epoch_ns(
         + bns as i128;
 
     // Add Y/M/W
-    let inter = add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0);
+    let inter = add_iso_date(
+        base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
+    );
     if !super::iso_date_within_limits(inter.0, inter.1, inter.2) {
         return Err(());
     }
@@ -762,9 +779,8 @@ fn add_duration_to_zdt_epoch_ns(
     }
     let day_adv_epoch_days = iso_date_to_epoch_days(day_adv.0, day_adv.1, day_adv.2) as i128;
     let day_adv_local_ns = day_adv_epoch_days * 86_400_000_000_000 + wall_time_ns;
-    let day_adv_epoch_ns = super::zoned_date_time::disambiguate_instant(
-        tz, day_adv_local_ns, "compatible",
-    );
+    let day_adv_epoch_ns =
+        super::zoned_date_time::disambiguate_instant(tz, day_adv_local_ns, "compatible");
 
     Ok(day_adv_epoch_ns + time_ns)
 }
@@ -774,7 +790,9 @@ fn add_duration_to_zdt_epoch_ns(
 fn nanoseconds_to_tz_days(
     dest_epoch_ns: i128,
     inter_epoch_ns: i128,
-    inter_year: i32, inter_month: u8, inter_day: u8,
+    inter_year: i32,
+    inter_month: u8,
+    inter_day: u8,
     wall_time_ns: i128,
     tz: &str,
 ) -> f64 {
@@ -791,11 +809,11 @@ fn nanoseconds_to_tz_days(
     loop {
         let next_epoch_days = current_epoch_days + sign;
         let next_local_ns = next_epoch_days * 86_400_000_000_000 + wall_time_ns;
-        let next_ns = super::zoned_date_time::disambiguate_instant(
-            tz, next_local_ns, "compatible",
-        );
+        let next_ns = super::zoned_date_time::disambiguate_instant(tz, next_local_ns, "compatible");
         day_length_ns = (next_ns - current_ns).abs();
-        if day_length_ns == 0 { day_length_ns = 86_400_000_000_000; }
+        if day_length_ns == 0 {
+            day_length_ns = 86_400_000_000_000;
+        }
         let remaining = (dest_epoch_ns - next_ns) * sign;
         if remaining < 0 {
             break; // overshot
@@ -806,7 +824,9 @@ fn nanoseconds_to_tz_days(
         if remaining == 0 {
             return day_count as f64;
         }
-        if day_count.abs() > 200_000_000 { break; }
+        if day_count.abs() > 200_000_000 {
+            break;
+        }
     }
 
     let remaining_ns = dest_epoch_ns - current_ns;
@@ -816,11 +836,22 @@ fn nanoseconds_to_tz_days(
 
 /// ZDT-aware TotalRelativeDuration: accounts for actual timezone day lengths.
 fn total_relative_duration_zdt(
-    y: f64, mo: f64, w: f64, d: f64,
-    h: f64, mi: f64, s: f64, ms: f64, us: f64, ns: f64,
+    y: f64,
+    mo: f64,
+    w: f64,
+    d: f64,
+    h: f64,
+    mi: f64,
+    s: f64,
+    ms: f64,
+    us: f64,
+    ns: f64,
     unit: &str,
-    base_year: i32, base_month: u8, base_day: u8,
-    base_epoch_ns: i128, tz: &str,
+    base_year: i32,
+    base_month: u8,
+    base_day: u8,
+    base_epoch_ns: i128,
+    tz: &str,
 ) -> Result<f64, ()> {
     // Get wall-clock time at base
     let bi = num_bigint::BigInt::from(base_epoch_ns);
@@ -845,9 +876,9 @@ fn total_relative_duration_zdt(
     // Compute intermediate epoch_ns: when Y/M/W=0, preserve original epoch_ns
     let has_date_add = y != 0.0 || mo != 0.0 || w != 0.0;
     let intermediate_epoch_ns = if has_date_add {
-        let inter_epoch_days = iso_date_to_epoch_days(
-            intermediate_iso.0, intermediate_iso.1, intermediate_iso.2,
-        ) as i128;
+        let inter_epoch_days =
+            iso_date_to_epoch_days(intermediate_iso.0, intermediate_iso.1, intermediate_iso.2)
+                as i128;
         let inter_local_ns = inter_epoch_days * 86_400_000_000_000 + wall_time_ns;
         super::zoned_date_time::disambiguate_instant(tz, inter_local_ns, "compatible")
     } else {
@@ -858,15 +889,24 @@ fn total_relative_duration_zdt(
     let has_day_add = d != 0.0;
     let day_advanced_epoch_ns = if has_day_add || has_date_add {
         let day_advanced_iso = add_iso_date(
-            intermediate_iso.0, intermediate_iso.1, intermediate_iso.2, 0, 0, 0, d as i32,
+            intermediate_iso.0,
+            intermediate_iso.1,
+            intermediate_iso.2,
+            0,
+            0,
+            0,
+            d as i32,
         );
-        if !super::iso_date_within_limits(day_advanced_iso.0, day_advanced_iso.1, day_advanced_iso.2)
-        {
+        if !super::iso_date_within_limits(
+            day_advanced_iso.0,
+            day_advanced_iso.1,
+            day_advanced_iso.2,
+        ) {
             return Err(());
         }
-        let day_adv_epoch_days = iso_date_to_epoch_days(
-            day_advanced_iso.0, day_advanced_iso.1, day_advanced_iso.2,
-        ) as i128;
+        let day_adv_epoch_days =
+            iso_date_to_epoch_days(day_advanced_iso.0, day_advanced_iso.1, day_advanced_iso.2)
+                as i128;
         let day_adv_local_ns = day_adv_epoch_days * 86_400_000_000_000 + wall_time_ns;
         super::zoned_date_time::disambiguate_instant(tz, day_adv_local_ns, "compatible")
     } else {
@@ -886,9 +926,13 @@ fn total_relative_duration_zdt(
         "day" => {
             // Total days from base to dest (includes Y/M/W/D contributions)
             let tz_days = nanoseconds_to_tz_days(
-                dest_epoch_ns, base_epoch_ns,
-                base_year, base_month, base_day,
-                wall_time_ns, tz,
+                dest_epoch_ns,
+                base_epoch_ns,
+                base_year,
+                base_month,
+                base_day,
+                wall_time_ns,
+                tz,
             );
             Ok(tz_days)
         }
@@ -900,9 +944,8 @@ fn total_relative_duration_zdt(
                 super::zoned_date_time::epoch_ns_to_components(&end_bi, tz);
 
             // Date difference from base to end
-            let diff_result = super::difference_iso_date(
-                base_year, base_month, base_day, ey, em, ed, unit,
-            );
+            let diff_result =
+                super::difference_iso_date(base_year, base_month, base_day, ey, em, ed, unit);
             let diff_primary = match unit {
                 "year" => diff_result.0,
                 "month" => diff_result.1,
@@ -911,8 +954,13 @@ fn total_relative_duration_zdt(
             };
 
             // Compute sign
-            let sign = if dest_epoch_ns > base_epoch_ns { 1i32 }
-                else if dest_epoch_ns < base_epoch_ns { -1i32 } else { return Ok(0.0); };
+            let sign = if dest_epoch_ns > base_epoch_ns {
+                1i32
+            } else if dest_epoch_ns < base_epoch_ns {
+                -1i32
+            } else {
+                return Ok(0.0);
+            };
 
             // Compute unit_boundary: base + diff_primary units, then + sign units
             let (ref_y, ref_mo, ref_w) = match unit {
@@ -921,38 +969,33 @@ fn total_relative_duration_zdt(
                 "week" => (0, 0, diff_primary),
                 _ => unreachable!(),
             };
-            let unit_start_iso = add_iso_date(
-                base_year, base_month, base_day, ref_y, ref_mo, ref_w, 0,
-            );
+            let unit_start_iso =
+                add_iso_date(base_year, base_month, base_day, ref_y, ref_mo, ref_w, 0);
             let (next_y, next_mo, next_w) = match unit {
                 "year" => (diff_primary + sign, 0, 0),
                 "month" => (0, diff_primary + sign, 0),
                 "week" => (0, 0, diff_primary + sign),
                 _ => unreachable!(),
             };
-            let unit_end_iso = add_iso_date(
-                base_year, base_month, base_day, next_y, next_mo, next_w, 0,
-            );
+            let unit_end_iso =
+                add_iso_date(base_year, base_month, base_day, next_y, next_mo, next_w, 0);
             if !super::iso_date_within_limits(unit_end_iso.0, unit_end_iso.1, unit_end_iso.2) {
                 return Err(());
             }
 
             // Convert these boundary dates to ZDT epoch_ns (same wall time)
-            let start_epoch_days = iso_date_to_epoch_days(
-                unit_start_iso.0, unit_start_iso.1, unit_start_iso.2,
-            ) as i128;
+            let start_epoch_days =
+                iso_date_to_epoch_days(unit_start_iso.0, unit_start_iso.1, unit_start_iso.2)
+                    as i128;
             let start_local_ns = start_epoch_days * 86_400_000_000_000 + wall_time_ns;
-            let unit_start_ns = super::zoned_date_time::disambiguate_instant(
-                tz, start_local_ns, "compatible",
-            );
+            let unit_start_ns =
+                super::zoned_date_time::disambiguate_instant(tz, start_local_ns, "compatible");
 
-            let end_epoch_days_val = iso_date_to_epoch_days(
-                unit_end_iso.0, unit_end_iso.1, unit_end_iso.2,
-            ) as i128;
+            let end_epoch_days_val =
+                iso_date_to_epoch_days(unit_end_iso.0, unit_end_iso.1, unit_end_iso.2) as i128;
             let end_local_ns = end_epoch_days_val * 86_400_000_000_000 + wall_time_ns;
-            let unit_end_ns = super::zoned_date_time::disambiguate_instant(
-                tz, end_local_ns, "compatible",
-            );
+            let unit_end_ns =
+                super::zoned_date_time::disambiguate_instant(tz, end_local_ns, "compatible");
 
             let unit_length_ns = (unit_end_ns - unit_start_ns).abs();
             let position_in_unit = (dest_epoch_ns - unit_start_ns) * sign as i128;
@@ -1046,28 +1089,47 @@ fn round_relative_duration(
             // Compute end_date for the truncated duration (Y/M/W/D with NanosecondsToDays)
             let inter_ens = add_zdt(y as i32, mo as i32, w as i32, 0);
             let frac_days = nanoseconds_to_tz_days(
-                dest_epoch_ns, inter_ens,
+                dest_epoch_ns,
+                inter_ens,
                 {
-                    let iso = add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0);
+                    let iso = add_iso_date(
+                        base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
+                    );
                     iso.0
                 },
                 {
-                    let iso = add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0);
+                    let iso = add_iso_date(
+                        base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
+                    );
                     iso.1
                 },
                 {
-                    let iso = add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0);
+                    let iso = add_iso_date(
+                        base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
+                    );
                     iso.2
                 },
-                wall_time_ns, tz,
+                wall_time_ns,
+                tz,
             );
             let total_days_i = frac_days.trunc() as i32;
             let end_date = add_iso_date(
-                base_year, base_month, base_day, y as i32, mo as i32, w as i32, total_days_i,
+                base_year,
+                base_month,
+                base_day,
+                y as i32,
+                mo as i32,
+                w as i32,
+                total_days_i,
             );
 
-            let sign_f = if dest_epoch_ns > *base_ens { 1i128 }
-                else if dest_epoch_ns < *base_ens { -1i128 } else { 0 };
+            let sign_f = if dest_epoch_ns > *base_ens {
+                1i128
+            } else if dest_epoch_ns < *base_ens {
+                -1i128
+            } else {
+                0
+            };
             if sign_f == 0 {
                 return Ok((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0));
             }
@@ -1077,8 +1139,7 @@ fn round_relative_duration(
                     let end_epoch = iso_date_to_epoch_days(end_date.0, end_date.1, end_date.2);
                     let base_epoch = iso_date_to_epoch_days(base_year, base_month, base_day);
                     let (diff_y, _, _, _) = super::difference_iso_date(
-                        base_year, base_month, base_day,
-                        end_date.0, end_date.1, end_date.2, "year",
+                        base_year, base_month, base_day, end_date.0, end_date.1, end_date.2, "year",
                     );
                     if end_epoch == base_epoch {
                         (0, 0, 0, 0)
@@ -1088,8 +1149,10 @@ fn round_relative_duration(
                         let end_ens = add_zdt(diff_y + sign_f as i32, 0, 0, 0);
                         let span = (end_ens - start_ens).abs() as f64;
                         let remaining = (dest_epoch_ns - start_ens) as f64;
-                        let fractional = diff_y as f64 + if span > 0.0 { remaining / span } else { 0.0 };
-                        let rounded = super::round_number_to_increment(fractional, increment, rounding_mode);
+                        let fractional =
+                            diff_y as f64 + if span > 0.0 { remaining / span } else { 0.0 };
+                        let rounded =
+                            super::round_number_to_increment(fractional, increment, rounding_mode);
                         (rounded as i32, 0, 0, 0)
                     }
                 }
@@ -1105,20 +1168,23 @@ fn round_relative_duration(
                         let span = (end_ens - start_ens).abs() as f64;
                         let remaining = (dest_epoch_ns - start_ens) as f64;
                         let fractional = mo + if span > 0.0 { remaining / span } else { 0.0 };
-                        let rounded = super::round_number_to_increment(fractional, increment, rounding_mode);
+                        let rounded =
+                            super::round_number_to_increment(fractional, increment, rounding_mode);
                         (y as i32, rounded as i32, 0, 0)
                     } else {
                         // Flatten to total months using ZDT boundaries
                         let (_, total_months, _, _) = super::difference_iso_date(
-                            base_year, base_month, base_day,
-                            end_date.0, end_date.1, end_date.2, "month",
+                            base_year, base_month, base_day, end_date.0, end_date.1, end_date.2,
+                            "month",
                         );
                         let start_ens = add_zdt(0, total_months, 0, 0);
                         let end_ens = add_zdt(0, total_months + sign_f as i32, 0, 0);
                         let span = (end_ens - start_ens).abs() as f64;
                         let remaining = (dest_epoch_ns - start_ens) as f64;
-                        let fractional = total_months as f64 + if span > 0.0 { remaining / span } else { 0.0 };
-                        let rounded = super::round_number_to_increment(fractional, increment, rounding_mode);
+                        let fractional =
+                            total_months as f64 + if span > 0.0 { remaining / span } else { 0.0 };
+                        let rounded =
+                            super::round_number_to_increment(fractional, increment, rounding_mode);
                         (0, rounded as i32, 0, 0)
                     }
                 }
@@ -1128,21 +1194,34 @@ fn round_relative_duration(
                     let preserve_months = matches!(largest_unit, "year" | "month");
                     if preserve_months {
                         let (_, total_months, _, _) = super::difference_iso_date(
-                            base_year, base_month, base_day,
-                            end_date.0, end_date.1, end_date.2, "month",
+                            base_year, base_month, base_day, end_date.0, end_date.1, end_date.2,
+                            "month",
                         );
                         let month_start_ens = add_zdt(0, total_months, 0, 0);
                         let remaining_ns = (dest_epoch_ns - month_start_ens) as f64;
                         // 1 week = 7 actual days from month_start
                         let week_end_ens = add_zdt(0, total_months, 0, 7);
                         let week_ns = (week_end_ens - month_start_ens).abs() as f64;
-                        let fractional_weeks = if week_ns > 0.0 { remaining_ns / week_ns } else { 0.0 };
-                        let rounded = super::round_number_to_increment(fractional_weeks, increment, rounding_mode);
+                        let fractional_weeks = if week_ns > 0.0 {
+                            remaining_ns / week_ns
+                        } else {
+                            0.0
+                        };
+                        let rounded = super::round_number_to_increment(
+                            fractional_weeks,
+                            increment,
+                            rounding_mode,
+                        );
                         (0, total_months, rounded as i32, 0)
                     } else {
-                        let total_days_from_base = (end_epoch - base_epoch) as f64 + frac_days.fract();
+                        let total_days_from_base =
+                            (end_epoch - base_epoch) as f64 + frac_days.fract();
                         let fractional_weeks = total_days_from_base / 7.0;
-                        let rounded = super::round_number_to_increment(fractional_weeks, increment, rounding_mode);
+                        let rounded = super::round_number_to_increment(
+                            fractional_weeks,
+                            increment,
+                            rounding_mode,
+                        );
                         (0, 0, rounded as i32, 0)
                     }
                 }
@@ -1151,14 +1230,24 @@ fn round_relative_duration(
                     // Range check
                     let end_days_i64 = total_days_i as i64 + sign_f as i64 * increment as i64;
                     let nudge_base = if y != 0.0 || mo != 0.0 || w != 0.0 {
-                        add_iso_date(base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0)
+                        add_iso_date(
+                            base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
+                        )
                     } else {
                         (base_year, base_month, base_day)
                     };
                     let nudge_end = add_iso_date(
-                        nudge_base.0, nudge_base.1, nudge_base.2, 0, 0, 0, end_days_i64 as i32,
+                        nudge_base.0,
+                        nudge_base.1,
+                        nudge_base.2,
+                        0,
+                        0,
+                        0,
+                        end_days_i64 as i32,
                     );
-                    if iso_date_to_epoch_days(nudge_end.0, nudge_end.1, nudge_end.2).abs() > 100_000_000 {
+                    if iso_date_to_epoch_days(nudge_end.0, nudge_end.1, nudge_end.2).abs()
+                        > 100_000_000
+                    {
                         return Err("Rounded date outside valid ISO range".to_string());
                     }
 
@@ -1166,22 +1255,19 @@ fn round_relative_duration(
                     let inter_iso = add_iso_date(
                         base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
                     );
-                    let day_pos_iso = add_iso_date(
-                        inter_iso.0, inter_iso.1, inter_iso.2, 0, 0, 0, total_days_i,
-                    );
+                    let day_pos_iso =
+                        add_iso_date(inter_iso.0, inter_iso.1, inter_iso.2, 0, 0, 0, total_days_i);
                     let day_pos_ens = add_zdt(y as i32, mo as i32, w as i32, total_days_i);
-                    let next_day_ens = add_zdt(
-                        y as i32, mo as i32, w as i32, total_days_i + sign_f as i32,
-                    );
+                    let next_day_ens =
+                        add_zdt(y as i32, mo as i32, w as i32, total_days_i + sign_f as i32);
                     let day_length_ns = (next_day_ens - day_pos_ens).abs();
                     let remaining_ns = dest_epoch_ns - day_pos_ens;
 
                     // Round using actual day length as the increment unit
                     let inc_ns = increment as i128 * day_length_ns;
                     let total_ns_in_day = total_days_i as i128 * day_length_ns + remaining_ns;
-                    let rounded_ns = super::round_i128_to_increment(
-                        remaining_ns, inc_ns, rounding_mode,
-                    );
+                    let rounded_ns =
+                        super::round_i128_to_increment(remaining_ns, inc_ns, rounding_mode);
                     let rounded_days = total_days_i + (rounded_ns / day_length_ns) as i32;
 
                     if y != 0.0 || mo != 0.0 || w != 0.0 {
@@ -1202,17 +1288,25 @@ fn round_relative_duration(
                     return Err("Rounded date outside valid ISO range".to_string());
                 }
                 let (dy, dm, mut dw, mut dd) = super::difference_iso_date(
-                    base_year, base_month, base_day,
-                    result_date.0, result_date.1, result_date.2,
+                    base_year,
+                    base_month,
+                    base_day,
+                    result_date.0,
+                    result_date.1,
+                    result_date.2,
                     largest_unit,
                 );
                 if smallest_unit == "week" && dd != 0 {
                     dw = dd / 7;
                     dd = dd % 7;
                 }
-                Ok((dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                Ok((
+                    dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ))
             } else {
-                Ok((ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                Ok((
+                    ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ))
             }
         } else {
             // PlainDate path: use constant 24h days and ISO epoch days
@@ -1226,9 +1320,19 @@ fn round_relative_duration(
             };
 
             let (ry, rm, rw, rd) = super::round_date_duration_with_frac_days(
-                y as i32, mo as i32, w as i32, frac_days, time_ns_i128,
-                smallest_unit, largest_unit, increment, rounding_mode,
-                base_year, base_month, base_day, is_zdt,
+                y as i32,
+                mo as i32,
+                w as i32,
+                frac_days,
+                time_ns_i128,
+                smallest_unit,
+                largest_unit,
+                increment,
+                rounding_mode,
+                base_year,
+                base_month,
+                base_day,
+                is_zdt,
             )?;
 
             if matches!(largest_unit, "year" | "month" | "week")
@@ -1239,17 +1343,25 @@ fn round_relative_duration(
                     return Err("Rounded date outside valid ISO range".to_string());
                 }
                 let (dy, dm, mut dw, mut dd) = super::difference_iso_date(
-                    base_year, base_month, base_day,
-                    result_date.0, result_date.1, result_date.2,
+                    base_year,
+                    base_month,
+                    base_day,
+                    result_date.0,
+                    result_date.1,
+                    result_date.2,
                     largest_unit,
                 );
                 if smallest_unit == "week" && dd != 0 {
                     dw = dd / 7;
                     dd = dd % 7;
                 }
-                Ok((dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                Ok((
+                    dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ))
             } else {
-                Ok((ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+                Ok((
+                    ry as f64, rm as f64, rw as f64, rd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                ))
             }
         }
     } else {
@@ -1278,16 +1390,15 @@ fn round_relative_duration(
                 );
 
                 // Add D days
-                let mut day_iso = add_iso_date(
-                    inter_iso.0, inter_iso.1, inter_iso.2, 0, 0, 0, d as i32,
-                );
+                let mut day_iso =
+                    add_iso_date(inter_iso.0, inter_iso.1, inter_iso.2, 0, 0, 0, d as i32);
 
                 // Compute dest_epoch_ns by adding time to day_iso with wall time
-                let day_epoch_days = iso_date_to_epoch_days(day_iso.0, day_iso.1, day_iso.2) as i128;
+                let day_epoch_days =
+                    iso_date_to_epoch_days(day_iso.0, day_iso.1, day_iso.2) as i128;
                 let day_local_ns = day_epoch_days * 86_400_000_000_000 + wall_time_ns;
-                let day_epoch_ns = super::zoned_date_time::disambiguate_instant(
-                    tz, day_local_ns, "compatible",
-                );
+                let day_epoch_ns =
+                    super::zoned_date_time::disambiguate_instant(tz, day_local_ns, "compatible");
                 let time_ns: i128 = h as i128 * 3_600_000_000_000
                     + mi as i128 * 60_000_000_000
                     + s as i128 * 1_000_000_000
@@ -1297,14 +1408,18 @@ fn round_relative_duration(
                 let dest_epoch_ns = day_epoch_ns + time_ns;
 
                 // Compute start-of-day for day_iso
-                let mut day_start_ns = super::zoned_date_time::get_start_of_day(
-                    tz, day_epoch_days,
-                );
+                let mut day_start_ns = super::zoned_date_time::get_start_of_day(tz, day_epoch_days);
 
                 // Normalize: carry full days using actual day lengths
                 let sign: i128 = if dest_epoch_ns >= day_start_ns {
-                    if dest_epoch_ns == day_start_ns && time_ns == 0 { 1 } else { 1 }
-                } else { -1 };
+                    if dest_epoch_ns == day_start_ns && time_ns == 0 {
+                        1
+                    } else {
+                        1
+                    }
+                } else {
+                    -1
+                };
 
                 let mut time_within_day = dest_epoch_ns - day_start_ns;
                 let mut extra_days: i32 = 0;
@@ -1315,12 +1430,18 @@ fn round_relative_duration(
                         let next_ed = day_epoch_days + extra_days as i128 + 1;
                         let next_start = super::zoned_date_time::get_start_of_day(tz, next_ed);
                         let day_length = next_start - day_start_ns;
-                        if day_length <= 0 { break; }
-                        if time_within_day < day_length { break; }
+                        if day_length <= 0 {
+                            break;
+                        }
+                        if time_within_day < day_length {
+                            break;
+                        }
                         time_within_day -= day_length;
                         extra_days += 1;
                         day_start_ns = next_start;
-                        if extra_days > 200_000_000 { break; }
+                        if extra_days > 200_000_000 {
+                            break;
+                        }
                     }
                 } else {
                     // Backward: borrow while time_within_day < 0
@@ -1328,11 +1449,15 @@ fn round_relative_duration(
                         let prev_ed = day_epoch_days + extra_days as i128 - 1;
                         let prev_start = super::zoned_date_time::get_start_of_day(tz, prev_ed);
                         let day_length = day_start_ns - prev_start;
-                        if day_length <= 0 { break; }
+                        if day_length <= 0 {
+                            break;
+                        }
                         time_within_day += day_length;
                         extra_days -= 1;
                         day_start_ns = prev_start;
-                        if extra_days.abs() > 200_000_000 { break; }
+                        if extra_days.abs() > 200_000_000 {
+                            break;
+                        }
                     }
                 }
 
@@ -1343,9 +1468,8 @@ fn round_relative_duration(
                 // Round time_within_day to increment
                 let unit_ns = temporal_unit_length_ns(smallest_unit) as i128;
                 let inc = increment as i128;
-                let mut rounded_time = super::round_i128_to_increment(
-                    time_within_day, unit_ns * inc, rounding_mode,
-                );
+                let mut rounded_time =
+                    super::round_i128_to_increment(time_within_day, unit_ns * inc, rounding_mode);
 
                 // AdjustRoundedDurationDays: if rounded time overflows the day, carry
                 // and re-round the beyond amount per spec step 11b.
@@ -1357,35 +1481,39 @@ fn round_relative_duration(
                     let beyond = rounded_time - current_day_length;
                     day_iso = add_iso_date(day_iso.0, day_iso.1, day_iso.2, 0, 0, 0, 1);
                     // Re-round the beyond amount to the same increment
-                    rounded_time = super::round_i128_to_increment(
-                        beyond, unit_ns * inc, rounding_mode,
-                    );
+                    rounded_time =
+                        super::round_i128_to_increment(beyond, unit_ns * inc, rounding_mode);
                 }
 
                 // BalanceDateDurationRelative
                 let (dy, dm, dw, dd) = super::difference_iso_date(
-                    base_year, base_month, base_day,
-                    day_iso.0, day_iso.1, day_iso.2,
+                    base_year,
+                    base_month,
+                    base_day,
+                    day_iso.0,
+                    day_iso.1,
+                    day_iso.2,
                     largest_unit,
                 );
 
                 let r = unbalance_time_ns_i128(rounded_time, "hour");
                 Ok((
-                    dy as f64, dm as f64, dw as f64, dd as f64,
-                    r.1 as f64, r.2 as f64, r.3 as f64,
+                    dy as f64, dm as f64, dw as f64, dd as f64, r.1 as f64, r.2 as f64, r.3 as f64,
                     r.4 as f64, r.5 as f64, r.6 as f64,
                 ))
             } else {
                 // largestUnit < "day": flatten to total ns, round, split by time units
                 let dest_ns = add_duration_to_zdt_epoch_ns(
-                    y, mo, w, d, h, mi, s, ms, us, ns,
-                    base_year, base_month, base_day, *base_ens, tz,
-                ).map_err(|_| "duration out of range".to_string())?;
+                    y, mo, w, d, h, mi, s, ms, us, ns, base_year, base_month, base_day, *base_ens,
+                    tz,
+                )
+                .map_err(|_| "duration out of range".to_string())?;
                 let total_ns = dest_ns - base_ens;
 
                 let unit_ns = temporal_unit_length_ns(smallest_unit) as i128;
                 let inc = increment as i128;
-                let rounded_ns = super::round_i128_to_increment(total_ns, unit_ns * inc, rounding_mode);
+                let rounded_ns =
+                    super::round_i128_to_increment(total_ns, unit_ns * inc, rounding_mode);
 
                 let limit = (1i128 << 53) * 1_000_000_000;
                 if rounded_ns.abs() >= limit {
@@ -1430,7 +1558,13 @@ fn round_relative_duration(
                 let (ry, rm, rd_result) =
                     add_iso_date(base_year, base_month, base_day, 0, 0, 0, total_days as i32);
                 let (dy, dm, dw, dd) = super::difference_iso_date(
-                    base_year, base_month, base_day, ry, rm, rd_result, largest_unit,
+                    base_year,
+                    base_month,
+                    base_day,
+                    ry,
+                    rm,
+                    rd_result,
+                    largest_unit,
                 );
                 let r = unbalance_time_ns_i128(remainder_ns, "hour");
                 Ok((
@@ -1821,8 +1955,7 @@ impl Interpreter {
                         && us == 0.0
                         && ns == 0.0;
                     let lu_order = temporal_unit_order(largest_unit);
-                    if is_zero && (!is_zdt || lu_order < temporal_unit_order("day"))
-                    {
+                    if is_zero && (!is_zdt || lu_order < temporal_unit_order("day")) {
                         return create_duration_result(
                             interp, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                         );
@@ -1849,9 +1982,7 @@ impl Interpreter {
                         ));
                     }
                     // NudgeToZonedTime pre-check: next-day boundary must be in range
-                    if is_zdt
-                        && temporal_unit_order(smallest_unit) < temporal_unit_order("day")
-                    {
+                    if is_zdt && temporal_unit_order(smallest_unit) < temporal_unit_order("day") {
                         let target = super::add_iso_date(
                             by, bm, bd, y as i32, mo as i32, w as i32, d as i32,
                         );
@@ -1868,7 +1999,8 @@ impl Interpreter {
                     // skip rounding entirely — just AdjustRoundedDurationDays + Balance.
                     // But only when largestUnit >= "day", because time-unit targets need
                     // NanosecondsToDays to convert days to actual timezone-aware time.
-                    if smallest_unit == "nanosecond" && increment == 1.0
+                    if smallest_unit == "nanosecond"
+                        && increment == 1.0
                         && temporal_unit_order(largest_unit) >= temporal_unit_order("day")
                     {
                         let (mut rd, mut rh, mut rmi, mut rs, mut rms, mut rus, mut rns) =
@@ -1882,23 +2014,48 @@ impl Interpreter {
                                 + rms as i128 * 1_000_000
                                 + rus as i128 * 1_000
                                 + rns as i128;
-                            let direction: i128 = if time_ns > 0 { 1 }
-                                else if time_ns < 0 { -1 } else { 0 };
+                            let direction: i128 = if time_ns > 0 {
+                                1
+                            } else if time_ns < 0 {
+                                -1
+                            } else {
+                                0
+                            };
                             if direction != 0 {
                                 let day_start = add_duration_to_zdt_epoch_ns(
-                                    y, mo, w, rd, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                    by, bm, bd, *base_ens, tz,
-                                ).unwrap_or(*base_ens);
+                                    y, mo, w, rd, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, by, bm, bd,
+                                    *base_ens, tz,
+                                )
+                                .unwrap_or(*base_ens);
                                 let day_end = add_duration_to_zdt_epoch_ns(
-                                    y, mo, w, rd + direction as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-                                    by, bm, bd, *base_ens, tz,
-                                ).unwrap_or(*base_ens);
+                                    y,
+                                    mo,
+                                    w,
+                                    rd + direction as f64,
+                                    0.0,
+                                    0.0,
+                                    0.0,
+                                    0.0,
+                                    0.0,
+                                    0.0,
+                                    by,
+                                    bm,
+                                    bd,
+                                    *base_ens,
+                                    tz,
+                                )
+                                .unwrap_or(*base_ens);
                                 let day_length_ns = day_end - day_start;
                                 if day_length_ns > 0 {
                                     let one_day_less = time_ns - day_length_ns;
                                     // Adjust if time >= one day (direction>0: time_ns >= day_length, direction<0: time_ns <= -day_length)
-                                    let less_sign = if one_day_less > 0 { 1i128 }
-                                        else if one_day_less < 0 { -1 } else { 0 };
+                                    let less_sign = if one_day_less > 0 {
+                                        1i128
+                                    } else if one_day_less < 0 {
+                                        -1
+                                    } else {
+                                        0
+                                    };
                                     if less_sign != -direction {
                                         // Time exceeds one day: carry
                                         rd += direction as f64;
@@ -1915,7 +2072,9 @@ impl Interpreter {
                         }
 
                         // BalanceTimeDuration: convert time to days for PlainDate
-                        if !is_zdt && temporal_unit_order(largest_unit) >= temporal_unit_order("day") {
+                        if !is_zdt
+                            && temporal_unit_order(largest_unit) >= temporal_unit_order("day")
+                        {
                             let time_ns: i128 = rh as i128 * 3_600_000_000_000
                                 + rmi as i128 * 60_000_000_000
                                 + rs as i128 * 1_000_000_000
@@ -1936,21 +2095,23 @@ impl Interpreter {
 
                         // BalanceDateDurationRelative
                         if matches!(largest_unit, "year" | "month" | "week")
-                            || (largest_unit == "day"
-                                && (y != 0.0 || mo != 0.0 || w != 0.0))
+                            || (largest_unit == "day" && (y != 0.0 || mo != 0.0 || w != 0.0))
                         {
                             let result_date = super::add_iso_date(
                                 by, bm, bd, y as i32, mo as i32, w as i32, rd as i32,
                             );
                             let (dy, dm, dw, dd) = super::difference_iso_date(
-                                by, bm, bd,
-                                result_date.0, result_date.1, result_date.2,
+                                by,
+                                bm,
+                                bd,
+                                result_date.0,
+                                result_date.1,
+                                result_date.2,
                                 largest_unit,
                             );
                             return create_duration_result(
-                                interp,
-                                dy as f64, dm as f64, dw as f64, dd as f64,
-                                rh, rmi, rs, rms, rus, rns,
+                                interp, dy as f64, dm as f64, dw as f64, dd as f64, rh, rmi, rs,
+                                rms, rus, rns,
                             );
                         }
                         return create_duration_result(
@@ -2082,8 +2243,7 @@ impl Interpreter {
                 if let Some((by, bm, bd, Some((ens, ref tz)))) = relative_to {
                     // ZDT relativeTo path — use timezone-aware day lengths
                     match total_relative_duration_zdt(
-                        y, mo, w, d, h, mi, s, ms, us, ns, unit,
-                        by, bm, bd, ens, tz,
+                        y, mo, w, d, h, mi, s, ms, us, ns, unit, by, bm, bd, ens, tz,
                     ) {
                         Ok(result) => Completion::Normal(JsValue::Number(result)),
                         Err(()) => Completion::Throw(interp.create_range_error(
@@ -2214,7 +2374,9 @@ impl Interpreter {
                     Some(v) => v,
                     None => {
                         let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                        let result = match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
+                        let result = match format_duration_iso(
+                            y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc",
+                        ) {
                             Ok(s) => s,
                             Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
                         };
@@ -2229,11 +2391,12 @@ impl Interpreter {
                     _ => return Completion::Normal(JsValue::Undefined),
                 };
                 if let JsValue::Object(df_obj) = &df_instance {
-                    let format_val = match interp.get_object_property(df_obj.id, "format", &df_instance) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
-                    };
+                    let format_val =
+                        match interp.get_object_property(df_obj.id, "format", &df_instance) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
                     match interp.call_function(&format_val, &df_instance, &[this.clone()]) {
                         Completion::Normal(v) => Completion::Normal(v),
                         Completion::Throw(e) => Completion::Throw(e),
@@ -2241,10 +2404,12 @@ impl Interpreter {
                     }
                 } else {
                     let (y, mo, w, d, h, mi, s, ms, us, ns) = fields;
-                    let result = match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc") {
-                        Ok(s) => s,
-                        Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
-                    };
+                    let result =
+                        match format_duration_iso(y, mo, w, d, h, mi, s, ms, us, ns, None, "trunc")
+                        {
+                            Ok(s) => s,
+                            Err(msg) => return Completion::Throw(interp.create_range_error(&msg)),
+                        };
                     Completion::Normal(JsValue::String(JsString::from_str(&result)))
                 }
             },
@@ -2476,8 +2641,8 @@ impl Interpreter {
                 let (ns1, ns2) = if let Some((by, bm, bd, Some((ens, ref tz)))) = relative_to {
                     // ZDT: compute actual endpoint epoch_ns for each duration
                     let n1 = match add_duration_to_zdt_epoch_ns(
-                        one.0, one.1, one.2, one.3, one.4, one.5, one.6, one.7, one.8, one.9,
-                        by, bm, bd, ens, tz,
+                        one.0, one.1, one.2, one.3, one.4, one.5, one.6, one.7, one.8, one.9, by,
+                        bm, bd, ens, tz,
                     ) {
                         Ok(v) => v,
                         Err(()) => {
@@ -2487,8 +2652,8 @@ impl Interpreter {
                         }
                     };
                     let n2 = match add_duration_to_zdt_epoch_ns(
-                        two.0, two.1, two.2, two.3, two.4, two.5, two.6, two.7, two.8, two.9,
-                        by, bm, bd, ens, tz,
+                        two.0, two.1, two.2, two.3, two.4, two.5, two.6, two.7, two.8, two.9, by,
+                        bm, bd, ens, tz,
                     ) {
                         Ok(v) => v,
                         Err(()) => {

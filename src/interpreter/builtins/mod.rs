@@ -1345,7 +1345,7 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::constructor("Boolean".to_string(), 1, |interp, this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let b = to_boolean(&val);
+                let b = interp.to_boolean_val(&val);
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -2166,7 +2166,7 @@ impl Interpreter {
                 };
 
                 let fn_source_text = format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
-                let source = format!("(function anonymous({}) {{ {} }})", params_str, body_str);
+                let source = format!("(function anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                 let mut p = match parser::Parser::new(&source) {
                     Ok(p) => p,
                     Err(e) => {
@@ -2560,7 +2560,7 @@ impl Interpreter {
                     let fn_source_text =
                         format!("async function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
                     let source =
-                        format!("(async function anonymous({}) {{ {} }})", params_str, body_str);
+                        format!("(async function anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -2663,7 +2663,7 @@ impl Interpreter {
                         params_str, body_str
                     );
                     let source =
-                        format!("(function* anonymous({}) {{ {} }})", params_str, body_str);
+                        format!("(function* anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -2766,7 +2766,7 @@ impl Interpreter {
                         params_str, body_str
                     );
                     let source =
-                        format!("(async function* anonymous({}) {{ {} }})", params_str, body_str);
+                        format!("(async function* anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -3198,6 +3198,8 @@ impl Interpreter {
             "Atomics",
             "Temporal",
             "Intl",
+            "escape",
+            "unescape",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.realm().global_env.borrow();
@@ -5305,7 +5307,7 @@ impl Interpreter {
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,
             };
-            return Ok(to_boolean(&done));
+            return Ok(self.to_boolean_val(&done));
         }
         Ok(true)
     }

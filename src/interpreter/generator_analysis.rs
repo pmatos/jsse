@@ -277,6 +277,9 @@ fn analyze_statement(
                         ctx,
                     );
                 }
+                ForInOfLeft::Expression(expr) => {
+                    analyze_expression(expr, analysis, ctx, true);
+                }
             }
             analyze_expression(&for_in_stmt.right, analysis, ctx, true);
             analyze_statement(&for_in_stmt.body, analysis, ctx);
@@ -321,6 +324,9 @@ fn analyze_statement(
                         &mut analysis.local_vars,
                         ctx,
                     );
+                }
+                ForInOfLeft::Expression(expr) => {
+                    analyze_expression(expr, analysis, ctx, true);
                 }
             }
             analyze_expression(&for_of_stmt.right, analysis, ctx, true);

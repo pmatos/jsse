@@ -420,10 +420,13 @@ pub(crate) fn typeof_val<'a>(
         JsValue::Symbol(_) => "symbol",
         JsValue::BigInt(_) => "bigint",
         JsValue::Object(o) => {
-            if let Some(Some(obj)) = objects.get(o.id as usize)
-                && obj.borrow().callable.is_some()
-            {
-                return "function";
+            if let Some(Some(obj)) = objects.get(o.id as usize) {
+                if obj.borrow().is_htmldda {
+                    return "undefined";
+                }
+                if obj.borrow().callable.is_some() {
+                    return "function";
+                }
             }
             "object"
         }
@@ -568,7 +571,7 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
                                         {
                                             let enum_val =
                                                 desc_obj.borrow().get_property("enumerable");
-                                            if to_boolean(&enum_val) {
+                                            if interp.to_boolean_val(&enum_val) {
                                                 keys.push(key_str);
                                             }
                                         }
@@ -1182,7 +1185,7 @@ fn json_internalize_apply(
             let key_val = JsValue::String(JsString::from_str(key));
             match interp.invoke_proxy_trap(obj_id, "deleteProperty", vec![target_val, key_val]) {
                 Ok(Some(v)) => {
-                    if !to_boolean(&v) {
+                    if !interp.to_boolean_val(&v) {
                         return Err(interp.create_type_error(
                             "'deleteProperty' on proxy: trap returned falsish",
                         ));
@@ -1224,7 +1227,7 @@ fn json_internalize_apply(
                 vec![target_val, key_val, desc_val],
             ) {
                 Ok(Some(v)) => {
-                    if !to_boolean(&v) {
+                    if !interp.to_boolean_val(&v) {
                         return Err(interp.create_type_error(
                             "'defineProperty' on proxy: trap returned falsish",
                         ));
@@ -1453,8 +1456,9 @@ pub(crate) fn days_in_year(y: f64) -> f64 {
 
 pub(crate) fn day_from_year(y: f64) -> f64 {
     let y = y as i64;
-    365.0 * (y - 1970) as f64 + ((y - 1969) / 4) as f64 - ((y - 1901) / 100) as f64
-        + ((y - 1601) / 400) as f64
+    365.0 * (y - 1970) as f64 + (y - 1969).div_euclid(4) as f64
+        - (y - 1901).div_euclid(100) as f64
+        + (y - 1601).div_euclid(400) as f64
 }
 
 pub(crate) fn time_from_year(y: f64) -> f64 {
@@ -1465,8 +1469,10 @@ pub(crate) fn year_from_time(t: f64) -> f64 {
     if t.is_nan() || t.is_infinite() {
         return f64::NAN;
     }
-    let mut lo = (t / MS_PER_DAY / 366.0 + 1970.0).floor() as i64 - 1;
-    let mut hi = (t / MS_PER_DAY / 365.0 + 1970.0).ceil() as i64 + 1;
+    let a = (t / MS_PER_DAY / 366.0 + 1970.0).floor() as i64 - 1;
+    let b = (t / MS_PER_DAY / 365.0 + 1970.0).ceil() as i64 + 1;
+    let mut lo = a.min(b);
+    let mut hi = a.max(b);
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         if time_from_year(mid as f64) <= t {

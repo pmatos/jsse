@@ -77,8 +77,12 @@ impl<'a> Parser<'a> {
         &self,
         expr: &Expression,
         simple_only: bool,
+        allow_call: bool,
     ) -> Result<(), ParseError> {
         if !simple_only && matches!(expr, Expression::Array(_) | Expression::Object(_)) {
+            if self.last_expr_parenthesized {
+                return Err(self.error("Invalid left-hand side in assignment"));
+            }
             self.validate_destructuring_pattern(expr)?;
             return Ok(());
         }
@@ -89,6 +93,9 @@ impl<'a> Parser<'a> {
             {
                 return Err(self.error("Assignment to 'eval' or 'arguments' in strict mode"));
             }
+            return Ok(());
+        }
+        if allow_call && !self.strict && matches!(expr, Expression::Call(_, _)) {
             return Ok(());
         }
         Err(self.error("Invalid left-hand side in assignment"))
@@ -196,7 +203,11 @@ impl<'a> Parser<'a> {
 
         if let Some(op) = op {
             let simple_only = op != AssignOp::Assign;
-            self.validate_assignment_target(&left, simple_only)?;
+            let is_logical = matches!(
+                op,
+                AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign
+            );
+            self.validate_assignment_target(&left, simple_only, !is_logical)?;
             self.advance()?;
             let right = self.parse_assignment_expression()?;
             Ok(Expression::Assign(op, Box::new(left), Box::new(right)))
@@ -484,7 +495,7 @@ impl<'a> Parser<'a> {
                 };
                 self.advance()?;
                 let expr = self.parse_unary()?;
-                self.validate_assignment_target(&expr, true)?;
+                self.validate_assignment_target(&expr, true, true)?;
                 Ok(Expression::Update(op, true, Box::new(expr)))
             }
             Token::Keyword(Keyword::Await)
@@ -512,7 +523,7 @@ impl<'a> Parser<'a> {
                 _ => None,
             };
             if let Some(op) = op {
-                self.validate_assignment_target(&expr, true)?;
+                self.validate_assignment_target(&expr, true, true)?;
                 self.advance()?;
                 return Ok(Expression::Update(op, false, Box::new(expr)));
             }
@@ -725,6 +736,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_primary_expression(&mut self) -> Result<Expression, ParseError> {
+        self.last_expr_parenthesized = false;
         match &self.current {
             Token::Keyword(Keyword::This) => {
                 self.advance()?;
@@ -1070,6 +1082,13 @@ impl<'a> Parser<'a> {
                     self.no_in = saved_no_in;
                     if self.current == Token::Arrow && !self.prev_line_terminator {
                         self.advance()?;
+                        if self.in_async {
+                            for e in &exprs {
+                                if Self::expr_contains_await_expression(e) {
+                                    return Err(self.error("Await expression is not allowed in formal parameters of an async function"));
+                                }
+                            }
+                        }
                         let params: Vec<Pattern> = exprs
                             .into_iter()
                             .map(expr_to_pattern)
@@ -1097,6 +1116,7 @@ impl<'a> Parser<'a> {
                         if Self::has_cover_initialized_name(&e) {
                             return Err(self.error("Invalid shorthand property initializer"));
                         }
+                        self.last_expr_parenthesized = true;
                         return Ok(e);
                     }
                     for e in &exprs {
@@ -1650,6 +1670,9 @@ impl<'a> Parser<'a> {
             // async(...rest) =>
             self.advance()?;
             let pat = self.parse_binding_pattern()?;
+            if Self::pattern_contains_await_identifier(&pat) {
+                return Err(self.error("'await' is not allowed in async arrow formal parameters"));
+            }
             let params = vec![Pattern::Rest(Box::new(pat))];
             self.eat(&Token::RightParen)?;
             self.eat(&Token::Arrow)?;
@@ -1688,6 +1711,13 @@ impl<'a> Parser<'a> {
             self.eat(&Token::RightParen)?;
             if self.current == Token::Arrow && !self.prev_line_terminator {
                 self.advance()?;
+                for e in &exprs {
+                    if Self::expr_contains_await_identifier(e) {
+                        return Err(
+                            self.error("'await' is not allowed in async arrow formal parameters")
+                        );
+                    }
+                }
                 let params: Vec<Pattern> = exprs
                     .into_iter()
                     .map(expr_to_pattern)
