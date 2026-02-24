@@ -39,3 +39,36 @@ jobs:
 
       - name: Run test262
         run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Generate coverage
+        run: |
+          source <(cargo llvm-cov show-env --export-prefix)
+          cargo llvm-cov clean --workspace
+          cargo build --release
+          cargo test
+          uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262
+          cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: pmatos/jsse
