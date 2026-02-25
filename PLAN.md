@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,114 (48,066 files, dual strict/non-strict per spec)
-**Current pass rate:** 88,600 / 92,114 (96.19%)
+**Current pass rate:** 88,702 / 92,114 (96.30%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -181,6 +181,8 @@ These features block significant numbers of tests:
 
 70. ~~**Array holes / sparse array prototype chain traversal**~~ — ✅ Done (+126 new passes, 96.05% → 96.19%). Four targeted fixes to correctly handle JavaScript "holes" in sparse arrays (created via `[0,,2]` literals or `delete arr[i]`). Root cause: `array_elements: Vec<JsValue>` stored holes and actual `undefined` values indistinguishably as `JsValue::Undefined`, causing holes to not fall through to the prototype chain. Fix strategy: since `set_property_value` always writes to both `properties` and `array_elements`, a `JsValue::Undefined` in `array_elements` WITHOUT a corresponding `properties` entry is always a hole. Changes: (1) `get_property` — skip `array_elements` hit when value is `Undefined` (let prototype chain handle it); (2) `get_property_descriptor` — same hole skip; (3) `get_own_property_full` — same hole skip (returns `None` for holes, not a descriptor); (4) delete operator (`eval.rs`) — after removing from `properties`, also set `array_elements[idx] = JsValue::Undefined` to clear the old cached value. Tests fixed: `[0,,2][1]` → prototype lookup, `delete arr[i]` → hole → prototype lookup, `hasOwnProperty(hole)` → false, `key in hole` → false, `for..in` skips holes, `Object.keys` omits holes, array methods (`map`/`forEach`/`filter`) skip holes. Array.prototype: improved pass rate.
 
+71. ~~**IteratorClose in array destructuring assignment**~~ — ✅ Done (+102 new passes, 96.19% → 96.30%). Two spec compliance fixes for `§13.15.5.2` IteratorClose in array destructuring assignment. Bug 1 (LHS eval order, thrw-close/lref-err): Per spec, `AssignmentElement` step 1 evaluates the LHS ref BEFORE stepping the iterator. Old code stepped the iterator first, so when LHS throws during evaluation, `done=true` and IteratorClose was skipped. Fix: added `eval_member_lhs_ref` helper that pre-evaluates member expression base+key before iterator steps; extracted `set_object_with_key` from `set_member_property` to allow split evaluate-then-assign. Bug 2 (rtrn-close, generators): When a generator yields mid-destructuring (via `InlineYield`) with `done=false`, calling `generator.return()` must call `IteratorClose` on the open iterator. Fix: added `pending_iter_close: Vec<JsValue>` field to track open iterators when yielding, saved to `generator_inline_iters: HashMap<u64, Vec<JsValue>>` (keyed by generator object ID) in `generator_next_state_machine` InlineYield path, and closed those iterators in `generator_return_state_machine`. Also fixed a Rust temporary borrow bug: `env.borrow().strict` in function-call argument position keeps the borrow alive for the call's duration; fixed by extracting to a `let strict = env.borrow().strict` binding first. assignment/dstr: 545→595/640 (93%).
+
 ---
 
 ## Cross-Cutting Concerns
@@ -253,5 +255,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,600 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,702 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |

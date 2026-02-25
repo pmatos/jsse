@@ -3338,6 +3338,167 @@ impl Interpreter {
         }
     }
 
+    /// Set a property on an already-evaluated object+key pair (strict controls TypeError on failure).
+    fn set_object_with_key(
+        &mut self,
+        obj_val: JsValue,
+        key: &str,
+        val: JsValue,
+        strict: bool,
+    ) -> Result<(), JsValue> {
+        // Auto-box primitives for property access
+        let obj_val = if !matches!(obj_val, JsValue::Object(_)) {
+            match self.to_object(&obj_val) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Ok(()),
+            }
+        } else {
+            obj_val
+        };
+
+        if let JsValue::Object(ref o) = obj_val
+            && let Some(obj) = self.get_object(o.id)
+        {
+            // Proxy set trap
+            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                let receiver = obj_val.clone();
+                match self.proxy_set(o.id, key, val, &receiver) {
+                    Ok(success) => {
+                        if !success && strict {
+                            return Err(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}'"
+                            )));
+                        }
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            // Module namespace exotic: [[Set]] always returns false
+            if obj.borrow().module_namespace.is_some() {
+                if strict {
+                    return Err(self.create_type_error(&format!(
+                        "Cannot assign to read only property '{key}' of module namespace"
+                    )));
+                }
+                return Ok(());
+            }
+            // Check for setter
+            let desc = obj.borrow().get_property_descriptor(key);
+            if let Some(ref d) = desc
+                && let Some(ref setter) = d.set
+                && !matches!(setter, JsValue::Undefined)
+            {
+                let setter = setter.clone();
+                let this = obj_val.clone();
+                return match self.call_function(&setter, &this, &[val]) {
+                    Completion::Normal(_) => Ok(()),
+                    Completion::Throw(e) => Err(e),
+                    _ => Ok(()),
+                };
+            }
+            if desc
+                .as_ref()
+                .map(|d| d.is_accessor_descriptor())
+                .unwrap_or(false)
+            {
+                if strict {
+                    return Err(self.create_type_error(&format!(
+                        "Cannot set property '{key}' which has only a getter"
+                    )));
+                }
+                return Ok(());
+            }
+            // TypedArray [[Set]]
+            let is_ta = obj.borrow().typed_array_info.is_some();
+            if is_ta && let Some(index) = canonical_numeric_index_string(key) {
+                let is_bigint = obj
+                    .borrow()
+                    .typed_array_info
+                    .as_ref()
+                    .map(|ta| ta.kind.is_bigint())
+                    .unwrap_or(false);
+                let num_val = if is_bigint {
+                    self.to_bigint_value(&val)?
+                } else {
+                    JsValue::Number(self.to_number_value(&val)?)
+                };
+                let obj_ref = obj.borrow();
+                let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                if is_valid_integer_index(ta, index) {
+                    let ta_clone = ta.clone();
+                    drop(obj_ref);
+                    typed_array_set_index(&ta_clone, index as usize, &num_val);
+                }
+                return Ok(());
+            }
+            // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
+            if !obj.borrow().has_own_property(key) {
+                let mut proto_opt = obj.borrow().prototype.clone();
+                while let Some(proto_rc) = proto_opt {
+                    let proto_id = proto_rc.borrow().id.unwrap();
+                    if self.has_proxy_in_prototype_chain(proto_id) {
+                        let receiver = obj_val.clone();
+                        match self.proxy_set(proto_id, key, val, &receiver) {
+                            Ok(success) => {
+                                if !success && strict {
+                                    return Err(self.create_type_error(&format!(
+                                        "Cannot assign to read only property '{key}'"
+                                    )));
+                                }
+                                return Ok(());
+                            }
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    let inherited = proto_rc.borrow().get_property_descriptor(key);
+                    if let Some(ref inherited_desc) = inherited {
+                        if inherited_desc.is_data_descriptor() {
+                            if inherited_desc.writable == Some(false) {
+                                if strict {
+                                    return Err(self.create_type_error(&format!(
+                                        "Cannot assign to read only property '{key}'"
+                                    )));
+                                }
+                                return Ok(());
+                            }
+                            break;
+                        }
+                        if inherited_desc.is_accessor_descriptor() {
+                            if let Some(ref setter) = inherited_desc.set
+                                && !matches!(setter, JsValue::Undefined)
+                            {
+                                let setter = setter.clone();
+                                let this = obj_val.clone();
+                                return match self.call_function(&setter, &this, &[val]) {
+                                    Completion::Normal(_) => Ok(()),
+                                    Completion::Throw(e) => Err(e),
+                                    _ => Ok(()),
+                                };
+                            }
+                            if strict {
+                                return Err(self.create_type_error(&format!(
+                                    "Cannot set property '{key}' which has only a getter"
+                                )));
+                            }
+                            return Ok(());
+                        }
+                        break;
+                    }
+                    proto_opt = proto_rc.borrow().prototype.clone();
+                }
+            }
+            let success = obj.borrow_mut().set_property_value(key, val);
+            if !success && strict {
+                return Err(
+                    self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn set_member_property(
         &mut self,
         obj_expr: &Expression,
@@ -3408,157 +3569,8 @@ impl Interpreter {
             MemberProperty::Private(_) => unreachable!(),
         };
 
-        // Auto-box primitives for property access
-        let obj_val = if !matches!(obj_val, JsValue::Object(_)) {
-            match self.to_object(&obj_val) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => return Ok(()),
-            }
-        } else {
-            obj_val
-        };
-
-        if let JsValue::Object(ref o) = obj_val
-            && let Some(obj) = self.get_object(o.id)
-        {
-            // Proxy set trap
-            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
-                let receiver = obj_val.clone();
-                match self.proxy_set(o.id, &key, val, &receiver) {
-                    Ok(success) => {
-                        if !success && env.borrow().strict {
-                            return Err(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}'"
-                            )));
-                        }
-                        return Ok(());
-                    }
-                    Err(e) => return Err(e),
-                }
-            }
-            // Module namespace exotic: [[Set]] always returns false
-            if obj.borrow().module_namespace.is_some() {
-                if env.borrow().strict {
-                    return Err(self.create_type_error(&format!(
-                        "Cannot assign to read only property '{key}' of module namespace"
-                    )));
-                }
-                return Ok(());
-            }
-            // Check for setter
-            let desc = obj.borrow().get_property_descriptor(&key);
-            if let Some(ref d) = desc
-                && let Some(ref setter) = d.set
-                && !matches!(setter, JsValue::Undefined)
-            {
-                let setter = setter.clone();
-                let this = obj_val.clone();
-                return match self.call_function(&setter, &this, &[val]) {
-                    Completion::Normal(_) => Ok(()),
-                    Completion::Throw(e) => Err(e),
-                    _ => Ok(()),
-                };
-            }
-            if desc
-                .as_ref()
-                .map(|d| d.is_accessor_descriptor())
-                .unwrap_or(false)
-            {
-                if env.borrow().strict {
-                    return Err(self.create_type_error(&format!(
-                        "Cannot set property '{key}' which has only a getter"
-                    )));
-                }
-                return Ok(());
-            }
-            // TypedArray [[Set]]
-            let is_ta = obj.borrow().typed_array_info.is_some();
-            if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
-                let is_bigint = obj
-                    .borrow()
-                    .typed_array_info
-                    .as_ref()
-                    .map(|ta| ta.kind.is_bigint())
-                    .unwrap_or(false);
-                let num_val = if is_bigint {
-                    self.to_bigint_value(&val)?
-                } else {
-                    JsValue::Number(self.to_number_value(&val)?)
-                };
-                let obj_ref = obj.borrow();
-                let ta = obj_ref.typed_array_info.as_ref().unwrap();
-                if is_valid_integer_index(ta, index) {
-                    let ta_clone = ta.clone();
-                    drop(obj_ref);
-                    typed_array_set_index(&ta_clone, index as usize, &num_val);
-                }
-                return Ok(());
-            }
-            // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
-            if !obj.borrow().has_own_property(&key) {
-                let mut proto_opt = obj.borrow().prototype.clone();
-                while let Some(proto_rc) = proto_opt {
-                    let proto_id = proto_rc.borrow().id.unwrap();
-                    if self.has_proxy_in_prototype_chain(proto_id) {
-                        let receiver = obj_val.clone();
-                        match self.proxy_set(proto_id, &key, val, &receiver) {
-                            Ok(success) => {
-                                if !success && env.borrow().strict {
-                                    return Err(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Ok(());
-                            }
-                            Err(e) => return Err(e),
-                        }
-                    }
-                    let inherited = proto_rc.borrow().get_property_descriptor(&key);
-                    if let Some(ref inherited_desc) = inherited {
-                        if inherited_desc.is_data_descriptor() {
-                            if inherited_desc.writable == Some(false) {
-                                if env.borrow().strict {
-                                    return Err(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Ok(());
-                            }
-                            break;
-                        }
-                        if inherited_desc.is_accessor_descriptor() {
-                            if let Some(ref setter) = inherited_desc.set
-                                && !matches!(setter, JsValue::Undefined)
-                            {
-                                let setter = setter.clone();
-                                let this = obj_val.clone();
-                                return match self.call_function(&setter, &this, &[val]) {
-                                    Completion::Normal(_) => Ok(()),
-                                    Completion::Throw(e) => Err(e),
-                                    _ => Ok(()),
-                                };
-                            }
-                            if env.borrow().strict {
-                                return Err(self.create_type_error(&format!(
-                                    "Cannot set property '{key}' which has only a getter"
-                                )));
-                            }
-                            return Ok(());
-                        }
-                        break;
-                    }
-                    proto_opt = proto_rc.borrow().prototype.clone();
-                }
-            }
-            let success = obj.borrow_mut().set_property_value(&key, val);
-            if !success && env.borrow().strict {
-                return Err(
-                    self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
-                );
-            }
-        }
-        Ok(())
+        let strict = env.borrow().strict;
+        self.set_object_with_key(obj_val, &key, val, strict)
     }
     pub(crate) fn assign_to_for_pattern(
         &mut self,
@@ -3680,6 +3692,55 @@ impl Interpreter {
         result
     }
 
+    /// Evaluate a member expression as an LHS reference (base object + key string).
+    /// Returns Ok(Some((base, key))) for member expressions,
+    /// Ok(None) for non-member expressions (handled lazily),
+    /// Err(e) if evaluation throws.
+    /// Sets *yield_val if a yield is encountered.
+    fn eval_member_lhs_ref(
+        &mut self,
+        target: &Expression,
+        env: &EnvRef,
+        yield_val: &mut Option<JsValue>,
+    ) -> Result<Option<(JsValue, String)>, JsValue> {
+        let Expression::Member(obj_expr, prop) = target else {
+            return Ok(None);
+        };
+        // Skip private members — they can't throw during key evaluation
+        if matches!(prop, MemberProperty::Private(_)) {
+            return Ok(None);
+        }
+
+        let base = match self.eval_expr(obj_expr, env) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            Completion::Yield(v) => {
+                *yield_val = Some(v);
+                return Ok(None);
+            }
+            _ => return Ok(None),
+        };
+
+        let key = match prop {
+            MemberProperty::Dot(name) => name.clone(),
+            MemberProperty::Computed(key_expr) => {
+                let kv = match self.eval_expr(key_expr, env) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    Completion::Yield(v) => {
+                        *yield_val = Some(v);
+                        return Ok(None);
+                    }
+                    _ => return Ok(None),
+                };
+                self.to_property_key(&kv)?
+            }
+            MemberProperty::Private(_) => unreachable!(),
+        };
+
+        Ok(Some((base, key)))
+    }
+
     fn destructure_array_assignment(
         &mut self,
         elements: &[Option<Expression>],
@@ -3714,7 +3775,19 @@ impl Interpreter {
                     }
                 }
                 Some(Expression::Spread(inner)) => {
-                    // Rest element: collect remaining into array
+                    // §13.15.5.4 AssignmentRestElement: evaluate LHS ref BEFORE collecting
+                    let precomp = match self.eval_member_lhs_ref(inner, env, &mut yield_val) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error = Some(e);
+                            break;
+                        }
+                    };
+                    if yield_val.is_some() {
+                        break;
+                    }
+
+                    // Collect remaining iterator values into rest array
                     let mut rest = Vec::new();
                     if !done {
                         loop {
@@ -3741,15 +3814,23 @@ impl Interpreter {
                     }
                     if error.is_none() {
                         let arr = self.create_array(rest);
-                        match self.put_value_to_target(inner, arr, env) {
-                            Completion::Normal(_) | Completion::Empty => {}
-                            Completion::Throw(e) => {
-                                error = Some(e);
+                        match precomp {
+                            Some((base, key)) => {
+                                let strict = env.borrow().strict;
+                                if let Err(e) = self.set_object_with_key(base, &key, arr, strict) {
+                                    error = Some(e);
+                                }
                             }
-                            Completion::Yield(v) => {
-                                yield_val = Some(v);
-                            }
-                            _ => {}
+                            None => match self.put_value_to_target(inner, arr, env) {
+                                Completion::Normal(_) | Completion::Empty => {}
+                                Completion::Throw(e) => {
+                                    error = Some(e);
+                                }
+                                Completion::Yield(v) => {
+                                    yield_val = Some(v);
+                                }
+                                _ => {}
+                            },
                         }
                     }
                     break;
@@ -3762,6 +3843,18 @@ impl Interpreter {
                         } else {
                             (expr, None)
                         };
+
+                    // §13.15.5.4: evaluate LHS reference BEFORE stepping the iterator
+                    let precomp = match self.eval_member_lhs_ref(target, env, &mut yield_val) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            error = Some(e);
+                            break;
+                        }
+                    };
+                    if yield_val.is_some() {
+                        break;
+                    }
 
                     let item = if done {
                         JsValue::Undefined
@@ -3800,7 +3893,6 @@ impl Interpreter {
                                 }
                                 Completion::Throw(e) => {
                                     error = Some(e);
-
                                     break;
                                 }
                                 Completion::Yield(v) => {
@@ -3816,17 +3908,26 @@ impl Interpreter {
                         item
                     };
 
-                    match self.put_value_to_target(target, val, env) {
-                        Completion::Normal(_) | Completion::Empty => {}
-                        Completion::Throw(e) => {
-                            error = Some(e);
-                            break;
+                    match precomp {
+                        Some((base, key)) => {
+                            let strict = env.borrow().strict;
+                            if let Err(e) = self.set_object_with_key(base, &key, val, strict) {
+                                error = Some(e);
+                                break;
+                            }
                         }
-                        Completion::Yield(v) => {
-                            yield_val = Some(v);
-                            break;
-                        }
-                        _ => {}
+                        None => match self.put_value_to_target(target, val, env) {
+                            Completion::Normal(_) | Completion::Empty => {}
+                            Completion::Throw(e) => {
+                                error = Some(e);
+                                break;
+                            }
+                            Completion::Yield(v) => {
+                                yield_val = Some(v);
+                                break;
+                            }
+                            _ => {}
+                        },
                     }
                 }
             }
@@ -3841,6 +3942,10 @@ impl Interpreter {
         };
 
         if let Some(yv) = yield_val {
+            // §13.15.5.2: if iterator not done, track it for IteratorClose when generator returns
+            if !done {
+                self.pending_iter_close.push(iterator.clone());
+            }
             unroot(self);
             return Completion::Yield(yv);
         }
@@ -4659,6 +4764,11 @@ impl Interpreter {
             if let Completion::Yield(yield_val) = stmt_result {
                 self.destructuring_yield = false;
                 let yield_count = ctx_after.map(|c| c.current_yield).unwrap_or(1);
+                // Save any iterators that need IteratorClose if generator.return() is called
+                let pending = std::mem::take(&mut self.pending_iter_close);
+                if !pending.is_empty() {
+                    self.generator_inline_iters.insert(o.id, pending);
+                }
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
                     state_machine: state_machine.clone(),
                     func_env: func_env.clone(),
@@ -4704,6 +4814,7 @@ impl Interpreter {
                     pending_exception: None,
                     pending_return: None,
                 });
+                self.generator_inline_iters.remove(&o.id);
                 return Completion::Throw(e);
             }
             if let Completion::Return(v) = stmt_result {
@@ -4719,6 +4830,7 @@ impl Interpreter {
                     pending_exception: None,
                     pending_return: None,
                 });
+                self.generator_inline_iters.remove(&o.id);
                 return Completion::Normal(self.create_iter_result_object(v, true));
             }
 
@@ -5046,6 +5158,7 @@ impl Interpreter {
                                         pending_exception: None,
                                         pending_return: None,
                                     });
+                                self.generator_inline_iters.remove(&o.id);
                                 return Completion::Throw(err);
                             }
                             other => return other,
@@ -5067,6 +5180,7 @@ impl Interpreter {
                             pending_exception: None,
                             pending_return: None,
                         });
+                    self.generator_inline_iters.remove(&o.id);
                     return Completion::Normal(self.create_iter_result_object(ret_val, true));
                 }
 
@@ -5097,6 +5211,7 @@ impl Interpreter {
                             pending_exception: None,
                             pending_return: None,
                         });
+                    self.generator_inline_iters.remove(&o.id);
                     return Completion::Throw(throw_val);
                 }
 
@@ -5444,6 +5559,14 @@ impl Interpreter {
                 pending_exception: None,
                 pending_return: None,
             });
+            // Close any iterators that were open when generator was suspended via InlineYield
+            if let Some(iters) = self.generator_inline_iters.remove(&o.id) {
+                for iter in iters {
+                    if let Err(e) = self.iterator_close_result(&iter) {
+                        return Completion::Throw(e);
+                    }
+                }
+            }
         }
         Completion::Normal(self.create_iter_result_object(value, true))
     }

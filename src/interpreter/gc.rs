@@ -49,6 +49,15 @@ impl Interpreter {
         for val in &self.microtask_roots {
             Self::collect_value_roots(val, &mut worklist);
         }
+        // Iterators pending close when a generator yields during destructuring
+        for val in &self.pending_iter_close {
+            Self::collect_value_roots(val, &mut worklist);
+        }
+        for iters in self.generator_inline_iters.values() {
+            for val in iters {
+                Self::collect_value_roots(val, &mut worklist);
+            }
+        }
 
         // Mark phase (BFS)
         while let Some(id) = worklist.pop() {
