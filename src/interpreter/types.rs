@@ -1365,6 +1365,7 @@ impl JsObjectData {
         if let Some(ref elems) = self.array_elements
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
+            && !matches!(elems[idx], JsValue::Undefined)
         {
             return elems[idx].clone();
         }
@@ -1399,6 +1400,7 @@ impl JsObjectData {
         if let Some(ref elems) = self.array_elements
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
+            && !matches!(elems[idx], JsValue::Undefined)
         {
             return Some(PropertyDescriptor {
                 value: Some(elems[idx].clone()),
@@ -1475,6 +1477,7 @@ impl JsObjectData {
         if let Some(ref elems) = self.array_elements
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
+            && !matches!(elems[idx], JsValue::Undefined)
         {
             return Some(PropertyDescriptor {
                 value: Some(elems[idx].clone()),

@@ -579,6 +579,13 @@ impl Interpreter {
                         if let Some(ref mut map) = obj_mut.parameter_map {
                             map.remove(&key);
                         }
+                        if let Ok(idx) = key.parse::<usize>() {
+                            if let Some(ref mut elems) = obj_mut.array_elements {
+                                if idx < elems.len() {
+                                    elems[idx] = JsValue::Undefined;
+                                }
+                            }
+                        }
                     }
                     Completion::Normal(JsValue::Boolean(true))
                 }

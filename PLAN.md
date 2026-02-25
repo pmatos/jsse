@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,114 (48,066 files, dual strict/non-strict per spec)
-**Current pass rate:** 88,474 / 92,114 (96.05%)
+**Current pass rate:** 88,600 / 92,114 (96.19%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -179,6 +179,8 @@ These features block significant numbers of tests:
 
 69. ~~**`using`/`await-using` (Explicit Resource Management) bug fixes**~~ — ✅ Done (+58 new passes, 95.99% → 96.05%). Five targeted bug fixes: (1) Parser: `parse_try_statement` now sets `in_block_or_function=true` for try/catch/finally bodies so `using` declarations are recognized inside try blocks. (2) `add_disposable_resource`: replaced raw `get_property` with getter-aware `get_object_property` for `Symbol.dispose` lookup — fixes objects with `get [Symbol.dispose]()` accessors. (3) `exec_for`: restructured with Rust labeled block to call `dispose_resources` after all loop exit paths (break/normal/throw). (4) `call_function`: added `dispose_resources` call after `exec_statements` for sync function body disposal. (5) `call_async_function`: added `dispose_resources` call after `exec_statements` for async function body disposal. Parser: `for (using x = init; test; update)` regular for loop support, `for (await using x = init; test; update)` support, `is_using_declaration()` extended to recognize `await`/`yield`/`let`/`static`/`async` keyword tokens. Class static blocks: set `in_block_or_function=true`. `check_for_in_of_early_errors` extended to reject `let` binding in `using`/`await-using` declarations. using/await-using: 246→300/336 (89.3%).
 
+70. ~~**Array holes / sparse array prototype chain traversal**~~ — ✅ Done (+126 new passes, 96.05% → 96.19%). Four targeted fixes to correctly handle JavaScript "holes" in sparse arrays (created via `[0,,2]` literals or `delete arr[i]`). Root cause: `array_elements: Vec<JsValue>` stored holes and actual `undefined` values indistinguishably as `JsValue::Undefined`, causing holes to not fall through to the prototype chain. Fix strategy: since `set_property_value` always writes to both `properties` and `array_elements`, a `JsValue::Undefined` in `array_elements` WITHOUT a corresponding `properties` entry is always a hole. Changes: (1) `get_property` — skip `array_elements` hit when value is `Undefined` (let prototype chain handle it); (2) `get_property_descriptor` — same hole skip; (3) `get_own_property_full` — same hole skip (returns `None` for holes, not a descriptor); (4) delete operator (`eval.rs`) — after removing from `properties`, also set `array_elements[idx] = JsValue::Undefined` to clear the old cached value. Tests fixed: `[0,,2][1]` → prototype lookup, `delete arr[i]` → hole → prototype lookup, `hasOwnProperty(hole)` → false, `key in hole` → false, `for..in` skips holes, `Object.keys` omits holes, array methods (`map`/`forEach`/`filter`) skip holes. Array.prototype: improved pass rate.
+
 ---
 
 ## Cross-Cutting Concerns
@@ -251,5 +253,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,474 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,600 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |
