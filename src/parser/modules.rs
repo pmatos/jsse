@@ -266,7 +266,7 @@ impl<'a> Parser<'a> {
         };
 
         let params = self.parse_formal_parameters()?;
-        let (body, _) = self.parse_function_body_with_context(is_generator, false)?;
+        let (body, body_is_strict) = self.parse_function_body_with_context(is_generator, false)?;
 
         let source_text = Some(self.source_since(start));
 
@@ -277,6 +277,7 @@ impl<'a> Parser<'a> {
             is_async: false,
             is_generator,
             source_text,
+            body_is_strict,
         })
     }
 
@@ -293,7 +294,7 @@ impl<'a> Parser<'a> {
         };
 
         let params = self.parse_formal_parameters()?;
-        let (body, _) = self.parse_function_body_with_context(is_generator, true)?;
+        let (body, body_is_strict) = self.parse_function_body_with_context(is_generator, true)?;
 
         let source_text = Some(self.source_since(start));
 
@@ -304,6 +305,7 @@ impl<'a> Parser<'a> {
             is_async: true,
             is_generator,
             source_text,
+            body_is_strict,
         })
     }
 

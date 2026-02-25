@@ -813,6 +813,7 @@ impl<'a> Parser<'a> {
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut body = Vec::new();
         let mut in_directive_prologue = true;
+        let mut body_is_strict = false;
 
         while self.current != Token::Eof {
             let stmt = self.parse_statement_or_declaration()?;
@@ -821,6 +822,7 @@ impl<'a> Parser<'a> {
                 if let Some(directive) = self.is_directive_prologue(&stmt) {
                     if directive == "use strict" {
                         self.set_strict(true);
+                        body_is_strict = true;
                     }
                 } else {
                     in_directive_prologue = false;
@@ -834,6 +836,7 @@ impl<'a> Parser<'a> {
             source_type: SourceType::Script,
             body,
             module_items: Vec::new(),
+            body_is_strict,
         })
     }
 
@@ -864,6 +867,7 @@ impl<'a> Parser<'a> {
             source_type: SourceType::Module,
             body: Vec::new(),
             module_items,
+            body_is_strict: true,
         })
     }
 

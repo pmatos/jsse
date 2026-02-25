@@ -2187,9 +2187,7 @@ impl Interpreter {
                 if let Some(Statement::Expression(Expression::Function(fe))) =
                     program.body.first()
                 {
-                    let is_strict = fe.body.first().is_some_and(|s| {
-                        matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
-                    });
+                    let is_strict = fe.body_is_strict;
                     let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
                     dynamic_fn_env.borrow_mut().strict = false;
                     let js_func = JsFunction::User {
@@ -2581,9 +2579,7 @@ impl Interpreter {
                     if let Some(Statement::Expression(Expression::Function(fe))) =
                         program.body.first()
                     {
-                        let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
-                        });
+                        let is_strict = fe.body_is_strict;
                         let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
@@ -2684,9 +2680,7 @@ impl Interpreter {
                     if let Some(Statement::Expression(Expression::Function(fe))) =
                         program.body.first()
                     {
-                        let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
-                        });
+                        let is_strict = fe.body_is_strict;
                         let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
@@ -2787,9 +2781,7 @@ impl Interpreter {
                     if let Some(Statement::Expression(Expression::Function(fe))) =
                         program.body.first()
                     {
-                        let is_strict = fe.body.first().is_some_and(|s| {
-                            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
-                        });
+                        let is_strict = fe.body_is_strict;
                         let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {

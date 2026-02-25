@@ -247,6 +247,7 @@ impl<'a> Parser<'a> {
             is_async,
             is_generator,
             source_text,
+            body_is_strict: body_strict,
         }))
     }
 
@@ -947,6 +948,7 @@ impl<'a> Parser<'a> {
             is_async,
             is_generator,
             source_text,
+            body_is_strict: body_strict,
         })
     }
 
@@ -1118,7 +1120,7 @@ impl<'a> Parser<'a> {
         &mut self,
         is_async: bool,
         params: &[Pattern],
-    ) -> Result<Vec<Statement>, ParseError> {
+    ) -> Result<(Vec<Statement>, bool), ParseError> {
         self.set_function_param_names(params);
         let (stmts, body_strict) = self.parse_arrow_function_body(is_async)?;
         if body_strict && !Self::is_simple_parameter_list(params) {
@@ -1126,6 +1128,6 @@ impl<'a> Parser<'a> {
                 "Illegal 'use strict' directive in function with non-simple parameter list",
             ));
         }
-        Ok(stmts)
+        Ok((stmts, body_strict))
     }
 }

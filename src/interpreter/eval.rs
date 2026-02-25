@@ -353,13 +353,14 @@ impl Interpreter {
                 } else {
                     env.clone()
                 };
+                let enclosing_strict = env.borrow().strict;
                 let func = JsFunction::User {
                     name: f.name.clone(),
                     params: f.params.clone(),
                     body: f.body.clone(),
                     closure: closure_env.clone(),
                     is_arrow: false,
-                    is_strict: Self::is_strict_mode_body(&f.body) || env.borrow().strict,
+                    is_strict: f.body_is_strict || enclosing_strict,
                     is_generator: f.is_generator,
                     is_async: f.is_async,
                     is_method: false,
@@ -372,6 +373,7 @@ impl Interpreter {
                 Completion::Normal(func_val)
             }
             Expression::ArrowFunction(af) => {
+                let enclosing_strict = env.borrow().strict;
                 let body_stmts = match &af.body {
                     ArrowBody::Block(stmts) => stmts.clone(),
                     ArrowBody::Expression(expr) => {
@@ -384,7 +386,7 @@ impl Interpreter {
                     body: body_stmts.clone(),
                     closure: env.clone(),
                     is_arrow: true,
-                    is_strict: Self::is_strict_mode_body(&body_stmts) || env.borrow().strict,
+                    is_strict: af.body_is_strict || enclosing_strict,
                     is_generator: false,
                     is_async: af.is_async,
                     is_method: false,
@@ -4422,6 +4424,7 @@ impl Interpreter {
             is_async: false,
         });
 
+        func_env.borrow_mut().strict = is_strict;
         self.call_stack_envs.push(func_env.clone());
         let result = self.exec_statements(&body, &func_env);
         self.call_stack_envs.pop();
@@ -4730,6 +4733,7 @@ impl Interpreter {
             }
         }
 
+        func_env.borrow_mut().strict = is_strict;
         let mut current_id = current_state_id;
         let mut current_try_stack = try_stack;
         let mut pending_exception: Option<JsValue> = stored_pending_exception;
@@ -6091,6 +6095,7 @@ impl Interpreter {
             }
         }
 
+        func_env.borrow_mut().strict = is_strict;
         let mut current_id = current_state_id;
         let mut current_try_stack = try_stack;
         let mut pending_exception: Option<JsValue> = stored_pending_exception;
@@ -6970,6 +6975,7 @@ impl Interpreter {
             is_async: true,
         });
 
+        func_env.borrow_mut().strict = is_strict;
         self.call_stack_envs.push(func_env.clone());
         let result = self.exec_statements(&body, &func_env);
         self.call_stack_envs.pop();
@@ -8091,6 +8097,7 @@ impl Interpreter {
                         } else {
                             func_env.clone()
                         };
+                        exec_env.borrow_mut().strict = is_strict;
                         self.call_stack_envs.push(exec_env.clone());
                         let result = self.exec_statements(&body, &exec_env);
                         self.call_stack_envs.pop();
@@ -8489,10 +8496,7 @@ impl Interpreter {
                 ));
             }
         }
-        let eval_code_strict = program.body.first().is_some_and(|s| {
-            matches!(s, Statement::Expression(Expression::Literal(Literal::String(s))) if utf16_eq(s, "use strict"))
-        });
-        let is_strict = (caller_strict && direct) || eval_code_strict;
+        let is_strict = (caller_strict && direct) || program.body_is_strict;
 
         // Determine varEnv and lexEnv per spec PerformEval / EvalDeclarationInstantiation
         let (var_env, lex_env) = if is_strict {
@@ -8790,13 +8794,14 @@ impl Interpreter {
 
         // Hoist function declarations to var_env
         for f in &functions_to_init {
+            let enclosing_strict = lex_env.borrow().strict;
             let func = JsFunction::User {
                 name: Some(f.name.clone()),
                 params: f.params.clone(),
                 body: f.body.clone(),
                 closure: lex_env.clone(),
                 is_arrow: false,
-                is_strict: Self::is_strict_mode_body(&f.body) || lex_env.borrow().strict,
+                is_strict: f.body_is_strict || enclosing_strict,
                 is_generator: f.is_generator,
                 is_async: f.is_async,
                 is_method: false,
@@ -11656,6 +11661,7 @@ impl Interpreter {
                     let block_env = Environment::new_function_scope(Some(class_env.clone()));
                     {
                         let mut be = block_env.borrow_mut();
+                        be.strict = true; // class bodies are always strict
                         be.bindings.insert(
                             "this".to_string(),
                             Binding {
@@ -12032,6 +12038,7 @@ impl Interpreter {
             }
         }
 
+        func_env.borrow_mut().strict = is_strict;
         let result = self.exec_statements(body, &func_env);
         let result = self.dispose_resources(&func_env, result);
         match result {

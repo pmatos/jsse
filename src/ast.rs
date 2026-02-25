@@ -12,6 +12,7 @@ pub struct Program {
     pub source_type: SourceType,
     pub body: Vec<Statement>,
     pub module_items: Vec<ModuleItem>,
+    pub body_is_strict: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -364,6 +365,7 @@ pub struct FunctionDecl {
     pub is_async: bool,
     pub is_generator: bool,
     pub source_text: Option<String>,
+    pub body_is_strict: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -374,6 +376,7 @@ pub struct FunctionExpr {
     pub is_async: bool,
     pub is_generator: bool,
     pub source_text: Option<String>,
+    pub body_is_strict: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -382,6 +385,7 @@ pub struct ArrowFunction {
     pub body: ArrowBody,
     pub is_async: bool,
     pub source_text: Option<String>,
+    pub body_is_strict: bool,
 }
 
 #[derive(Clone, Debug)]

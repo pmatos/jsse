@@ -888,7 +888,13 @@ impl Interpreter {
     pub fn run(&mut self, program: &Program) -> Completion {
         self.maybe_gc();
         let result = match program.source_type {
-            SourceType::Script => self.exec_statements(&program.body, &self.realm().global_env.clone()),
+            SourceType::Script => {
+                let global = self.realm().global_env.clone();
+                if program.body_is_strict {
+                    global.borrow_mut().strict = true;
+                }
+                self.exec_statements(&program.body, &global)
+            }
             SourceType::Module => self.run_module(program, None),
         };
         self.drain_microtasks();
@@ -901,7 +907,11 @@ impl Interpreter {
             SourceType::Script => {
                 let prev = self.current_module_path.take();
                 self.current_module_path = Some(path.to_path_buf());
-                let r = self.exec_statements(&program.body, &self.realm().global_env.clone());
+                let global = self.realm().global_env.clone();
+                if program.body_is_strict {
+                    global.borrow_mut().strict = true;
+                }
+                let r = self.exec_statements(&program.body, &global);
                 self.current_module_path = prev;
                 r
             }
@@ -1816,13 +1826,14 @@ impl Interpreter {
                 } else {
                     func.name.clone()
                 };
+                let enclosing_strict = env.borrow().strict;
                 let js_func = JsFunction::User {
                     name: Some(name),
                     params: func.params.clone(),
                     body: func.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
-                    is_strict: Self::is_strict_mode_body(&func.body) || env.borrow().strict,
+                    is_strict: func.body_is_strict || enclosing_strict,
                     is_generator: func.is_generator,
                     is_async: func.is_async,
                     is_method: false,

@@ -2,9 +2,6 @@ use super::*;
 
 impl Interpreter {
     pub(crate) fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
-        if Self::is_strict_mode_body(stmts) {
-            env.borrow_mut().strict = true;
-        }
         // Hoist var and function declarations
         let var_scope = Environment::find_var_scope(env);
         let is_global = var_scope.borrow().global_object.is_some();
@@ -236,13 +233,14 @@ impl Interpreter {
         } else {
             env.borrow_mut().declare(&f.name, BindingKind::Var);
         }
+        let enclosing_strict = env.borrow().strict;
         let func = JsFunction::User {
             name: Some(f.name.clone()),
             params: f.params.clone(),
             body: f.body.clone(),
             closure: env.clone(),
             is_arrow: false,
-            is_strict: Self::is_strict_mode_body(&f.body) || env.borrow().strict,
+            is_strict: f.body_is_strict || enclosing_strict,
             is_generator: f.is_generator,
             is_async: f.is_async,
             is_method: false,
@@ -1787,13 +1785,14 @@ impl Interpreter {
                     && !f.is_async
                 {
                     switch_env.borrow_mut().declare(&f.name, BindingKind::Var);
+                    let enclosing_strict = switch_env.borrow().strict;
                     let func = JsFunction::User {
                         name: Some(f.name.clone()),
                         params: f.params.clone(),
                         body: f.body.clone(),
                         closure: switch_env.clone(),
                         is_arrow: false,
-                        is_strict: Self::is_strict_mode_body(&f.body) || switch_env.borrow().strict,
+                        is_strict: f.body_is_strict || enclosing_strict,
                         is_generator: f.is_generator,
                         is_async: f.is_async,
                         is_method: false,
