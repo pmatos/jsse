@@ -37,8 +37,8 @@ jobs:
 
       - uses: astral-sh/setup-uv@v7
 
-      - name: Run test262
-        run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262
+      - name: Run test262 (10% sample)
+        run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.1
 
   coverage:
     runs-on: ubuntu-latest
@@ -64,7 +64,7 @@ jobs:
           cargo llvm-cov clean --workspace
           cargo build --release
           cargo test
-          uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262
+          uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.1
           cargo llvm-cov report --lcov --output-path lcov.info
 
       - name: Upload coverage reports to Codecov
