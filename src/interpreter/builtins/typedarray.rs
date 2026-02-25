@@ -1112,10 +1112,8 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.typed_array_info.is_some() {
-                        // Look for the stored buffer object reference
-                        let buf_val = obj_ref.get_property("__buffer__");
-                        if !matches!(buf_val, JsValue::Undefined) {
-                            return Completion::Normal(buf_val);
+                        if let Some(buf_id) = obj_ref.view_buffer_object_id {
+                            return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                         }
                     }
                 }
@@ -1337,7 +1335,11 @@ impl Interpreter {
                     let (ta, buf_val) = {
                         let obj_ref = obj.borrow();
                         if let Some(ref ta) = obj_ref.typed_array_info {
-                            (ta.clone(), obj_ref.get_property("__buffer__"))
+                            let bv = obj_ref
+                                .view_buffer_object_id
+                                .map(|id| JsValue::Object(JsObject { id }))
+                                .unwrap_or(JsValue::Undefined);
+                            (ta.clone(), bv)
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
@@ -3917,16 +3919,12 @@ impl Interpreter {
             ab.arraybuffer_detached = Some(detached);
         }
         let ab_id = ab_obj.borrow().id.unwrap();
-        let buf_val = JsValue::Object(JsObject { id: ab_id });
         let result = self.create_object();
         {
             let mut r = result.borrow_mut();
             r.class_name = exemplar_kind.name().to_string();
             r.prototype = proto;
-            r.insert_property(
-                "__buffer__".to_string(),
-                PropertyDescriptor::data(buf_val, false, false, false),
-            );
+            r.view_buffer_object_id = Some(ab_id);
             r.typed_array_info = Some(ta_info);
         }
         let id = result.borrow().id.unwrap();
@@ -3993,10 +3991,9 @@ impl Interpreter {
             let mut o = obj.borrow_mut();
             o.class_name = info.kind.name().to_string();
             o.prototype = proto;
-            o.insert_property(
-                "__buffer__".to_string(),
-                PropertyDescriptor::data(buf_val, false, false, false),
-            );
+            if let JsValue::Object(ref bobj) = buf_val {
+                o.view_buffer_object_id = Some(bobj.id);
+            }
             o.typed_array_info = Some(info);
         }
         obj
@@ -4013,10 +4010,9 @@ impl Interpreter {
             let mut o = obj.borrow_mut();
             o.class_name = info.kind.name().to_string();
             o.prototype = Some(proto.clone());
-            o.insert_property(
-                "__buffer__".to_string(),
-                PropertyDescriptor::data(buf_val, false, false, false),
-            );
+            if let JsValue::Object(ref bobj) = buf_val {
+                o.view_buffer_object_id = Some(bobj.id);
+            }
             o.typed_array_info = Some(info);
         }
         obj
@@ -4105,16 +4101,12 @@ impl Interpreter {
                         ab.arraybuffer_detached = Some(new_detached);
                     }
                     let ab_id = ab_obj.borrow().id.unwrap();
-                    let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let result = self.create_object();
                     {
                         let mut r = result.borrow_mut();
                         r.class_name = kind.name().to_string();
                         r.prototype = proto;
-                        r.insert_property(
-                            "__buffer__".to_string(),
-                            PropertyDescriptor::data(buf_val, false, false, false),
-                        );
+                        r.view_buffer_object_id = Some(ab_id);
                         r.typed_array_info = Some(ta);
                     }
                     let id = result.borrow().id.unwrap();
@@ -4228,8 +4220,10 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.data_view_info.is_some() {
-                        let buf_val = obj_ref.get_property("__buffer__");
-                        return Completion::Normal(buf_val);
+                        if let Some(buf_id) = obj_ref.view_buffer_object_id {
+                            return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
+                        }
+                        return Completion::Normal(JsValue::Undefined);
                     }
                 }
                 Completion::Throw(interp.create_type_error("not a DataView"))
@@ -4880,10 +4874,9 @@ impl Interpreter {
                         let mut r = result.borrow_mut();
                         r.class_name = "DataView".to_string();
                         r.prototype = Some(dv_proto_clone.clone());
-                        r.insert_property(
-                            "__buffer__".to_string(),
-                            PropertyDescriptor::data(buf_arg.clone(), false, false, false),
-                        );
+                        if let JsValue::Object(ref bobj) = buf_arg {
+                            r.view_buffer_object_id = Some(bobj.id);
+                        }
                         r.data_view_info = Some(dv_info);
                     }
                     let id = result.borrow().id.unwrap();

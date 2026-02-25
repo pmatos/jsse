@@ -365,14 +365,10 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.typed_array_info.is_some() {
-                        // Check the underlying buffer object
-                        let buf_val = obj_ref.get_property("__buffer__");
-                        if let JsValue::Object(bo) = &buf_val {
-                            if let Some(buf_obj) = interp.get_object(bo.id) {
-                                buf_obj.borrow().arraybuffer_is_shared
-                            } else {
-                                false
-                            }
+                        if let Some(buf_id) = obj_ref.view_buffer_object_id
+                            && let Some(buf_obj) = interp.get_object(buf_id)
+                        {
+                            buf_obj.borrow().arraybuffer_is_shared
                         } else {
                             false
                         }

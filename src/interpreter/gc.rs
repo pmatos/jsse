@@ -209,6 +209,11 @@ impl Interpreter {
                 }
             }
 
+            // Trace view_buffer_object_id (TypedArray / DataView backing buffer)
+            if let Some(buf_id) = obj.view_buffer_object_id {
+                worklist.push(buf_id);
+            }
+
             // Trace iterator state
             if let Some(ref state) = obj.iterator_state {
                 match state {

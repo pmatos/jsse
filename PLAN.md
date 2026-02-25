@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 92,114 (48,066 files, dual strict/non-strict per spec)
-**Current pass rate:** 88,702 / 92,114 (96.30%)
+**Current pass rate:** 88,722 / 92,114 (96.32%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -183,6 +183,8 @@ These features block significant numbers of tests:
 
 71. ~~**IteratorClose in array destructuring assignment**~~ — ✅ Done (+102 new passes, 96.19% → 96.30%). Two spec compliance fixes for `§13.15.5.2` IteratorClose in array destructuring assignment. Bug 1 (LHS eval order, thrw-close/lref-err): Per spec, `AssignmentElement` step 1 evaluates the LHS ref BEFORE stepping the iterator. Old code stepped the iterator first, so when LHS throws during evaluation, `done=true` and IteratorClose was skipped. Fix: added `eval_member_lhs_ref` helper that pre-evaluates member expression base+key before iterator steps; extracted `set_object_with_key` from `set_member_property` to allow split evaluate-then-assign. Bug 2 (rtrn-close, generators): When a generator yields mid-destructuring (via `InlineYield`) with `done=false`, calling `generator.return()` must call `IteratorClose` on the open iterator. Fix: added `pending_iter_close: Vec<JsValue>` field to track open iterators when yielding, saved to `generator_inline_iters: HashMap<u64, Vec<JsValue>>` (keyed by generator object ID) in `generator_next_state_machine` InlineYield path, and closed those iterators in `generator_return_state_machine`. Also fixed a Rust temporary borrow bug: `env.borrow().strict` in function-call argument position keeps the borrow alive for the call's duration; fixed by extracting to a `let strict = env.borrow().strict` binding first. assignment/dstr: 545→595/640 (93%).
 
+72. ~~**TypedArray `__buffer__` cleanup**~~ — ✅ Done (+20 new passes, 96.30% → 96.32%). TypedArray and DataView objects were storing their backing ArrayBuffer JS object as a regular (non-enumerable) property named `__buffer__` in `property_order`/`properties`. While `Object.keys` and `for-in` correctly excluded it, `Object.getOwnPropertyNames`, `Reflect.ownKeys`, `Object.getOwnPropertyDescriptor`, and `hasOwnProperty` incorrectly exposed it, violating the spec's `[[GetOwnProperty]]` and `[[OwnPropertyKeys]]` for TypedArrays. Fix: added `view_buffer_object_id: Option<u64>` field to `JsObjectData` to store the ArrayBuffer object ID without touching `property_order` or `properties`. Updated GC tracing in `gc.rs` to mark `view_buffer_object_id` as a root. Replaced all 5 `insert_property("__buffer__", ...)` sites (TypedArray constructor, `create_typed_array_object`, `create_typed_array_object_with_proto`, TypedArraySpeciesCreate, DataView constructor) and all 4 `get_property("__buffer__")` readers (TypedArray `.buffer` getter, `subarray`, DataView `.buffer` getter, Atomics shared-buffer check) with direct field access. TypedArray: 2,732/2,860 (95.5%).
+
 ---
 
 ## Cross-Cutting Concerns
@@ -255,5 +257,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,702 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,722 |
 | M10 | Full spec compliance | ~92,658 | ⬜ |
