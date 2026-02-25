@@ -649,15 +649,8 @@ impl Interpreter {
                                     );
                                 }
                                 if is_typed_array_out_of_bounds(ta) {
-                                    obj.borrow_mut().iterator_state =
-                                        Some(IteratorState::TypedArrayIterator {
-                                            typed_array_id,
-                                            index,
-                                            kind,
-                                            done: true,
-                                        });
-                                    return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                    return Completion::Throw(
+                                        interp.create_type_error("typed array is out of bounds"),
                                     );
                                 }
                                 let len = typed_array_length(ta);

@@ -1768,16 +1768,30 @@ impl Interpreter {
                 let text = s.to_rust_string();
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
-                    return Err(self.create_error(
-                        "SyntaxError",
-                        &format!("Cannot convert \"{}\" to a BigInt", text),
-                    ));
+                    return Ok(JsValue::BigInt(crate::types::JsBigInt {
+                        value: num_bigint::BigInt::from(0),
+                    }));
                 }
-                match trimmed.parse::<num_bigint::BigInt>() {
-                    Ok(n) => Ok(JsValue::BigInt(crate::types::JsBigInt { value: n })),
-                    Err(_) => Err(self.create_error(
+                let parsed = if let Some(hex) =
+                    trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X"))
+                {
+                    num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
+                } else if let Some(oct) =
+                    trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O"))
+                {
+                    num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
+                } else if let Some(bin) =
+                    trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B"))
+                {
+                    num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
+                } else {
+                    trimmed.parse::<num_bigint::BigInt>().ok()
+                };
+                match parsed {
+                    Some(n) => Ok(JsValue::BigInt(crate::types::JsBigInt { value: n })),
+                    None => Err(self.create_error(
                         "SyntaxError",
-                        &format!("Cannot convert \"{}\" to a BigInt", text),
+                        &format!("Cannot convert {} to a BigInt", text),
                     )),
                 }
             }
@@ -1970,6 +1984,11 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
+                if matches!(lprim, JsValue::Symbol(_)) || matches!(rprim, JsValue::Symbol(_)) {
+                    return Completion::Throw(
+                        self.create_type_error("Cannot convert a Symbol value to a string"),
+                    );
+                }
                 if is_string(&lprim) || is_string(&rprim) {
                     let mut code_units = js_value_to_code_units(&lprim);
                     code_units.extend(js_value_to_code_units(&rprim));
@@ -9649,7 +9668,7 @@ impl Interpreter {
         // Check if object is a proxy
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = self.symbol_key_to_jsvalue(key);
             let receiver = this_val.clone();
             match self.invoke_proxy_trap(obj_id, "get", vec![target_val.clone(), key_val, receiver])
             {
@@ -9800,7 +9819,7 @@ impl Interpreter {
     pub(crate) fn proxy_has_property(&mut self, obj_id: u64, key: &str) -> Result<bool, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = self.symbol_key_to_jsvalue(key);
             match self.invoke_proxy_trap(obj_id, "has", vec![target_val.clone(), key_val]) {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
@@ -9833,6 +9852,15 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // TypedArray §10.4.5.3 [[HasProperty]]: numeric indices handled by IsValidIntegerIndex only
+            {
+                let b = obj.borrow();
+                if b.typed_array_info.is_some()
+                    && let Some(index) = crate::interpreter::types::canonical_numeric_index_string(key)
+                {
+                    return Ok(is_valid_integer_index(b.typed_array_info.as_ref().unwrap(), index));
+                }
+            }
             if obj.borrow().has_own_property(key) {
                 return Ok(true);
             }
@@ -10088,7 +10116,7 @@ impl Interpreter {
     ) -> Result<bool, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = self.symbol_key_to_jsvalue(key);
             match self.invoke_proxy_trap(
                 obj_id,
                 "set",
@@ -10225,7 +10253,7 @@ impl Interpreter {
     ) -> Result<bool, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = self.symbol_key_to_jsvalue(key);
             match self.invoke_proxy_trap(
                 obj_id,
                 "deleteProperty",
@@ -10354,7 +10382,7 @@ impl Interpreter {
     ) -> Result<bool, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
-            let key_val = JsValue::String(JsString::from_str(&key));
+            let key_val = self.symbol_key_to_jsvalue(&key);
             match self.invoke_proxy_trap(
                 obj_id,
                 "defineProperty",
@@ -10444,7 +10472,7 @@ impl Interpreter {
     ) -> Result<JsValue, JsValue> {
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = self.symbol_key_to_jsvalue(key);
             match self.invoke_proxy_trap(
                 obj_id,
                 "getOwnPropertyDescriptor",

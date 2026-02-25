@@ -2,8 +2,8 @@
 
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
-**Total test262 scenarios:** 92,550 (48,286 files, dual strict/non-strict per spec)
-**Current pass rate:** 89,131 / 92,550 (96.31%)
+**Total test262 scenarios:** 92,788 (48,438 files, dual strict/non-strict per spec)
+**Current pass rate:** 89,423 / 92,788 (96.37%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -185,6 +185,8 @@ These features block significant numbers of tests:
 
 72. ~~**TypedArray `__buffer__` cleanup**~~ — ✅ Done (+20 new passes, 96.30% → 96.32%). TypedArray and DataView objects were storing their backing ArrayBuffer JS object as a regular (non-enumerable) property named `__buffer__` in `property_order`/`properties`. While `Object.keys` and `for-in` correctly excluded it, `Object.getOwnPropertyNames`, `Reflect.ownKeys`, `Object.getOwnPropertyDescriptor`, and `hasOwnProperty` incorrectly exposed it, violating the spec's `[[GetOwnProperty]]` and `[[OwnPropertyKeys]]` for TypedArrays. Fix: added `view_buffer_object_id: Option<u64>` field to `JsObjectData` to store the ArrayBuffer object ID without touching `property_order` or `properties`. Updated GC tracing in `gc.rs` to mark `view_buffer_object_id` as a root. Replaced all 5 `insert_property("__buffer__", ...)` sites (TypedArray constructor, `create_typed_array_object`, `create_typed_array_object_with_proto`, TypedArraySpeciesCreate, DataView constructor) and all 4 `get_property("__buffer__")` readers (TypedArray `.buffer` getter, `subarray`, DataView `.buffer` getter, Atomics shared-buffer check) with direct field access. TypedArray: 2,732/2,860 (95.5%).
 
+73. ~~**TypedArray RAB compliance + Proxy key type + Symbol+string TypeError**~~ — ✅ Done (+701 net new passes from 88,722 baseline, 96.32% → 96.37%). Four interrelated fixes: (1) TypedArray RAB full compliance: sort write-back OOB check (`is_valid_integer_index` before each element write), TypedArray iterator OOB throws TypeError instead of returning done=true, set() captures `target_len` before source length getter, set() uses `is_valid_integer_index` for mid-iteration writes, `typed_array_create` helper for spec-order `of`/`from` (construct first with len, then Set elements), `collect_iterable_or_arraylike` error propagation, generic constructor path in `construct_typed_array_from_this`. TypedArray: 2,858→2,864/2,864 (100.00%). (2) Proxy trap key type: `get_object_property`, `proxy_has_property`, `proxy_set`, `proxy_delete_property`, `proxy_define_own_property`, `proxy_get_own_property_descriptor` were passing property key to traps as a plain String even for Symbol keys. Fixed by using `symbol_key_to_jsvalue(key)` which reconstructs the actual JsValue::Symbol for well-known and user symbols. Proxy: 540→544/607 (89.6%). (3) Symbol implicit coercion TypeError: `BinaryOp::Add` was silently converting Symbols to their string representation (e.g. "Symbol(Symbol.iterator)") instead of throwing TypeError. Fixed by checking for Symbol operands before string concatenation. These are connected: test262's `throwingProxy` `get` trap throws `new Error('Called getter for ' + prop)` where `prop` is a Symbol key — fix (2) ensures `prop` is a Symbol, fix (3) ensures `string + Symbol` throws TypeError (not Error), which is why the test expects TypeError from `assert.throws(TypeError, () => SetNumOrBigInt(OOB_typed_array, throwingProxy))`. Files: `src/interpreter/eval.rs` (BinaryOp::Add Symbol check, all 5 proxy trap key fixes), `src/interpreter/builtins/typedarray.rs` (RAB fixes), `src/interpreter/builtins/iterators.rs` (OOB TypeError).
+
 ---
 
 ## Cross-Cutting Concerns
@@ -232,11 +234,11 @@ These are tracked across all phases:
 | `built-ins/Object` | 6,802 | 6,565 (96.5%) |
 | `built-ins/Array` | 6,111 | 5,874 (96.1%) |
 | `built-ins/RegExp` | 3,756 | 3,682 (98.0%) |
-| `built-ins/TypedArray` | 2,860 | 2,732 (95.5%) |
+| `built-ins/TypedArray` | 2,864 | 2,864 (100.0%) |
 | `built-ins/TypedArrayConstructors` | 1,442 | 1,280 (88.8%) |
 | `built-ins/String` | 2,427 | 2,362 (97.3%) |
 | `built-ins/DataView` | 1,122 | 1,090 (97.1%) |
-| `built-ins/Proxy` | 607 | 540 (89.0%) |
+| `built-ins/Proxy` | 607 | 544 (89.6%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
 | `annexB` | 1,377 | 1,264 (91.8%) |
 | `intl402/Temporal` | 3,838 | 3,838 (100.00%) |
@@ -257,5 +259,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 88,722 |
-| M10 | Full spec compliance | ~92,658 | ⬜ |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 89,423 |
+| M10 | Full spec compliance | ~92,788 | ⬜ |

@@ -2241,6 +2241,9 @@ pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
 }
 
 pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {
+    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+        return JsValue::Undefined;
+    }
     let buf = ta.buffer.borrow();
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
     if offset + ta.kind.bytes_per_element() > buf.len() {
@@ -2403,11 +2406,21 @@ fn to_uint8(v: &JsValue) -> u8 {
 fn to_uint8_clamped(v: &JsValue) -> u8 {
     let n = to_number(v);
     if n.is_nan() || n <= 0.0 {
-        0
-    } else if n >= 255.0 {
-        255
+        return 0;
+    }
+    if n >= 255.0 {
+        return 255;
+    }
+    let f = n.floor();
+    let half = f + 0.5;
+    if n < half {
+        f as u8
+    } else if n > half {
+        (f + 1.0) as u8
+    } else if (f as u64) % 2 == 0 {
+        f as u8
     } else {
-        (n + 0.5).floor() as u8
+        (f + 1.0) as u8
     }
 }
 fn to_int16(v: &JsValue) -> i16 {
@@ -2449,6 +2462,12 @@ fn to_biguint64(v: &JsValue) -> u64 {
             let mut result = [0u8; 8];
             let len = bytes.len().min(8);
             result[..len].copy_from_slice(&bytes[..len]);
+            // Sign-extend if negative (high bit of last byte is set)
+            if bytes.len() < 8 && !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80) != 0 {
+                for byte in result.iter_mut().skip(len) {
+                    *byte = 0xFF;
+                }
+            }
             u64::from_le_bytes(result)
         }),
         _ => 0,

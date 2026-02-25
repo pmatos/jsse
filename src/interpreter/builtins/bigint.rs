@@ -170,10 +170,9 @@ impl Interpreter {
                     JsValue::String(s) => {
                         let text = s.to_rust_string().trim().to_string();
                         if text.is_empty() {
-                            return Completion::Throw(interp.create_error(
-                                "SyntaxError",
-                                "Cannot convert  to a BigInt",
-                            ));
+                            return Completion::Normal(JsValue::BigInt(JsBigInt {
+                                value: num_bigint::BigInt::from(0),
+                            }));
                         }
                         let parsed = if let Some(hex) =
                             text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))

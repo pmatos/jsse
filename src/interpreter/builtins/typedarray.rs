@@ -1146,25 +1146,33 @@ impl Interpreter {
                 if let JsValue::Object(o) = this_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let obj_ref = obj.borrow();
-                    if let Some(ref ta) = obj_ref.typed_array_info {
-                        if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                            return Completion::Throw(
-                                interp.create_type_error("typed array is detached"),
-                            );
+                    let ta = {
+                        let obj_ref = obj.borrow();
+                        if let Some(ref ta) = obj_ref.typed_array_info {
+                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+                                return Completion::Throw(
+                                    interp.create_type_error("typed array is detached"),
+                                );
+                            }
+                            ta.clone()
+                        } else {
+                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
-                        let idx_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let idx = match interp.to_number_value(&idx_val) {
-                            Ok(n) => to_integer(n) as i64,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let len = typed_array_length(ta) as i64;
-                        let actual = if idx < 0 { len + idx } else { idx };
-                        if actual < 0 || actual >= len {
-                            return Completion::Normal(JsValue::Undefined);
-                        }
-                        return Completion::Normal(typed_array_get_index(ta, actual as usize));
+                    };
+                    // Capture len BEFORE argument coercion (may resize buffer)
+                    let len = typed_array_length(&ta) as i64;
+                    let idx_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let idx = match interp.to_number_value(&idx_val) {
+                        Ok(n) => to_integer(n) as i64,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let actual = if idx < 0 { len + idx } else { idx };
+                    if actual < 0 || actual >= len {
+                        return Completion::Normal(JsValue::Undefined);
                     }
+                    // Use Get semantics (checks OOB post-resize via is_valid_integer_index)
+                    let key = actual.to_string();
+                    return interp.get_object_property(o.id, &key, this_val);
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
@@ -1281,6 +1289,8 @@ impl Interpreter {
                     }
 
                     // Array-like source path
+                    // Capture target length BEFORE source length getter (may resize)
+                    let target_len = typed_array_length(&ta);
                     let src_obj = match interp.to_object(&source) {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -1295,7 +1305,7 @@ impl Interpreter {
                             Ok(n) => to_integer(n) as usize,
                             Err(e) => return Completion::Throw(e),
                         };
-                        if offset + src_len > typed_array_length(&ta) {
+                        if offset + src_len > target_len {
                             return Completion::Throw(
                                 interp.create_range_error("offset is out of bounds"),
                             );
@@ -1314,7 +1324,10 @@ impl Interpreter {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            typed_array_set_index(&ta, offset + i, &coerced);
+                            // Use is_valid_integer_index to silently skip OOB writes (handles shrink mid-iteration)
+                            if is_valid_integer_index(&ta, (offset + i) as f64) {
+                                typed_array_set_index(&ta, offset + i, &coerced);
+                            }
                         }
                     }
                     return Completion::Normal(JsValue::Undefined);
@@ -1344,59 +1357,59 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let len = typed_array_length(&ta) as f64;
-                    let begin_arg = to_integer(if let Some(a) = args.first() {
-                        match interp.to_number_value(a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }
+                    // Per spec: if OOB, srcArrayLength = 0 (no throw for subarray)
+                    let src_len = if ta.is_detached.get() || is_typed_array_out_of_bounds(&ta) {
+                        0i64
                     } else {
-                        0.0
-                    });
-                    let begin = if begin_arg < 0.0 {
-                        ((len + begin_arg) as isize).max(0) as usize
-                    } else {
-                        (begin_arg as usize).min(typed_array_length(&ta))
+                        typed_array_length(&ta) as i64
                     };
-                    let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        to_integer(match interp.to_number_value(&args[1]) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        })
-                    } else {
-                        len
+                    let resolve_idx = |v: f64, len: i64| -> usize {
+                        let vi = if v == f64::NEG_INFINITY || v <= -(len as f64) - 1.0 {
+                            i64::MIN / 2
+                        } else if v == f64::INFINITY || v > len as f64 {
+                            i64::MAX / 2
+                        } else {
+                            v as i64
+                        };
+                        (if vi < 0 { (len + vi).max(0) } else { vi.min(len) }) as usize
                     };
-                    let end = if end_arg < 0.0 {
-                        ((len + end_arg) as isize).max(0) as usize
-                    } else {
-                        (end_arg as usize).min(typed_array_length(&ta))
+                    let begin = {
+                        let n = to_integer(if let Some(a) = args.first() {
+                            match interp.to_number_value(a) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else {
+                            0.0
+                        });
+                        resolve_idx(n, src_len)
                     };
-                    let end_is_undefined = args.len() <= 1 || matches!(args[1], JsValue::Undefined);
+                    let end_is_undefined = args.len() <= 1 || matches!(args.get(1), Some(JsValue::Undefined));
+                    let end = {
+                        let n = if !end_is_undefined {
+                            to_integer(match interp.to_number_value(&args[1]) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            })
+                        } else {
+                            src_len as f64
+                        };
+                        resolve_idx(n, src_len)
+                    };
                     let new_len = end.saturating_sub(begin);
                     let bpe = ta.kind.bytes_per_element();
                     let new_offset = ta.byte_offset + begin * bpe;
 
-                    let default_ctor_name = ta.kind.name();
-                    let default_ctor = interp.realm()
-                        .global_env
-                        .borrow()
-                        .get(default_ctor_name)
-                        .unwrap_or(JsValue::Undefined);
-                    let ctor = match interp.species_constructor(this_val, &default_ctor) {
-                        Ok(c) => c,
-                        Err(e) => return Completion::Throw(e),
-                    };
                     let length_arg = if end_is_undefined && ta.is_length_tracking {
                         JsValue::Undefined
                     } else {
                         JsValue::Number(new_len as f64)
                     };
-                    let result = interp.construct_with_new_target(
-                        &ctor,
-                        &[buf_val, JsValue::Number(new_offset as f64), length_arg],
-                        ctor.clone(),
-                    );
-                    return result;
+                    let ctor_args = [buf_val, JsValue::Number(new_offset as f64), length_arg];
+                    return match interp.typed_array_species_create(this_val, &ctor_args) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    };
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
@@ -1426,32 +1439,38 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    let len = typed_array_length(&ta) as f64;
-                    let begin_arg = to_integer(if let Some(a) = args.first() {
-                        match interp.to_number_value(a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        0.0
-                    });
-                    let begin = if begin_arg < 0.0 {
-                        ((len + begin_arg) as isize).max(0) as usize
-                    } else {
-                        (begin_arg as usize).min(typed_array_length(&ta))
+                    let len = typed_array_length(&ta) as i64;
+                    let resolve_idx = |v: f64, len: i64| -> usize {
+                        let vi = if v == f64::NEG_INFINITY || v <= -(len as f64) - 1.0 {
+                            i64::MIN / 2
+                        } else if v == f64::INFINITY || v > len as f64 {
+                            i64::MAX / 2
+                        } else {
+                            v as i64
+                        };
+                        (if vi < 0 { (len + vi).max(0) } else { vi.min(len) }) as usize
                     };
-                    let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        to_integer(match interp.to_number_value(&args[1]) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        })
-                    } else {
-                        len
+                    let begin = {
+                        let n = to_integer(if let Some(a) = args.first() {
+                            match interp.to_number_value(a) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else {
+                            0.0
+                        });
+                        resolve_idx(n, len)
                     };
-                    let end = if end_arg < 0.0 {
-                        ((len + end_arg) as isize).max(0) as usize
-                    } else {
-                        (end_arg as usize).min(typed_array_length(&ta))
+                    let end = {
+                        let n = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
+                            to_integer(match interp.to_number_value(&args[1]) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            })
+                        } else {
+                            len as f64
+                        };
+                        resolve_idx(n, len)
                     };
                     let count = end.saturating_sub(begin);
 
@@ -1490,17 +1509,30 @@ impl Interpreter {
                                 };
                                 if new_ta.kind == ta.kind {
                                     let bpe = ta.kind.bytes_per_element();
-                                    let src_buf = ta.buffer.borrow();
-                                    let mut dst_buf = new_ta.buffer.borrow_mut();
                                     let src_start = ta.byte_offset + begin * bpe;
                                     let dst_start = new_ta.byte_offset;
                                     let byte_count = count * bpe;
-                                    if src_start + byte_count <= src_buf.len()
-                                        && dst_start + byte_count <= dst_buf.len()
-                                    {
-                                        dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
-                                            &src_buf[src_start..src_start + byte_count],
-                                        );
+                                    let same_buf = Rc::ptr_eq(&ta.buffer, &new_ta.buffer);
+                                    if same_buf {
+                                        let mut buf = ta.buffer.borrow_mut();
+                                        if src_start + byte_count <= buf.len()
+                                            && dst_start + byte_count <= buf.len()
+                                        {
+                                            // Spec: copy byte-by-byte in forward order (overlapping-write semantics)
+                                            for j in 0..byte_count {
+                                                buf[dst_start + j] = buf[src_start + j];
+                                            }
+                                        }
+                                    } else {
+                                        let src_buf = ta.buffer.borrow();
+                                        let mut dst_buf = new_ta.buffer.borrow_mut();
+                                        if src_start + byte_count <= src_buf.len()
+                                            && dst_start + byte_count <= dst_buf.len()
+                                        {
+                                            dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
+                                                &src_buf[src_start..src_start + byte_count],
+                                            );
+                                        }
                                     }
                                 } else {
                                     for i in 0..count {
@@ -1542,37 +1574,44 @@ impl Interpreter {
                         }
                     };
                     let len = typed_array_length(&ta) as i64;
+                    let resolve_index = |v: f64, len: i64| -> usize {
+                        let vi = if v == f64::NEG_INFINITY || v < -(len as f64) - 1.0 {
+                            i64::MIN / 2
+                        } else if v == f64::INFINITY || v > len as f64 {
+                            i64::MAX / 2
+                        } else {
+                            v as i64
+                        };
+                        (if vi < 0 { (len + vi).max(0) } else { vi.min(len) }) as usize
+                    };
                     let target = {
-                        let v = to_integer(
-                            match interp
-                                .to_number_value(args.first().unwrap_or(&JsValue::Undefined))
-                            {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            },
-                        ) as i64;
-                        (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
+                        let n = match interp
+                            .to_number_value(args.first().unwrap_or(&JsValue::Undefined))
+                        {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        resolve_index(to_integer(n), len)
                     };
                     let start = {
-                        let v = to_integer(
-                            match interp.to_number_value(args.get(1).unwrap_or(&JsValue::Undefined))
-                            {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            },
-                        ) as i64;
-                        (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
+                        let n = match interp
+                            .to_number_value(args.get(1).unwrap_or(&JsValue::Undefined))
+                        {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        resolve_index(to_integer(n), len)
                     };
                     let end = {
-                        let v = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            to_integer(match interp.to_number_value(&args[2]) {
-                                Ok(n) => n,
+                        let n = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
+                            match interp.to_number_value(&args[2]) {
+                                Ok(n) => to_integer(n),
                                 Err(e) => return Completion::Throw(e),
-                            }) as i64
+                            }
                         } else {
-                            len
+                            len as f64
                         };
-                        (if v < 0 { (len + v).max(0) } else { v.min(len) }) as usize
+                        resolve_index(n, len)
                     };
                     // Re-check detach and OOB after coercion
                     if ta.is_detached.get() || is_typed_array_out_of_bounds(&ta) {
@@ -1580,15 +1619,28 @@ impl Interpreter {
                             interp.create_type_error("typed array is detached"),
                         );
                     }
-                    let count = (end - start).min(len as usize - target).min(end - start);
+                    // Use original len for count (per spec), but bound copy by actual buffer
+                    let cur_len = typed_array_length(&ta) as usize;
+                    let count = if end <= start || target >= len as usize {
+                        0
+                    } else {
+                        (end - start).min(len as usize - target)
+                    };
                     if count > 0 {
                         let bpe = ta.kind.bytes_per_element();
                         let mut buf = ta.buffer.borrow_mut();
-                        let src_start = ta.byte_offset + start * bpe;
-                        let dst_start = ta.byte_offset + target * bpe;
-                        let byte_count = count * bpe;
-                        let src: Vec<u8> = buf[src_start..src_start + byte_count].to_vec();
-                        buf[dst_start..dst_start + byte_count].copy_from_slice(&src);
+                        let buf_len = buf.len();
+                        let src_byte_start = ta.byte_offset + start * bpe;
+                        let dst_byte_start = ta.byte_offset + target * bpe;
+                        let max_src_bytes = buf_len.saturating_sub(src_byte_start);
+                        let max_dst_bytes = buf_len.saturating_sub(dst_byte_start);
+                        let byte_count = (count * bpe).min(max_src_bytes).min(max_dst_bytes);
+                        if byte_count > 0 {
+                            let src: Vec<u8> =
+                                buf[src_byte_start..src_byte_start + byte_count].to_vec();
+                            buf[dst_byte_start..dst_byte_start + byte_count]
+                                .copy_from_slice(&src);
+                        }
                     }
                     return Completion::Normal(this_val.clone());
                 }
@@ -1705,7 +1757,8 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    if typed_array_length(&ta) == 0 {
+                    let len = typed_array_length(&ta) as i64;
+                    if len == 0 {
                         return Completion::Normal(JsValue::Number(-1.0));
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1718,11 +1771,15 @@ impl Interpreter {
                         0
                     };
                     let start = if from < 0 {
-                        (typed_array_length(&ta) as i64 + from).max(0) as usize
+                        (len + from).max(0) as usize
                     } else {
                         from as usize
                     };
-                    for i in start..typed_array_length(&ta) {
+                    for i in start..len as usize {
+                        // indexOf uses HasProperty semantics: skip elements that are not valid
+                        if !is_valid_integer_index(&ta, i as f64) {
+                            continue;
+                        }
                         let elem = typed_array_get_index(&ta, i);
                         if strict_eq(&elem, &search) {
                             return Completion::Normal(JsValue::Number(i as f64));
@@ -1758,7 +1815,8 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    if typed_array_length(&ta) == 0 {
+                    let len = typed_array_length(&ta) as i64;
+                    if len == 0 {
                         return Completion::Normal(JsValue::Number(-1.0));
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1768,18 +1826,21 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }) as i64
                     } else {
-                        typed_array_length(&ta) as i64 - 1
+                        len - 1
                     };
                     let start = if from < 0 {
-                        (typed_array_length(&ta) as i64 + from).max(-1)
+                        (len + from).max(-1)
                     } else {
-                        from.min(typed_array_length(&ta) as i64 - 1)
+                        from.min(len - 1)
                     };
                     let mut i = start;
                     while i >= 0 {
-                        let elem = typed_array_get_index(&ta, i as usize);
-                        if strict_eq(&elem, &search) {
-                            return Completion::Normal(JsValue::Number(i as f64));
+                        // lastIndexOf uses HasProperty semantics: skip elements that are not valid
+                        if is_valid_integer_index(&ta, i as f64) {
+                            let elem = typed_array_get_index(&ta, i as usize);
+                            if strict_eq(&elem, &search) {
+                                return Completion::Normal(JsValue::Number(i as f64));
+                            }
                         }
                         i -= 1;
                     }
@@ -1813,7 +1874,8 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
-                    if typed_array_length(&ta) == 0 {
+                    let len = typed_array_length(&ta) as i64;
+                    if len == 0 {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1826,11 +1888,11 @@ impl Interpreter {
                         0
                     };
                     let start = if from < 0 {
-                        (typed_array_length(&ta) as i64 + from).max(0) as usize
+                        (len + from).max(0) as usize
                     } else {
                         from as usize
                     };
-                    for i in start..typed_array_length(&ta) {
+                    for i in start..len as usize {
                         let elem = typed_array_get_index(&ta, i);
                         if same_value_zero(&elem, &search) {
                             return Completion::Normal(JsValue::Boolean(true));
@@ -1995,6 +2057,9 @@ impl Interpreter {
                         return Completion::Throw(e);
                     }
                     for (i, val) in elems.iter().enumerate() {
+                        if !is_valid_integer_index(&ta, i as f64) {
+                            break;
+                        }
                         typed_array_set_index(&ta, i, val);
                     }
                     return Completion::Normal(this_val.clone());
@@ -2027,6 +2092,7 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    let len = typed_array_length(&ta);
                     let sep = if args.is_empty() || matches!(args[0], JsValue::Undefined) {
                         ",".to_string()
                     } else {
@@ -2035,13 +2101,16 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
-                    let len = typed_array_length(&ta);
                     let mut parts: Vec<String> = Vec::with_capacity(len);
                     for i in 0..len {
                         let elem = typed_array_get_index(&ta, i);
-                        let s = match interp.to_string_value(&elem) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
+                        let s = if matches!(elem, JsValue::Undefined | JsValue::Null) {
+                            String::new()
+                        } else {
+                            match interp.to_string_value(&elem) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            }
                         };
                         parts.push(s);
                     }
@@ -2055,46 +2124,12 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("join".to_string(), join_fn);
 
-        // toString (same as join with comma)
-        let tostring_fn = self.create_function(JsFunction::native(
-            "toString".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let ta = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
-                            }
-                            ta.clone()
-                        } else {
-                            return Completion::Throw(interp.create_type_error("not a TypedArray"));
-                        }
-                    };
-                    let len = typed_array_length(&ta);
-                    let mut parts: Vec<String> = Vec::with_capacity(len);
-                    for i in 0..len {
-                        let elem = typed_array_get_index(&ta, i);
-                        let s = match interp.to_string_value(&elem) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        parts.push(s);
-                    }
-                    Completion::Normal(JsValue::String(JsString::from_str(&parts.join(","))))
-                } else {
-                    Completion::Throw(interp.create_type_error("not a TypedArray"))
-                }
-            },
-        ));
-        proto
-            .borrow_mut()
-            .insert_builtin("toString".to_string(), tostring_fn);
+        // toString must be the same function object as Array.prototype.toString (spec §23.2.3.30)
+        {
+            let array_proto = self.realm().array_prototype.clone().unwrap();
+            let tostring_val = array_proto.borrow().get_property("toString");
+            proto.borrow_mut().insert_builtin("toString".to_string(), tostring_val);
+        }
 
         // toLocaleString
         let to_locale_string_fn = self.create_function(JsFunction::native(
@@ -2567,14 +2602,8 @@ impl Interpreter {
                         }
                     };
 
-                    // Step 9: Re-check detach/OOB after coercions, then check bounds
-                    if ta.is_detached.get() || is_typed_array_out_of_bounds(&ta) {
-                        return Completion::Throw(
-                            interp.create_type_error("typed array is detached"),
-                        );
-                    }
-                    let len = typed_array_length(&ta) as i64;
-                    if actual_index < 0 || actual_index >= len {
+                    // Step 9: Check IsValidIntegerIndex after coercions (uses current TA state)
+                    if !is_valid_integer_index(&ta, actual_index as f64) {
                         return Completion::Throw(
                             interp
                                 .create_range_error("Invalid index for TypedArray.prototype.with"),
@@ -3221,7 +3250,7 @@ impl Interpreter {
                 let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
 
                 // Step 3: If mapfn is provided and not undefined, check callable
-                if let Some(ref mf) = map_fn
+                let mapping = if let Some(ref mf) = map_fn
                     && !matches!(mf, JsValue::Undefined)
                 {
                     let is_callable = matches!(mf, JsValue::Object(o) if {
@@ -3232,34 +3261,67 @@ impl Interpreter {
                             interp.create_type_error("mapfn is not a function"),
                         );
                     }
-                }
+                    true
+                } else {
+                    false
+                };
 
-                // Get array-like or iterable
+                // Collect source values (iterable or array-like)
                 let values = interp.collect_iterable_or_arraylike(&source);
                 let values = match values {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
+                let len = values.len();
 
-                let mapped: Vec<JsValue> = if let Some(ref mf) = map_fn {
-                    let mut result = Vec::new();
-                    for (i, val) in values.iter().enumerate() {
+                // Create the target object by calling the constructor with len
+                let target_obj = match interp.typed_array_create(this_val, len) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+
+                // For each element: apply mapper if any, then Set(targetObj, k, value, true)
+                let ta_kind = if let JsValue::Object(ref o) = target_obj {
+                    interp
+                        .get_object(o.id)
+                        .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
+                } else {
+                    None
+                };
+                let ta_kind = match ta_kind {
+                    Some(k) => k,
+                    None => return Completion::Throw(
+                        interp.create_type_error("TypedArray.from: target is not a TypedArray"),
+                    ),
+                };
+
+                for (k, val) in values.iter().enumerate() {
+                    let mapped_val = if mapping {
+                        let mf = map_fn.as_ref().unwrap();
                         match interp.call_function(
                             mf,
                             &this_arg,
-                            &[val.clone(), JsValue::Number(i as f64)],
+                            &[val.clone(), JsValue::Number(k as f64)],
                         ) {
-                            Completion::Normal(v) => result.push(v),
+                            Completion::Normal(v) => v,
                             other => return other,
                         }
+                    } else {
+                        val.clone()
+                    };
+                    // Coerce and Set (silently ignores OOB/detached)
+                    let coerced = match interp.typed_array_coerce_value(ta_kind, &mapped_val) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let key = k.to_string();
+                    if let JsValue::Object(ref o) = target_obj {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            obj.borrow_mut().set_property_value(&key, coerced);
+                        }
                     }
-                    result
-                } else {
-                    values
-                };
-
-                // Call this_val as constructor with the values
-                interp.construct_typed_array_from_this(this_val, &mapped)
+                }
+                Completion::Normal(target_obj)
             },
         ));
         if let JsValue::Object(o) = &ta_ctor
@@ -3268,11 +3330,46 @@ impl Interpreter {
             obj.borrow_mut()
                 .insert_builtin("from".to_string(), ta_from_fn);
         }
-        // TypedArray.of
+        // TypedArray.of — spec §23.2.2.2
         let ta_of_fn = self.create_function(JsFunction::native(
             "of".to_string(),
             0,
-            |interp, this_val, args| interp.construct_typed_array_from_this(this_val, args),
+            |interp, this_val, args| {
+                let len = args.len();
+                // Step 4: Let newObj = TypedArrayCreate(C, len)
+                let new_obj = match interp.typed_array_create(this_val, len) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                // Get ta_kind for coercion
+                let ta_kind = if let JsValue::Object(ref o) = new_obj {
+                    interp
+                        .get_object(o.id)
+                        .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
+                } else {
+                    None
+                };
+                let ta_kind = match ta_kind {
+                    Some(k) => k,
+                    None => return Completion::Throw(
+                        interp.create_type_error("TypedArray.of: not a TypedArray"),
+                    ),
+                };
+                // Step 5-6: Set each element
+                for (k, val) in args.iter().enumerate() {
+                    let coerced = match interp.typed_array_coerce_value(ta_kind, val) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let key = k.to_string();
+                    if let JsValue::Object(ref o) = new_obj {
+                        if let Some(obj) = interp.get_object(o.id) {
+                            obj.borrow_mut().set_property_value(&key, coerced);
+                        }
+                    }
+                }
+                Completion::Normal(new_obj)
+            },
         ));
         if let JsValue::Object(o) = &ta_ctor
             && let Some(obj) = self.get_object(o.id)
@@ -4034,12 +4131,123 @@ impl Interpreter {
         }
     }
 
+    /// TypedArrayCreate(C, argumentList) — §23.2.4.2
+    /// Creates a TypedArray by calling C with argumentList. Validates result is a TypedArray.
+    fn typed_array_create(
+        &mut self,
+        ctor: &JsValue,
+        len: usize,
+    ) -> Completion {
+        // Fast path for known built-in TypedArray constructors
+        if let JsValue::Object(o) = ctor
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let name = {
+                let obj_ref = obj.borrow();
+                if let Some(ref func) = obj_ref.callable {
+                    match func {
+                        JsFunction::Native(n, _, _, _) => Some(n.clone()),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            };
+            if let Some(ref n) = name {
+                let kind = match n.as_str() {
+                    "Int8Array" => Some(TypedArrayKind::Int8),
+                    "Uint8Array" => Some(TypedArrayKind::Uint8),
+                    "Uint8ClampedArray" => Some(TypedArrayKind::Uint8Clamped),
+                    "Int16Array" => Some(TypedArrayKind::Int16),
+                    "Uint16Array" => Some(TypedArrayKind::Uint16),
+                    "Int32Array" => Some(TypedArrayKind::Int32),
+                    "Uint32Array" => Some(TypedArrayKind::Uint32),
+                    "Float32Array" => Some(TypedArrayKind::Float32),
+                    "Float64Array" => Some(TypedArrayKind::Float64),
+                    "BigInt64Array" => Some(TypedArrayKind::BigInt64),
+                    "BigUint64Array" => Some(TypedArrayKind::BigUint64),
+                    _ => None,
+                };
+                if let Some(kind) = kind {
+                    let proto = self.get_typed_array_prototype(kind);
+                    let bpe = kind.bytes_per_element();
+                    let new_buf = vec![0u8; len * bpe];
+                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                    let new_detached = Rc::new(Cell::new(false));
+                    let ta = TypedArrayInfo {
+                        kind,
+                        buffer: new_buf_rc.clone(),
+                        byte_offset: 0,
+                        byte_length: len * bpe,
+                        array_length: len,
+                        is_detached: new_detached.clone(),
+                        is_length_tracking: false,
+                    };
+                    let ab_obj = self.create_object();
+                    {
+                        let mut ab = ab_obj.borrow_mut();
+                        ab.class_name = "ArrayBuffer".to_string();
+                        ab.prototype = self.realm().arraybuffer_prototype.clone();
+                        ab.arraybuffer_data = Some(new_buf_rc);
+                        ab.arraybuffer_detached = Some(new_detached);
+                    }
+                    let ab_id = ab_obj.borrow().id.unwrap();
+                    let result = self.create_object();
+                    {
+                        let mut r = result.borrow_mut();
+                        r.class_name = kind.name().to_string();
+                        r.prototype = proto;
+                        r.view_buffer_object_id = Some(ab_id);
+                        r.typed_array_info = Some(ta);
+                    }
+                    let id = result.borrow().id.unwrap();
+                    return Completion::Normal(JsValue::Object(JsObject { id }));
+                }
+            }
+        }
+        // Generic path: call ctor(len), validate result is TypedArray
+        let new_obj = match self.construct_with_new_target(
+            ctor,
+            &[JsValue::Number(len as f64)],
+            ctor.clone(),
+        ) {
+            Completion::Normal(v) => v,
+            other => return other,
+        };
+        if let JsValue::Object(ref o) = new_obj {
+            if self
+                .get_object(o.id)
+                .is_some_and(|obj| obj.borrow().typed_array_info.is_some())
+            {
+                return Completion::Normal(new_obj);
+            }
+        }
+        Completion::Throw(
+            self.create_type_error("TypedArray.from/of: constructor did not return a TypedArray"),
+        )
+    }
+
     fn construct_typed_array_from_this(
         &mut self,
         this_val: &JsValue,
         values: &[JsValue],
     ) -> Completion {
-        // Determine which TypedArray constructor `this` is
+        let len = values.len();
+        // Check `this` is callable (constructor)
+        if let JsValue::Object(o) = this_val {
+            let is_callable = self
+                .get_object(o.id)
+                .is_some_and(|obj| obj.borrow().callable.is_some());
+            if !is_callable {
+                return Completion::Throw(
+                    self.create_type_error("not a TypedArray constructor"),
+                );
+            }
+        } else {
+            return Completion::Throw(self.create_type_error("not a TypedArray constructor"));
+        }
+
+        // Use fast path for known built-in TypedArray constructors
         if let JsValue::Object(o) = this_val
             && let Some(obj) = self.get_object(o.id)
         {
@@ -4048,7 +4256,7 @@ impl Interpreter {
                 if let Some(ref func) = obj_ref.callable {
                     match func {
                         JsFunction::Native(n, _, _, _) => Some(n.clone()),
-                        JsFunction::User { name, .. } => name.clone(),
+                        JsFunction::User { .. } => None,
                     }
                 } else {
                     None
@@ -4072,7 +4280,6 @@ impl Interpreter {
                 if let Some(kind) = kind {
                     let proto = self.get_typed_array_prototype(kind);
                     let bpe = kind.bytes_per_element();
-                    let len = values.len();
                     let new_buf = vec![0u8; len * bpe];
                     let new_buf_rc = Rc::new(RefCell::new(new_buf));
                     let new_detached = Rc::new(Cell::new(false));
@@ -4114,7 +4321,45 @@ impl Interpreter {
                 }
             }
         }
-        Completion::Throw(self.create_type_error("not a TypedArray constructor"))
+
+        // Generic path: call this_val as constructor with len, validate result is TypedArray
+        let new_obj = match self.construct_with_new_target(
+            this_val,
+            &[JsValue::Number(len as f64)],
+            this_val.clone(),
+        ) {
+            Completion::Normal(v) => v,
+            other => return other,
+        };
+        // Validate result is a TypedArray
+        let ta_kind = if let JsValue::Object(ref o) = new_obj {
+            self.get_object(o.id)
+                .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
+        } else {
+            None
+        };
+        let ta_kind = match ta_kind {
+            Some(k) => k,
+            None => {
+                return Completion::Throw(
+                    self.create_type_error("TypedArray.of/from: constructor did not return a TypedArray"),
+                );
+            }
+        };
+        // Set each element using Set semantics (which respects OOB/detach)
+        for (i, val) in values.iter().enumerate() {
+            let key = i.to_string();
+            let coerced = match self.typed_array_coerce_value(ta_kind, val) {
+                Ok(v) => v,
+                Err(e) => return Completion::Throw(e),
+            };
+            if let JsValue::Object(ref o) = new_obj {
+                if let Some(obj) = self.get_object(o.id) {
+                    obj.borrow_mut().set_property_value(&key, coerced);
+                }
+            }
+        }
+        Completion::Normal(new_obj)
     }
 
     pub(crate) fn collect_iterable_or_arraylike(
@@ -4173,6 +4418,7 @@ impl Interpreter {
                         }
                         let value = match self.get_object_property(ro.id, "value", &result) {
                             Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(Completion::Throw(e)),
                             _ => JsValue::Undefined,
                         };
                         values.push(value);
@@ -4186,6 +4432,7 @@ impl Interpreter {
             // Array-like
             let len_val = match self.get_object_property(o.id, "length", val) {
                 Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(Completion::Throw(e)),
                 _ => return Ok(Vec::new()),
             };
             let len = match self.to_number_value(&len_val) {
