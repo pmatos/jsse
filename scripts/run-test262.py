@@ -15,7 +15,9 @@ Examples:
 import argparse
 import ctypes
 import json
+import math
 import os
+import random
 import re
 import resource
 import signal
@@ -456,6 +458,22 @@ examples:
         help="Timeout per test in seconds (default: 120)",
     )
     parser.add_argument(
+        "--sample",
+        type=float,
+        default=None,
+        metavar="RATE",
+        help=(
+            "Randomly sample RATE fraction of tests per directory (e.g. 0.1 for 10%%). "
+            "Sampled runs do not update test262-pass.txt."
+        ),
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for --sample (default: non-deterministic)",
+    )
+    parser.add_argument(
         "paths",
         nargs="*",
         help="Specific test files or directories to run (default: all tests)",
@@ -486,6 +504,26 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
         if d.is_dir():
             tests.extend(f for f in d.rglob("*.js") if not _is_fixture(f))
     return sorted(tests)
+
+
+def sample_tests(tests: list[Path], rate: float, seed: int | None) -> list[Path]:
+    """Return a stratified random sample of tests.
+
+    Tests are grouped by their parent directory so that every directory
+    contributes proportionally.  At least one test is kept per directory.
+    """
+    rng = random.Random(seed)
+    by_dir: dict[Path, list[Path]] = {}
+    for t in tests:
+        by_dir.setdefault(t.parent, []).append(t)
+
+    sampled: list[Path] = []
+    for dir_tests in by_dir.values():
+        k = max(1, math.ceil(len(dir_tests) * rate))
+        k = min(k, len(dir_tests))
+        sampled.extend(rng.sample(dir_tests, k))
+
+    return sorted(sampled)
 
 
 def main():
@@ -521,6 +559,19 @@ def main():
         sys.exit(2)
 
     tests = find_tests(test262, args.paths if args.paths else None)
+
+    is_sample_run = args.sample is not None
+    if is_sample_run:
+        rate = args.sample
+        if not (0 < rate <= 1):
+            print("Error: --sample must be between 0 (exclusive) and 1 (inclusive)", file=sys.stderr)
+            sys.exit(2)
+        tests = sample_tests(tests, rate, args.seed)
+        print(
+            f"Sampling {rate*100:.1f}% of tests (seed={args.seed}): {len(tests)} files selected.",
+            file=sys.stderr,
+        )
+
     num_files = len(tests)
     if num_files == 0:
         print("No tests found.")
@@ -613,6 +664,8 @@ def main():
     print()
     print("=== test262 Results ===")
     print(f"Engine:  {engine_name} ({binary})")
+    if is_sample_run:
+        print(f"Sample:  {args.sample*100:.1f}% (seed={args.seed})")
     print(f"Files:   {num_files}")
     print(f"Scenarios: {total}")
     print(f"Run:     {run_total}")
@@ -631,7 +684,7 @@ def main():
     if new_passes:
         print(f"\nNew passes: {len(new_passes)}")
 
-    if is_full_run:
+    if is_full_run and not is_sample_run:
         pass_list.sort()
         baseline_file.write_text("\n".join(pass_list) + "\n")
 
