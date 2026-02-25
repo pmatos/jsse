@@ -860,6 +860,13 @@ pub enum PrivateFieldDef {
     },
 }
 
+/// Unified ordered instance field definition (private or public), preserving source order.
+#[derive(Debug, Clone)]
+pub enum InstanceFieldDef {
+    Private(PrivateFieldDef),
+    Public(String, Option<Expression>),
+}
+
 #[derive(Debug, Clone)]
 pub enum PrivateElement {
     Field(JsValue),
@@ -1232,8 +1239,7 @@ pub struct JsObjectData {
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
     pub private_fields: HashMap<String, PrivateElement>,
-    pub class_private_field_defs: Vec<PrivateFieldDef>,
-    pub class_public_field_defs: Vec<(String, Option<crate::ast::Expression>)>,
+    pub class_instance_field_defs: Vec<InstanceFieldDef>,
     pub iterator_state: Option<IteratorState>,
     pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
@@ -1288,8 +1294,7 @@ impl JsObjectData {
             extensible: true,
             primitive_value: None,
             private_fields: HashMap::new(),
-            class_private_field_defs: Vec::new(),
-            class_public_field_defs: Vec::new(),
+            class_instance_field_defs: Vec::new(),
             iterator_state: None,
             parameter_map: None,
             map_data: None,

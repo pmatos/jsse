@@ -71,14 +71,10 @@ impl Interpreter {
         } else {
             return Ok(());
         };
-        let (private_field_defs, public_field_defs) = if let JsValue::Object(ref o) = new_target_val
+        let instance_field_defs = if let JsValue::Object(ref o) = new_target_val
             && let Some(func_obj) = self.get_object(o.id)
         {
-            let borrowed = func_obj.borrow();
-            (
-                borrowed.class_private_field_defs.clone(),
-                borrowed.class_public_field_defs.clone(),
-            )
+            func_obj.borrow().class_instance_field_defs.clone()
         } else {
             return Ok(());
         };
@@ -133,9 +129,54 @@ impl Interpreter {
                 );
             }
         }
-        for def in &private_field_defs {
-            match def {
-                PrivateFieldDef::Field { name, initializer } => {
+        // Pass 1: Install private methods and accessors before any field initializer runs.
+        for idef in &instance_field_defs {
+            match idef {
+                InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
+                    if let Some(obj) = self.get_object(this_obj_id) {
+                        if !obj.borrow().extensible {
+                            return Err(self.create_type_error(
+                                "Cannot define private method on non-extensible object",
+                            ));
+                        }
+                        if obj.borrow().private_fields.contains_key(name) {
+                            return Err(
+                                self.create_type_error("Cannot add private method to object twice")
+                            );
+                        }
+                        obj.borrow_mut()
+                            .private_fields
+                            .insert(name.clone(), PrivateElement::Method(value.clone()));
+                    }
+                }
+                InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
+                    if let Some(obj) = self.get_object(this_obj_id) {
+                        if !obj.borrow().extensible {
+                            return Err(self.create_type_error(
+                                "Cannot define private accessor on non-extensible object",
+                            ));
+                        }
+                        if obj.borrow().private_fields.contains_key(name) {
+                            return Err(self.create_type_error(
+                                "Cannot add private accessor to object twice",
+                            ));
+                        }
+                        obj.borrow_mut().private_fields.insert(
+                            name.clone(),
+                            PrivateElement::Accessor {
+                                get: get.clone(),
+                                set: set.clone(),
+                            },
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Pass 2: Run field initializers in source order.
+        for idef in &instance_field_defs {
+            match idef {
+                InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
                     let val = if let Some(init) = initializer {
                         match self.eval_expr(init, &init_env) {
                             Completion::Normal(v) => v,
@@ -161,58 +202,22 @@ impl Interpreter {
                             .insert(name.clone(), PrivateElement::Field(val));
                     }
                 }
-                PrivateFieldDef::Method { name, value } => {
-                    if let Some(obj) = self.get_object(this_obj_id) {
-                        if !obj.borrow().extensible {
-                            return Err(self.create_type_error(
-                                "Cannot define private method on non-extensible object",
-                            ));
+                InstanceFieldDef::Public(key, initializer) => {
+                    let val = if let Some(init) = initializer {
+                        match self.eval_expr(init, &init_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => JsValue::Undefined,
                         }
-                        if obj.borrow().private_fields.contains_key(name) {
-                            return Err(
-                                self.create_type_error("Cannot add private method to object twice")
-                            );
-                        }
-                        obj.borrow_mut()
-                            .private_fields
-                            .insert(name.clone(), PrivateElement::Method(value.clone()));
-                    }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    crate::interpreter::builtins::array::create_data_property_or_throw(
+                        self, &this_val, key, val,
+                    )?;
                 }
-                PrivateFieldDef::Accessor { name, get, set } => {
-                    if let Some(obj) = self.get_object(this_obj_id) {
-                        if !obj.borrow().extensible {
-                            return Err(self.create_type_error(
-                                "Cannot define private accessor on non-extensible object",
-                            ));
-                        }
-                        if obj.borrow().private_fields.contains_key(name) {
-                            return Err(self
-                                .create_type_error("Cannot add private accessor to object twice"));
-                        }
-                        obj.borrow_mut().private_fields.insert(
-                            name.clone(),
-                            PrivateElement::Accessor {
-                                get: get.clone(),
-                                set: set.clone(),
-                            },
-                        );
-                    }
-                }
+                _ => {} // Methods/accessors handled in pass 1
             }
-        }
-        for (key, initializer) in &public_field_defs {
-            let val = if let Some(init) = initializer {
-                match self.eval_expr(init, &init_env) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
-                }
-            } else {
-                JsValue::Undefined
-            };
-            crate::interpreter::builtins::array::create_data_property_or_throw(
-                self, &this_val, key, val,
-            )?;
         }
         Ok(())
     }
@@ -9116,16 +9121,12 @@ impl Interpreter {
                     new_obj.borrow_mut().prototype = Some(proto_rc);
                 }
             }
-            let (private_field_defs, public_field_defs) = if let JsValue::Object(o) = &callee_val
+            let instance_field_defs = if let JsValue::Object(o) = &callee_val
                 && let Some(func_obj) = self.get_object(o.id)
             {
-                let borrowed = func_obj.borrow();
-                (
-                    borrowed.class_private_field_defs.clone(),
-                    borrowed.class_public_field_defs.clone(),
-                )
+                func_obj.borrow().class_instance_field_defs.clone()
             } else {
-                (Vec::new(), Vec::new())
+                Vec::new()
             };
             let new_obj_id = new_obj.borrow().id.unwrap();
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
@@ -9156,9 +9157,34 @@ impl Interpreter {
                     );
                 }
             }
-            for def in &private_field_defs {
-                match def {
-                    PrivateFieldDef::Field { name, initializer } => {
+            // Pass 1: Install private methods and accessors first.
+            for idef in &instance_field_defs {
+                match idef {
+                    InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
+                        if let Some(obj) = self.get_object(new_obj_id) {
+                            obj.borrow_mut()
+                                .private_fields
+                                .insert(name.clone(), PrivateElement::Method(value.clone()));
+                        }
+                    }
+                    InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
+                        if let Some(obj) = self.get_object(new_obj_id) {
+                            obj.borrow_mut().private_fields.insert(
+                                name.clone(),
+                                PrivateElement::Accessor {
+                                    get: get.clone(),
+                                    set: set.clone(),
+                                },
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Pass 2: Run field initializers in source order.
+            for idef in &instance_field_defs {
+                match idef {
+                    InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
                         let val = if let Some(init) = initializer {
                             match self.eval_expr(init, &init_env) {
                                 Completion::Normal(v) => v,
@@ -9173,37 +9199,20 @@ impl Interpreter {
                                 .insert(name.clone(), PrivateElement::Field(val));
                         }
                     }
-                    PrivateFieldDef::Method { name, value } => {
+                    InstanceFieldDef::Public(key, initializer) => {
+                        let val = if let Some(init) = initializer {
+                            match self.eval_expr(init, &init_env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
                         if let Some(obj) = self.get_object(new_obj_id) {
-                            obj.borrow_mut()
-                                .private_fields
-                                .insert(name.clone(), PrivateElement::Method(value.clone()));
+                            obj.borrow_mut().insert_value(key.clone(), val);
                         }
                     }
-                    PrivateFieldDef::Accessor { name, get, set } => {
-                        if let Some(obj) = self.get_object(new_obj_id) {
-                            obj.borrow_mut().private_fields.insert(
-                                name.clone(),
-                                PrivateElement::Accessor {
-                                    get: get.clone(),
-                                    set: set.clone(),
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-            for (key, initializer) in &public_field_defs {
-                let val = if let Some(init) = initializer {
-                    match self.eval_expr(init, &init_env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    }
-                } else {
-                    JsValue::Undefined
-                };
-                if let Some(obj) = self.get_object(new_obj_id) {
-                    obj.borrow_mut().insert_value(key.clone(), val);
+                    _ => {} // Methods/accessors handled in pass 1
                 }
             }
             let prev_new_target = self.new_target.take();
@@ -9363,6 +9372,119 @@ impl Interpreter {
             }
             let new_obj_id = new_obj.borrow().id.unwrap();
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+
+            // Initialize instance fields from the constructor's class_instance_field_defs.
+            let instance_field_defs = if let JsValue::Object(co) = constructor
+                && let Some(func_obj) = self.get_object(co.id)
+            {
+                func_obj.borrow().class_instance_field_defs.clone()
+            } else {
+                Vec::new()
+            };
+            if !instance_field_defs.is_empty() {
+                let (class_pn, proto_val, outer_env) =
+                    if let JsValue::Object(co) = constructor
+                        && let Some(func_obj) = self.get_object(co.id)
+                    {
+                        let (pn, oe) =
+                            if let Some(JsFunction::User { ref closure, .. }) =
+                                func_obj.borrow().callable
+                            {
+                                let cls_env = closure.borrow();
+                                (cls_env.class_private_names.clone(), cls_env.parent.clone())
+                            } else {
+                                (None, None)
+                            };
+                        let pv = func_obj.borrow().get_property("prototype");
+                        (pn, pv, oe)
+                    } else {
+                        (None, JsValue::Undefined, None)
+                    };
+                let init_parent =
+                    outer_env.unwrap_or_else(|| Environment::new_function_scope(None));
+                let init_env = Environment::new(Some(init_parent));
+                init_env.borrow_mut().declare("this", BindingKind::Const);
+                let _ = init_env.borrow_mut().set("this", this_val.clone());
+                init_env.borrow_mut().is_field_initializer = true;
+                init_env.borrow_mut().class_private_names = class_pn;
+                if matches!(&proto_val, JsValue::Object(_)) {
+                    init_env.borrow_mut().bindings.insert(
+                        "__home_object__".to_string(),
+                        Binding {
+                            value: proto_val,
+                            kind: BindingKind::Const,
+                            initialized: true,
+                            deletable: false,
+                        },
+                    );
+                }
+                // Pass 1: Install private methods and accessors first.
+                for idef in &instance_field_defs {
+                    match idef {
+                        InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
+                            if let Some(obj) = self.get_object(new_obj_id) {
+                                obj.borrow_mut().private_fields.insert(
+                                    name.clone(),
+                                    PrivateElement::Method(value.clone()),
+                                );
+                            }
+                        }
+                        InstanceFieldDef::Private(PrivateFieldDef::Accessor {
+                            name,
+                            get,
+                            set,
+                        }) => {
+                            if let Some(obj) = self.get_object(new_obj_id) {
+                                obj.borrow_mut().private_fields.insert(
+                                    name.clone(),
+                                    PrivateElement::Accessor {
+                                        get: get.clone(),
+                                        set: set.clone(),
+                                    },
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Pass 2: Run field initializers in source order.
+                for idef in &instance_field_defs {
+                    match idef {
+                        InstanceFieldDef::Private(PrivateFieldDef::Field {
+                            name,
+                            initializer,
+                        }) => {
+                            let val = if let Some(init) = initializer {
+                                match self.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::Undefined
+                            };
+                            if let Some(obj) = self.get_object(new_obj_id) {
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(name.clone(), PrivateElement::Field(val));
+                            }
+                        }
+                        InstanceFieldDef::Public(key, initializer) => {
+                            let val = if let Some(init) = initializer {
+                                match self.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::Undefined
+                            };
+                            if let Some(obj) = self.get_object(new_obj_id) {
+                                obj.borrow_mut().insert_value(key.clone(), val);
+                            }
+                        }
+                        _ => {} // Methods/accessors handled in pass 1
+                    }
+                }
+            }
 
             let prev_new_target = self.new_target.take();
             self.new_target = Some(new_target.clone());
@@ -11429,10 +11551,12 @@ impl Interpreter {
                                     ClassMethodKind::Get => {
                                         let mut b = func_obj.borrow_mut();
                                         let mut found = false;
-                                        for def in b.class_private_field_defs.iter_mut() {
-                                            if let PrivateFieldDef::Accessor {
-                                                name: n, get: g, ..
-                                            } = def
+                                        for idef in b.class_instance_field_defs.iter_mut() {
+                                            if let InstanceFieldDef::Private(
+                                                PrivateFieldDef::Accessor {
+                                                    name: n, get: g, ..
+                                                },
+                                            ) = idef
                                                 && *n == branded
                                             {
                                                 *g = Some(method_val.clone());
@@ -11441,22 +11565,26 @@ impl Interpreter {
                                             }
                                         }
                                         if !found {
-                                            b.class_private_field_defs.push(
-                                                PrivateFieldDef::Accessor {
-                                                    name: branded.clone(),
-                                                    get: Some(method_val),
-                                                    set: None,
-                                                },
+                                            b.class_instance_field_defs.push(
+                                                InstanceFieldDef::Private(
+                                                    PrivateFieldDef::Accessor {
+                                                        name: branded.clone(),
+                                                        get: Some(method_val),
+                                                        set: None,
+                                                    },
+                                                ),
                                             );
                                         }
                                     }
                                     ClassMethodKind::Set => {
                                         let mut b = func_obj.borrow_mut();
                                         let mut found = false;
-                                        for def in b.class_private_field_defs.iter_mut() {
-                                            if let PrivateFieldDef::Accessor {
-                                                name: n, set: s, ..
-                                            } = def
+                                        for idef in b.class_instance_field_defs.iter_mut() {
+                                            if let InstanceFieldDef::Private(
+                                                PrivateFieldDef::Accessor {
+                                                    name: n, set: s, ..
+                                                },
+                                            ) = idef
                                                 && *n == branded
                                             {
                                                 *s = Some(method_val.clone());
@@ -11465,21 +11593,23 @@ impl Interpreter {
                                             }
                                         }
                                         if !found {
-                                            b.class_private_field_defs.push(
-                                                PrivateFieldDef::Accessor {
-                                                    name: branded.clone(),
-                                                    get: None,
-                                                    set: Some(method_val),
-                                                },
+                                            b.class_instance_field_defs.push(
+                                                InstanceFieldDef::Private(
+                                                    PrivateFieldDef::Accessor {
+                                                        name: branded.clone(),
+                                                        get: None,
+                                                        set: Some(method_val),
+                                                    },
+                                                ),
                                             );
                                         }
                                     }
                                     _ => {
-                                        func_obj.borrow_mut().class_private_field_defs.push(
-                                            PrivateFieldDef::Method {
+                                        func_obj.borrow_mut().class_instance_field_defs.push(
+                                            InstanceFieldDef::Private(PrivateFieldDef::Method {
                                                 name: branded.clone(),
                                                 value: method_val,
-                                            },
+                                            }),
                                         );
                                     }
                                 }
@@ -11584,11 +11714,11 @@ impl Interpreter {
                             if let JsValue::Object(ref o) = ctor_val
                                 && let Some(func_obj) = self.get_object(o.id)
                             {
-                                func_obj.borrow_mut().class_private_field_defs.push(
-                                    PrivateFieldDef::Field {
+                                func_obj.borrow_mut().class_instance_field_defs.push(
+                                    InstanceFieldDef::Private(PrivateFieldDef::Field {
                                         name: branded,
                                         initializer: p.value.clone(),
-                                    },
+                                    }),
                                 );
                             }
                         } else {
@@ -11637,8 +11767,8 @@ impl Interpreter {
                         {
                             func_obj
                                 .borrow_mut()
-                                .class_public_field_defs
-                                .push((key, p.value.clone()));
+                                .class_instance_field_defs
+                                .push(InstanceFieldDef::Public(key, p.value.clone()));
                         }
                     }
                 }

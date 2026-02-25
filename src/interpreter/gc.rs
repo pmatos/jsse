@@ -121,21 +121,23 @@ impl Interpreter {
                 }
             }
 
-            // Trace class_private_field_defs (method/accessor templates on constructors)
-            for def in &obj.class_private_field_defs {
-                match def {
-                    PrivateFieldDef::Method { value, .. } => {
-                        Self::collect_value_roots(value, &mut worklist);
-                    }
-                    PrivateFieldDef::Accessor { get, set, .. } => {
-                        if let Some(g) = get {
-                            Self::collect_value_roots(g, &mut worklist);
+            // Trace class_instance_field_defs (method/accessor templates on constructors)
+            for idef in &obj.class_instance_field_defs {
+                if let InstanceFieldDef::Private(def) = idef {
+                    match def {
+                        PrivateFieldDef::Method { value, .. } => {
+                            Self::collect_value_roots(value, &mut worklist);
                         }
-                        if let Some(s) = set {
-                            Self::collect_value_roots(s, &mut worklist);
+                        PrivateFieldDef::Accessor { get, set, .. } => {
+                            if let Some(g) = get {
+                                Self::collect_value_roots(g, &mut worklist);
+                            }
+                            if let Some(s) = set {
+                                Self::collect_value_roots(s, &mut worklist);
+                            }
                         }
+                        PrivateFieldDef::Field { .. } => {}
                     }
-                    PrivateFieldDef::Field { .. } => {}
                 }
             }
 
