@@ -372,7 +372,10 @@ impl Interpreter {
                         .map(|d| d.to_rust_string())
                         .unwrap_or_default()
                 );
-                proto.borrow_mut().insert_builtin(key, to_prim_fn);
+                proto.borrow_mut().insert_property(
+                    key,
+                    PropertyDescriptor::data(to_prim_fn, false, false, true),
+                );
             }
         }
 

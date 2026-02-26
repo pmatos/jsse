@@ -2,8 +2,8 @@
 
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
-**Total test262 scenarios:** 92,242 (48,130 files, dual strict/non-strict per spec)
-**Current pass rate:** 89,099 / 92,242 (96.59%)
+**Total test262 scenarios:** 91,986 (48,002 files, dual strict/non-strict per spec)
+**Current pass rate:** 89,169 / 91,986 (96.94%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -35,16 +35,18 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 |----------|-----------|-----------|
 | Reflect | 100% | 306/306 |
 | Map | 100% | 403/405 |
+| Symbol | 100% | 184/184 |
+| WeakRef | 100% | 58/58 |
+| FinalizationRegistry | 100% | 94/94 |
 | Temporal | 99% | 8,898/8,964 |
 | Number | 99.7% | 668/670 |
+| annexB | 99% | 1,362/1,377 |
 | RegExp | 98% | 3,682/3,756 |
-| FinalizationRegistry | 98% | 92/94 |
 | DisposableStack | 99% | 180/182 |
 | String | 97% | 2,362/2,427 |
 | DataView | 97% | 1,090/1,122 |
 | Set | 97% | 742/764 |
 | Math | 100% | 654/654 |
-| WeakRef | 97% | 56/58 |
 | Object | 97% | 6,565/6,802 |
 | Promise | 96% | 1,224/1,272 |
 | Array | 96% | 5,874/6,111 |
@@ -52,10 +54,8 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | TypedArray | 96% | 2,732/2,860 |
 | Date | 95% | 1,130/1,188 |
 | Function | 95% | 847/893 |
-| annexB | 99% | 1,362/1,377 |
 | Proxy | 89% | 540/607 |
 | TypedArrayConstructors | 89% | 1,280/1,442 |
-| Symbol | 79% | 146/184 |
 
 ---
 

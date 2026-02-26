@@ -25,6 +25,7 @@ pub struct Interpreter {
     pub(crate) current_realm_id: usize,
     objects: Vec<Option<Rc<RefCell<JsObjectData>>>>,
     global_symbol_registry: HashMap<String, crate::types::JsSymbol>,
+    pub(crate) well_known_symbols: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
     free_list: Vec<usize>,
@@ -92,6 +93,7 @@ impl Interpreter {
             current_realm_id: 0,
             objects: Vec::new(),
             global_symbol_registry: HashMap::new(),
+            well_known_symbols: HashMap::new(),
             next_symbol_id: 1,
             new_target: None,
             free_list: Vec::new(),
@@ -361,6 +363,41 @@ impl Interpreter {
             }
         }
         Ok(default_proto.clone())
+    }
+
+    // GetPrototypeFromConstructor with realm-aware fallback — §10.2.4
+    pub(crate) fn get_prototype_from_new_target_realm<F>(
+        &mut self,
+        get_realm_proto: F,
+    ) -> Result<Option<Rc<RefCell<JsObjectData>>>, JsValue>
+    where
+        F: Fn(&Realm) -> Option<Rc<RefCell<JsObjectData>>>,
+    {
+        let nt = match self.new_target.clone() {
+            Some(v) => v,
+            None => {
+                let proto = get_realm_proto(&self.realms[self.current_realm_id]);
+                return Ok(proto);
+            }
+        };
+        if let JsValue::Object(nt_o) = &nt {
+            let proto_val = match self.get_object_property(nt_o.id, "prototype", &nt) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            if let JsValue::Object(po) = proto_val
+                && let Some(proto_rc) = self.get_object(po.id)
+            {
+                return Ok(Some(proto_rc));
+            }
+            // proto is not an object: use realm of newTarget
+            let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()));
+            let proto = get_realm_proto(&self.realms[nt_realm_id]);
+            return Ok(proto);
+        }
+        let proto = get_realm_proto(&self.realms[self.current_realm_id]);
+        Ok(proto)
     }
 
     fn register_global_fn(&mut self, name: &str, kind: BindingKind, func: JsFunction) {

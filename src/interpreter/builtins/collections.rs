@@ -2411,8 +2411,7 @@ impl Interpreter {
                     ));
                 }
                 // OrdinaryCreateFromConstructor(NewTarget, "%WeakRef.prototype%")
-                let default_proto = interp.realm().weakref_prototype.clone();
-                let proto = match interp.get_prototype_from_new_target(&default_proto) {
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| realm.weakref_prototype.clone()) {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -2643,8 +2642,7 @@ impl Interpreter {
                     ));
                 }
                 // OrdinaryCreateFromConstructor(NewTarget, "%FinalizationRegistry.prototype%")
-                let default_proto = interp.realm().finalization_registry_prototype.clone();
-                let proto = match interp.get_prototype_from_new_target(&default_proto) {
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| realm.finalization_registry_prototype.clone()) {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
                 };

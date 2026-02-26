@@ -992,15 +992,21 @@ impl Interpreter {
                     ("asyncDispose", "Symbol.asyncDispose"),
                 ];
                 for (name, desc) in well_known {
-                    let id = self.next_symbol_id;
-                    self.next_symbol_id += 1;
-                    let sym = JsValue::Symbol(crate::types::JsSymbol {
-                        id,
-                        description: Some(JsString::from_str(desc)),
-                    });
+                    let sym_val = if let Some(existing) = self.well_known_symbols.get(name) {
+                        JsValue::Symbol(existing.clone())
+                    } else {
+                        let id = self.next_symbol_id;
+                        self.next_symbol_id += 1;
+                        let sym = crate::types::JsSymbol {
+                            id,
+                            description: Some(JsString::from_str(desc)),
+                        };
+                        self.well_known_symbols.insert(name.to_string(), sym.clone());
+                        JsValue::Symbol(sym)
+                    };
                     obj.borrow_mut().insert_property(
                         name.to_string(),
-                        PropertyDescriptor::data(sym, false, false, false),
+                        PropertyDescriptor::data(sym_val, false, false, false),
                     );
                 }
 
@@ -2180,77 +2186,95 @@ impl Interpreter {
         );
 
         // Function constructor
-        self.register_global_fn(
-            "Function",
-            BindingKind::Var,
-            JsFunction::constructor("Function".to_string(), 1, |interp, _this, args| {
-                let (params_str, body_str) = if args.is_empty() {
-                    (String::new(), String::new())
-                } else if args.len() == 1 {
-                    match interp.to_string_value(&args[0]) {
-                        Ok(s) => (String::new(), s),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    let mut params = Vec::new();
-                    for arg in &args[..args.len() - 1] {
-                        match interp.to_string_value(arg) {
-                            Ok(s) => params.push(s),
+        // Capture realm_id so that functions created by `new other.Function()` are
+        // registered in the realm where the Function constructor was defined (§10.3).
+        {
+            let fn_ctor_realm_id = self.current_realm_id;
+            let fn_ctor_fn = self.create_function(JsFunction::constructor(
+                "Function".to_string(),
+                1,
+                move |interp, _this, args| {
+                    let (params_str, body_str) = if args.is_empty() {
+                        (String::new(), String::new())
+                    } else if args.len() == 1 {
+                        match interp.to_string_value(&args[0]) {
+                            Ok(s) => (String::new(), s),
                             Err(e) => return Completion::Throw(e),
                         }
-                    }
-                    let body = match interp.to_string_value(args.last().unwrap()) {
-                        Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
+                    } else {
+                        let mut params = Vec::new();
+                        for arg in &args[..args.len() - 1] {
+                            match interp.to_string_value(arg) {
+                                Ok(s) => params.push(s),
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        let body = match interp.to_string_value(args.last().unwrap()) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        (params.join(","), body)
                     };
-                    (params.join(","), body)
-                };
 
-                let fn_source_text = format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
-                let source = format!("(function anonymous({}\n) {{\n{}\n}})", params_str, body_str);
-                let mut p = match parser::Parser::new(&source) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        return Completion::Throw(
-                            interp.create_error("SyntaxError", &format!("{}", e)),
-                        );
-                    }
-                };
-                let program = match p.parse_program() {
-                    Ok(prog) => prog,
-                    Err(e) => {
-                        return Completion::Throw(
-                            interp.create_error("SyntaxError", &format!("{}", e)),
-                        );
-                    }
-                };
-
-                if let Some(Statement::Expression(Expression::Function(fe))) =
-                    program.body.first()
-                {
-                    let is_strict = fe.body_is_strict;
-                    let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
-                    dynamic_fn_env.borrow_mut().strict = false;
-                    let js_func = JsFunction::User {
-                        name: Some("anonymous".to_string()),
-                        params: fe.params.clone(),
-                        body: fe.body.clone(),
-                        closure: dynamic_fn_env,
-                        is_arrow: false,
-                        is_strict,
-                        is_generator: false,
-                        is_async: false,
-                        is_method: false,
-                        source_text: Some(fn_source_text),
+                    let fn_source_text = format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
+                    let source = format!("(function anonymous({}\n) {{\n{}\n}})", params_str, body_str);
+                    let mut p = match parser::Parser::new(&source) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            return Completion::Throw(
+                                interp.create_error("SyntaxError", &format!("{}", e)),
+                            );
+                        }
                     };
-                    Completion::Normal(interp.create_function(js_func))
-                } else {
-                    Completion::Throw(
-                        interp.create_error("SyntaxError", "Failed to parse function"),
-                    )
-                }
-            }),
-        );
+                    let program = match p.parse_program() {
+                        Ok(prog) => prog,
+                        Err(e) => {
+                            return Completion::Throw(
+                                interp.create_error("SyntaxError", &format!("{}", e)),
+                            );
+                        }
+                    };
+
+                    if let Some(Statement::Expression(Expression::Function(fe))) =
+                        program.body.first()
+                    {
+                        let is_strict = fe.body_is_strict;
+                        // Use the realm of the Function constructor, not the caller's realm
+                        let old_realm = interp.current_realm_id;
+                        interp.current_realm_id = fn_ctor_realm_id;
+                        let global_env = interp.realm().global_env.clone();
+                        interp.current_realm_id = old_realm;
+                        let dynamic_fn_env = Environment::new(Some(global_env));
+                        dynamic_fn_env.borrow_mut().strict = false;
+                        let js_func = JsFunction::User {
+                            name: Some("anonymous".to_string()),
+                            params: fe.params.clone(),
+                            body: fe.body.clone(),
+                            closure: dynamic_fn_env,
+                            is_arrow: false,
+                            is_strict,
+                            is_generator: false,
+                            is_async: false,
+                            is_method: false,
+                            source_text: Some(fn_source_text),
+                        };
+                        // Create function in the Function constructor's realm
+                        let old_realm = interp.current_realm_id;
+                        interp.current_realm_id = fn_ctor_realm_id;
+                        let result = interp.create_function(js_func);
+                        interp.current_realm_id = old_realm;
+                        Completion::Normal(result)
+                    } else {
+                        Completion::Throw(
+                            interp.create_error("SyntaxError", "Failed to parse function"),
+                        )
+                    }
+                },
+            ));
+            let global_env = self.realm().global_env.clone();
+            global_env.borrow_mut().declare("Function", BindingKind::Var);
+            let _ = global_env.borrow_mut().set("Function", fn_ctor_fn);
+        }
 
         // Per spec §20.2.3, Function.prototype is itself a function object
         {
@@ -4090,12 +4114,12 @@ impl Interpreter {
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     // ES6 §19.1.2.9: Let obj = ? ToObject(O)
-                    if matches!(target, JsValue::Null | JsValue::Undefined) {
-                        return Completion::Throw(
-                            interp.create_type_error("Cannot convert undefined or null to object"),
-                        );
-                    }
-                    if let JsValue::Object(ref o) = target
+                    let obj_val = match interp.to_object(&target) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        other => return other,
+                    };
+                    if let JsValue::Object(ref o) = obj_val
                         && let Some(obj) = interp.get_object(o.id)
                     {
                         // Proxy getPrototypeOf trap

@@ -1478,19 +1478,14 @@ impl Interpreter {
                 JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
                     value: bigint_ops::unary_minus(&b.value),
                 })),
-                JsValue::Object(_) => Completion::Normal(JsValue::Number(number_ops::unary_minus(
-                    self.to_number_coerce(val),
-                ))),
-                _ => Completion::Normal(JsValue::Number(number_ops::unary_minus(to_number(val)))),
+                _ => match self.to_number_value(val) {
+                    Ok(n) => Completion::Normal(JsValue::Number(number_ops::unary_minus(n))),
+                    Err(e) => Completion::Throw(e),
+                },
             },
-            UnaryOp::Plus => match val {
-                JsValue::BigInt(_) => Completion::Throw(
-                    self.create_type_error("Cannot convert a BigInt value to a number"),
-                ),
-                JsValue::Object(_) => {
-                    Completion::Normal(JsValue::Number(self.to_number_coerce(val)))
-                }
-                _ => Completion::Normal(JsValue::Number(to_number(val))),
+            UnaryOp::Plus => match self.to_number_value(val) {
+                Ok(n) => Completion::Normal(JsValue::Number(n)),
+                Err(e) => Completion::Throw(e),
             },
             UnaryOp::Not => Completion::Normal(JsValue::Boolean(!self.to_boolean_val(val))),
             UnaryOp::BitNot => match val {
@@ -1814,9 +1809,9 @@ impl Interpreter {
         }
     }
 
-    fn abstract_equality(&mut self, left: &JsValue, right: &JsValue) -> bool {
+    fn abstract_equality(&mut self, left: &JsValue, right: &JsValue) -> Result<bool, JsValue> {
         if std::mem::discriminant(left) == std::mem::discriminant(right) {
-            return strict_equality(left, right);
+            return Ok(strict_equality(left, right));
         }
         // B.3.6.2: IsHTMLDDA == null/undefined
         if let JsValue::Object(o) = left {
@@ -1824,7 +1819,7 @@ impl Interpreter {
                 if obj.borrow().is_htmldda
                     && (right.is_null() || right.is_undefined())
                 {
-                    return true;
+                    return Ok(true);
                 }
             }
         }
@@ -1833,12 +1828,12 @@ impl Interpreter {
                 if obj.borrow().is_htmldda
                     && (left.is_null() || left.is_undefined())
                 {
-                    return true;
+                    return Ok(true);
                 }
             }
         }
         if (left.is_null() && right.is_undefined()) || (left.is_undefined() && right.is_null()) {
-            return true;
+            return Ok(true);
         }
         if left.is_number() && right.is_string() {
             return self.abstract_equality(left, &JsValue::Number(to_number(right)));
@@ -1857,47 +1852,41 @@ impl Interpreter {
             (left, right)
         {
             if n.is_nan() || n.is_infinite() {
-                return false;
+                return Ok(false);
             }
             if *n != n.trunc() {
-                return false;
+                return Ok(false);
             }
             let n_as_bigint = crate::interpreter::builtins::bigint::f64_to_bigint(*n);
-            return bigint_ops::equal(&b.value, &n_as_bigint);
+            return Ok(bigint_ops::equal(&b.value, &n_as_bigint));
         }
         // BigInt == String
         if let (JsValue::BigInt(b), JsValue::String(s)) = (left, right) {
             if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
-                return bigint_ops::equal(&b.value, &parsed);
+                return Ok(bigint_ops::equal(&b.value, &parsed));
             }
-            return false;
+            return Ok(false);
         }
         if let (JsValue::String(s), JsValue::BigInt(b)) = (left, right) {
             if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
-                return bigint_ops::equal(&parsed, &b.value);
+                return Ok(bigint_ops::equal(&parsed, &b.value));
             }
-            return false;
+            return Ok(false);
         }
         // Object vs primitive (including BigInt)
         if matches!(left, JsValue::Object(_))
             && (right.is_string() || right.is_number() || right.is_symbol() || right.is_bigint())
         {
-            let lprim = match self.to_primitive(left, "default") {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
+            let lprim = self.to_primitive(left, "default")?;
             return self.abstract_equality(&lprim, right);
         }
         if matches!(right, JsValue::Object(_))
             && (left.is_string() || left.is_number() || left.is_symbol() || left.is_bigint())
         {
-            let rprim = match self.to_primitive(right, "default") {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
+            let rprim = self.to_primitive(right, "default")?;
             return self.abstract_equality(left, &rprim);
         }
-        false
+        Ok(false)
     }
 
     fn abstract_relational(
@@ -1972,6 +1961,10 @@ impl Interpreter {
                     .abstract_relational(&JsValue::BigInt(JsBigInt { value: parsed }), &rprim);
             }
             return Ok(None);
+        }
+        // ToNumeric throws TypeError for Symbol
+        if matches!(lprim, JsValue::Symbol(_)) || matches!(rprim, JsValue::Symbol(_)) {
+            return Err(self.create_type_error("Cannot convert a Symbol value to a number"));
         }
         let ln = to_number(&lprim);
         let rn = to_number(&rprim);
@@ -2067,12 +2060,14 @@ impl Interpreter {
                     }))
                 }
             }
-            BinaryOp::Eq => {
-                Completion::Normal(JsValue::Boolean(self.abstract_equality(left, right)))
-            }
-            BinaryOp::NotEq => {
-                Completion::Normal(JsValue::Boolean(!self.abstract_equality(left, right)))
-            }
+            BinaryOp::Eq => match self.abstract_equality(left, right) {
+                Ok(b) => Completion::Normal(JsValue::Boolean(b)),
+                Err(e) => Completion::Throw(e),
+            },
+            BinaryOp::NotEq => match self.abstract_equality(left, right) {
+                Ok(b) => Completion::Normal(JsValue::Boolean(!b)),
+                Err(e) => Completion::Throw(e),
+            },
             BinaryOp::StrictEq => {
                 Completion::Normal(JsValue::Boolean(strict_equality(left, right)))
             }
@@ -2957,6 +2952,12 @@ impl Interpreter {
                         )));
                     }
                     return Completion::Normal(final_val);
+                }
+                // Non-object base: in strict mode, throw TypeError
+                if env.borrow().strict {
+                    return Completion::Throw(self.create_type_error(&format!(
+                        "Cannot create property '{key}' on {obj_val}"
+                    )));
                 }
                 Completion::Normal(rval)
             }
