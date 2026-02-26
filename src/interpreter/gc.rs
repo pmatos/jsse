@@ -148,6 +148,11 @@ impl Interpreter {
                 Self::collect_env_roots(closure, &mut worklist);
             }
 
+            // Trace wrapped function target
+            if let Some(ref target) = obj.wrapped_target_function {
+                Self::collect_value_roots(target, &mut worklist);
+            }
+
             // Trace parameter_map environments
             if let Some(ref map) = obj.parameter_map {
                 for (env_ref, _) in map.values() {
@@ -311,6 +316,9 @@ impl Interpreter {
                     && let JsFunction::User { closure, .. } = func
                 {
                     Self::collect_env_roots(closure, &mut worklist);
+                }
+                if let Some(ref target) = obj.wrapped_target_function {
+                    Self::collect_value_roots(target, &mut worklist);
                 }
                 if obj.class_name != "WeakMap"
                     && let Some(ref entries) = obj.map_data

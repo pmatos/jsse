@@ -7768,6 +7768,11 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 }
             }
+            // Wrapped function [[Call]]
+            let has_wrapped_target = obj.borrow().wrapped_target_function.is_some();
+            if has_wrapped_target {
+                return self.call_wrapped_function(o.id, _this_val, args);
+            }
             let is_class_ctor = obj.borrow().is_class_constructor;
             if is_class_ctor && self.new_target.is_none() {
                 return Completion::Throw(
@@ -7785,7 +7790,15 @@ impl Interpreter {
                             self.gc_root_value(a);
                         }
                         let saved_this = self.last_call_this_value.take();
+                        // Switch to the function's realm per spec (current realm = function's realm)
+                        let saved_realm = self.current_realm_id;
+                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                            if fn_realm < self.realms.len() {
+                                self.current_realm_id = fn_realm;
+                            }
+                        }
                         let result = f(self, _this_val, args);
+                        self.current_realm_id = saved_realm;
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
                         for a in args.iter().rev() {
@@ -7819,6 +7832,7 @@ impl Interpreter {
                         if is_async && is_generator {
                             let gen_obj = self.create_object();
                             // Set prototype from function's .prototype property, fall back to intrinsic
+                            // Use GetPrototypeFromConstructor(fn, "%AsyncGeneratorPrototype%") semantics
                             let mut proto_set = false;
                             if let Some(func_obj_rc) = self.get_object(o.id) {
                                 let proto_val =
@@ -7831,8 +7845,10 @@ impl Interpreter {
                                 }
                             }
                             if !proto_set {
+                                // GetFunctionRealm(fn) to find the right realm's proto
+                                let fn_realm_id = self.get_function_realm(func_val);
                                 gen_obj.borrow_mut().prototype =
-                                    self.realm().async_generator_prototype.clone();
+                                    self.realms[fn_realm_id].async_generator_prototype.clone();
                             }
                             gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
                             // Create persistent function environment
@@ -7933,6 +7949,8 @@ impl Interpreter {
                             // Create a generator object instead of executing
                             let gen_obj = self.create_object();
                             // Set prototype from the function's .prototype property
+                            // Use GetPrototypeFromConstructor semantics (GetFunctionRealm fallback)
+                            let mut proto_set = false;
                             if let Some(func_obj_rc) = self.get_object(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
@@ -7940,7 +7958,13 @@ impl Interpreter {
                                     && let Some(proto_rc) = self.get_object(p.id)
                                 {
                                     gen_obj.borrow_mut().prototype = Some(proto_rc);
+                                    proto_set = true;
                                 }
+                            }
+                            if !proto_set {
+                                let fn_realm_id = self.get_function_realm(func_val);
+                                gen_obj.borrow_mut().prototype =
+                                    self.realms[fn_realm_id].generator_prototype.clone();
                             }
                             gen_obj.borrow_mut().class_name = "Generator".to_string();
                             // Create persistent function environment
@@ -12534,5 +12558,256 @@ impl Interpreter {
         // Create namespace object and return fulfilled promise
         let ns = self.create_module_namespace(&module);
         self.create_resolved_promise(ns)
+    }
+
+    pub(crate) fn create_error_in_realm(&mut self, realm_id: usize, error_type: &str, msg: &str) -> JsValue {
+        let old_realm = self.current_realm_id;
+        self.current_realm_id = realm_id;
+        let err = self.create_error(error_type, msg);
+        self.current_realm_id = old_realm;
+        err
+    }
+
+    pub(crate) fn get_wrapped_value(&mut self, caller_realm_id: usize, value: &JsValue) -> Result<JsValue, JsValue> {
+        match value {
+            JsValue::Undefined
+            | JsValue::Null
+            | JsValue::Boolean(_)
+            | JsValue::Number(_)
+            | JsValue::String(_)
+            | JsValue::Symbol(_)
+            | JsValue::BigInt(_) => Ok(value.clone()),
+            JsValue::Object(_) => {
+                if !self.is_callable(value) {
+                    return Err(self.create_error_in_realm(
+                        caller_realm_id,
+                        "TypeError",
+                        "ShadowRealm can only pass callable and primitive values across realm boundaries",
+                    ));
+                }
+                self.wrapped_function_create(caller_realm_id, value)
+            }
+        }
+    }
+
+    pub(crate) fn wrapped_function_create(&mut self, caller_realm_id: usize, target_func: &JsValue) -> Result<JsValue, JsValue> {
+        let old_realm = self.current_realm_id;
+        self.current_realm_id = caller_realm_id;
+
+        let func_obj = self.create_object();
+        let func_id = func_obj.borrow().id.unwrap();
+        {
+            let mut o = func_obj.borrow_mut();
+            o.prototype = self.realms[caller_realm_id].function_prototype.clone();
+            o.class_name = "Function".to_string();
+            o.callable = Some(JsFunction::native(
+                "".to_string(),
+                0,
+                |_, _, _| Completion::Normal(JsValue::Undefined),
+            ));
+            o.wrapped_target_function = Some(target_func.clone());
+            o.wrapped_caller_realm_id = Some(caller_realm_id);
+        }
+        self.function_realm_map.insert(func_id, caller_realm_id);
+
+        self.current_realm_id = old_realm;
+
+        // CopyNameAndLength (spec §10.4.2.4) — any error becomes TypeError from callerRealm
+        let length_val = if let JsValue::Object(tf) = target_func {
+            // HasOwnProperty via [[GetOwnProperty]] (invokes proxy trap if proxy)
+            let has_own_length = match self.proxy_get_own_property_descriptor(tf.id, "length") {
+                Ok(JsValue::Undefined) => false,
+                Ok(_) => true,
+                Err(_) => {
+                    return Err(self.create_error_in_realm(
+                        caller_realm_id,
+                        "TypeError",
+                        "WrappedFunctionCreate: error getting length descriptor",
+                    ));
+                }
+            };
+            if has_own_length {
+                match self.get_object_property(tf.id, "length", target_func) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(_) => {
+                        return Err(self.create_error_in_realm(
+                            caller_realm_id,
+                            "TypeError",
+                            "WrappedFunctionCreate: error getting length",
+                        ));
+                    }
+                    _ => JsValue::Number(0.0),
+                }
+            } else {
+                JsValue::Number(0.0)
+            }
+        } else {
+            JsValue::Number(0.0)
+        };
+
+        let computed_length = match length_val {
+            JsValue::Number(n) => {
+                if n == f64::INFINITY {
+                    f64::INFINITY
+                } else if n == f64::NEG_INFINITY || n < 0.0 {
+                    0.0
+                } else {
+                    n.trunc().max(0.0)
+                }
+            }
+            _ => 0.0,
+        };
+
+        let name_str = if let JsValue::Object(tf) = target_func {
+            match self.get_object_property(tf.id, "name", target_func) {
+                Completion::Normal(JsValue::String(s)) => s.to_string(),
+                Completion::Normal(_) => String::new(),
+                Completion::Throw(_) => {
+                    return Err(self.create_error_in_realm(
+                        caller_realm_id,
+                        "TypeError",
+                        "WrappedFunctionCreate: error getting name",
+                    ));
+                }
+                _ => String::new(),
+            }
+        } else {
+            String::new()
+        };
+
+        if let Some(obj) = self.get_object(func_id) {
+            obj.borrow_mut().insert_property(
+                "length".to_string(),
+                PropertyDescriptor::data(JsValue::Number(computed_length), false, false, true),
+            );
+            obj.borrow_mut().insert_property(
+                "name".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(crate::types::JsString::from_str(&name_str)),
+                    false,
+                    false,
+                    true,
+                ),
+            );
+        }
+
+        Ok(JsValue::Object(crate::types::JsObject { id: func_id }))
+    }
+
+    pub(crate) fn call_wrapped_function(
+        &mut self,
+        wrapper_id: u64,
+        _this_val: &JsValue,
+        args: &[JsValue],
+    ) -> Completion {
+        let (target, caller_realm_id) = {
+            let obj = match self.get_object(wrapper_id) {
+                Some(o) => o,
+                None => {
+                    return Completion::Throw(
+                        self.create_type_error("WrappedFunction: missing target"),
+                    )
+                }
+            };
+            let b = obj.borrow();
+            let target = match b.wrapped_target_function.clone() {
+                Some(t) => t,
+                None => {
+                    return Completion::Throw(
+                        self.create_type_error("WrappedFunction: missing target"),
+                    )
+                }
+            };
+            let caller_realm_id = b.wrapped_caller_realm_id.unwrap_or(self.current_realm_id);
+            (target, caller_realm_id)
+        };
+
+        let target_realm_id = self.get_function_realm(&target);
+
+        // Wrap arguments into target realm
+        let mut wrapped_args = Vec::with_capacity(args.len());
+        for arg in args {
+            match self.get_wrapped_value(target_realm_id, arg) {
+                Ok(v) => wrapped_args.push(v),
+                Err(_) => {
+                    return Completion::Throw(self.create_error_in_realm(
+                        caller_realm_id,
+                        "TypeError",
+                        "WrappedFunction: argument is not a primitive or callable",
+                    ));
+                }
+            }
+        }
+
+        // Call target in its realm
+        let old_realm = self.current_realm_id;
+        self.current_realm_id = target_realm_id;
+        let result = self.call_function(&target, &JsValue::Undefined, &wrapped_args);
+        self.current_realm_id = old_realm;
+
+        let result_val = match result {
+            Completion::Normal(v) => v,
+            Completion::Empty => JsValue::Undefined,
+            _ => {
+                return Completion::Throw(self.create_error_in_realm(
+                    caller_realm_id,
+                    "TypeError",
+                    "WrappedFunction: error in target function",
+                ));
+            }
+        };
+
+        match self.get_wrapped_value(caller_realm_id, &result_val) {
+            Ok(v) => Completion::Normal(v),
+            Err(e) => Completion::Throw(e),
+        }
+    }
+
+    pub(crate) fn perform_realm_eval(
+        &mut self,
+        source_text: &str,
+        caller_realm_id: usize,
+        eval_realm_id: usize,
+    ) -> Completion {
+        use crate::parser::Parser;
+
+        let program = {
+            let mut parser = match Parser::new(source_text) {
+                Ok(p) => p,
+                Err(_) => {
+                    return Completion::Throw(
+                        self.create_error_in_realm(caller_realm_id, "SyntaxError", "Invalid source text"),
+                    );
+                }
+            };
+            match parser.parse_program() {
+                Ok(prog) => prog,
+                Err(e) => {
+                    return Completion::Throw(
+                        self.create_error_in_realm(caller_realm_id, "SyntaxError", &e.to_string()),
+                    );
+                }
+            }
+        };
+
+        let old_realm = self.current_realm_id;
+        self.current_realm_id = eval_realm_id;
+        let result = self.run(&program);
+        self.current_realm_id = old_realm;
+
+        let result_val = match result {
+            Completion::Normal(v) => v,
+            Completion::Empty => JsValue::Undefined,
+            _ => {
+                return Completion::Throw(
+                    self.create_error_in_realm(caller_realm_id, "TypeError", "ShadowRealm evaluate error"),
+                );
+            }
+        };
+
+        match self.get_wrapped_value(caller_realm_id, &result_val) {
+            Ok(v) => Completion::Normal(v),
+            Err(e) => Completion::Throw(e),
+        }
     }
 }

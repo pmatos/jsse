@@ -167,6 +167,7 @@ pub struct Realm {
     pub(crate) disposable_stack_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) async_disposable_stack_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) suppressed_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) shadow_realm_prototype: Option<Rc<RefCell<JsObjectData>>>,
 }
 
 impl Realm {
@@ -256,6 +257,7 @@ impl Realm {
             disposable_stack_prototype: None,
             async_disposable_stack_prototype: None,
             suppressed_error_prototype: None,
+            shadow_realm_prototype: None,
         }
     }
 
@@ -333,6 +335,7 @@ impl Realm {
             &self.syntax_error_prototype,
             &self.uri_error_prototype,
             &self.eval_error_prototype,
+            &self.shadow_realm_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id
@@ -1282,6 +1285,9 @@ pub struct JsObjectData {
     pub is_derived_class_constructor: bool,
     pub bound_target_function: Option<JsValue>,
     pub bound_args: Option<Vec<JsValue>>,
+    pub shadow_realm_id: Option<usize>,
+    pub wrapped_target_function: Option<JsValue>,
+    pub wrapped_caller_realm_id: Option<usize>,
     pub(crate) disposable_stack: Option<DisposableStackData>,
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
     pub(crate) temporal_data: Option<TemporalData>,
@@ -1338,6 +1344,9 @@ impl JsObjectData {
             is_derived_class_constructor: false,
             bound_target_function: None,
             bound_args: None,
+            shadow_realm_id: None,
+            wrapped_target_function: None,
+            wrapped_caller_realm_id: None,
             disposable_stack: None,
             module_namespace: None,
             temporal_data: None,

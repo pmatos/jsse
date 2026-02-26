@@ -2706,7 +2706,23 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text),
                         };
-                        Completion::Normal(interp.create_function(js_func))
+                        let fn_val = interp.create_function(js_func);
+                        // Apply GetPrototypeFromConstructor(newTarget, "%AsyncFunction.prototype%")
+                        if let JsValue::Object(ref fo) = fn_val {
+                            let proto = interp.get_prototype_from_new_target_realm(|realm| {
+                                realm.async_function_prototype.clone()
+                            });
+                            match proto {
+                                Ok(Some(proto_rc)) => {
+                                    if let Some(fo_obj) = interp.get_object(fo.id) {
+                                        fo_obj.borrow_mut().prototype = Some(proto_rc);
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        Completion::Normal(fn_val)
                     } else {
                         Completion::Throw(
                             interp.create_error("SyntaxError", "Failed to parse async function"),
@@ -2808,7 +2824,23 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text),
                         };
-                        Completion::Normal(interp.create_function(js_func))
+                        let fn_val = interp.create_function(js_func);
+                        // Apply GetPrototypeFromConstructor(newTarget, "%GeneratorFunction.prototype%")
+                        if let JsValue::Object(ref fo) = fn_val {
+                            let proto = interp.get_prototype_from_new_target_realm(|realm| {
+                                realm.generator_function_prototype.clone()
+                            });
+                            match proto {
+                                Ok(Some(proto_rc)) => {
+                                    if let Some(fo_obj) = interp.get_object(fo.id) {
+                                        fo_obj.borrow_mut().prototype = Some(proto_rc);
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        Completion::Normal(fn_val)
                     } else {
                         Completion::Throw(
                             interp
@@ -2913,7 +2945,23 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text),
                         };
-                        Completion::Normal(interp.create_function(js_func))
+                        let fn_val = interp.create_function(js_func);
+                        // Apply GetPrototypeFromConstructor(newTarget, "%AsyncGeneratorFunction.prototype%")
+                        if let JsValue::Object(ref fo) = fn_val {
+                            let proto = interp.get_prototype_from_new_target_realm(|realm| {
+                                realm.async_generator_function_prototype.clone()
+                            });
+                            match proto {
+                                Ok(Some(proto_rc)) => {
+                                    if let Some(fo_obj) = interp.get_object(fo.id) {
+                                        fo_obj.borrow_mut().prototype = Some(proto_rc);
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
+                        Completion::Normal(fn_val)
                     } else {
                         Completion::Throw(interp.create_error(
                             "SyntaxError",
@@ -3225,6 +3273,9 @@ impl Interpreter {
         // Intl built-in
         self.setup_intl();
 
+        // ShadowRealm built-in
+        self.setup_shadow_realm();
+
         // globalThis - create a global object
         let global_obj = self.create_object();
         let global_val = JsValue::Object(crate::types::JsObject {
@@ -3315,6 +3366,7 @@ impl Interpreter {
             "DisposableStack",
             "AsyncDisposableStack",
             "SuppressedError",
+            "ShadowRealm",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.realm().global_env.borrow();
@@ -3363,6 +3415,7 @@ impl Interpreter {
             "SharedArrayBuffer",
             "WeakRef",
             "FinalizationRegistry",
+            "ShadowRealm",
         ];
         let ctor_vals: Vec<JsValue> = {
             let env = self.realm().global_env.borrow();
@@ -7748,5 +7801,232 @@ impl Interpreter {
         obj_proto
             .borrow_mut()
             .insert_builtin("toString".to_string(), fn_tostring);
+    }
+
+    pub(crate) fn setup_shadow_realm(&mut self) {
+        let proto = self.create_object();
+        {
+            let mut p = proto.borrow_mut();
+            p.class_name = "ShadowRealm".to_string();
+            p.prototype = self.realm().object_prototype.clone();
+        }
+
+        // ShadowRealm.prototype[Symbol.toStringTag] = "ShadowRealm"
+        let to_string_tag_key = self
+            .get_symbol_key("toStringTag")
+            .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+        proto.borrow_mut().insert_property(
+            to_string_tag_key,
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_str("ShadowRealm")),
+                false,
+                false,
+                true,
+            ),
+        );
+
+        // ShadowRealm.prototype.evaluate
+        let evaluate_fn = self.create_function(JsFunction::native(
+            "evaluate".to_string(),
+            1,
+            |interp, this, args| {
+                let eval_realm_id = if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(realm_id) = obj.borrow().shadow_realm_id
+                {
+                    realm_id
+                } else {
+                    return Completion::Throw(interp.create_type_error(
+                        "ShadowRealm.prototype.evaluate called on non-ShadowRealm",
+                    ));
+                };
+
+                let source_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let source_text = match &source_val {
+                    JsValue::String(s) => s.to_string(),
+                    _ => {
+                        return Completion::Throw(interp.create_type_error(
+                            "ShadowRealm.prototype.evaluate: sourceText must be a string",
+                        ));
+                    }
+                };
+
+                let caller_realm_id = interp.current_realm_id;
+                interp.perform_realm_eval(&source_text, caller_realm_id, eval_realm_id)
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("evaluate".to_string(), evaluate_fn);
+
+        // ShadowRealm.prototype.importValue
+        let import_value_fn = self.create_function(JsFunction::native(
+            "importValue".to_string(),
+            2,
+            |interp, this, args| {
+                let eval_realm_id = if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(realm_id) = obj.borrow().shadow_realm_id
+                {
+                    realm_id
+                } else {
+                    return Completion::Throw(interp.create_type_error(
+                        "ShadowRealm.prototype.importValue called on non-ShadowRealm",
+                    ));
+                };
+
+                let specifier_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let export_name_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+
+                let specifier = match interp.to_string_value(&specifier_val) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
+
+                let export_name = match &export_name_val {
+                    JsValue::String(s) => s.to_string(),
+                    _ => {
+                        return Completion::Throw(interp.create_type_error(
+                            "ShadowRealm.prototype.importValue: exportName must be a string",
+                        ));
+                    }
+                };
+
+                let caller_realm_id = interp.current_realm_id;
+                let referrer = interp.current_module_path.clone();
+
+                let old_realm = interp.current_realm_id;
+                interp.current_realm_id = eval_realm_id;
+
+                let module_path = match interp.resolve_module_specifier(&specifier, referrer.as_deref()) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        interp.current_realm_id = old_realm;
+                        let err = interp.create_error_in_realm(
+                            caller_realm_id,
+                            "TypeError",
+                            "ShadowRealm importValue: cannot resolve module",
+                        );
+                        return interp.create_rejected_promise(err);
+                    }
+                };
+
+                let module = match interp.load_module(&module_path) {
+                    Ok(m) => m,
+                    Err(_) => {
+                        interp.current_realm_id = old_realm;
+                        let err = interp.create_error_in_realm(
+                            caller_realm_id,
+                            "TypeError",
+                            "ShadowRealm importValue: module load error",
+                        );
+                        return interp.create_rejected_promise(err);
+                    }
+                };
+                interp.current_realm_id = old_realm;
+
+                // Get the named export
+                let export_val = {
+                    let m = module.borrow();
+                    if let Some(v) = m.exports.get(&export_name) {
+                        Some(v.clone())
+                    } else {
+                        // Also check export_bindings -> env
+                        if let Some(binding_name) = m.export_bindings.get(&export_name) {
+                            m.env.borrow().get(binding_name)
+                        } else {
+                            None
+                        }
+                    }
+                };
+
+                let export_val = match export_val {
+                    Some(v) => v,
+                    None => {
+                        let err = interp.create_error_in_realm(
+                            caller_realm_id,
+                            "TypeError",
+                            &format!("ShadowRealm importValue: export '{}' not found", export_name),
+                        );
+                        return interp.create_rejected_promise(err);
+                    }
+                };
+
+                match interp.get_wrapped_value(caller_realm_id, &export_val) {
+                    Ok(wrapped) => interp.create_resolved_promise(wrapped),
+                    Err(e) => interp.create_rejected_promise(e),
+                }
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("importValue".to_string(), import_value_fn);
+
+        let proto_id = proto.borrow().id.unwrap();
+        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+
+        // ShadowRealm constructor
+        let proto_val_for_ctor = proto_val.clone();
+        let shadow_realm_ctor = self.create_function(JsFunction::constructor(
+            "ShadowRealm".to_string(),
+            0,
+            move |interp, _this, _args| {
+                if interp.new_target.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("ShadowRealm must be called with 'new'"),
+                    );
+                }
+
+                let new_realm_id = interp.create_new_realm();
+
+                let obj = interp.create_object();
+                {
+                    let mut o = obj.borrow_mut();
+                    o.class_name = "ShadowRealm".to_string();
+                    o.shadow_realm_id = Some(new_realm_id);
+                    if let JsValue::Object(ref p) = proto_val_for_ctor
+                        && let Some(proto_rc) = interp.get_object(p.id)
+                    {
+                        o.prototype = Some(proto_rc);
+                    }
+                }
+                Completion::Normal(JsValue::Object(crate::types::JsObject {
+                    id: obj.borrow().id.unwrap(),
+                }))
+            },
+        ));
+
+        // Set ShadowRealm.prototype on constructor
+        if let JsValue::Object(ref ctor_o) = shadow_realm_ctor
+            && let Some(ctor_obj) = self.get_object(ctor_o.id)
+        {
+            ctor_obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
+        }
+
+        // Set ShadowRealm.prototype.constructor = ShadowRealm
+        if let JsValue::Object(ref p) = proto_val
+            && let Some(proto_obj) = self.get_object(p.id)
+        {
+            proto_obj
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), shadow_realm_ctor.clone());
+        }
+
+        // Store prototype in realm
+        if let Some(proto_rc) = self.get_object(proto_id) {
+            self.realm_mut().shadow_realm_prototype = Some(proto_rc);
+        }
+
+        // Register ShadowRealm as global
+        let global_env = self.realm().global_env.clone();
+        global_env
+            .borrow_mut()
+            .declare("ShadowRealm", BindingKind::Var);
+        let _ = global_env
+            .borrow_mut()
+            .set("ShadowRealm", shadow_realm_ctor);
     }
 }

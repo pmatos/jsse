@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Test Files | Scenarios | Passing | Failing | Pass Rate |
 |------------|-----------|---------|---------|-----------|
-| 48,123     | 92,144    | 89,463  | 2,681   | 97.09%    |
+| 48,002     | 91,986    | 89,635  | 2,351   | 97.44%    |
 
 Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution, expanding 48,286 test files into 92,550 scenarios.
 
@@ -79,6 +79,7 @@ Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262
   - `Temporal` (all types: `Instant`, `ZonedDateTime`, `PlainDateTime`, `PlainDate`, `PlainTime`, `PlainYearMonth`, `PlainMonthDay`, `Duration`, `Temporal.Now`; full arithmetic, comparison, rounding, formatting; IANA timezone support via ICU4X; 12 calendar systems; 100% test262 + intl402/Temporal compliance)
   - `Intl.DateTimeFormat` (partial — dateStyle/timeStyle, calendar-aware Temporal formatting)
   - `Intl.NumberFormat` (partial)
+  - `ShadowRealm` (constructor, `evaluate`, `importValue`; full cross-realm value wrapping with WrappedFunction exotic objects)
   - `globalThis`
   - Built-ins: `console.log`, `Error`, `Test262Error`, `$DONOTEVALUATE$`
 
