@@ -211,7 +211,10 @@ fn format_precision(n: f64, precision: usize) -> String {
             0
         };
         let int_part: String = if int_count <= rounded.len() {
-            rounded[..int_count].iter().map(|&d| (b'0' + d) as char).collect()
+            rounded[..int_count]
+                .iter()
+                .map(|&d| (b'0' + d) as char)
+                .collect()
         } else {
             let s: String = rounded.iter().map(|&d| (b'0' + d) as char).collect();
             format!("{}{}", s, "0".repeat(int_count - rounded.len()))
@@ -220,7 +223,10 @@ fn format_precision(n: f64, precision: usize) -> String {
             format!("{sign}{int_part}")
         } else {
             let frac_src: String = if int_count < rounded.len() {
-                rounded[int_count..].iter().map(|&d| (b'0' + d) as char).collect()
+                rounded[int_count..]
+                    .iter()
+                    .map(|&d| (b'0' + d) as char)
+                    .collect()
             } else {
                 String::new()
             };

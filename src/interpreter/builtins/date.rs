@@ -1468,7 +1468,8 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("constructor".to_string(), date_ctor.clone());
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Date", BindingKind::Var);
         let _ = self.realm().global_env.borrow_mut().set("Date", date_ctor);

@@ -577,10 +577,15 @@ impl Interpreter {
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("ArrayBuffer", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("ArrayBuffer", ctor);
+        let _ = self
+            .realm()
+            .global_env
+            .borrow_mut()
+            .set("ArrayBuffer", ctor);
     }
 
     pub(crate) fn create_arraybuffer(&mut self, data: Vec<u8>) -> Rc<RefCell<JsObjectData>> {
@@ -998,10 +1003,15 @@ impl Interpreter {
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("SharedArrayBuffer", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("SharedArrayBuffer", ctor);
+        let _ = self
+            .realm()
+            .global_env
+            .borrow_mut()
+            .set("SharedArrayBuffer", ctor);
     }
 
     fn setup_typed_array_base_prototype(&mut self) {
@@ -1371,7 +1381,11 @@ impl Interpreter {
                         } else {
                             v as i64
                         };
-                        (if vi < 0 { (len + vi).max(0) } else { vi.min(len) }) as usize
+                        (if vi < 0 {
+                            (len + vi).max(0)
+                        } else {
+                            vi.min(len)
+                        }) as usize
                     };
                     let begin = {
                         let n = to_integer(if let Some(a) = args.first() {
@@ -1384,7 +1398,8 @@ impl Interpreter {
                         });
                         resolve_idx(n, src_len)
                     };
-                    let end_is_undefined = args.len() <= 1 || matches!(args.get(1), Some(JsValue::Undefined));
+                    let end_is_undefined =
+                        args.len() <= 1 || matches!(args.get(1), Some(JsValue::Undefined));
                     let end = {
                         let n = if !end_is_undefined {
                             to_integer(match interp.to_number_value(&args[1]) {
@@ -1448,7 +1463,11 @@ impl Interpreter {
                         } else {
                             v as i64
                         };
-                        (if vi < 0 { (len + vi).max(0) } else { vi.min(len) }) as usize
+                        (if vi < 0 {
+                            (len + vi).max(0)
+                        } else {
+                            vi.min(len)
+                        }) as usize
                     };
                     let begin = {
                         let n = to_integer(if let Some(a) = args.first() {
@@ -1529,9 +1548,10 @@ impl Interpreter {
                                         if src_start + byte_count <= src_buf.len()
                                             && dst_start + byte_count <= dst_buf.len()
                                         {
-                                            dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
-                                                &src_buf[src_start..src_start + byte_count],
-                                            );
+                                            dst_buf[dst_start..dst_start + byte_count]
+                                                .copy_from_slice(
+                                                    &src_buf[src_start..src_start + byte_count],
+                                                );
                                         }
                                     }
                                 } else {
@@ -1582,7 +1602,11 @@ impl Interpreter {
                         } else {
                             v as i64
                         };
-                        (if vi < 0 { (len + vi).max(0) } else { vi.min(len) }) as usize
+                        (if vi < 0 {
+                            (len + vi).max(0)
+                        } else {
+                            vi.min(len)
+                        }) as usize
                     };
                     let target = {
                         let n = match interp
@@ -1638,8 +1662,7 @@ impl Interpreter {
                         if byte_count > 0 {
                             let src: Vec<u8> =
                                 buf[src_byte_start..src_byte_start + byte_count].to_vec();
-                            buf[dst_byte_start..dst_byte_start + byte_count]
-                                .copy_from_slice(&src);
+                            buf[dst_byte_start..dst_byte_start + byte_count].copy_from_slice(&src);
                         }
                     }
                     return Completion::Normal(this_val.clone());
@@ -2128,7 +2151,9 @@ impl Interpreter {
         {
             let array_proto = self.realm().array_prototype.clone().unwrap();
             let tostring_val = array_proto.borrow().get_property("toString");
-            proto.borrow_mut().insert_builtin("toString".to_string(), tostring_val);
+            proto
+                .borrow_mut()
+                .insert_builtin("toString".to_string(), tostring_val);
         }
 
         // toLocaleString
@@ -3290,9 +3315,11 @@ impl Interpreter {
                 };
                 let ta_kind = match ta_kind {
                     Some(k) => k,
-                    None => return Completion::Throw(
-                        interp.create_type_error("TypedArray.from: target is not a TypedArray"),
-                    ),
+                    None => {
+                        return Completion::Throw(
+                            interp.create_type_error("TypedArray.from: target is not a TypedArray"),
+                        );
+                    }
                 };
 
                 for (k, val) in values.iter().enumerate() {
@@ -3351,9 +3378,11 @@ impl Interpreter {
                 };
                 let ta_kind = match ta_kind {
                     Some(k) => k,
-                    None => return Completion::Throw(
-                        interp.create_type_error("TypedArray.of: not a TypedArray"),
-                    ),
+                    None => {
+                        return Completion::Throw(
+                            interp.create_type_error("TypedArray.of: not a TypedArray"),
+                        );
+                    }
                 };
                 // Step 5-6: Set each element
                 for (k, val) in args.iter().enumerate() {
@@ -3670,24 +3699,43 @@ impl Interpreter {
 
             // Store prototype for this kind
             match kind {
-                TypedArrayKind::Int8 => self.realm_mut().int8array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Uint8 => self.realm_mut().uint8array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Int8 => {
+                    self.realm_mut().int8array_prototype = Some(type_proto.clone())
+                }
+                TypedArrayKind::Uint8 => {
+                    self.realm_mut().uint8array_prototype = Some(type_proto.clone())
+                }
                 TypedArrayKind::Uint8Clamped => {
                     self.realm_mut().uint8clampedarray_prototype = Some(type_proto.clone())
                 }
-                TypedArrayKind::Int16 => self.realm_mut().int16array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Uint16 => self.realm_mut().uint16array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Int32 => self.realm_mut().int32array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Uint32 => self.realm_mut().uint32array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Float32 => self.realm_mut().float32array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::Float64 => self.realm_mut().float64array_prototype = Some(type_proto.clone()),
-                TypedArrayKind::BigInt64 => self.realm_mut().bigint64array_prototype = Some(type_proto.clone()),
+                TypedArrayKind::Int16 => {
+                    self.realm_mut().int16array_prototype = Some(type_proto.clone())
+                }
+                TypedArrayKind::Uint16 => {
+                    self.realm_mut().uint16array_prototype = Some(type_proto.clone())
+                }
+                TypedArrayKind::Int32 => {
+                    self.realm_mut().int32array_prototype = Some(type_proto.clone())
+                }
+                TypedArrayKind::Uint32 => {
+                    self.realm_mut().uint32array_prototype = Some(type_proto.clone())
+                }
+                TypedArrayKind::Float32 => {
+                    self.realm_mut().float32array_prototype = Some(type_proto.clone())
+                }
+                TypedArrayKind::Float64 => {
+                    self.realm_mut().float64array_prototype = Some(type_proto.clone())
+                }
+                TypedArrayKind::BigInt64 => {
+                    self.realm_mut().bigint64array_prototype = Some(type_proto.clone())
+                }
                 TypedArrayKind::BigUint64 => {
                     self.realm_mut().biguint64array_prototype = Some(type_proto.clone())
                 }
             }
 
-            self.realm().global_env
+            self.realm()
+                .global_env
                 .borrow_mut()
                 .declare(&name, BindingKind::Var);
             let _ = self.realm().global_env.borrow_mut().set(&name, ctor);
@@ -3924,7 +3972,8 @@ impl Interpreter {
         };
 
         let default_ctor_name = kind.name();
-        let default_ctor = self.realm()
+        let default_ctor = self
+            .realm()
             .global_env
             .borrow()
             .get(default_ctor_name)
@@ -4133,11 +4182,7 @@ impl Interpreter {
 
     /// TypedArrayCreate(C, argumentList) — §23.2.4.2
     /// Creates a TypedArray by calling C with argumentList. Validates result is a TypedArray.
-    fn typed_array_create(
-        &mut self,
-        ctor: &JsValue,
-        len: usize,
-    ) -> Completion {
+    fn typed_array_create(&mut self, ctor: &JsValue, len: usize) -> Completion {
         // Fast path for known built-in TypedArray constructors
         if let JsValue::Object(o) = ctor
             && let Some(obj) = self.get_object(o.id)
@@ -4239,9 +4284,7 @@ impl Interpreter {
                 .get_object(o.id)
                 .is_some_and(|obj| obj.borrow().callable.is_some());
             if !is_callable {
-                return Completion::Throw(
-                    self.create_type_error("not a TypedArray constructor"),
-                );
+                return Completion::Throw(self.create_type_error("not a TypedArray constructor"));
             }
         } else {
             return Completion::Throw(self.create_type_error("not a TypedArray constructor"));
@@ -4341,9 +4384,9 @@ impl Interpreter {
         let ta_kind = match ta_kind {
             Some(k) => k,
             None => {
-                return Completion::Throw(
-                    self.create_type_error("TypedArray.of/from: constructor did not return a TypedArray"),
-                );
+                return Completion::Throw(self.create_type_error(
+                    "TypedArray.of/from: constructor did not return a TypedArray",
+                ));
             }
         };
         // Set each element using Set semantics (which respects OOB/detach)
@@ -4393,9 +4436,9 @@ impl Interpreter {
                     _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
                 };
                 if !matches!(iter, JsValue::Object(_)) {
-                    return Err(Completion::Throw(
-                        self.create_type_error("Result of the Symbol.iterator method is not an object"),
-                    ));
+                    return Err(Completion::Throw(self.create_type_error(
+                        "Result of the Symbol.iterator method is not an object",
+                    )));
                 }
                 let mut values = Vec::new();
                 while let JsValue::Object(io) = &iter {
@@ -5153,7 +5196,8 @@ impl Interpreter {
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("DataView", BindingKind::Var);
         let _ = self.realm().global_env.borrow_mut().set("DataView", ctor);

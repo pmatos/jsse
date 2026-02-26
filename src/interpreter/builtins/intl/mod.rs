@@ -313,7 +313,8 @@ impl Interpreter {
         self.setup_intl_duration_format(&intl_obj);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Intl", BindingKind::Var);
         let _ = self.realm().global_env.borrow_mut().set("Intl", intl_val);

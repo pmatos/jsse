@@ -862,7 +862,12 @@ impl<'a> Parser<'a> {
                                 let (stmts, strict) = self.parse_arrow_function_body(true)?;
                                 (ArrowBody::Block(stmts), strict)
                             } else {
-                                (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                                (
+                                    ArrowBody::Expression(Box::new(
+                                        self.parse_assignment_expression()?,
+                                    )),
+                                    false,
+                                )
                             };
                             self.in_async = prev_async;
                             let source_text = Some(self.source_since(source_start));
@@ -902,7 +907,10 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                        (
+                            ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                            false,
+                        )
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -939,7 +947,10 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                        (
+                            ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                            false,
+                        )
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -1033,7 +1044,12 @@ impl<'a> Parser<'a> {
                             let (stmts, strict) = self.parse_arrow_function_body(false)?;
                             (ArrowBody::Block(stmts), strict)
                         } else {
-                            (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                            (
+                                ArrowBody::Expression(Box::new(
+                                    self.parse_assignment_expression()?,
+                                )),
+                                false,
+                            )
                         };
                         let source_text = Some(self.source_since(paren_start));
                         return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -1058,7 +1074,10 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_body_checked(false, &params)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                        (
+                            ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                            false,
+                        )
                     };
                     let source_text = Some(self.source_since(paren_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -1108,7 +1127,12 @@ impl<'a> Parser<'a> {
                             let (stmts, strict) = self.parse_arrow_body_checked(false, &params)?;
                             (ArrowBody::Block(stmts), strict)
                         } else {
-                            (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                            (
+                                ArrowBody::Expression(Box::new(
+                                    self.parse_assignment_expression()?,
+                                )),
+                                false,
+                            )
                         };
                         let source_text = Some(self.source_since(paren_start));
                         return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -1665,7 +1689,10 @@ impl<'a> Parser<'a> {
                     let (stmts, strict) = self.parse_arrow_function_body(true)?;
                     (ArrowBody::Block(stmts), strict)
                 } else {
-                    (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                    (
+                        ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                        false,
+                    )
                 };
                 self.in_async = prev_async;
                 let source_text = Some(self.source_since(source_start));
@@ -1699,7 +1726,10 @@ impl<'a> Parser<'a> {
                 let (stmts, strict) = self.parse_arrow_body_checked(true, &params)?;
                 (ArrowBody::Block(stmts), strict)
             } else {
-                (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                (
+                    ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                    false,
+                )
             };
             self.in_async = prev_async;
             let source_text = Some(self.source_since(source_start));
@@ -1751,7 +1781,10 @@ impl<'a> Parser<'a> {
                     let (stmts, strict) = self.parse_arrow_body_checked(true, &params)?;
                     (ArrowBody::Block(stmts), strict)
                 } else {
-                    (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                    (
+                        ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                        false,
+                    )
                 };
                 self.in_async = prev_async;
                 let source_text = Some(self.source_since(source_start));

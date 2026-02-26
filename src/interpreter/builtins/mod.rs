@@ -361,10 +361,15 @@ impl Interpreter {
                 .insert_builtin("log".to_string(), log_fn);
         }
         let console_val = JsValue::Object(crate::types::JsObject { id: console_id });
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("console", BindingKind::Const);
-        let _ = self.realm().global_env.borrow_mut().set("console", console_val);
+        let _ = self
+            .realm()
+            .global_env
+            .borrow_mut()
+            .set("console", console_val);
 
         // print global (needed by test262 async harness doneprintHandle.js)
         {
@@ -377,7 +382,8 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            self.realm().global_env
+            self.realm()
+                .global_env
                 .borrow_mut()
                 .declare("print", BindingKind::Var);
             let _ = self.realm().global_env.borrow_mut().set("print", print_fn);
@@ -950,8 +956,11 @@ impl Interpreter {
                     interp.create_array(args.to_vec())
                 };
                 if let JsValue::Object(ref o) = arr {
-                    let default_proto_id =
-                        interp.realm().array_prototype.as_ref().and_then(|p| p.borrow().id);
+                    let default_proto_id = interp
+                        .realm()
+                        .array_prototype
+                        .as_ref()
+                        .and_then(|p| p.borrow().id);
                     interp.apply_new_target_prototype(o.id, default_proto_id);
                 }
                 Completion::Normal(arr)
@@ -1018,7 +1027,8 @@ impl Interpreter {
                             id,
                             description: Some(JsString::from_str(desc)),
                         };
-                        self.well_known_symbols.insert(name.to_string(), sym.clone());
+                        self.well_known_symbols
+                            .insert(name.to_string(), sym.clone());
                         JsValue::Symbol(sym)
                     };
                     obj.borrow_mut().insert_property(
@@ -1080,10 +1090,15 @@ impl Interpreter {
                 obj.borrow_mut()
                     .insert_builtin("keyFor".to_string(), key_for_fn);
             }
-            self.realm().global_env
+            self.realm()
+                .global_env
                 .borrow_mut()
                 .declare("Symbol", BindingKind::Var);
-            let _ = self.realm().global_env.borrow_mut().set("Symbol", symbol_fn);
+            let _ = self
+                .realm()
+                .global_env
+                .borrow_mut()
+                .set("Symbol", symbol_fn);
         }
 
         self.setup_iterator_prototypes();
@@ -2164,7 +2179,8 @@ impl Interpreter {
         }
 
         let math_val = JsValue::Object(crate::types::JsObject { id: math_id });
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Math", BindingKind::Const);
         let _ = self.realm().global_env.borrow_mut().set("Math", math_val);
@@ -2233,8 +2249,12 @@ impl Interpreter {
                         (params.join(","), body)
                     };
 
-                    let fn_source_text = format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
-                    let source = format!("(function anonymous({}\n) {{\n{}\n}})", params_str, body_str);
+                    let fn_source_text =
+                        format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
+                    let source = format!(
+                        "(function anonymous({}\n) {{\n{}\n}})",
+                        params_str, body_str
+                    );
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -2289,7 +2309,9 @@ impl Interpreter {
                 },
             ));
             let global_env = self.realm().global_env.clone();
-            global_env.borrow_mut().declare("Function", BindingKind::Var);
+            global_env
+                .borrow_mut()
+                .declare("Function", BindingKind::Var);
             let _ = global_env.borrow_mut().set("Function", fn_ctor_fn);
         }
 
@@ -2430,7 +2452,8 @@ impl Interpreter {
                         out
                     }
 
-                    let bindings: Vec<JsValue> = self.realm()
+                    let bindings: Vec<JsValue> = self
+                        .realm()
                         .global_env
                         .borrow()
                         .bindings
@@ -2639,10 +2662,14 @@ impl Interpreter {
                         (params.join(","), body)
                     };
 
-                    let fn_source_text =
-                        format!("async function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
-                    let source =
-                        format!("(async function anonymous({}\n) {{\n{}\n}})", params_str, body_str);
+                    let fn_source_text = format!(
+                        "async function anonymous({}\n) {{\n{}\n}}",
+                        params_str, body_str
+                    );
+                    let source = format!(
+                        "(async function anonymous({}\n) {{\n{}\n}})",
+                        params_str, body_str
+                    );
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -2664,7 +2691,8 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body_is_strict;
-                        let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
+                        let dynamic_fn_env =
+                            Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
@@ -2738,12 +2766,12 @@ impl Interpreter {
                         (params.join(","), body)
                     };
 
-                    let fn_source_text = format!(
-                        "function* anonymous({}\n) {{\n{}\n}}",
+                    let fn_source_text =
+                        format!("function* anonymous({}\n) {{\n{}\n}}", params_str, body_str);
+                    let source = format!(
+                        "(function* anonymous({}\n) {{\n{}\n}})",
                         params_str, body_str
                     );
-                    let source =
-                        format!("(function* anonymous({}\n) {{\n{}\n}})", params_str, body_str);
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -2765,7 +2793,8 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body_is_strict;
-                        let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
+                        let dynamic_fn_env =
+                            Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
@@ -2782,7 +2811,8 @@ impl Interpreter {
                         Completion::Normal(interp.create_function(js_func))
                     } else {
                         Completion::Throw(
-                            interp.create_error("SyntaxError", "Failed to parse generator function"),
+                            interp
+                                .create_error("SyntaxError", "Failed to parse generator function"),
                         )
                     }
                 },
@@ -2843,8 +2873,10 @@ impl Interpreter {
                         "async function* anonymous({}\n) {{\n{}\n}}",
                         params_str, body_str
                     );
-                    let source =
-                        format!("(async function* anonymous({}\n) {{\n{}\n}})", params_str, body_str);
+                    let source = format!(
+                        "(async function* anonymous({}\n) {{\n{}\n}})",
+                        params_str, body_str
+                    );
                     let mut p = match parser::Parser::new(&source) {
                         Ok(p) => p,
                         Err(e) => {
@@ -2866,7 +2898,8 @@ impl Interpreter {
                         program.body.first()
                     {
                         let is_strict = fe.body_is_strict;
-                        let dynamic_fn_env = Environment::new(Some(interp.realm().global_env.clone()));
+                        let dynamic_fn_env =
+                            Environment::new(Some(interp.realm().global_env.clone()));
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
@@ -3123,7 +3156,8 @@ impl Interpreter {
         let json_val = JsValue::Object(crate::types::JsObject {
             id: json_obj.borrow().id.unwrap(),
         });
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("JSON", BindingKind::Var);
         let _ = self.realm().global_env.borrow_mut().set("JSON", json_val);
@@ -3196,10 +3230,12 @@ impl Interpreter {
         let global_val = JsValue::Object(crate::types::JsObject {
             id: global_obj.borrow().id.unwrap(),
         });
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("globalThis", BindingKind::Var);
-        let _ = self.realm()
+        let _ = self
+            .realm()
             .global_env
             .borrow_mut()
             .set("globalThis", global_val.clone());
@@ -3361,16 +3397,15 @@ impl Interpreter {
             let realm_id = self.current_realm_id;
             let dollar_262_val = self.create_dollar_262(realm_id);
             let global_env = self.realm().global_env.clone();
-            global_env
-                .borrow_mut()
-                .declare("$262", BindingKind::Var);
+            global_env.borrow_mut().declare("$262", BindingKind::Var);
             let _ = global_env.borrow_mut().set("$262", dollar_262_val);
         }
     }
 
     fn setup_object_statics(&mut self) {
         // Get the Object function from global env
-        let obj_func_val = self.realm()
+        let obj_func_val = self
+            .realm()
             .global_env
             .borrow()
             .get("Object")
@@ -3537,11 +3572,9 @@ impl Interpreter {
                 let obj_valueof_fn = self.create_function(JsFunction::native(
                     "valueOf".to_string(),
                     0,
-                    |interp, this_val, _args| {
-                        match interp.to_object(this_val) {
-                            Completion::Normal(o) => Completion::Normal(o),
-                            other => other,
-                        }
+                    |interp, this_val, _args| match interp.to_object(this_val) {
+                        Completion::Normal(o) => Completion::Normal(o),
+                        other => other,
                     },
                 ));
                 proto_obj
@@ -3634,7 +3667,11 @@ impl Interpreter {
                             other => return other,
                         };
                         loop {
-                            let v_id = if let JsValue::Object(ref vo) = v { vo.id } else { break; };
+                            let v_id = if let JsValue::Object(ref vo) = v {
+                                vo.id
+                            } else {
+                                break;
+                            };
                             // Use proxy-aware [[GetPrototypeOf]]
                             let proto = if let Some(obj) = interp.get_object(v_id) {
                                 if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
@@ -3797,12 +3834,17 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         loop {
-                            let obj_id = if let JsValue::Object(ref o) = current { o.id } else { break; };
-                            // Step 4a: O.[[GetOwnProperty]](key) (proxy-aware)
-                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
+                            let obj_id = if let JsValue::Object(ref o) = current {
+                                o.id
+                            } else {
+                                break;
                             };
+                            // Step 4a: O.[[GetOwnProperty]](key) (proxy-aware)
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             if !matches!(desc_val, JsValue::Undefined) {
                                 if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
                                     if let Some(g) = desc.get {
@@ -3812,8 +3854,12 @@ impl Interpreter {
                                 return Completion::Normal(JsValue::Undefined);
                             }
                             // Step 4c: O.[[GetPrototypeOf]]() (proxy-aware)
-                            let is_proxy = interp.get_object(obj_id)
-                                .map(|o| { let b = o.borrow(); b.is_proxy() || b.proxy_revoked })
+                            let is_proxy = interp
+                                .get_object(obj_id)
+                                .map(|o| {
+                                    let b = o.borrow();
+                                    b.is_proxy() || b.proxy_revoked
+                                })
                                 .unwrap_or(false);
                             let proto = if is_proxy {
                                 match interp.proxy_get_prototype_of(obj_id) {
@@ -3859,11 +3905,16 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         loop {
-                            let obj_id = if let JsValue::Object(ref o) = current { o.id } else { break; };
-                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
+                            let obj_id = if let JsValue::Object(ref o) = current {
+                                o.id
+                            } else {
+                                break;
                             };
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             if !matches!(desc_val, JsValue::Undefined) {
                                 if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
                                     if let Some(s) = desc.set {
@@ -3872,8 +3923,12 @@ impl Interpreter {
                                 }
                                 return Completion::Normal(JsValue::Undefined);
                             }
-                            let is_proxy = interp.get_object(obj_id)
-                                .map(|o| { let b = o.borrow(); b.is_proxy() || b.proxy_revoked })
+                            let is_proxy = interp
+                                .get_object(obj_id)
+                                .map(|o| {
+                                    let b = o.borrow();
+                                    b.is_proxy() || b.proxy_revoked
+                                })
                                 .unwrap_or(false);
                             let proto = if is_proxy {
                                 match interp.proxy_get_prototype_of(obj_id) {
@@ -4161,15 +4216,12 @@ impl Interpreter {
                                 })
                                 .unwrap_or(false);
                             if is_export {
-                                let live_val = match interp.get_object_property(
-                                    o.id,
-                                    &key,
-                                    &target.clone(),
-                                ) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                };
+                                let live_val =
+                                    match interp.get_object_property(o.id, &key, &target.clone()) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        other => return other,
+                                    };
                                 let desc = crate::interpreter::types::PropertyDescriptor {
                                     value: Some(live_val),
                                     writable: Some(true),
@@ -4220,7 +4272,11 @@ impl Interpreter {
                         };
                         // For non-proxy, also include string wrapper char indices
                         let mut extra_str_keys: Vec<String> = Vec::new();
-                        if interp.get_object(obj_id).map(|ob| !ob.borrow().is_proxy()).unwrap_or(false) {
+                        if interp
+                            .get_object(obj_id)
+                            .map(|ob| !ob.borrow().is_proxy())
+                            .unwrap_or(false)
+                        {
                             if let Some(obj) = interp.get_object(obj_id) {
                                 let b = obj.borrow();
                                 if let Some(JsValue::String(ref s)) = b.primitive_value {
@@ -4240,8 +4296,12 @@ impl Interpreter {
                         for kv in &all_keys {
                             if let JsValue::String(s) = kv {
                                 let k = s.to_rust_string();
-                                if extra_str_keys.contains(&k) { continue; }
-                                if k.starts_with("Symbol(") { continue; }
+                                if extra_str_keys.contains(&k) {
+                                    continue;
+                                }
+                                if k.starts_with("Symbol(") {
+                                    continue;
+                                }
                                 if let Ok(n) = k.parse::<u64>() {
                                     if n.to_string() == k {
                                         int_keys.push((n, k));
@@ -4254,8 +4314,14 @@ impl Interpreter {
                             }
                         }
                         int_keys.sort_by_key(|(n, _)| *n);
-                        for (_, k) in int_keys { result.push(JsValue::String(JsString::from_str(&k))); }
-                        result.extend(str_keys.iter().map(|k| JsValue::String(JsString::from_str(k))));
+                        for (_, k) in int_keys {
+                            result.push(JsValue::String(JsString::from_str(&k)));
+                        }
+                        result.extend(
+                            str_keys
+                                .iter()
+                                .map(|k| JsValue::String(JsString::from_str(k))),
+                        );
                         // For each string key call [[GetOwnProperty]] and filter enumerable
                         let mut enum_keys: Vec<JsValue> = Vec::new();
                         // Extra char index keys are always enumerable (string exotic)
@@ -4265,11 +4331,14 @@ impl Interpreter {
                         for kv in result.iter().skip(extra_str_keys.len()) {
                             if let JsValue::String(s) = kv {
                                 let k = s.to_rust_string();
-                                let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                if matches!(desc_val, JsValue::Undefined) { continue; }
+                                let desc_val =
+                                    match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                if matches!(desc_val, JsValue::Undefined) {
+                                    continue;
+                                }
                                 if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
                                     if desc.enumerable != Some(false) {
                                         enum_keys.push(kv.clone());
@@ -4294,14 +4363,22 @@ impl Interpreter {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target {
                         let obj_id = o.id;
-                        let is_proxy = interp.get_object(obj_id)
-                            .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.proxy_revoked })
+                        let is_proxy = interp
+                            .get_object(obj_id)
+                            .map(|obj| {
+                                let b = obj.borrow();
+                                b.is_proxy() || b.proxy_revoked
+                            })
                             .unwrap_or(false);
                         if is_proxy {
                             // SetIntegrityLevel: preventExtensions
                             match interp.proxy_prevent_extensions(obj_id) {
                                 Ok(true) => {}
-                                Ok(false) => return Completion::Throw(interp.create_type_error("Cannot freeze: preventExtensions returned false")),
+                                Ok(false) => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot freeze: preventExtensions returned false",
+                                    ));
+                                }
                                 Err(e) => return Completion::Throw(e),
                             }
                             // Get own keys
@@ -4316,19 +4393,36 @@ impl Interpreter {
                                     _ => continue,
                                 };
                                 // GetOwnProperty to determine accessor vs data
-                                let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                if matches!(desc_val, JsValue::Undefined) { continue; }
+                                let desc_val =
+                                    match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                if matches!(desc_val, JsValue::Undefined) {
+                                    continue;
+                                }
                                 let desc = match interp.to_property_descriptor(&desc_val) {
                                     Ok(d) => d,
                                     Err(_) => continue,
                                 };
                                 let new_desc = if desc.is_accessor_descriptor() {
-                                    PropertyDescriptor { configurable: Some(false), value: None, writable: None, get: None, set: None, enumerable: None }
+                                    PropertyDescriptor {
+                                        configurable: Some(false),
+                                        value: None,
+                                        writable: None,
+                                        get: None,
+                                        set: None,
+                                        enumerable: None,
+                                    }
                                 } else {
-                                    PropertyDescriptor { configurable: Some(false), writable: Some(false), value: None, get: None, set: None, enumerable: None }
+                                    PropertyDescriptor {
+                                        configurable: Some(false),
+                                        writable: Some(false),
+                                        value: None,
+                                        get: None,
+                                        set: None,
+                                        enumerable: None,
+                                    }
                                 };
                                 let new_desc_val = interp.from_property_descriptor(&new_desc);
                                 match interp.proxy_define_own_property(obj_id, key, &new_desc_val) {
@@ -4340,15 +4434,30 @@ impl Interpreter {
                             obj.borrow_mut().extensible = false;
                             let keys_and_descs: Vec<(String, PropertyDescriptor)> = {
                                 let b = obj.borrow();
-                                b.properties.iter()
+                                b.properties
+                                    .iter()
                                     .map(|(k, d)| (k.clone(), d.clone()))
                                     .collect()
                             };
                             for (key, desc) in keys_and_descs {
                                 let new_desc = if desc.is_accessor_descriptor() {
-                                    PropertyDescriptor { configurable: Some(false), value: None, writable: None, get: None, set: None, enumerable: None }
+                                    PropertyDescriptor {
+                                        configurable: Some(false),
+                                        value: None,
+                                        writable: None,
+                                        get: None,
+                                        set: None,
+                                        enumerable: None,
+                                    }
                                 } else {
-                                    PropertyDescriptor { configurable: Some(false), writable: Some(false), value: None, get: None, set: None, enumerable: None }
+                                    PropertyDescriptor {
+                                        configurable: Some(false),
+                                        writable: Some(false),
+                                        value: None,
+                                        get: None,
+                                        set: None,
+                                        enumerable: None,
+                                    }
                                 };
                                 obj.borrow_mut().define_own_property(key, new_desc);
                             }
@@ -4451,13 +4560,18 @@ impl Interpreter {
                                     _ => continue,
                                 };
                                 // Check enumerability via [[GetOwnProperty]]
-                                let desc_check = match interp.proxy_get_own_property_descriptor(d_id, &key) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                if matches!(desc_check, JsValue::Undefined) { continue; }
+                                let desc_check =
+                                    match interp.proxy_get_own_property_descriptor(d_id, &key) {
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                if matches!(desc_check, JsValue::Undefined) {
+                                    continue;
+                                }
                                 if let Ok(chk) = interp.to_property_descriptor(&desc_check) {
-                                    if chk.enumerable == Some(false) { continue; }
+                                    if chk.enumerable == Some(false) {
+                                        continue;
+                                    }
                                 }
                                 let prop_desc_val =
                                     match interp.get_object_property(d_id, &key, &props_obj_val) {
@@ -4496,80 +4610,108 @@ impl Interpreter {
                 .insert_builtin("create".to_string(), create_fn);
 
             // Object.entries
-            let entries_fn = self.create_function(JsFunction::native(
-                "entries".to_string(),
-                1,
-                |interp, _this, args| {
-                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let obj_val = match interp.to_object(&target) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    if let JsValue::Object(o) = &obj_val {
-                        let obj_id = o.id;
-                        // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
-                        let all_keys = match interp.proxy_own_keys(obj_id) {
-                            Ok(k) => k,
-                            Err(e) => return Completion::Throw(e),
+            let entries_fn =
+                self.create_function(JsFunction::native(
+                    "entries".to_string(),
+                    1,
+                    |interp, _this, args| {
+                        let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let obj_val = match interp.to_object(&target) {
+                            Completion::Normal(v) => v,
+                            other => return other,
                         };
-                        // String exotic: prepend char indices as enumerable
-                        let mut extra_str_keys: Vec<String> = Vec::new();
-                        if interp.get_object(obj_id).map(|ob| !ob.borrow().is_proxy()).unwrap_or(false) {
-                            if let Some(obj) = interp.get_object(obj_id) {
-                                let b = obj.borrow();
-                                if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                    for i in 0..s.len() { extra_str_keys.push(i.to_string()); }
-                                }
-                            }
-                        }
-                        let mut pairs = Vec::new();
-                        // Extra char index keys from string exotic
-                        for k in &extra_str_keys {
-                            let val = match interp.get_object_property(obj_id, k, &obj_val) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            pairs.push(interp.create_array(vec![JsValue::String(JsString::from_str(k)), val]));
-                        }
-                        // Sort string keys: integer indices first, then the rest
-                        let mut int_keys: Vec<(u64, String)> = Vec::new();
-                        let mut str_keys: Vec<String> = Vec::new();
-                        for kv in &all_keys {
-                            if let JsValue::String(s) = kv {
-                                let k = s.to_rust_string();
-                                if extra_str_keys.contains(&k) || k.starts_with("Symbol(") { continue; }
-                                if let Ok(n) = k.parse::<u64>() {
-                                    if n.to_string() == k { int_keys.push((n, k)); } else { str_keys.push(k); }
-                                } else {
-                                    str_keys.push(k);
-                                }
-                            }
-                        }
-                        int_keys.sort_by_key(|(n, _)| *n);
-                        let ordered: Vec<String> = int_keys.into_iter().map(|(_, k)| k).chain(str_keys).collect();
-                        for k in ordered {
-                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
-                                Ok(v) => v,
+                        if let JsValue::Object(o) = &obj_val {
+                            let obj_id = o.id;
+                            // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
+                            let all_keys = match interp.proxy_own_keys(obj_id) {
+                                Ok(k) => k,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            if matches!(desc_val, JsValue::Undefined) { continue; }
-                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                if desc.enumerable == Some(false) { continue; }
-                            } else {
-                                continue;
+                            // String exotic: prepend char indices as enumerable
+                            let mut extra_str_keys: Vec<String> = Vec::new();
+                            if interp
+                                .get_object(obj_id)
+                                .map(|ob| !ob.borrow().is_proxy())
+                                .unwrap_or(false)
+                            {
+                                if let Some(obj) = interp.get_object(obj_id) {
+                                    let b = obj.borrow();
+                                    if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                        for i in 0..s.len() {
+                                            extra_str_keys.push(i.to_string());
+                                        }
+                                    }
+                                }
                             }
-                            let val = match interp.get_object_property(obj_id, &k, &obj_val) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            pairs.push(interp.create_array(vec![JsValue::String(JsString::from_str(&k)), val]));
+                            let mut pairs = Vec::new();
+                            // Extra char index keys from string exotic
+                            for k in &extra_str_keys {
+                                let val = match interp.get_object_property(obj_id, k, &obj_val) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                                pairs.push(interp.create_array(vec![
+                                    JsValue::String(JsString::from_str(k)),
+                                    val,
+                                ]));
+                            }
+                            // Sort string keys: integer indices first, then the rest
+                            let mut int_keys: Vec<(u64, String)> = Vec::new();
+                            let mut str_keys: Vec<String> = Vec::new();
+                            for kv in &all_keys {
+                                if let JsValue::String(s) = kv {
+                                    let k = s.to_rust_string();
+                                    if extra_str_keys.contains(&k) || k.starts_with("Symbol(") {
+                                        continue;
+                                    }
+                                    if let Ok(n) = k.parse::<u64>() {
+                                        if n.to_string() == k {
+                                            int_keys.push((n, k));
+                                        } else {
+                                            str_keys.push(k);
+                                        }
+                                    } else {
+                                        str_keys.push(k);
+                                    }
+                                }
+                            }
+                            int_keys.sort_by_key(|(n, _)| *n);
+                            let ordered: Vec<String> = int_keys
+                                .into_iter()
+                                .map(|(_, k)| k)
+                                .chain(str_keys)
+                                .collect();
+                            for k in ordered {
+                                let desc_val =
+                                    match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                if matches!(desc_val, JsValue::Undefined) {
+                                    continue;
+                                }
+                                if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                    if desc.enumerable == Some(false) {
+                                        continue;
+                                    }
+                                } else {
+                                    continue;
+                                }
+                                let val = match interp.get_object_property(obj_id, &k, &obj_val) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                                pairs.push(interp.create_array(vec![
+                                    JsValue::String(JsString::from_str(&k)),
+                                    val,
+                                ]));
+                            }
+                            let arr = interp.create_array(pairs);
+                            return Completion::Normal(arr);
                         }
-                        let arr = interp.create_array(pairs);
-                        return Completion::Normal(arr);
-                    }
-                    Completion::Normal(interp.create_array(Vec::new()))
-                },
-            ));
+                        Completion::Normal(interp.create_array(Vec::new()))
+                    },
+                ));
             obj_func
                 .borrow_mut()
                 .insert_builtin("entries".to_string(), entries_fn);
@@ -4593,11 +4735,17 @@ impl Interpreter {
                         };
                         // String exotic: prepend char indices as enumerable
                         let mut extra_str_keys: Vec<String> = Vec::new();
-                        if interp.get_object(obj_id).map(|ob| !ob.borrow().is_proxy()).unwrap_or(false) {
+                        if interp
+                            .get_object(obj_id)
+                            .map(|ob| !ob.borrow().is_proxy())
+                            .unwrap_or(false)
+                        {
                             if let Some(obj) = interp.get_object(obj_id) {
                                 let b = obj.borrow();
                                 if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                    for i in 0..s.len() { extra_str_keys.push(i.to_string()); }
+                                    for i in 0..s.len() {
+                                        extra_str_keys.push(i.to_string());
+                                    }
                                 }
                             }
                         }
@@ -4616,24 +4764,39 @@ impl Interpreter {
                         for kv in &all_keys {
                             if let JsValue::String(s) = kv {
                                 let k = s.to_rust_string();
-                                if extra_str_keys.contains(&k) || k.starts_with("Symbol(") { continue; }
+                                if extra_str_keys.contains(&k) || k.starts_with("Symbol(") {
+                                    continue;
+                                }
                                 if let Ok(n) = k.parse::<u64>() {
-                                    if n.to_string() == k { int_keys.push((n, k)); } else { str_keys.push(k); }
+                                    if n.to_string() == k {
+                                        int_keys.push((n, k));
+                                    } else {
+                                        str_keys.push(k);
+                                    }
                                 } else {
                                     str_keys.push(k);
                                 }
                             }
                         }
                         int_keys.sort_by_key(|(n, _)| *n);
-                        let ordered: Vec<String> = int_keys.into_iter().map(|(_, k)| k).chain(str_keys).collect();
+                        let ordered: Vec<String> = int_keys
+                            .into_iter()
+                            .map(|(_, k)| k)
+                            .chain(str_keys)
+                            .collect();
                         for k in ordered {
-                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            if matches!(desc_val, JsValue::Undefined) { continue; }
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                            if matches!(desc_val, JsValue::Undefined) {
+                                continue;
+                            }
                             if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                if desc.enumerable == Some(false) { continue; }
+                                if desc.enumerable == Some(false) {
+                                    continue;
+                                }
                             } else {
                                 continue;
                             }
@@ -4686,7 +4849,8 @@ impl Interpreter {
                         // [[OwnPropertyKeys]](): use proxy_own_keys for proxy sources;
                         // for non-proxy, build OrdinaryOwnPropertyKeys manually
                         // (integer indices, then string keys, then symbol keys).
-                        let is_proxy_src = interp.get_object(s_id)
+                        let is_proxy_src = interp
+                            .get_object(s_id)
                             .map(|o| o.borrow().is_proxy())
                             .unwrap_or(false);
                         let raw_keys: Vec<JsValue> = if is_proxy_src {
@@ -4700,7 +4864,8 @@ impl Interpreter {
                             let mut result: Vec<JsValue> = Vec::new();
                             if let Some(JsValue::String(ref s)) = b.primitive_value {
                                 for i in 0..s.len() {
-                                    result.push(JsValue::String(JsString::from_str(&i.to_string())));
+                                    result
+                                        .push(JsValue::String(JsString::from_str(&i.to_string())));
                                 }
                             }
                             let is_string_wrapper =
@@ -4735,7 +4900,11 @@ impl Interpreter {
                             // Already accounted for char indices above; add int keys
                             for (_, k) in &int_keys {
                                 let already = result.iter().any(|v| {
-                                    if let JsValue::String(s) = v { s.to_rust_string() == *k } else { false }
+                                    if let JsValue::String(s) = v {
+                                        s.to_rust_string() == *k
+                                    } else {
+                                        false
+                                    }
                                 });
                                 if !already {
                                     result.push(JsValue::String(JsString::from_str(k)));
@@ -4754,7 +4923,8 @@ impl Interpreter {
                         for key_val in raw_keys {
                             let key_str = to_property_key_string(&key_val);
                             // [[GetOwnProperty]] to check enumerability
-                            let desc_result = interp.proxy_get_own_property_descriptor(s_id, &key_str);
+                            let desc_result =
+                                interp.proxy_get_own_property_descriptor(s_id, &key_str);
                             let desc_obj = match desc_result {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
@@ -4772,7 +4942,8 @@ impl Interpreter {
                                 continue;
                             }
                             // [[Get]] from source
-                            let val = match interp.get_object_property(s_id, &key_str, &src_obj_val) {
+                            let val = match interp.get_object_property(s_id, &key_str, &src_obj_val)
+                            {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => JsValue::Undefined,
@@ -4781,9 +4952,11 @@ impl Interpreter {
                             match interp.proxy_set(t_id, &key_str, val, &target) {
                                 Ok(true) => {}
                                 Ok(false) => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot assign to read only property",
-                                    ));
+                                    return Completion::Throw(
+                                        interp.create_type_error(
+                                            "Cannot assign to read only property",
+                                        ),
+                                    );
                                 }
                                 Err(e) => return Completion::Throw(e),
                             }
@@ -4903,7 +5076,9 @@ impl Interpreter {
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => return Completion::Normal(interp.create_array(Vec::new())),
                     };
-                    let o = if let JsValue::Object(ref o) = target { o.clone() } else {
+                    let o = if let JsValue::Object(ref o) = target {
+                        o.clone()
+                    } else {
                         return Completion::Normal(interp.create_array(Vec::new()));
                     };
                     if let Some(obj) = interp.get_object(o.id) {
@@ -4915,7 +5090,8 @@ impl Interpreter {
                         if res {
                             match interp.proxy_own_keys(o.id) {
                                 Ok(keys) => {
-                                    let str_keys: Vec<JsValue> = keys.into_iter()
+                                    let str_keys: Vec<JsValue> = keys
+                                        .into_iter()
                                         .filter(|k| matches!(k, JsValue::String(_)))
                                         .collect();
                                     let arr = interp.create_array(str_keys);
@@ -4953,7 +5129,8 @@ impl Interpreter {
                         }
                         // String exotic: include "length" and character index keys
                         let b = obj.borrow();
-                        let is_string_wrapper = matches!(b.primitive_value, Some(JsValue::String(_)));
+                        let is_string_wrapper =
+                            matches!(b.primitive_value, Some(JsValue::String(_)));
                         let mut names: Vec<JsValue> = Vec::new();
                         if is_string_wrapper {
                             if let Some(JsValue::String(ref s)) = b.primitive_value {
@@ -4963,7 +5140,9 @@ impl Interpreter {
                             }
                         }
                         // Collect and sort non-symbol keys from property_order
-                        let prop_keys: Vec<String> = b.property_order.iter()
+                        let prop_keys: Vec<String> = b
+                            .property_order
+                            .iter()
                             .filter(|k| !k.starts_with("Symbol("))
                             .cloned()
                             .collect();
@@ -4973,11 +5152,19 @@ impl Interpreter {
                         let mut str_keys2: Vec<String> = Vec::new();
                         for k in prop_keys {
                             let already_added = names.iter().any(|v| {
-                                if let JsValue::String(s) = v { s.to_rust_string() == k } else { false }
+                                if let JsValue::String(s) = v {
+                                    s.to_rust_string() == k
+                                } else {
+                                    false
+                                }
                             });
-                            if already_added { continue; }
+                            if already_added {
+                                continue;
+                            }
                             // For string wrappers, "length" is added at the end
-                            if is_string_wrapper && k == "length" { continue; }
+                            if is_string_wrapper && k == "length" {
+                                continue;
+                            }
                             if let Ok(n) = k.parse::<u64>() {
                                 if n.to_string() == k {
                                     int_keys.push((n, k));
@@ -4989,8 +5176,12 @@ impl Interpreter {
                             }
                         }
                         int_keys.sort_by_key(|(n, _)| *n);
-                        for (_, k) in int_keys { names.push(JsValue::String(JsString::from_str(&k))); }
-                        for k in str_keys2 { names.push(JsValue::String(JsString::from_str(&k))); }
+                        for (_, k) in int_keys {
+                            names.push(JsValue::String(JsString::from_str(&k)));
+                        }
+                        for k in str_keys2 {
+                            names.push(JsValue::String(JsString::from_str(&k)));
+                        }
                         // String exotic: "length" is always an own property
                         if is_string_wrapper {
                             names.push(JsValue::String(JsString::from_str("length")));
@@ -5023,7 +5214,8 @@ impl Interpreter {
                             if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                                 match interp.proxy_own_keys(obj_id) {
                                     Ok(keys) => {
-                                        let sym_keys: Vec<JsValue> = keys.into_iter()
+                                        let sym_keys: Vec<JsValue> = keys
+                                            .into_iter()
                                             .filter(|k| matches!(k, JsValue::Symbol(_)))
                                             .collect();
                                         return Completion::Normal(interp.create_array(sym_keys));
@@ -5033,7 +5225,9 @@ impl Interpreter {
                             } else {
                                 // Return symbol keys in property_order first, then any not in order
                                 let b = obj.borrow();
-                                let mut sym_keys: Vec<String> = b.property_order.iter()
+                                let mut sym_keys: Vec<String> = b
+                                    .property_order
+                                    .iter()
                                     .filter(|k| k.starts_with("Symbol("))
                                     .cloned()
                                     .collect();
@@ -5047,7 +5241,8 @@ impl Interpreter {
                         } else {
                             Vec::new()
                         };
-                        let symbols: Vec<JsValue> = all_keys.iter()
+                        let symbols: Vec<JsValue> = all_keys
+                            .iter()
                             .map(|k| interp.symbol_key_to_jsvalue(k))
                             .collect();
                         return Completion::Normal(interp.create_array(symbols));
@@ -5131,8 +5326,12 @@ impl Interpreter {
                     if let JsValue::Object(o) = &target {
                         let obj_id = o.id;
                         // TestIntegrityLevel: check extensible first, then each key
-                        let is_proxy = interp.get_object(obj_id)
-                            .map(|ob| { let b = ob.borrow(); b.is_proxy() || b.proxy_revoked })
+                        let is_proxy = interp
+                            .get_object(obj_id)
+                            .map(|ob| {
+                                let b = ob.borrow();
+                                b.is_proxy() || b.proxy_revoked
+                            })
                             .unwrap_or(false);
                         if is_proxy {
                             // Check via proxy isExtensible trap
@@ -5157,10 +5356,11 @@ impl Interpreter {
                                 JsValue::Symbol(s) => s.to_property_key(),
                                 _ => continue,
                             };
-                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
                                 if desc.configurable != Some(false) {
                                     return Completion::Normal(JsValue::Boolean(false));
@@ -5187,8 +5387,12 @@ impl Interpreter {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(o) = &target {
                         let obj_id = o.id;
-                        let is_proxy = interp.get_object(obj_id)
-                            .map(|ob| { let b = ob.borrow(); b.is_proxy() || b.proxy_revoked })
+                        let is_proxy = interp
+                            .get_object(obj_id)
+                            .map(|ob| {
+                                let b = ob.borrow();
+                                b.is_proxy() || b.proxy_revoked
+                            })
                             .unwrap_or(false);
                         if is_proxy {
                             match interp.proxy_is_extensible(obj_id) {
@@ -5211,10 +5415,11 @@ impl Interpreter {
                                 JsValue::Symbol(s) => s.to_property_key(),
                                 _ => continue,
                             };
-                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
                                 if desc.configurable != Some(false) {
                                     return Completion::Normal(JsValue::Boolean(false));
@@ -5238,13 +5443,21 @@ impl Interpreter {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target {
                         let obj_id = o.id;
-                        let is_proxy = interp.get_object(obj_id)
-                            .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.proxy_revoked })
+                        let is_proxy = interp
+                            .get_object(obj_id)
+                            .map(|obj| {
+                                let b = obj.borrow();
+                                b.is_proxy() || b.proxy_revoked
+                            })
                             .unwrap_or(false);
                         if is_proxy {
                             match interp.proxy_prevent_extensions(obj_id) {
                                 Ok(true) => {}
-                                Ok(false) => return Completion::Throw(interp.create_type_error("Cannot seal: preventExtensions returned false")),
+                                Ok(false) => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot seal: preventExtensions returned false",
+                                    ));
+                                }
                                 Err(e) => return Completion::Throw(e),
                             }
                             let keys = match interp.proxy_own_keys(obj_id) {
@@ -5257,12 +5470,22 @@ impl Interpreter {
                                     JsValue::Symbol(s) => s.to_property_key(),
                                     _ => continue,
                                 };
-                                let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
+                                let desc_val =
+                                    match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
+                                if matches!(desc_val, JsValue::Undefined) {
+                                    continue;
+                                }
+                                let new_desc = PropertyDescriptor {
+                                    configurable: Some(false),
+                                    value: None,
+                                    writable: None,
+                                    get: None,
+                                    set: None,
+                                    enumerable: None,
                                 };
-                                if matches!(desc_val, JsValue::Undefined) { continue; }
-                                let new_desc = PropertyDescriptor { configurable: Some(false), value: None, writable: None, get: None, set: None, enumerable: None };
                                 let new_desc_val = interp.from_property_descriptor(&new_desc);
                                 match interp.proxy_define_own_property(obj_id, key, &new_desc_val) {
                                     Ok(_) => {}
@@ -5271,9 +5494,17 @@ impl Interpreter {
                             }
                         } else if let Some(obj) = interp.get_object(obj_id) {
                             obj.borrow_mut().extensible = false;
-                            let keys: Vec<String> = obj.borrow().properties.keys().cloned().collect();
+                            let keys: Vec<String> =
+                                obj.borrow().properties.keys().cloned().collect();
                             for key in keys {
-                                let new_desc = PropertyDescriptor { configurable: Some(false), value: None, writable: None, get: None, set: None, enumerable: None };
+                                let new_desc = PropertyDescriptor {
+                                    configurable: Some(false),
+                                    value: None,
+                                    writable: None,
+                                    get: None,
+                                    set: None,
+                                    enumerable: None,
+                                };
                                 obj.borrow_mut().define_own_property(key, new_desc);
                             }
                         }
@@ -5304,7 +5535,12 @@ impl Interpreter {
                     };
                     if let JsValue::Object(o) = &obj_val {
                         match interp.proxy_get_own_property_descriptor(o.id, &key) {
-                            Ok(desc_val) => return Completion::Normal(JsValue::Boolean(!matches!(desc_val, JsValue::Undefined))),
+                            Ok(desc_val) => {
+                                return Completion::Normal(JsValue::Boolean(!matches!(
+                                    desc_val,
+                                    JsValue::Undefined
+                                )));
+                            }
                             Err(e) => return Completion::Throw(e),
                         }
                     }
@@ -5533,8 +5769,11 @@ impl Interpreter {
                         };
                         // String exotic: prepend character indices
                         let mut keys: Vec<String> = Vec::new();
-                        let is_string_wrapper = interp.get_object(obj_id)
-                            .map(|ob| matches!(ob.borrow().primitive_value, Some(JsValue::String(_))))
+                        let is_string_wrapper = interp
+                            .get_object(obj_id)
+                            .map(|ob| {
+                                matches!(ob.borrow().primitive_value, Some(JsValue::String(_)))
+                            })
                             .unwrap_or(false);
                         if is_string_wrapper {
                             if let Some(obj) = interp.get_object(obj_id) {
@@ -5556,30 +5795,43 @@ impl Interpreter {
                                 JsValue::Symbol(s) => s.to_property_key(),
                                 _ => continue,
                             };
-                            if keys.contains(&k) { continue; }
+                            if keys.contains(&k) {
+                                continue;
+                            }
                             if k.starts_with("Symbol(") {
                                 sym_keys.push(k);
                             } else if let Ok(n) = k.parse::<u64>() {
-                                if n.to_string() == k { int_keys.push((n, k)); } else { str_keys.push(k); }
+                                if n.to_string() == k {
+                                    int_keys.push((n, k));
+                                } else {
+                                    str_keys.push(k);
+                                }
                             } else {
                                 str_keys.push(k);
                             }
                         }
                         int_keys.sort_by_key(|(n, _)| *n);
-                        for (_, k) in int_keys { keys.push(k); }
-                        for k in str_keys { keys.push(k); }
+                        for (_, k) in int_keys {
+                            keys.push(k);
+                        }
+                        for k in str_keys {
+                            keys.push(k);
+                        }
                         // String exotic: "length" is always own (add before symbols)
                         if is_string_wrapper && !keys.contains(&"length".to_string()) {
                             keys.push("length".to_string());
                         }
-                        for k in sym_keys { keys.push(k); }
+                        for k in sym_keys {
+                            keys.push(k);
+                        }
                         let result = interp.create_object();
                         for key in keys {
                             // Use proxy_get_own_property_descriptor to invoke trap
-                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                             if !matches!(desc_val, JsValue::Undefined) {
                                 let key_sym = interp.symbol_key_to_jsvalue(&key);
                                 let key_str = if let JsValue::String(ref s) = key_sym {
@@ -5686,16 +5938,20 @@ impl Interpreter {
     }
 
     pub(crate) fn get_symbol_iterator_key(&self) -> Option<String> {
-        self.realm().global_env.borrow().get("Symbol").and_then(|sv| {
-            if let JsValue::Object(so) = sv {
-                self.get_object(so.id).map(|sobj| {
-                    let val = sobj.borrow().get_property("iterator");
-                    to_js_string(&val)
-                })
-            } else {
-                None
-            }
-        })
+        self.realm()
+            .global_env
+            .borrow()
+            .get("Symbol")
+            .and_then(|sv| {
+                if let JsValue::Object(so) = sv {
+                    self.get_object(so.id).map(|sobj| {
+                        let val = sobj.borrow().get_property("iterator");
+                        to_js_string(&val)
+                    })
+                } else {
+                    None
+                }
+            })
     }
 
     pub(crate) fn create_iter_result_object(&mut self, value: JsValue, done: bool) -> JsValue {
@@ -5858,7 +6114,11 @@ impl Interpreter {
                 let value_wrapper = interp.promise_resolve_value(&value);
                 // Chain: when valueWrapper resolves to resolvedVal, yield {value: resolvedVal, done}
                 let outer_promise = interp.create_promise_object();
-                let outer_id = if let JsValue::Object(ref o) = outer_promise { o.id } else { 0 };
+                let outer_id = if let JsValue::Object(ref o) = outer_promise {
+                    o.id
+                } else {
+                    0
+                };
                 let then_val = interp.obj_get(&value_wrapper, "then").ok();
                 if let Some(then_fn) = then_val.filter(|v| matches!(v, JsValue::Object(_))) {
                     let outer_promise_clone = outer_promise.clone();
@@ -5867,7 +6127,8 @@ impl Interpreter {
                         1,
                         move |interp, _this, args| {
                             let resolved_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            let iter_result = interp.create_iter_result_object(resolved_val, done_bool);
+                            let iter_result =
+                                interp.create_iter_result_object(resolved_val, done_bool);
                             if let JsValue::Object(ref op) = outer_promise_clone {
                                 interp.fulfill_promise(op.id, iter_result);
                             }
@@ -5886,7 +6147,8 @@ impl Interpreter {
                             Completion::Normal(JsValue::Undefined)
                         },
                     ));
-                    let _ = interp.call_function(&then_fn, &value_wrapper, &[fulfill_fn, reject_fn]);
+                    let _ =
+                        interp.call_function(&then_fn, &value_wrapper, &[fulfill_fn, reject_fn]);
                 } else {
                     // value_wrapper is not a promise (or doesn't have .then), resolve directly
                     let iter_result = interp.create_iter_result_object(value, done_bool);
@@ -6536,15 +6798,12 @@ impl Interpreter {
                                 })
                                 .unwrap_or(false);
                             if is_export {
-                                let live_val = match interp.get_object_property(
-                                    o.id,
-                                    &key,
-                                    &target.clone(),
-                                ) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    other => return other,
-                                };
+                                let live_val =
+                                    match interp.get_object_property(o.id, &key, &target.clone()) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        other => return other,
+                                    };
                                 let desc = crate::interpreter::types::PropertyDescriptor {
                                     value: Some(live_val),
                                     writable: Some(true),
@@ -7085,10 +7344,15 @@ impl Interpreter {
 
         // Register Reflect as global
         let reflect_val = JsValue::Object(crate::types::JsObject { id: reflect_id });
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Reflect", BindingKind::Const);
-        let _ = self.realm().global_env.borrow_mut().set("Reflect", reflect_val);
+        let _ = self
+            .realm()
+            .global_env
+            .borrow_mut()
+            .set("Reflect", reflect_val);
     }
 
     fn setup_proxy(&mut self) {
@@ -7213,7 +7477,8 @@ impl Interpreter {
                 .insert_builtin("revocable".to_string(), revocable_fn);
         }
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Proxy", BindingKind::Var);
         let _ = self.realm().global_env.borrow_mut().set("Proxy", proxy_fn);

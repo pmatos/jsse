@@ -97,35 +97,36 @@ impl Interpreter {
                         return Completion::Normal(value);
                     }
                     if !matches!(value, JsValue::Object(_)) {
-                        return Completion::Throw(interp.create_type_error(
-                            "Using requires an object or null/undefined",
-                        ));
+                        return Completion::Throw(
+                            interp.create_type_error("Using requires an object or null/undefined"),
+                        );
                     }
                     // GetMethod(V, @@dispose) - uses get_object_property to invoke getters
-                    let method = if let Some(key) = interp.get_symbol_key("dispose") {
-                        if let JsValue::Object(vo) = &value {
-                            match interp.get_object_property(vo.id, &key, &value) {
-                                Completion::Normal(m) => {
-                                    if matches!(m, JsValue::Undefined | JsValue::Null) {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "Object does not have a [Symbol.dispose] method",
-                                        ));
+                    let method =
+                        if let Some(key) = interp.get_symbol_key("dispose") {
+                            if let JsValue::Object(vo) = &value {
+                                match interp.get_object_property(vo.id, &key, &value) {
+                                    Completion::Normal(m) => {
+                                        if matches!(m, JsValue::Undefined | JsValue::Null) {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Object does not have a [Symbol.dispose] method",
+                                            ));
+                                        }
+                                        m
                                     }
-                                    m
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    _ => JsValue::Undefined,
                                 }
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
+                            } else {
+                                return Completion::Throw(interp.create_type_error(
+                                    "Using requires an object or null/undefined",
+                                ));
                             }
                         } else {
-                            return Completion::Throw(interp.create_type_error(
-                                "Using requires an object or null/undefined",
-                            ));
-                        }
-                    } else {
-                        return Completion::Throw(
-                            interp.create_type_error("Symbol.dispose not available"),
-                        );
-                    };
+                            return Completion::Throw(
+                                interp.create_type_error("Symbol.dispose not available"),
+                            );
+                        };
                     if !interp.is_callable(&method) {
                         return Completion::Throw(
                             interp.create_type_error("[Symbol.dispose] is not a function"),
@@ -414,9 +415,7 @@ impl Interpreter {
             let stack = {
                 let mut b = obj.borrow_mut();
                 if b.class_name != "DisposableStack" {
-                    return Completion::Throw(
-                        self.create_type_error("Not a DisposableStack"),
-                    );
+                    return Completion::Throw(self.create_type_error("Not a DisposableStack"));
                 }
                 match &mut b.disposable_stack {
                     Some(ds) => {
@@ -796,8 +795,9 @@ impl Interpreter {
                 move |interp, _this, _args| {
                     if interp.new_target.is_none() {
                         return Completion::Throw(
-                            interp
-                                .create_type_error("Constructor AsyncDisposableStack requires 'new'"),
+                            interp.create_type_error(
+                                "Constructor AsyncDisposableStack requires 'new'",
+                            ),
                         );
                     }
                     let default_proto = interp.realm().async_disposable_stack_prototype.clone();

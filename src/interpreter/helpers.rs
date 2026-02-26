@@ -540,7 +540,10 @@ pub(crate) fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
     result
 }
 
-pub(crate) fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<String>, JsValue> {
+pub(crate) fn enumerable_own_keys(
+    interp: &mut Interpreter,
+    obj_id: u64,
+) -> Result<Vec<String>, JsValue> {
     if let Some(obj) = interp.get_object(obj_id) {
         if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
             let target_val = interp.get_proxy_target_val(obj_id);
@@ -1475,8 +1478,7 @@ pub(crate) fn days_in_year(y: f64) -> f64 {
 
 pub(crate) fn day_from_year(y: f64) -> f64 {
     let y = y as i64;
-    365.0 * (y - 1970) as f64 + (y - 1969).div_euclid(4) as f64
-        - (y - 1901).div_euclid(100) as f64
+    365.0 * (y - 1970) as f64 + (y - 1969).div_euclid(4) as f64 - (y - 1901).div_euclid(100) as f64
         + (y - 1601).div_euclid(400) as f64
 }
 

@@ -61,8 +61,8 @@ pub struct LoadedModule {
     pub env: EnvRef,
     pub exports: HashMap<String, JsValue>,
     pub export_bindings: HashMap<String, String>, // export_name -> binding_name
-    pub cached_namespace: Option<JsValue>,        // cached namespace object (same identity on re-import)
-    pub error: Option<JsValue>,                   // if module evaluation threw, the error
+    pub cached_namespace: Option<JsValue>, // cached namespace object (same identity on re-import)
+    pub error: Option<JsValue>,            // if module evaluation threw, the error
 }
 
 impl Interpreter {
@@ -332,7 +332,9 @@ impl Interpreter {
             {
                 let target_id = target.borrow().id.unwrap();
                 drop(obj_ref);
-                return self.get_function_realm(&JsValue::Object(crate::types::JsObject { id: target_id }));
+                return self.get_function_realm(&JsValue::Object(crate::types::JsObject {
+                    id: target_id,
+                }));
             }
             drop(obj_ref);
             // Check function_realm_map
@@ -615,19 +617,23 @@ impl Interpreter {
         };
         let mut obj_data = JsObjectData::new();
         obj_data.prototype = if is_async_gen {
-            self.realm().async_generator_function_prototype
+            self.realm()
+                .async_generator_function_prototype
                 .clone()
                 .or(self.realm().object_prototype.clone())
         } else if is_gen {
-            self.realm().generator_function_prototype
+            self.realm()
+                .generator_function_prototype
                 .clone()
                 .or(self.realm().object_prototype.clone())
         } else if is_async_non_gen {
-            self.realm().async_function_prototype
+            self.realm()
+                .async_function_prototype
                 .clone()
                 .or(self.realm().object_prototype.clone())
         } else {
-            self.realm().function_prototype
+            self.realm()
+                .function_prototype
                 .clone()
                 .or(self.realm().object_prototype.clone())
         };
@@ -707,7 +713,8 @@ impl Interpreter {
         }
         let obj = Rc::new(RefCell::new(obj_data));
         let func_id = self.allocate_object_slot(obj.clone());
-        self.function_realm_map.insert(func_id, self.current_realm_id);
+        self.function_realm_map
+            .insert(func_id, self.current_realm_id);
         let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
         // Set prototype.constructor = func (not for generators)
         if is_constructable
@@ -828,7 +835,8 @@ impl Interpreter {
 
         // Unmapped (strict OR non-simple params): callee is a throw accessor
         if func_env.is_none() {
-            let thrower = self.realm()
+            let thrower = self
+                .realm()
                 .throw_type_error
                 .clone()
                 .unwrap_or_else(|| self.create_thrower_function());
@@ -1252,7 +1260,12 @@ impl Interpreter {
             let parsed = match crate::interpreter::helpers::json_parse_value(self, &source) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                other => return Err(JsValue::String(JsString::from_str(&format!("JSON parse error in '{}'", path.display())))),
+                other => {
+                    return Err(JsValue::String(JsString::from_str(&format!(
+                        "JSON parse error in '{}'",
+                        path.display()
+                    ))));
+                }
             };
             let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
             module_env.borrow_mut().strict = true;
@@ -1272,9 +1285,12 @@ impl Interpreter {
                 cached_namespace: None,
                 error: None,
             }));
-            module_env.borrow_mut().declare("*default*", BindingKind::Const);
+            module_env
+                .borrow_mut()
+                .declare("*default*", BindingKind::Const);
             let _ = module_env.borrow_mut().set("*default*", parsed);
-            self.module_registry.insert(canon_path.clone(), loaded_module.clone());
+            self.module_registry
+                .insert(canon_path.clone(), loaded_module.clone());
             return Ok(loaded_module);
         }
 
