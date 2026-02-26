@@ -713,6 +713,22 @@ impl Environment {
             false
         }
     }
+
+    pub fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
+        let e = env.borrow();
+        if e.bindings.contains_key(name) {
+            return Some(env.clone());
+        }
+        if e.global_object.is_some() {
+            return Some(env.clone());
+        }
+        if let Some(ref parent) = e.parent {
+            let parent_clone = parent.clone();
+            drop(e);
+            return Self::find_binding_env(&parent_clone, name);
+        }
+        None
+    }
 }
 
 pub enum JsFunction {

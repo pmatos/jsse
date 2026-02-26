@@ -3,6 +3,7 @@ use super::*;
 enum IdentifierRef {
     WithObject(u64),
     Binding,
+    SpecificEnv(EnvRef),
 }
 
 impl Interpreter {
@@ -2302,7 +2303,7 @@ impl Interpreter {
                         other => return other,
                     }
                 }
-                IdentifierRef::Binding => {
+                IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
                     if let Some(result) = self.resolve_global_getter(name, env) {
                         match result {
                             Completion::Normal(v) => v,
@@ -2538,7 +2539,7 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                    IdentifierRef::Binding => {
+                    IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
                         if let Some(result) = self.resolve_global_getter(name, env) {
                             match result {
                                 Completion::Normal(v) => v,
@@ -3060,7 +3061,7 @@ impl Interpreter {
                             other => return other,
                         }
                     }
-                    IdentifierRef::Binding => {
+                    IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
                         if let Some(result) = self.resolve_global_getter(name, env) {
                             match result {
                                 Completion::Normal(v) => v,
@@ -10168,7 +10169,13 @@ impl Interpreter {
     ) -> Result<IdentifierRef, JsValue> {
         match self.resolve_with_has_binding(name, env)? {
             Some(obj_id) => Ok(IdentifierRef::WithObject(obj_id)),
-            None => Ok(IdentifierRef::Binding),
+            None => {
+                if let Some(specific_env) = Environment::find_binding_env(env, name) {
+                    Ok(IdentifierRef::SpecificEnv(specific_env))
+                } else {
+                    Ok(IdentifierRef::Binding)
+                }
+            }
         }
     }
 
@@ -10186,6 +10193,51 @@ impl Interpreter {
                 match self.with_set_mutable_binding(*obj_id, name, value.clone(), strict) {
                     Ok(()) => Completion::Normal(value),
                     Err(e) => Completion::Throw(e),
+                }
+            }
+            IdentifierRef::SpecificEnv(specific_env) => {
+                match Environment::check_set_binding(specific_env, name) {
+                    SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
+                        &format!("Cannot access '{}' before initialization", name),
+                    )),
+                    SetBindingCheck::ConstAssign => Completion::Throw(
+                        self.create_type_error("Assignment to constant variable."),
+                    ),
+                    SetBindingCheck::FunctionNameAssign => {
+                        if specific_env.borrow().strict {
+                            Completion::Throw(
+                                self.create_type_error("Assignment to constant variable."),
+                            )
+                        } else {
+                            Completion::Normal(value)
+                        }
+                    }
+                    SetBindingCheck::Unresolvable => {
+                        if env.borrow().strict {
+                            Completion::Throw(
+                                self.create_reference_error(&format!("{name} is not defined")),
+                            )
+                        } else {
+                            let var_scope = Environment::find_var_scope(env);
+                            if !var_scope.borrow().bindings.contains_key(name) {
+                                var_scope.borrow_mut().declare(name, BindingKind::Var);
+                            }
+                            match var_scope.borrow_mut().set(name, value.clone()) {
+                                Ok(()) => Completion::Normal(value),
+                                Err(_) => Completion::Throw(
+                                    self.create_type_error("Assignment to constant variable."),
+                                ),
+                            }
+                        }
+                    }
+                    SetBindingCheck::Ok => {
+                        match specific_env.borrow_mut().set(name, value.clone()) {
+                            Ok(()) => Completion::Normal(value),
+                            Err(_) => Completion::Throw(
+                                self.create_type_error("Assignment to constant variable."),
+                            ),
+                        }
+                    }
                 }
             }
             IdentifierRef::Binding => match Environment::check_set_binding(env, name) {
@@ -10254,10 +10306,13 @@ impl Interpreter {
                     .properties
                     .get(name)
                     .is_some_and(|d| d.get.is_some());
-                if has_getter && let Some(global_id) = global_obj_clone.borrow().id {
-                    drop(env_borrow);
-                    let this_val = JsValue::Object(crate::types::JsObject { id: global_id });
-                    return Some(self.get_object_property(global_id, name, &this_val));
+                let global_id = global_obj_clone.borrow().id;
+                drop(env_borrow);
+                if has_getter {
+                    if let Some(gid) = global_id {
+                        let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                        return Some(self.get_object_property(gid, name, &this_val));
+                    }
                 }
                 return None;
             }
