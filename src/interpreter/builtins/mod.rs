@@ -7804,6 +7804,7 @@ impl Interpreter {
     }
 
     pub(crate) fn setup_shadow_realm(&mut self) {
+        let my_realm_id = self.current_realm_id;
         let proto = self.create_object();
         {
             let mut p = proto.borrow_mut();
@@ -7829,14 +7830,16 @@ impl Interpreter {
         let evaluate_fn = self.create_function(JsFunction::native(
             "evaluate".to_string(),
             1,
-            |interp, this, args| {
+            move |interp, this, args| {
                 let eval_realm_id = if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                     && let Some(realm_id) = obj.borrow().shadow_realm_id
                 {
                     realm_id
                 } else {
-                    return Completion::Throw(interp.create_type_error(
+                    return Completion::Throw(interp.create_error_in_realm(
+                        my_realm_id,
+                        "TypeError",
                         "ShadowRealm.prototype.evaluate called on non-ShadowRealm",
                     ));
                 };
@@ -7845,14 +7848,15 @@ impl Interpreter {
                 let source_text = match &source_val {
                     JsValue::String(s) => s.to_string(),
                     _ => {
-                        return Completion::Throw(interp.create_type_error(
+                        return Completion::Throw(interp.create_error_in_realm(
+                            my_realm_id,
+                            "TypeError",
                             "ShadowRealm.prototype.evaluate: sourceText must be a string",
                         ));
                     }
                 };
 
-                let caller_realm_id = interp.current_realm_id;
-                interp.perform_realm_eval(&source_text, caller_realm_id, eval_realm_id)
+                interp.perform_realm_eval(&source_text, my_realm_id, eval_realm_id)
             },
         ));
         proto
@@ -7863,14 +7867,16 @@ impl Interpreter {
         let import_value_fn = self.create_function(JsFunction::native(
             "importValue".to_string(),
             2,
-            |interp, this, args| {
+            move |interp, this, args| {
                 let eval_realm_id = if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                     && let Some(realm_id) = obj.borrow().shadow_realm_id
                 {
                     realm_id
                 } else {
-                    return Completion::Throw(interp.create_type_error(
+                    return Completion::Throw(interp.create_error_in_realm(
+                        my_realm_id,
+                        "TypeError",
                         "ShadowRealm.prototype.importValue called on non-ShadowRealm",
                     ));
                 };
@@ -7886,13 +7892,15 @@ impl Interpreter {
                 let export_name = match &export_name_val {
                     JsValue::String(s) => s.to_string(),
                     _ => {
-                        return Completion::Throw(interp.create_type_error(
+                        return Completion::Throw(interp.create_error_in_realm(
+                            my_realm_id,
+                            "TypeError",
                             "ShadowRealm.prototype.importValue: exportName must be a string",
                         ));
                     }
                 };
 
-                let caller_realm_id = interp.current_realm_id;
+                let caller_realm_id = my_realm_id;
                 let referrer = interp.current_module_path.clone();
 
                 let old_realm = interp.current_realm_id;

@@ -7769,7 +7769,7 @@ impl Interpreter {
                 }
             }
             // Wrapped function [[Call]]
-            let has_wrapped_target = obj.borrow().wrapped_target_function.is_some();
+            let has_wrapped_target = obj.borrow().wrapped_target_function_id.is_some();
             if has_wrapped_target {
                 return self.call_wrapped_function(o.id, _this_val, args);
             }
@@ -7790,15 +7790,7 @@ impl Interpreter {
                             self.gc_root_value(a);
                         }
                         let saved_this = self.last_call_this_value.take();
-                        // Switch to the function's realm per spec (current realm = function's realm)
-                        let saved_realm = self.current_realm_id;
-                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
-                            if fn_realm < self.realms.len() {
-                                self.current_realm_id = fn_realm;
-                            }
-                        }
                         let result = f(self, _this_val, args);
-                        self.current_realm_id = saved_realm;
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
                         for a in args.iter().rev() {
@@ -12605,7 +12597,9 @@ impl Interpreter {
                 0,
                 |_, _, _| Completion::Normal(JsValue::Undefined),
             ));
-            o.wrapped_target_function = Some(target_func.clone());
+            if let JsValue::Object(tf) = target_func {
+                o.wrapped_target_function_id = Some(tf.id);
+            }
             o.wrapped_caller_realm_id = Some(caller_realm_id);
         }
         self.function_realm_map.insert(func_id, caller_realm_id);
@@ -12710,8 +12704,8 @@ impl Interpreter {
                 }
             };
             let b = obj.borrow();
-            let target = match b.wrapped_target_function.clone() {
-                Some(t) => t,
+            let target_id = match b.wrapped_target_function_id {
+                Some(id) => id,
                 None => {
                     return Completion::Throw(
                         self.create_type_error("WrappedFunction: missing target"),
@@ -12719,7 +12713,7 @@ impl Interpreter {
                 }
             };
             let caller_realm_id = b.wrapped_caller_realm_id.unwrap_or(self.current_realm_id);
-            (target, caller_realm_id)
+            (JsValue::Object(crate::types::JsObject { id: target_id }), caller_realm_id)
         };
 
         let target_realm_id = self.get_function_realm(&target);
