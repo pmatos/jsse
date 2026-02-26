@@ -110,7 +110,8 @@ impl Interpreter {
             kind: IteratorKind,
         ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype = interp.realm()
+            obj_data.prototype = interp
+                .realm()
                 .map_iterator_prototype
                 .clone()
                 .or(interp.realm().iterator_prototype.clone())
@@ -834,7 +835,8 @@ impl Interpreter {
                 .insert_builtin("groupBy".to_string(), group_by_fn);
         }
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Map", BindingKind::Var);
         let _ = self.realm().global_env.borrow_mut().set("Map", map_ctor);
@@ -948,7 +950,8 @@ impl Interpreter {
             kind: IteratorKind,
         ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype = interp.realm()
+            obj_data.prototype = interp
+                .realm()
                 .set_iterator_prototype
                 .clone()
                 .or(interp.realm().iterator_prototype.clone())
@@ -1863,7 +1866,8 @@ impl Interpreter {
             );
         }
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Set", BindingKind::Var);
         let _ = self.realm().global_env.borrow_mut().set("Set", set_ctor);
@@ -2133,10 +2137,15 @@ impl Interpreter {
             PropertyDescriptor::data(weakmap_ctor.clone(), true, false, true),
         );
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("WeakMap", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("WeakMap", weakmap_ctor);
+        let _ = self
+            .realm()
+            .global_env
+            .borrow_mut()
+            .set("WeakMap", weakmap_ctor);
 
         self.realm_mut().weakmap_prototype = Some(proto);
     }
@@ -2342,10 +2351,15 @@ impl Interpreter {
             PropertyDescriptor::data(weakset_ctor.clone(), true, false, true),
         );
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("WeakSet", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("WeakSet", weakset_ctor);
+        let _ = self
+            .realm()
+            .global_env
+            .borrow_mut()
+            .set("WeakSet", weakset_ctor);
 
         self.realm_mut().weakset_prototype = Some(proto);
     }
@@ -2411,7 +2425,9 @@ impl Interpreter {
                     ));
                 }
                 // OrdinaryCreateFromConstructor(NewTarget, "%WeakRef.prototype%")
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| realm.weakref_prototype.clone()) {
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.weakref_prototype.clone())
+                {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -2447,10 +2463,15 @@ impl Interpreter {
             PropertyDescriptor::data(weakref_ctor.clone(), true, false, true),
         );
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("WeakRef", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("WeakRef", weakref_ctor);
+        let _ = self
+            .realm()
+            .global_env
+            .borrow_mut()
+            .set("WeakRef", weakref_ctor);
 
         self.realm_mut().weakref_prototype = Some(proto);
     }
@@ -2642,7 +2663,9 @@ impl Interpreter {
                     ));
                 }
                 // OrdinaryCreateFromConstructor(NewTarget, "%FinalizationRegistry.prototype%")
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| realm.finalization_registry_prototype.clone()) {
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.finalization_registry_prototype.clone()
+                }) {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -2681,10 +2704,12 @@ impl Interpreter {
             PropertyDescriptor::data(fr_ctor.clone(), true, false, true),
         );
 
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("FinalizationRegistry", BindingKind::Var);
-        let _ = self.realm()
+        let _ = self
+            .realm()
             .global_env
             .borrow_mut()
             .set("FinalizationRegistry", fr_ctor);

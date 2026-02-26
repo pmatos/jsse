@@ -243,7 +243,8 @@ impl Interpreter {
                     };
 
                 // Step 3: Let C = ? SpeciesConstructor(promise, %Promise%).
-                let promise_ctor = interp.realm()
+                let promise_ctor = interp
+                    .realm()
                     .global_env
                     .borrow()
                     .get("Promise")
@@ -667,7 +668,8 @@ impl Interpreter {
         }
 
         // Register Promise as global
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Promise", BindingKind::Var);
         let _ = self.realm().global_env.borrow_mut().set("Promise", ctor);
@@ -901,7 +903,8 @@ impl Interpreter {
         };
 
         // SpeciesConstructor(promise, %Promise%)
-        let promise_ctor = self.realm()
+        let promise_ctor = self
+            .realm()
             .global_env
             .borrow()
             .get("Promise")

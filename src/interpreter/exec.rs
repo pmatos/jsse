@@ -146,18 +146,13 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.16 CanDeclareGlobalFunction
-    fn can_declare_global_function(
-        global_obj: &Rc<RefCell<JsObjectData>>,
-        name: &str,
-    ) -> bool {
+    fn can_declare_global_function(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
         let gb = global_obj.borrow();
         if let Some(desc) = gb.properties.get(name) {
             if desc.configurable == Some(true) {
                 return true;
             }
-            if desc.value.is_some()
-                && desc.writable == Some(true)
-                && desc.enumerable == Some(true)
+            if desc.value.is_some() && desc.writable == Some(true) && desc.enumerable == Some(true)
             {
                 return true;
             }
@@ -168,10 +163,7 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.15 CanDeclareGlobalVar
-    fn can_declare_global_var(
-        global_obj: &Rc<RefCell<JsObjectData>>,
-        name: &str,
-    ) -> bool {
+    fn can_declare_global_var(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
         let gb = global_obj.borrow();
         if gb.properties.contains_key(name) {
             return true;
@@ -215,10 +207,8 @@ impl Interpreter {
         for name in &var_names {
             if !declared_function_names.contains(name) {
                 if !Self::can_declare_global_var(&global_obj, name) {
-                    let err = self.create_type_error(&format!(
-                        "Cannot declare global variable '{}'",
-                        name
-                    ));
+                    let err = self
+                        .create_type_error(&format!("Cannot declare global variable '{}'", name));
                     return Some(Completion::Throw(err));
                 }
             }
@@ -865,8 +855,7 @@ impl Interpreter {
                                 cursor = cur_b.parent.clone();
                             }
                             if !blocked_by_intermediate {
-                                let val =
-                                    env.borrow().get(&f.name).unwrap_or(JsValue::Undefined);
+                                let val = env.borrow().get(&f.name).unwrap_or(JsValue::Undefined);
                                 let _ = var_scope.borrow_mut().set(&f.name, val);
                             }
                         }
@@ -1742,8 +1731,7 @@ impl Interpreter {
                         if matches!(param, Pattern::Identifier(_)) {
                             catch_env.borrow_mut().is_simple_catch_scope = true;
                         }
-                        if let Err(e) =
-                            self.bind_pattern(param, val, BindingKind::Let, &catch_env)
+                        if let Err(e) = self.bind_pattern(param, val, BindingKind::Let, &catch_env)
                         {
                             return Completion::Throw(e);
                         }
@@ -1920,9 +1908,7 @@ impl Interpreter {
             }
         }
 
-        if matches!(method, JsValue::Undefined)
-            && hint == DisposeHint::Async
-        {
+        if matches!(method, JsValue::Undefined) && hint == DisposeHint::Async {
             let sync_key = self.get_symbol_key("dispose");
             if let Some(ref key) = sync_key
                 && let JsValue::Object(o) = value

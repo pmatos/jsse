@@ -1024,7 +1024,10 @@ impl<'a> Lexer<'a> {
                     continue;
                 }
                 // --> at start of line is a single-line comment
-                if ch == '-' && self.had_line_terminator && self.source[self.offset..].starts_with("-->") {
+                if ch == '-'
+                    && self.had_line_terminator
+                    && self.source[self.offset..].starts_with("-->")
+                {
                     self.advance(); // -
                     self.advance(); // >
                     self.skip_line_comment();

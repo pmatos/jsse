@@ -158,9 +158,8 @@ impl Interpreter {
                             ));
                         }
                         if obj.borrow().private_fields.contains_key(name) {
-                            return Err(self.create_type_error(
-                                "Cannot add private accessor to object twice",
-                            ));
+                            return Err(self
+                                .create_type_error("Cannot add private accessor to object twice"));
                         }
                         obj.borrow_mut().private_fields.insert(
                             name.clone(),
@@ -831,9 +830,12 @@ impl Interpreter {
                                 }
                                 // Step 11: Get "with" property (must use [[Get]] to invoke getters)
                                 if let JsValue::Object(o) = &opts_val.clone() {
-                                    let wv = match self.get_object_property(o.id, "with", &opts_val) {
+                                    let wv = match self.get_object_property(o.id, "with", &opts_val)
+                                    {
                                         Completion::Normal(v) => v,
-                                        Completion::Throw(e) => return self.create_rejected_promise(e),
+                                        Completion::Throw(e) => {
+                                            return self.create_rejected_promise(e);
+                                        }
                                         other => return other,
                                     };
                                     if !wv.is_undefined() {
@@ -850,9 +852,15 @@ impl Interpreter {
                                                 Err(e) => return self.create_rejected_promise(e),
                                             };
                                             for k in keys {
-                                                let v = match self.get_object_property(with_obj.id, &k, &wv) {
+                                                let v = match self.get_object_property(
+                                                    with_obj.id,
+                                                    &k,
+                                                    &wv,
+                                                ) {
                                                     Completion::Normal(v) => v,
-                                                    Completion::Throw(e) => return self.create_rejected_promise(e),
+                                                    Completion::Throw(e) => {
+                                                        return self.create_rejected_promise(e);
+                                                    }
                                                     other => return other,
                                                 };
                                                 if !matches!(v, JsValue::String(_)) {
@@ -1370,7 +1378,8 @@ impl Interpreter {
     fn create_frozen_template_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let len = values.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.realm()
+        obj_data.prototype = self
+            .realm()
             .array_prototype
             .clone()
             .or(self.realm().object_prototype.clone());
@@ -1418,7 +1427,8 @@ impl Interpreter {
             }
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();
-                obj.prototype = self.realm()
+                obj.prototype = self
+                    .realm()
                     .regexp_prototype
                     .clone()
                     .or(self.realm().object_prototype.clone());
@@ -1470,7 +1480,8 @@ impl Interpreter {
 
     pub(crate) fn create_regexp(&mut self, pattern: &str, flags: &str) -> JsValue {
         let mut obj = JsObjectData::new();
-        obj.prototype = self.realm()
+        obj.prototype = self
+            .realm()
             .regexp_prototype
             .clone()
             .or(self.realm().object_prototype.clone());
@@ -1803,16 +1814,19 @@ impl Interpreter {
                         value: num_bigint::BigInt::from(0),
                     }));
                 }
-                let parsed = if let Some(hex) =
-                    trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X"))
+                let parsed = if let Some(hex) = trimmed
+                    .strip_prefix("0x")
+                    .or_else(|| trimmed.strip_prefix("0X"))
                 {
                     num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
-                } else if let Some(oct) =
-                    trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O"))
+                } else if let Some(oct) = trimmed
+                    .strip_prefix("0o")
+                    .or_else(|| trimmed.strip_prefix("0O"))
                 {
                     num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
-                } else if let Some(bin) =
-                    trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B"))
+                } else if let Some(bin) = trimmed
+                    .strip_prefix("0b")
+                    .or_else(|| trimmed.strip_prefix("0B"))
                 {
                     num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
                 } else {
@@ -1847,18 +1861,14 @@ impl Interpreter {
         // B.3.6.2: IsHTMLDDA == null/undefined
         if let JsValue::Object(o) = left {
             if let Some(Some(obj)) = self.objects.get(o.id as usize) {
-                if obj.borrow().is_htmldda
-                    && (right.is_null() || right.is_undefined())
-                {
+                if obj.borrow().is_htmldda && (right.is_null() || right.is_undefined()) {
                     return Ok(true);
                 }
             }
         }
         if let JsValue::Object(o) = right {
             if let Some(Some(obj)) = self.objects.get(o.id as usize) {
-                if obj.borrow().is_htmldda
-                    && (left.is_null() || left.is_undefined())
-                {
+                if obj.borrow().is_htmldda && (left.is_null() || left.is_undefined()) {
                     return Ok(true);
                 }
             }
@@ -4339,7 +4349,8 @@ impl Interpreter {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::Number(_)) {
-                    let proto = self.realm()
+                    let proto = self
+                        .realm()
                         .number_prototype
                         .clone()
                         .or(self.realm().object_prototype.clone());
@@ -4350,7 +4361,8 @@ impl Interpreter {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::Boolean(_)) {
-                    let proto = self.realm()
+                    let proto = self
+                        .realm()
                         .boolean_prototype
                         .clone()
                         .or(self.realm().object_prototype.clone());
@@ -4379,7 +4391,8 @@ impl Interpreter {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::BigInt(_)) {
-                    let proto = self.realm()
+                    let proto = self
+                        .realm()
                         .bigint_prototype
                         .clone()
                         .or(self.realm().object_prototype.clone());
@@ -8046,7 +8059,8 @@ impl Interpreter {
                             } else {
                                 let effective_this = if !is_strict && !closure_strict {
                                     if matches!(_this_val, JsValue::Undefined | JsValue::Null) {
-                                        self.realm().global_env
+                                        self.realm()
+                                            .global_env
                                             .borrow()
                                             .get("this")
                                             .unwrap_or(_this_val.clone())
@@ -9413,24 +9427,22 @@ impl Interpreter {
                 Vec::new()
             };
             if !instance_field_defs.is_empty() {
-                let (class_pn, proto_val, outer_env) =
-                    if let JsValue::Object(co) = constructor
-                        && let Some(func_obj) = self.get_object(co.id)
+                let (class_pn, proto_val, outer_env) = if let JsValue::Object(co) = constructor
+                    && let Some(func_obj) = self.get_object(co.id)
+                {
+                    let (pn, oe) = if let Some(JsFunction::User { ref closure, .. }) =
+                        func_obj.borrow().callable
                     {
-                        let (pn, oe) =
-                            if let Some(JsFunction::User { ref closure, .. }) =
-                                func_obj.borrow().callable
-                            {
-                                let cls_env = closure.borrow();
-                                (cls_env.class_private_names.clone(), cls_env.parent.clone())
-                            } else {
-                                (None, None)
-                            };
-                        let pv = func_obj.borrow().get_property("prototype");
-                        (pn, pv, oe)
+                        let cls_env = closure.borrow();
+                        (cls_env.class_private_names.clone(), cls_env.parent.clone())
                     } else {
-                        (None, JsValue::Undefined, None)
+                        (None, None)
                     };
+                    let pv = func_obj.borrow().get_property("prototype");
+                    (pn, pv, oe)
+                } else {
+                    (None, JsValue::Undefined, None)
+                };
                 let init_parent =
                     outer_env.unwrap_or_else(|| Environment::new_function_scope(None));
                 let init_env = Environment::new(Some(init_parent));
@@ -9454,17 +9466,12 @@ impl Interpreter {
                     match idef {
                         InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
                             if let Some(obj) = self.get_object(new_obj_id) {
-                                obj.borrow_mut().private_fields.insert(
-                                    name.clone(),
-                                    PrivateElement::Method(value.clone()),
-                                );
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(name.clone(), PrivateElement::Method(value.clone()));
                             }
                         }
-                        InstanceFieldDef::Private(PrivateFieldDef::Accessor {
-                            name,
-                            get,
-                            set,
-                        }) => {
+                        InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
                             if let Some(obj) = self.get_object(new_obj_id) {
                                 obj.borrow_mut().private_fields.insert(
                                     name.clone(),
@@ -9481,10 +9488,7 @@ impl Interpreter {
                 // Pass 2: Run field initializers in source order.
                 for idef in &instance_field_defs {
                     match idef {
-                        InstanceFieldDef::Private(PrivateFieldDef::Field {
-                            name,
-                            initializer,
-                        }) => {
+                        InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
                             let val = if let Some(init) = initializer {
                                 match self.eval_expr(init, &init_env) {
                                     Completion::Normal(v) => v,
@@ -9750,7 +9754,9 @@ impl Interpreter {
                 }
                 let result = self.call_function(&method, right, std::slice::from_ref(left));
                 return match result {
-                    Completion::Normal(v) => Completion::Normal(JsValue::Boolean(self.to_boolean_val(&v))),
+                    Completion::Normal(v) => {
+                        Completion::Normal(JsValue::Boolean(self.to_boolean_val(&v)))
+                    }
                     other => other,
                 };
             }
@@ -10017,9 +10023,13 @@ impl Interpreter {
             {
                 let b = obj.borrow();
                 if b.typed_array_info.is_some()
-                    && let Some(index) = crate::interpreter::types::canonical_numeric_index_string(key)
+                    && let Some(index) =
+                        crate::interpreter::types::canonical_numeric_index_string(key)
                 {
-                    return Ok(is_valid_integer_index(b.typed_array_info.as_ref().unwrap(), index));
+                    return Ok(is_valid_integer_index(
+                        b.typed_array_info.as_ref().unwrap(),
+                        index,
+                    ));
                 }
             }
             if obj.borrow().has_own_property(key) {
@@ -10819,7 +10829,11 @@ impl Interpreter {
                         };
                         let len = match len_val {
                             JsValue::Number(n) => n as usize,
-                            _ => return Err(self.create_type_error("ownKeys trap result length is not a number")),
+                            _ => {
+                                return Err(self.create_type_error(
+                                    "ownKeys trap result length is not a number",
+                                ));
+                            }
                         };
                         // Use [[Get]] for each element
                         let mut keys: Vec<JsValue> = Vec::with_capacity(len);
@@ -10866,8 +10880,8 @@ impl Interpreter {
             let b = obj.borrow();
 
             // String exotic objects (§10.4.3.3): virtual char indices included
-            let is_string_wrapper = b.class_name == "String"
-                && matches!(b.primitive_value, Some(JsValue::String(_)));
+            let is_string_wrapper =
+                b.class_name == "String" && matches!(b.primitive_value, Some(JsValue::String(_)));
             let string_len = if is_string_wrapper {
                 if let Some(JsValue::String(ref s)) = b.primitive_value {
                     s.code_units.len()
@@ -10878,7 +10892,8 @@ impl Interpreter {
                 0
             };
 
-            let mut int_keys_set: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+            let mut int_keys_set: std::collections::BTreeMap<u64, String> =
+                std::collections::BTreeMap::new();
             let mut str_keys: Vec<String> = Vec::new();
             let mut sym_keys: Vec<String> = Vec::new();
 
@@ -12324,7 +12339,8 @@ impl Interpreter {
                 && !closure_strict
                 && matches!(this_val, JsValue::Undefined | JsValue::Null)
             {
-                self.realm().global_env
+                self.realm()
+                    .global_env
                     .borrow()
                     .get("this")
                     .unwrap_or(this_val.clone())

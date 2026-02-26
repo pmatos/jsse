@@ -1750,10 +1750,15 @@ impl Interpreter {
 
         // Register Temporal as global (writable, not enumerable, configurable)
         let temporal_val = JsValue::Object(crate::types::JsObject { id: temporal_id });
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Temporal", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Temporal", temporal_val);
+        let _ = self
+            .realm()
+            .global_env
+            .borrow_mut()
+            .set("Temporal", temporal_val);
     }
 }
 

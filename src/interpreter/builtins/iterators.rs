@@ -494,10 +494,12 @@ impl Interpreter {
         }
 
         // Register Iterator as global
-        self.realm().global_env
+        self.realm()
+            .global_env
             .borrow_mut()
             .declare("Iterator", BindingKind::Var);
-        let _ = self.realm()
+        let _ = self
+            .realm()
             .global_env
             .borrow_mut()
             .set("Iterator", iterator_ctor.clone());
@@ -3040,7 +3042,8 @@ impl Interpreter {
 
     pub(crate) fn create_array_iterator(&mut self, array_id: u64, kind: IteratorKind) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.realm()
+        obj_data.prototype = self
+            .realm()
             .array_iterator_prototype
             .clone()
             .or(self.realm().iterator_prototype.clone())
@@ -3063,7 +3066,8 @@ impl Interpreter {
         kind: IteratorKind,
     ) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.realm()
+        obj_data.prototype = self
+            .realm()
             .array_iterator_prototype
             .clone()
             .or(self.realm().iterator_prototype.clone())
@@ -3082,7 +3086,8 @@ impl Interpreter {
 
     pub(crate) fn create_string_iterator(&mut self, string: JsString) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.realm()
+        obj_data.prototype = self
+            .realm()
             .string_iterator_prototype
             .clone()
             .or(self.realm().iterator_prototype.clone())

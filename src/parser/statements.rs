@@ -394,7 +394,10 @@ impl<'a> Parser<'a> {
             Self::bound_names_from_pattern(&d.pattern, &mut bound);
         }
         // "let" cannot be a bound name in let/const/using declarations
-        if matches!(kind, VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing) {
+        if matches!(
+            kind,
+            VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+        ) {
             for name in &bound {
                 if name == "let" {
                     return Err(ParseError {
