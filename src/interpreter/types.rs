@@ -1271,6 +1271,7 @@ pub struct JsObjectData {
     pub(crate) temporal_data: Option<TemporalData>,
     pub(crate) intl_data: Option<IntlData>,
     pub(crate) is_htmldda: bool,
+    pub(crate) is_immutable_prototype: bool,
 }
 
 #[derive(Clone)]
@@ -1326,6 +1327,7 @@ impl JsObjectData {
             temporal_data: None,
             intl_data: None,
             is_htmldda: false,
+            is_immutable_prototype: false,
         }
     }
 
@@ -2052,8 +2054,10 @@ impl JsObjectData {
                             .properties
                             .keys()
                             .filter_map(|k| {
-                                k.parse::<u32>()
+                                k.parse::<u64>()
                                     .ok()
+                                    .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == *k)
+                                    .map(|idx| idx as u32)
                                     .filter(|&idx| idx >= new_len_u32)
                                     .map(|idx| (idx, k.clone()))
                             })

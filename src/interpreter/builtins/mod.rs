@@ -896,6 +896,23 @@ impl Interpreter {
             "Object",
             BindingKind::Var,
             JsFunction::constructor("Object".to_string(), 1, |interp, _this, args| {
+                // §20.1.1 Object(value): Step 1 — if NewTarget is not undefined and is not
+                // the active function (Object), return OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
+                if let Some(ref nt) = interp.new_target.clone() {
+                    // Check if new_target is different from the Object constructor itself
+                    let object_fn = interp.realm().global_env.borrow().get("Object").unwrap_or(JsValue::Undefined);
+                    let nt_is_object = matches!((&object_fn, nt), (JsValue::Object(a), JsValue::Object(b)) if a.id == b.id);
+                    if !nt_is_object {
+                        // OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
+                        let default_proto = interp.realm().object_prototype.as_ref()
+                            .map(|p| p.borrow().id.unwrap());
+                        let new_obj_rc = interp.create_object();
+                        let no_id = new_obj_rc.borrow().id.unwrap();
+                        interp.apply_new_target_prototype(no_id, default_proto);
+                        let new_obj_val = JsValue::Object(crate::types::JsObject { id: no_id });
+                        return Completion::Normal(new_obj_val);
+                    }
+                }
                 match args.first() {
                     Some(val) if matches!(val, JsValue::Object(_)) => {
                         Completion::Normal(val.clone())
@@ -3367,6 +3384,8 @@ impl Interpreter {
                 && let Some(proto_obj) = self.get_object(proto_ref.id)
             {
                 self.realm_mut().object_prototype = Some(proto_obj.clone());
+                // Object.prototype is an immutable prototype exotic object (§10.4.7)
+                proto_obj.borrow_mut().is_immutable_prototype = true;
 
                 // Fix Error.prototype chain - created before object_prototype was available
                 {
@@ -3401,14 +3420,18 @@ impl Interpreter {
                     "hasOwnProperty".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_property_key_string).unwrap_or_default();
-                        // ToObject(this value)
+                        // Step 1: ToPropertyKey(V) first
+                        let key_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let key = match interp.to_property_key(&key_val) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        // Step 2: ToObject(this value)
                         let o = match interp.to_object(this_val) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
                         if let JsValue::Object(ref obj_ref) = o {
-                            // Use proxy-aware [[GetOwnProperty]]
                             match interp.proxy_get_own_property_descriptor(obj_ref.id, &key) {
                                 Ok(desc_val) => {
                                     return Completion::Normal(JsValue::Boolean(!matches!(
@@ -3431,7 +3454,6 @@ impl Interpreter {
                     "toString".to_string(),
                     0,
                     |interp, this_val, _args| {
-                        // Steps 1-2: undefined/null
                         if matches!(this_val, JsValue::Undefined) {
                             return Completion::Normal(JsValue::String(JsString::from_str(
                                 "[object Undefined]",
@@ -3442,18 +3464,21 @@ impl Interpreter {
                                 "[object Null]",
                             )));
                         }
-                        // Step 3: Let O be ! ToObject(this value).
                         let o = match interp.to_object(this_val) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
                         if let JsValue::Object(ref obj_ref) = o {
-                            // Steps 4-14: determine builtinTag from internal slots
-                            let builtin_tag = if let Some(obj) = interp.get_object(obj_ref.id) {
+                            // Step 4: IsArray (recursive for proxies)
+                            let is_array = match is_array_value(interp, obj_ref.id) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let builtin_tag = if is_array {
+                                "Array"
+                            } else if let Some(obj) = interp.get_object(obj_ref.id) {
                                 let ob = obj.borrow();
-                                if ob.class_name == "Array" {
-                                    "Array"
-                                } else if ob.class_name == "Arguments" {
+                                if ob.class_name == "Arguments" {
                                     "Arguments"
                                 } else if ob.callable.is_some() {
                                     "Function"
@@ -3488,14 +3513,11 @@ impl Interpreter {
                             // Step 15: Let tag be ? Get(O, @@toStringTag).
                             let tag_key = "Symbol(Symbol.toStringTag)".to_string();
                             let tag_result = interp.get_object_property(obj_ref.id, &tag_key, &o);
-                            let tag = if let Completion::Normal(ref tag_val) = tag_result
-                                && let JsValue::String(s) = tag_val
-                            {
-                                // Step 16: If tag is a String, use it
-                                s.to_string()
-                            } else {
-                                // Step 17: Otherwise use builtinTag
-                                builtin_tag.to_string()
+                            let tag = match tag_result {
+                                Completion::Normal(JsValue::String(s)) => s.to_string(),
+                                Completion::Normal(_) => builtin_tag.to_string(),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => builtin_tag.to_string(),
                             };
                             Completion::Normal(JsValue::String(JsString::from_str(&format!(
                                 "[object {tag}]"
@@ -3516,17 +3538,10 @@ impl Interpreter {
                     "valueOf".to_string(),
                     0,
                     |interp, this_val, _args| {
-                        let obj = match interp.to_object(this_val) {
-                            Completion::Normal(o) => o,
-                            other => return other,
-                        };
-                        if let JsValue::Object(o) = &obj
-                            && let Some(obj_data) = interp.get_object(o.id)
-                            && let Some(pv) = obj_data.borrow().primitive_value.clone()
-                        {
-                            return Completion::Normal(pv);
+                        match interp.to_object(this_val) {
+                            Completion::Normal(o) => Completion::Normal(o),
+                            other => other,
                         }
-                        Completion::Normal(obj)
                     },
                 ));
                 proto_obj
@@ -3538,20 +3553,25 @@ impl Interpreter {
                     "toLocaleString".to_string(),
                     0,
                     |interp, this_val, _args| {
-                        // 1. Let O be ? ToObject(this value).
-                        let o = match interp.to_object(this_val) {
+                        // 1. Let O be the this value.
+                        let o = this_val.clone();
+                        // 2. Return ? Invoke(O, "toString").
+                        // Invoke(V, P): func = GetV(V, P); Return Call(func, V).
+                        // GetV(V, P): obj = ToObject(V); Return obj.[[Get]](P, V).
+                        let obj = match interp.to_object(&o) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        // 2. Return ? Invoke(O, "toString").
-                        if let JsValue::Object(ref obj_ref) = o {
+                        if let JsValue::Object(ref obj_ref) = obj {
+                            // [[Get]] with receiver = O (the original value, possibly primitive)
                             let to_string_fn =
                                 match interp.get_object_property(obj_ref.id, "toString", &o) {
                                     Completion::Normal(v) => v,
                                     other => return other,
                                 };
                             if interp.is_callable(&to_string_fn) {
-                                return interp.call_function(&to_string_fn, this_val, &[]);
+                                // Call(func, O) — this is the original value
+                                return interp.call_function(&to_string_fn, &o, &[]);
                             }
                         }
                         Completion::Throw(interp.create_type_error("toString is not a function"))
@@ -3566,7 +3586,11 @@ impl Interpreter {
                     "propertyIsEnumerable".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_property_key_string).unwrap_or_default();
+                        let key_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let key = match interp.to_property_key(&key_val) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         let o = match interp.to_object(this_val) {
                             Completion::Normal(v) => v,
                             other => return other,
@@ -3601,25 +3625,44 @@ impl Interpreter {
                     "isPrototypeOf".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let JsValue::Object(target_o) = &target else {
+                        let mut v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        if !matches!(v, JsValue::Object(_)) {
                             return Completion::Normal(JsValue::Boolean(false));
-                        };
+                        }
                         let o = match interp.to_object(this_val) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        if let JsValue::Object(this_o) = &o
-                            && let (Some(this_data), Some(target_data)) =
-                                (interp.get_object(this_o.id), interp.get_object(target_o.id))
-                        {
-                            let mut current = target_data.borrow().prototype.clone();
-                            while let Some(p) = current {
-                                if Rc::ptr_eq(&p, &this_data) {
+                        loop {
+                            let v_id = if let JsValue::Object(ref vo) = v { vo.id } else { break; };
+                            // Use proxy-aware [[GetPrototypeOf]]
+                            let proto = if let Some(obj) = interp.get_object(v_id) {
+                                if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                                    match interp.proxy_get_prototype_of(v_id) {
+                                        Ok(p) => p,
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                } else {
+                                    match obj.borrow().prototype.clone() {
+                                        Some(p) => {
+                                            let pid = p.borrow().id.unwrap();
+                                            JsValue::Object(crate::types::JsObject { id: pid })
+                                        }
+                                        None => JsValue::Null,
+                                    }
+                                }
+                            } else {
+                                break;
+                            };
+                            if matches!(proto, JsValue::Null) {
+                                break;
+                            }
+                            if let (JsValue::Object(po), JsValue::Object(oo)) = (&proto, &o) {
+                                if po.id == oo.id {
                                     return Completion::Normal(JsValue::Boolean(true));
                                 }
-                                current = p.borrow().prototype.clone();
                             }
+                            v = proto;
                         }
                         Completion::Normal(JsValue::Boolean(false))
                     },
@@ -3633,7 +3676,11 @@ impl Interpreter {
                     "__defineGetter__".to_string(),
                     2,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_property_key_string).unwrap_or_default();
+                        // Step 1: ToObject(this) first
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
                         let getter = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         if !matches!(&getter, JsValue::Object(o) if interp.get_object(o.id).map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
                         {
@@ -3641,24 +3688,37 @@ impl Interpreter {
                                 interp.create_type_error("Getter must be a function"),
                             );
                         }
-                        let o = match interp.to_object(this_val) {
-                            Completion::Normal(v) => v,
-                            other => return other,
+                        // ToPropertyKey(P)
+                        let key_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let key = match interp.to_property_key(&key_val) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
                         };
-                        if let JsValue::Object(ref obj_ref) = o
-                            && let Some(obj) = interp.get_object(obj_ref.id)
-                        {
-                            obj.borrow_mut().define_own_property(
-                                key,
-                                PropertyDescriptor {
-                                    value: None,
-                                    writable: None,
-                                    get: Some(getter),
-                                    set: None,
-                                    enumerable: Some(true),
-                                    configurable: Some(true),
-                                },
-                            );
+                        // Step 5: DefinePropertyOrThrow
+                        let desc = PropertyDescriptor {
+                            value: None,
+                            writable: None,
+                            get: Some(getter),
+                            set: None,
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                        };
+                        if let JsValue::Object(ref obj_ref) = o {
+                            let is_proxy = interp.get_object(obj_ref.id)
+                                .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.proxy_revoked })
+                                .unwrap_or(false);
+                            if is_proxy {
+                                let desc_val = interp.from_property_descriptor(&desc);
+                                match interp.proxy_define_own_property(obj_ref.id, key, &desc_val) {
+                                    Ok(true) => {}
+                                    Ok(false) => return Completion::Throw(interp.create_type_error("Cannot define property")),
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else if let Some(obj) = interp.get_object(obj_ref.id) {
+                                if !obj.borrow_mut().define_own_property(key, desc) {
+                                    return Completion::Throw(interp.create_type_error("Cannot define property"));
+                                }
+                            }
                         }
                         Completion::Normal(JsValue::Undefined)
                     },
@@ -3672,7 +3732,11 @@ impl Interpreter {
                     "__defineSetter__".to_string(),
                     2,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_property_key_string).unwrap_or_default();
+                        // Step 1: ToObject(this) first
+                        let o = match interp.to_object(this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
                         let setter = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         if !matches!(&setter, JsValue::Object(o) if interp.get_object(o.id).map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
                         {
@@ -3680,24 +3744,35 @@ impl Interpreter {
                                 interp.create_type_error("Setter must be a function"),
                             );
                         }
-                        let o = match interp.to_object(this_val) {
-                            Completion::Normal(v) => v,
-                            other => return other,
+                        let key_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let key = match interp.to_property_key(&key_val) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
                         };
-                        if let JsValue::Object(ref obj_ref) = o
-                            && let Some(obj) = interp.get_object(obj_ref.id)
-                        {
-                            obj.borrow_mut().define_own_property(
-                                key,
-                                PropertyDescriptor {
-                                    value: None,
-                                    writable: None,
-                                    get: None,
-                                    set: Some(setter),
-                                    enumerable: Some(true),
-                                    configurable: Some(true),
-                                },
-                            );
+                        let desc = PropertyDescriptor {
+                            value: None,
+                            writable: None,
+                            get: None,
+                            set: Some(setter),
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                        };
+                        if let JsValue::Object(ref obj_ref) = o {
+                            let is_proxy = interp.get_object(obj_ref.id)
+                                .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.proxy_revoked })
+                                .unwrap_or(false);
+                            if is_proxy {
+                                let desc_val = interp.from_property_descriptor(&desc);
+                                match interp.proxy_define_own_property(obj_ref.id, key, &desc_val) {
+                                    Ok(true) => {}
+                                    Ok(false) => return Completion::Throw(interp.create_type_error("Cannot define property")),
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else if let Some(obj) = interp.get_object(obj_ref.id) {
+                                if !obj.borrow_mut().define_own_property(key, desc) {
+                                    return Completion::Throw(interp.create_type_error("Cannot define property"));
+                                }
+                            }
                         }
                         Completion::Normal(JsValue::Undefined)
                     },
@@ -3711,30 +3786,57 @@ impl Interpreter {
                     "__lookupGetter__".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_property_key_string).unwrap_or_default();
+                        // Step 1: ToObject(this) first
                         let mut current = match interp.to_object(this_val) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
+                        let key_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let key = match interp.to_property_key(&key_val) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         loop {
-                            if let JsValue::Object(ref o) = current
-                                && let Some(obj) = interp.get_object(o.id)
-                            {
-                                if let Some(desc) = obj.borrow().get_own_property(&key) {
-                                    if let Some(ref g) = desc.get {
-                                        return Completion::Normal(g.clone());
+                            let obj_id = if let JsValue::Object(ref o) = current { o.id } else { break; };
+                            // Step 4a: O.[[GetOwnProperty]](key) (proxy-aware)
+                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if !matches!(desc_val, JsValue::Undefined) {
+                                if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                    if let Some(g) = desc.get {
+                                        return Completion::Normal(g);
                                     }
-                                    return Completion::Normal(JsValue::Undefined);
                                 }
-                                let proto = obj.borrow().prototype.clone();
-                                if let Some(p) = proto {
-                                    let pid = p.borrow().id.unwrap();
-                                    current = JsValue::Object(crate::types::JsObject { id: pid });
-                                    continue;
-                                }
+                                return Completion::Normal(JsValue::Undefined);
                             }
-                            return Completion::Normal(JsValue::Undefined);
+                            // Step 4c: O.[[GetPrototypeOf]]() (proxy-aware)
+                            let is_proxy = interp.get_object(obj_id)
+                                .map(|o| { let b = o.borrow(); b.is_proxy() || b.proxy_revoked })
+                                .unwrap_or(false);
+                            let proto = if is_proxy {
+                                match interp.proxy_get_prototype_of(obj_id) {
+                                    Ok(p) => p,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else if let Some(obj) = interp.get_object(obj_id) {
+                                match obj.borrow().prototype.clone() {
+                                    Some(p) => {
+                                        let pid = p.borrow().id.unwrap();
+                                        JsValue::Object(crate::types::JsObject { id: pid })
+                                    }
+                                    None => JsValue::Null,
+                                }
+                            } else {
+                                break;
+                            };
+                            if matches!(proto, JsValue::Null) {
+                                break;
+                            }
+                            current = proto;
                         }
+                        Completion::Normal(JsValue::Undefined)
                     },
                 ));
                 proto_obj
@@ -3746,30 +3848,55 @@ impl Interpreter {
                     "__lookupSetter__".to_string(),
                     1,
                     |interp, this_val, args| {
-                        let key = args.first().map(to_property_key_string).unwrap_or_default();
+                        // Step 1: ToObject(this) first
                         let mut current = match interp.to_object(this_val) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
+                        let key_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let key = match interp.to_property_key(&key_val) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         loop {
-                            if let JsValue::Object(ref o) = current
-                                && let Some(obj) = interp.get_object(o.id)
-                            {
-                                if let Some(desc) = obj.borrow().get_own_property(&key) {
-                                    if let Some(ref s) = desc.set {
-                                        return Completion::Normal(s.clone());
+                            let obj_id = if let JsValue::Object(ref o) = current { o.id } else { break; };
+                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if !matches!(desc_val, JsValue::Undefined) {
+                                if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                    if let Some(s) = desc.set {
+                                        return Completion::Normal(s);
                                     }
-                                    return Completion::Normal(JsValue::Undefined);
                                 }
-                                let proto = obj.borrow().prototype.clone();
-                                if let Some(p) = proto {
-                                    let pid = p.borrow().id.unwrap();
-                                    current = JsValue::Object(crate::types::JsObject { id: pid });
-                                    continue;
-                                }
+                                return Completion::Normal(JsValue::Undefined);
                             }
-                            return Completion::Normal(JsValue::Undefined);
+                            let is_proxy = interp.get_object(obj_id)
+                                .map(|o| { let b = o.borrow(); b.is_proxy() || b.proxy_revoked })
+                                .unwrap_or(false);
+                            let proto = if is_proxy {
+                                match interp.proxy_get_prototype_of(obj_id) {
+                                    Ok(p) => p,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else if let Some(obj) = interp.get_object(obj_id) {
+                                match obj.borrow().prototype.clone() {
+                                    Some(p) => {
+                                        let pid = p.borrow().id.unwrap();
+                                        JsValue::Object(crate::types::JsObject { id: pid })
+                                    }
+                                    None => JsValue::Null,
+                                }
+                            } else {
+                                break;
+                            };
+                            if matches!(proto, JsValue::Null) {
+                                break;
+                            }
+                            current = proto;
                         }
+                        Completion::Normal(JsValue::Undefined)
                     },
                 ));
                 proto_obj
@@ -4019,6 +4146,48 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
+                        // Module namespace [[GetOwnProperty]] (§10.4.6.4): live binding
+                        let is_ns = interp
+                            .get_object(o.id)
+                            .map(|obj| obj.borrow().module_namespace.is_some())
+                            .unwrap_or(false);
+                        if is_ns {
+                            let is_export = interp
+                                .get_object(o.id)
+                                .and_then(|obj| {
+                                    let b = obj.borrow();
+                                    let ns = b.module_namespace.as_ref()?;
+                                    Some(ns.export_names.contains(&key))
+                                })
+                                .unwrap_or(false);
+                            if is_export {
+                                let live_val = match interp.get_object_property(
+                                    o.id,
+                                    &key,
+                                    &target.clone(),
+                                ) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    other => return other,
+                                };
+                                let desc = crate::interpreter::types::PropertyDescriptor {
+                                    value: Some(live_val),
+                                    writable: Some(true),
+                                    enumerable: Some(true),
+                                    configurable: Some(false),
+                                    get: None,
+                                    set: None,
+                                };
+                                return Completion::Normal(interp.from_property_descriptor(&desc));
+                            }
+                            // Non-export key on namespace (e.g. Symbol.toStringTag): fall through
+                            if let Some(obj) = interp.get_object(o.id)
+                                && let Some(desc) = obj.borrow().get_own_property(&key)
+                            {
+                                return Completion::Normal(interp.from_property_descriptor(&desc));
+                            }
+                            return Completion::Normal(JsValue::Undefined);
+                        }
                         if let Some(obj) = interp.get_object(o.id)
                             && let Some(desc) = obj.borrow().get_own_property(&key)
                         {
@@ -4042,40 +4211,75 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if let JsValue::Object(ref o) = obj_val
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        // Proxy ownKeys trap
-                        let res = {
-                            let _b = obj.borrow();
-                            _b.is_proxy() || _b.proxy_revoked
+                    if let JsValue::Object(ref o) = obj_val {
+                        let obj_id = o.id;
+                        // [[OwnPropertyKeys]] for all keys
+                        let all_keys = match interp.proxy_own_keys(obj_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
                         };
-                        if res {
-                            match interp.proxy_own_keys(o.id) {
-                                Ok(keys) => {
-                                    let arr = interp.create_array(keys);
-                                    return Completion::Normal(arr);
+                        // For non-proxy, also include string wrapper char indices
+                        let mut extra_str_keys: Vec<String> = Vec::new();
+                        if interp.get_object(obj_id).map(|ob| !ob.borrow().is_proxy()).unwrap_or(false) {
+                            if let Some(obj) = interp.get_object(obj_id) {
+                                let b = obj.borrow();
+                                if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                    for i in 0..s.len() {
+                                        extra_str_keys.push(i.to_string());
+                                    }
                                 }
-                                Err(e) => return Completion::Throw(e),
                             }
                         }
-                        let borrowed = obj.borrow();
-                        let keys: Vec<JsValue> = borrowed
-                            .property_order
-                            .iter()
-                            .filter(|k| {
-                                !k.starts_with("Symbol(")
-                                    && borrowed
-                                        .properties
-                                        .get(*k)
-                                        .is_some_and(|d| d.enumerable != Some(false))
-                            })
-                            .map(|k| JsValue::String(JsString::from_str(k)))
-                            .collect();
-                        let arr = interp.create_array(keys);
-                        return Completion::Normal(arr);
+                        let mut result = Vec::new();
+                        // Add extra char index keys first (string wrapper exotic)
+                        for k in &extra_str_keys {
+                            result.push(JsValue::String(JsString::from_str(k)));
+                        }
+                        let mut int_keys: Vec<(u64, String)> = Vec::new();
+                        let mut str_keys: Vec<String> = Vec::new();
+                        for kv in &all_keys {
+                            if let JsValue::String(s) = kv {
+                                let k = s.to_rust_string();
+                                if extra_str_keys.contains(&k) { continue; }
+                                if k.starts_with("Symbol(") { continue; }
+                                if let Ok(n) = k.parse::<u64>() {
+                                    if n.to_string() == k {
+                                        int_keys.push((n, k));
+                                    } else {
+                                        str_keys.push(k);
+                                    }
+                                } else {
+                                    str_keys.push(k);
+                                }
+                            }
+                        }
+                        int_keys.sort_by_key(|(n, _)| *n);
+                        for (_, k) in int_keys { result.push(JsValue::String(JsString::from_str(&k))); }
+                        result.extend(str_keys.iter().map(|k| JsValue::String(JsString::from_str(k))));
+                        // For each string key call [[GetOwnProperty]] and filter enumerable
+                        let mut enum_keys: Vec<JsValue> = Vec::new();
+                        // Extra char index keys are always enumerable (string exotic)
+                        for k in &extra_str_keys {
+                            enum_keys.push(JsValue::String(JsString::from_str(k)));
+                        }
+                        for kv in result.iter().skip(extra_str_keys.len()) {
+                            if let JsValue::String(s) = kv {
+                                let k = s.to_rust_string();
+                                let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                if matches!(desc_val, JsValue::Undefined) { continue; }
+                                if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                    if desc.enumerable != Some(false) {
+                                        enum_keys.push(kv.clone());
+                                    }
+                                }
+                            }
+                        }
+                        return Completion::Normal(interp.create_array(enum_keys));
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(interp.create_array(Vec::new()))
                 },
             ));
             obj_func
@@ -4088,15 +4292,65 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = target
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let mut o = obj.borrow_mut();
-                        o.extensible = false;
-                        for desc in o.properties.values_mut() {
-                            desc.configurable = Some(false);
-                            if desc.is_data_descriptor() {
-                                desc.writable = Some(false);
+                    if let JsValue::Object(ref o) = target {
+                        let obj_id = o.id;
+                        let is_proxy = interp.get_object(obj_id)
+                            .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.proxy_revoked })
+                            .unwrap_or(false);
+                        if is_proxy {
+                            // SetIntegrityLevel: preventExtensions
+                            match interp.proxy_prevent_extensions(obj_id) {
+                                Ok(true) => {}
+                                Ok(false) => return Completion::Throw(interp.create_type_error("Cannot freeze: preventExtensions returned false")),
+                                Err(e) => return Completion::Throw(e),
+                            }
+                            // Get own keys
+                            let keys = match interp.proxy_own_keys(obj_id) {
+                                Ok(k) => k,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            for key_val in keys {
+                                let key = match &key_val {
+                                    JsValue::String(s) => s.to_rust_string(),
+                                    JsValue::Symbol(s) => s.to_property_key(),
+                                    _ => continue,
+                                };
+                                // GetOwnProperty to determine accessor vs data
+                                let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                if matches!(desc_val, JsValue::Undefined) { continue; }
+                                let desc = match interp.to_property_descriptor(&desc_val) {
+                                    Ok(d) => d,
+                                    Err(_) => continue,
+                                };
+                                let new_desc = if desc.is_accessor_descriptor() {
+                                    PropertyDescriptor { configurable: Some(false), value: None, writable: None, get: None, set: None, enumerable: None }
+                                } else {
+                                    PropertyDescriptor { configurable: Some(false), writable: Some(false), value: None, get: None, set: None, enumerable: None }
+                                };
+                                let new_desc_val = interp.from_property_descriptor(&new_desc);
+                                match interp.proxy_define_own_property(obj_id, key, &new_desc_val) {
+                                    Ok(_) => {}
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                        } else if let Some(obj) = interp.get_object(obj_id) {
+                            obj.borrow_mut().extensible = false;
+                            let keys_and_descs: Vec<(String, PropertyDescriptor)> = {
+                                let b = obj.borrow();
+                                b.properties.iter()
+                                    .map(|(k, d)| (k.clone(), d.clone()))
+                                    .collect()
+                            };
+                            for (key, desc) in keys_and_descs {
+                                let new_desc = if desc.is_accessor_descriptor() {
+                                    PropertyDescriptor { configurable: Some(false), value: None, writable: None, get: None, set: None, enumerable: None }
+                                } else {
+                                    PropertyDescriptor { configurable: Some(false), writable: Some(false), value: None, get: None, set: None, enumerable: None }
+                                };
+                                obj.borrow_mut().define_own_property(key, new_desc);
                             }
                         }
                     }
@@ -4184,22 +4438,29 @@ impl Interpreter {
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => return Completion::Normal(target),
                         };
-                        if let JsValue::Object(ref d) = props_obj_val
-                            && let Some(desc_obj) = interp.get_object(d.id)
-                        {
-                            let keys: Vec<String> = desc_obj.borrow().property_order.clone();
-                            for key in keys {
-                                let b_desc = desc_obj.borrow();
-                                let is_enum = b_desc
-                                    .get_property_descriptor(&key)
-                                    .map(|d| d.enumerable.unwrap_or(true))
-                                    .unwrap_or(true);
-                                drop(b_desc);
-                                if !is_enum {
-                                    continue;
+                        if let JsValue::Object(ref d) = props_obj_val {
+                            let d_id = d.id;
+                            let all_keys = match interp.proxy_own_keys(d_id) {
+                                Ok(k) => k,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            for key_val in all_keys {
+                                let key = match &key_val {
+                                    JsValue::String(s) => s.to_rust_string(),
+                                    JsValue::Symbol(s) => s.to_property_key(),
+                                    _ => continue,
+                                };
+                                // Check enumerability via [[GetOwnProperty]]
+                                let desc_check = match interp.proxy_get_own_property_descriptor(d_id, &key) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                if matches!(desc_check, JsValue::Undefined) { continue; }
+                                if let Ok(chk) = interp.to_property_descriptor(&desc_check) {
+                                    if chk.enumerable == Some(false) { continue; }
                                 }
                                 let prop_desc_val =
-                                    match interp.get_object_property(d.id, &key, &props_obj_val) {
+                                    match interp.get_object_property(d_id, &key, &props_obj_val) {
                                         Completion::Normal(v) => v,
                                         Completion::Throw(e) => return Completion::Throw(e),
                                         _ => continue,
@@ -4244,32 +4505,64 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if let JsValue::Object(o) = &obj_val
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let keys: Vec<String> = {
-                            let borrowed = obj.borrow();
-                            borrowed
-                                .property_order
-                                .iter()
-                                .filter(|k| {
-                                    !k.starts_with("Symbol(")
-                                        && borrowed
-                                            .properties
-                                            .get(*k)
-                                            .is_some_and(|d| d.enumerable != Some(false))
-                                })
-                                .cloned()
-                                .collect()
+                    if let JsValue::Object(o) = &obj_val {
+                        let obj_id = o.id;
+                        // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
+                        let all_keys = match interp.proxy_own_keys(obj_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
                         };
+                        // String exotic: prepend char indices as enumerable
+                        let mut extra_str_keys: Vec<String> = Vec::new();
+                        if interp.get_object(obj_id).map(|ob| !ob.borrow().is_proxy()).unwrap_or(false) {
+                            if let Some(obj) = interp.get_object(obj_id) {
+                                let b = obj.borrow();
+                                if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                    for i in 0..s.len() { extra_str_keys.push(i.to_string()); }
+                                }
+                            }
+                        }
                         let mut pairs = Vec::new();
-                        for k in keys {
-                            let val = match interp.get_object_property(o.id, &k, &obj_val) {
+                        // Extra char index keys from string exotic
+                        for k in &extra_str_keys {
+                            let val = match interp.get_object_property(obj_id, k, &obj_val) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            let key = JsValue::String(JsString::from_str(&k));
-                            pairs.push(interp.create_array(vec![key, val]));
+                            pairs.push(interp.create_array(vec![JsValue::String(JsString::from_str(k)), val]));
+                        }
+                        // Sort string keys: integer indices first, then the rest
+                        let mut int_keys: Vec<(u64, String)> = Vec::new();
+                        let mut str_keys: Vec<String> = Vec::new();
+                        for kv in &all_keys {
+                            if let JsValue::String(s) = kv {
+                                let k = s.to_rust_string();
+                                if extra_str_keys.contains(&k) || k.starts_with("Symbol(") { continue; }
+                                if let Ok(n) = k.parse::<u64>() {
+                                    if n.to_string() == k { int_keys.push((n, k)); } else { str_keys.push(k); }
+                                } else {
+                                    str_keys.push(k);
+                                }
+                            }
+                        }
+                        int_keys.sort_by_key(|(n, _)| *n);
+                        let ordered: Vec<String> = int_keys.into_iter().map(|(_, k)| k).chain(str_keys).collect();
+                        for k in ordered {
+                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if matches!(desc_val, JsValue::Undefined) { continue; }
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                if desc.enumerable == Some(false) { continue; }
+                            } else {
+                                continue;
+                            }
+                            let val = match interp.get_object_property(obj_id, &k, &obj_val) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            pairs.push(interp.create_array(vec![JsValue::String(JsString::from_str(&k)), val]));
                         }
                         let arr = interp.create_array(pairs);
                         return Completion::Normal(arr);
@@ -4291,27 +4584,60 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if let JsValue::Object(o) = &obj_val
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let keys: Vec<String> = {
-                            let borrowed = obj.borrow();
-                            borrowed
-                                .property_order
-                                .iter()
-                                .filter(|k| {
-                                    !k.starts_with("Symbol(")
-                                        && borrowed
-                                            .properties
-                                            .get(*k)
-                                            .is_some_and(|d| d.enumerable != Some(false))
-                                })
-                                .cloned()
-                                .collect()
+                    if let JsValue::Object(o) = &obj_val {
+                        let obj_id = o.id;
+                        // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
+                        let all_keys = match interp.proxy_own_keys(obj_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
                         };
+                        // String exotic: prepend char indices as enumerable
+                        let mut extra_str_keys: Vec<String> = Vec::new();
+                        if interp.get_object(obj_id).map(|ob| !ob.borrow().is_proxy()).unwrap_or(false) {
+                            if let Some(obj) = interp.get_object(obj_id) {
+                                let b = obj.borrow();
+                                if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                    for i in 0..s.len() { extra_str_keys.push(i.to_string()); }
+                                }
+                            }
+                        }
                         let mut values = Vec::new();
-                        for k in keys {
-                            let val = match interp.get_object_property(o.id, &k, &obj_val) {
+                        // Extra char index keys from string exotic
+                        for k in &extra_str_keys {
+                            let val = match interp.get_object_property(obj_id, k, &obj_val) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            values.push(val);
+                        }
+                        // Sort string keys: integer indices first, then the rest
+                        let mut int_keys: Vec<(u64, String)> = Vec::new();
+                        let mut str_keys: Vec<String> = Vec::new();
+                        for kv in &all_keys {
+                            if let JsValue::String(s) = kv {
+                                let k = s.to_rust_string();
+                                if extra_str_keys.contains(&k) || k.starts_with("Symbol(") { continue; }
+                                if let Ok(n) = k.parse::<u64>() {
+                                    if n.to_string() == k { int_keys.push((n, k)); } else { str_keys.push(k); }
+                                } else {
+                                    str_keys.push(k);
+                                }
+                            }
+                        }
+                        int_keys.sort_by_key(|(n, _)| *n);
+                        let ordered: Vec<String> = int_keys.into_iter().map(|(_, k)| k).chain(str_keys).collect();
+                        for k in ordered {
+                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if matches!(desc_val, JsValue::Undefined) { continue; }
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                if desc.enumerable == Some(false) { continue; }
+                            } else {
+                                continue;
+                            }
+                            let val = match interp.get_object_property(obj_id, &k, &obj_val) {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
@@ -4357,61 +4683,109 @@ impl Interpreter {
                         } else {
                             continue;
                         };
-                        let keys: Vec<String> = if let Some(src) = interp.get_object(s_id) {
+                        // [[OwnPropertyKeys]](): use proxy_own_keys for proxy sources;
+                        // for non-proxy, build OrdinaryOwnPropertyKeys manually
+                        // (integer indices, then string keys, then symbol keys).
+                        let is_proxy_src = interp.get_object(s_id)
+                            .map(|o| o.borrow().is_proxy())
+                            .unwrap_or(false);
+                        let raw_keys: Vec<JsValue> = if is_proxy_src {
+                            match interp.proxy_own_keys(s_id) {
+                                Ok(k) => k,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else if let Some(src) = interp.get_object(s_id) {
                             let b = src.borrow();
                             // String exotic: prepend character indices
-                            let mut result = Vec::new();
+                            let mut result: Vec<JsValue> = Vec::new();
                             if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                let len = s.len();
-                                for i in 0..len {
-                                    result.push(i.to_string());
+                                for i in 0..s.len() {
+                                    result.push(JsValue::String(JsString::from_str(&i.to_string())));
                                 }
                             }
                             let is_string_wrapper =
                                 matches!(b.primitive_value, Some(JsValue::String(_)));
-                            for k in b.property_order.iter().chain(
-                                b.properties
-                                    .keys()
-                                    .filter(|k| k.starts_with("Symbol("))
-                                    .filter(|k| !b.property_order.contains(k)),
-                            ) {
-                                if result.contains(k) {
-                                    continue;
-                                }
+                            // Collect string keys (non-symbol, non-integer-index) and symbol keys separately
+                            let mut int_keys: Vec<(u64, String)> = Vec::new();
+                            let mut str_keys: Vec<String> = Vec::new();
+                            let mut sym_keys: Vec<String> = Vec::new();
+                            for k in &b.property_order {
                                 if is_string_wrapper && k == "length" {
                                     continue;
                                 }
-                                if let Some(d) = b.properties.get(k)
-                                    && d.enumerable != Some(false)
-                                {
-                                    result.push(k.clone());
+                                if k.starts_with("Symbol(") {
+                                    sym_keys.push(k.clone());
+                                } else if let Ok(n) = k.parse::<u64>() {
+                                    if n.to_string() == *k {
+                                        int_keys.push((n, k.clone()));
+                                    } else {
+                                        str_keys.push(k.clone());
+                                    }
+                                } else {
+                                    str_keys.push(k.clone());
                                 }
+                            }
+                            // Also pick up symbol keys that may not be in property_order
+                            for k in b.properties.keys() {
+                                if k.starts_with("Symbol(") && !b.property_order.contains(k) {
+                                    sym_keys.push(k.clone());
+                                }
+                            }
+                            int_keys.sort_by_key(|(n, _)| *n);
+                            // Already accounted for char indices above; add int keys
+                            for (_, k) in &int_keys {
+                                let already = result.iter().any(|v| {
+                                    if let JsValue::String(s) = v { s.to_rust_string() == *k } else { false }
+                                });
+                                if !already {
+                                    result.push(JsValue::String(JsString::from_str(k)));
+                                }
+                            }
+                            for k in str_keys {
+                                result.push(JsValue::String(JsString::from_str(&k)));
+                            }
+                            for k in sym_keys {
+                                result.push(interp.symbol_key_to_jsvalue(&k));
                             }
                             result
                         } else {
                             continue;
                         };
-                        for key in keys {
-                            let val = match interp.get_object_property(s_id, &key, &src_obj_val) {
+                        for key_val in raw_keys {
+                            let key_str = to_property_key_string(&key_val);
+                            // [[GetOwnProperty]] to check enumerability
+                            let desc_result = interp.proxy_get_own_property_descriptor(s_id, &key_str);
+                            let desc_obj = match desc_result {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            // If descriptor is undefined or not enumerable, skip
+                            if matches!(desc_obj, JsValue::Undefined) {
+                                continue;
+                            }
+                            let desc = interp.to_property_descriptor(&desc_obj);
+                            let is_enum = match &desc {
+                                Ok(d) => d.enumerable != Some(false),
+                                Err(_) => false,
+                            };
+                            if !is_enum {
+                                continue;
+                            }
+                            // [[Get]] from source
+                            let val = match interp.get_object_property(s_id, &key_str, &src_obj_val) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => JsValue::Undefined,
                             };
-                            // [[Set]] on target: check for setters
-                            if let Some(tgt) = interp.get_object(t_id) {
-                                let desc = tgt.borrow().get_property_descriptor(&key);
-                                if let Some(ref d) = desc
-                                    && let Some(ref setter) = d.set
-                                {
-                                    let setter = setter.clone();
-                                    if let Completion::Throw(e) =
-                                        interp.call_function(&setter, &target, &[val])
-                                    {
-                                        return Completion::Throw(e);
-                                    }
-                                } else {
-                                    tgt.borrow_mut().set_property_value(&key, val);
+                            // [[Set]] on target with Throw=true
+                            match interp.proxy_set(t_id, &key_str, val, &target) {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot assign to read only property",
+                                    ));
                                 }
+                                Err(e) => return Completion::Throw(e),
                             }
                         }
                     }
@@ -4463,7 +4837,15 @@ impl Interpreter {
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => JsValue::Undefined,
                         };
-                        let key_str = to_property_key_string(&key_val);
+                        // ToPropertyKey (with error propagation)
+                        let key_str = match interp.to_property_key(&key_val) {
+                            Ok(k) => k,
+                            Err(e) => {
+                                // IfAbruptCloseIterator
+                                let _ = interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                        };
                         if let Some(obj) = interp.get_object(result_id) {
                             let existing = obj.borrow().get_property(&key_str);
                             if let JsValue::Object(ref arr_o) = existing
@@ -4471,15 +4853,16 @@ impl Interpreter {
                             {
                                 let len_val = arr.borrow().get_property("length");
                                 let len = to_number(&len_val) as usize;
-                                arr.borrow_mut()
-                                    .insert_builtin(len.to_string(), value);
-                                arr.borrow_mut().insert_builtin(
+                                // Use enumerable property insertion
+                                arr.borrow_mut().insert_property(len.to_string(), PropertyDescriptor::data(value, true, true, true));
+                                arr.borrow_mut().insert_property(
                                     "length".to_string(),
-                                    JsValue::Number((len + 1) as f64),
+                                    PropertyDescriptor::data(JsValue::Number((len + 1) as f64), true, false, false),
                                 );
                             } else {
                                 let new_arr = interp.create_array(vec![value]);
-                                obj.borrow_mut().insert_builtin(key_str, new_arr);
+                                // Create enumerable property
+                                obj.borrow_mut().insert_property(key_str, PropertyDescriptor::data(new_arr, true, true, true));
                             }
                         }
                         k += 1;
@@ -4514,11 +4897,17 @@ impl Interpreter {
                 "getOwnPropertyNames".to_string(),
                 1,
                 |interp, _this, args| {
-                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(o) = &target
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        // Proxy ownKeys trap (getOwnPropertyNames returns all keys)
+                    let target_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let target = match interp.to_object(&target_arg) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => return Completion::Normal(interp.create_array(Vec::new())),
+                    };
+                    let o = if let JsValue::Object(ref o) = target { o.clone() } else {
+                        return Completion::Normal(interp.create_array(Vec::new()));
+                    };
+                    if let Some(obj) = interp.get_object(o.id) {
+                        // Proxy ownKeys trap (getOwnPropertyNames returns all string keys)
                         let res = {
                             let _b = obj.borrow();
                             _b.is_proxy() || _b.proxy_revoked
@@ -4526,7 +4915,10 @@ impl Interpreter {
                         if res {
                             match interp.proxy_own_keys(o.id) {
                                 Ok(keys) => {
-                                    let arr = interp.create_array(keys);
+                                    let str_keys: Vec<JsValue> = keys.into_iter()
+                                        .filter(|k| matches!(k, JsValue::String(_)))
+                                        .collect();
+                                    let arr = interp.create_array(str_keys);
                                     return Completion::Normal(arr);
                                 }
                                 Err(e) => return Completion::Throw(e),
@@ -4559,13 +4951,50 @@ impl Interpreter {
                                 return Completion::Normal(arr);
                             }
                         }
-                        let names: Vec<JsValue> = obj
-                            .borrow()
-                            .property_order
-                            .iter()
+                        // String exotic: include "length" and character index keys
+                        let b = obj.borrow();
+                        let is_string_wrapper = matches!(b.primitive_value, Some(JsValue::String(_)));
+                        let mut names: Vec<JsValue> = Vec::new();
+                        if is_string_wrapper {
+                            if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                for i in 0..s.len() {
+                                    names.push(JsValue::String(JsString::from_str(&i.to_string())));
+                                }
+                            }
+                        }
+                        // Collect and sort non-symbol keys from property_order
+                        let prop_keys: Vec<String> = b.property_order.iter()
                             .filter(|k| !k.starts_with("Symbol("))
-                            .map(|k| JsValue::String(JsString::from_str(k)))
+                            .cloned()
                             .collect();
+                        drop(b);
+                        // Sort: integer indices first (already added char indices), then string keys
+                        let mut int_keys: Vec<(u64, String)> = Vec::new();
+                        let mut str_keys2: Vec<String> = Vec::new();
+                        for k in prop_keys {
+                            let already_added = names.iter().any(|v| {
+                                if let JsValue::String(s) = v { s.to_rust_string() == k } else { false }
+                            });
+                            if already_added { continue; }
+                            // For string wrappers, "length" is added at the end
+                            if is_string_wrapper && k == "length" { continue; }
+                            if let Ok(n) = k.parse::<u64>() {
+                                if n.to_string() == k {
+                                    int_keys.push((n, k));
+                                } else {
+                                    str_keys2.push(k);
+                                }
+                            } else {
+                                str_keys2.push(k);
+                            }
+                        }
+                        int_keys.sort_by_key(|(n, _)| *n);
+                        for (_, k) in int_keys { names.push(JsValue::String(JsString::from_str(&k))); }
+                        for k in str_keys2 { names.push(JsValue::String(JsString::from_str(&k))); }
+                        // String exotic: "length" is always an own property
+                        if is_string_wrapper {
+                            names.push(JsValue::String(JsString::from_str("length")));
+                        }
                         let arr = interp.create_array(names);
                         return Completion::Normal(arr);
                     }
@@ -4587,15 +5016,39 @@ impl Interpreter {
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => return Completion::Normal(interp.create_array(Vec::new())),
                     };
-                    if let JsValue::Object(ref o) = target
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let symbols: Vec<JsValue> = obj
-                            .borrow()
-                            .properties
-                            .keys()
-                            .filter(|k| k.starts_with("Symbol("))
-                            .map(|k| JsValue::String(JsString::from_str(k)))
+                    if let JsValue::Object(ref o) = target {
+                        let obj_id = o.id;
+                        // Use [[OwnPropertyKeys]] for proxy support
+                        let all_keys = if let Some(obj) = interp.get_object(obj_id) {
+                            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                                match interp.proxy_own_keys(obj_id) {
+                                    Ok(keys) => {
+                                        let sym_keys: Vec<JsValue> = keys.into_iter()
+                                            .filter(|k| matches!(k, JsValue::Symbol(_)))
+                                            .collect();
+                                        return Completion::Normal(interp.create_array(sym_keys));
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else {
+                                // Return symbol keys in property_order first, then any not in order
+                                let b = obj.borrow();
+                                let mut sym_keys: Vec<String> = b.property_order.iter()
+                                    .filter(|k| k.starts_with("Symbol("))
+                                    .cloned()
+                                    .collect();
+                                for k in b.properties.keys() {
+                                    if k.starts_with("Symbol(") && !sym_keys.contains(k) {
+                                        sym_keys.push(k.clone());
+                                    }
+                                }
+                                sym_keys
+                            }
+                        } else {
+                            Vec::new()
+                        };
+                        let symbols: Vec<JsValue> = all_keys.iter()
+                            .map(|k| interp.symbol_key_to_jsvalue(k))
                             .collect();
                         return Completion::Normal(interp.create_array(symbols));
                     }
@@ -4675,18 +5128,49 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(o) = &target
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let obj_ref = obj.borrow();
-                        if obj_ref.extensible {
-                            return Completion::Normal(JsValue::Boolean(false));
+                    if let JsValue::Object(o) = &target {
+                        let obj_id = o.id;
+                        // TestIntegrityLevel: check extensible first, then each key
+                        let is_proxy = interp.get_object(obj_id)
+                            .map(|ob| { let b = ob.borrow(); b.is_proxy() || b.proxy_revoked })
+                            .unwrap_or(false);
+                        if is_proxy {
+                            // Check via proxy isExtensible trap
+                            match interp.proxy_is_extensible(obj_id) {
+                                Ok(true) => return Completion::Normal(JsValue::Boolean(false)),
+                                Ok(false) => {}
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else if let Some(obj) = interp.get_object(obj_id) {
+                            if obj.borrow().extensible {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
                         }
-                        let all_frozen = obj_ref.properties.values().all(|d| {
-                            d.configurable == Some(false)
-                                && (!d.is_data_descriptor() || d.writable == Some(false))
-                        });
-                        return Completion::Normal(JsValue::Boolean(all_frozen));
+                        // Get all own keys via proxy_own_keys
+                        let all_keys = match interp.proxy_own_keys(obj_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        for key_val in all_keys {
+                            let key = match &key_val {
+                                JsValue::String(s) => s.to_rust_string(),
+                                JsValue::Symbol(s) => s.to_property_key(),
+                                _ => continue,
+                            };
+                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                if desc.configurable != Some(false) {
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                                if desc.is_data_descriptor() && desc.writable != Some(false) {
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                            }
+                        }
+                        return Completion::Normal(JsValue::Boolean(true));
                     }
                     Completion::Normal(JsValue::Boolean(true))
                 },
@@ -4701,18 +5185,43 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(o) = &target
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let obj_ref = obj.borrow();
-                        if obj_ref.extensible {
-                            return Completion::Normal(JsValue::Boolean(false));
+                    if let JsValue::Object(o) = &target {
+                        let obj_id = o.id;
+                        let is_proxy = interp.get_object(obj_id)
+                            .map(|ob| { let b = ob.borrow(); b.is_proxy() || b.proxy_revoked })
+                            .unwrap_or(false);
+                        if is_proxy {
+                            match interp.proxy_is_extensible(obj_id) {
+                                Ok(true) => return Completion::Normal(JsValue::Boolean(false)),
+                                Ok(false) => {}
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else if let Some(obj) = interp.get_object(obj_id) {
+                            if obj.borrow().extensible {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
                         }
-                        let all_sealed = obj_ref
-                            .properties
-                            .values()
-                            .all(|d| d.configurable == Some(false));
-                        return Completion::Normal(JsValue::Boolean(all_sealed));
+                        let all_keys = match interp.proxy_own_keys(obj_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        for key_val in all_keys {
+                            let key = match &key_val {
+                                JsValue::String(s) => s.to_rust_string(),
+                                JsValue::Symbol(s) => s.to_property_key(),
+                                _ => continue,
+                            };
+                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                if desc.configurable != Some(false) {
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                            }
+                        }
+                        return Completion::Normal(JsValue::Boolean(true));
                     }
                     Completion::Normal(JsValue::Boolean(true))
                 },
@@ -4727,13 +5236,46 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(o) = &target
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        let mut obj_mut = obj.borrow_mut();
-                        obj_mut.extensible = false;
-                        for desc in obj_mut.properties.values_mut() {
-                            desc.configurable = Some(false);
+                    if let JsValue::Object(ref o) = target {
+                        let obj_id = o.id;
+                        let is_proxy = interp.get_object(obj_id)
+                            .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.proxy_revoked })
+                            .unwrap_or(false);
+                        if is_proxy {
+                            match interp.proxy_prevent_extensions(obj_id) {
+                                Ok(true) => {}
+                                Ok(false) => return Completion::Throw(interp.create_type_error("Cannot seal: preventExtensions returned false")),
+                                Err(e) => return Completion::Throw(e),
+                            }
+                            let keys = match interp.proxy_own_keys(obj_id) {
+                                Ok(k) => k,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            for key_val in keys {
+                                let key = match &key_val {
+                                    JsValue::String(s) => s.to_rust_string(),
+                                    JsValue::Symbol(s) => s.to_property_key(),
+                                    _ => continue,
+                                };
+                                let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                if matches!(desc_val, JsValue::Undefined) { continue; }
+                                let new_desc = PropertyDescriptor { configurable: Some(false), value: None, writable: None, get: None, set: None, enumerable: None };
+                                let new_desc_val = interp.from_property_descriptor(&new_desc);
+                                match interp.proxy_define_own_property(obj_id, key, &new_desc_val) {
+                                    Ok(_) => {}
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                        } else if let Some(obj) = interp.get_object(obj_id) {
+                            obj.borrow_mut().extensible = false;
+                            let keys: Vec<String> = obj.borrow().properties.keys().cloned().collect();
+                            for key in keys {
+                                let new_desc = PropertyDescriptor { configurable: Some(false), value: None, writable: None, get: None, set: None, enumerable: None };
+                                obj.borrow_mut().define_own_property(key, new_desc);
+                            }
                         }
                     }
                     Completion::Normal(target)
@@ -4748,14 +5290,23 @@ impl Interpreter {
                 "hasOwn".to_string(),
                 2,
                 |interp, _this, args| {
-                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let key = args.get(1).map(to_property_key_string).unwrap_or_default();
-                    if let JsValue::Object(o) = &target
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        return Completion::Normal(JsValue::Boolean(
-                            obj.borrow().has_own_property(&key),
-                        ));
+                    // Step 1: ToObject(O)
+                    let target_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let obj_val = match interp.to_object(&target_arg) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    // Step 2: ToPropertyKey(P)
+                    let key_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let key = match interp.to_property_key(&key_arg) {
+                        Ok(k) => k,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if let JsValue::Object(o) = &obj_val {
+                        match interp.proxy_get_own_property_descriptor(o.id, &key) {
+                            Ok(desc_val) => return Completion::Normal(JsValue::Boolean(!matches!(desc_val, JsValue::Undefined))),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                     Completion::Normal(JsValue::Boolean(false))
                 },
@@ -4770,7 +5321,19 @@ impl Interpreter {
                 2,
                 |interp, _this, args| {
                     let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let proto = args.get(1).cloned().unwrap_or(JsValue::Null);
+                    // Step 1: RequireObjectCoercible(O)
+                    if matches!(target, JsValue::Null | JsValue::Undefined) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Object.setPrototypeOf called on null or undefined",
+                        ));
+                    }
+                    let proto = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    // Step 3: If Type(proto) is neither Object nor Null, throw TypeError
+                    if !matches!(proto, JsValue::Object(_) | JsValue::Null) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Object prototype may only be an Object or null",
+                        ));
+                    }
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
                     {
@@ -4791,6 +5354,19 @@ impl Interpreter {
                                 }
                                 Err(e) => return Completion::Throw(e),
                             }
+                        }
+                        // Immutable prototype exotic object check (Object.prototype)
+                        if obj.borrow().is_immutable_prototype {
+                            let current_proto_id = obj.borrow().prototype.as_ref().and_then(|p| p.borrow().id);
+                            let new_proto_id = if let JsValue::Object(ref p) = proto { Some(p.id) } else { None };
+                            let same = (matches!(proto, JsValue::Null) && current_proto_id.is_none())
+                                || matches!((new_proto_id, current_proto_id), (Some(a), Some(b)) if a == b);
+                            if !same {
+                                return Completion::Throw(interp.create_type_error(
+                                    "Immutable prototype object's [[Prototype]] may not be set",
+                                ));
+                            }
+                            return Completion::Normal(target);
                         }
                         // OrdinarySetPrototypeOf checks
                         let target_id = o.id;
@@ -4863,42 +5439,36 @@ impl Interpreter {
                     };
                     if let JsValue::Object(ref t) = target
                         && let JsValue::Object(ref d) = descs
-                        && let Some(desc_obj) = interp.get_object(d.id)
                     {
-                        let keys: Vec<String> = {
-                            let b = desc_obj.borrow();
-                            let mut result = Vec::new();
-                            let is_string_wrapper =
-                                matches!(b.primitive_value, Some(JsValue::String(_)));
-                            if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                let len = s.len();
-                                for i in 0..len {
-                                    result.push(i.to_string());
-                                }
-                            }
-                            for k in b.property_order.iter() {
-                                if result.contains(k) {
-                                    continue;
-                                }
-                                if is_string_wrapper && k == "length" {
-                                    continue;
-                                }
-                                if let Some(p) = b.properties.get(k)
-                                    && p.enumerable != Some(false) {
-                                        result.push(k.clone());
-                                    }
-                            }
-                            result
+                        let d_id = d.id;
+                        // Use proxy_own_keys to call ownKeys trap if present
+                        let all_keys = match interp.proxy_own_keys(d_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
                         };
-                        // Collect all descriptors first
+                        // Collect all descriptors first, calling [[GetOwnProperty]] per key
                         let mut descriptors: Vec<(String, PropertyDescriptor)> = Vec::new();
-                        for key in keys {
-                            let prop_desc_val =
-                                match interp.get_object_property(d.id, &key, &descs) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => continue,
-                                };
+                        for key_val in all_keys {
+                            let key = match &key_val {
+                                JsValue::String(s) => s.to_rust_string(),
+                                JsValue::Symbol(s) => s.to_property_key(),
+                                _ => continue,
+                            };
+                            // Call [[GetOwnProperty]] to check enumerability
+                            let desc_val = match interp.proxy_get_own_property_descriptor(d_id, &key) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if matches!(desc_val, JsValue::Undefined) { continue; }
+                            // Only process enumerable properties (spec: ObjectDefineProperties)
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                if desc.enumerable == Some(false) { continue; }
+                            }
+                            let prop_desc_val = match interp.get_object_property(d_id, &key, &descs) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => continue,
+                            };
                             match interp.to_property_descriptor(&prop_desc_val) {
                                 Ok(desc) => descriptors.push((key, desc)),
                                 Err(Some(e)) => return Completion::Throw(e),
@@ -4954,31 +5524,70 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if let JsValue::Object(ref t) = obj_val
-                        && let Some(obj) = interp.get_object(t.id)
-                    {
-                        let result = interp.create_object();
-                        // Collect all own keys including String exotic indices
+                    if let JsValue::Object(ref t) = obj_val {
+                        let obj_id = t.id;
+                        // Use proxy_own_keys to invoke ownKeys trap (proxy-aware)
+                        let all_keys = match interp.proxy_own_keys(obj_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        // String exotic: prepend character indices
                         let mut keys: Vec<String> = Vec::new();
-                        let b = obj.borrow();
-                        if let Some(JsValue::String(ref s)) = b.primitive_value
-                            && b.class_name == "String"
-                        {
-                            for i in 0..s.code_units.len() {
-                                keys.push(i.to_string());
+                        let is_string_wrapper = interp.get_object(obj_id)
+                            .map(|ob| matches!(ob.borrow().primitive_value, Some(JsValue::String(_))))
+                            .unwrap_or(false);
+                        if is_string_wrapper {
+                            if let Some(obj) = interp.get_object(obj_id) {
+                                let b = obj.borrow();
+                                if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                    for i in 0..s.code_units.len() {
+                                        keys.push(i.to_string());
+                                    }
+                                }
                             }
+                        }
+                        // Add keys from proxy_own_keys in sorted order
+                        let mut int_keys: Vec<(u64, String)> = Vec::new();
+                        let mut str_keys: Vec<String> = Vec::new();
+                        let mut sym_keys: Vec<String> = Vec::new();
+                        for kv in &all_keys {
+                            let k = match kv {
+                                JsValue::String(s) => s.to_rust_string(),
+                                JsValue::Symbol(s) => s.to_property_key(),
+                                _ => continue,
+                            };
+                            if keys.contains(&k) { continue; }
+                            if k.starts_with("Symbol(") {
+                                sym_keys.push(k);
+                            } else if let Ok(n) = k.parse::<u64>() {
+                                if n.to_string() == k { int_keys.push((n, k)); } else { str_keys.push(k); }
+                            } else {
+                                str_keys.push(k);
+                            }
+                        }
+                        int_keys.sort_by_key(|(n, _)| *n);
+                        for (_, k) in int_keys { keys.push(k); }
+                        for k in str_keys { keys.push(k); }
+                        // String exotic: "length" is always own (add before symbols)
+                        if is_string_wrapper && !keys.contains(&"length".to_string()) {
                             keys.push("length".to_string());
                         }
-                        for k in &b.property_order {
-                            if !keys.contains(k) {
-                                keys.push(k.clone());
-                            }
-                        }
-                        drop(b);
+                        for k in sym_keys { keys.push(k); }
+                        let result = interp.create_object();
                         for key in keys {
-                            if let Some(d) = obj.borrow().get_own_property(&key) {
-                                let desc_val = interp.from_property_descriptor(&d);
-                                result.borrow_mut().insert_value(key, desc_val);
+                            // Use proxy_get_own_property_descriptor to invoke trap
+                            let desc_val = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            if !matches!(desc_val, JsValue::Undefined) {
+                                let key_sym = interp.symbol_key_to_jsvalue(&key);
+                                let key_str = if let JsValue::String(ref s) = key_sym {
+                                    s.to_rust_string()
+                                } else {
+                                    key.clone()
+                                };
+                                result.borrow_mut().insert_value(key_str, desc_val);
                             }
                         }
                         let id = result.borrow().id.unwrap();
@@ -5017,28 +5626,53 @@ impl Interpreter {
                                 return Completion::Throw(e);
                             }
                         };
-                        let value = match interp.iterator_value(&step) {
+                        let next_item = match interp.iterator_value(&step) {
                             Ok(v) => v,
                             Err(e) => {
                                 interp.gc_unroot_value(&iterator);
                                 return Completion::Throw(e);
                             }
                         };
-                        let (k, v) = if let JsValue::Object(ref vo) = value {
-                            if let Some(val_obj) = interp.get_object(vo.id) {
-                                let k = to_js_string(&val_obj.borrow().get_property("0"));
-                                let v = val_obj.borrow().get_property("1");
-                                (k, v)
-                            } else {
-                                (String::new(), JsValue::Undefined)
-                            }
+                        // Step d: If Type(nextItem) is not Object, close and throw TypeError
+                        let item_id = if let JsValue::Object(ref vo) = next_item {
+                            vo.id
                         } else {
                             interp.gc_unroot_value(&iterator);
                             let err = interp.create_type_error("Iterator value is not an object");
+                            interp.iterator_close(&iterator, err.clone());
                             return Completion::Throw(err);
                         };
+                        // Step e: Get key from entry[0]
+                        let key_raw = match interp.get_object_property(item_id, "0", &next_item) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                interp.gc_unroot_value(&iterator);
+                                interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                            _ => JsValue::Undefined,
+                        };
+                        // Step g: Get value from entry[1]
+                        let value = match interp.get_object_property(item_id, "1", &next_item) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                interp.gc_unroot_value(&iterator);
+                                interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                            _ => JsValue::Undefined,
+                        };
+                        // Step f: ToPropertyKey(key)
+                        let key = match interp.to_property_key(&key_raw) {
+                            Ok(k) => k,
+                            Err(e) => {
+                                interp.gc_unroot_value(&iterator);
+                                interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                        };
                         if let Some(obj_data) = interp.get_object(obj_id) {
-                            obj_data.borrow_mut().insert_value(k, v);
+                            obj_data.borrow_mut().insert_value(key, value);
                         }
                     }
                     interp.gc_unroot_value(&iterator);
@@ -5200,12 +5834,65 @@ impl Interpreter {
                             );
                         }
                     }
-                    Completion::Throw(e) => return Completion::Throw(e),
+                    Completion::Throw(e) => {
+                        // §27.6.3.2: If syncResult is an abrupt completion, return a rejected promise
+                        return interp.create_rejected_promise(e);
+                    }
                     _ => {
                         return Completion::Throw(interp.create_type_error("Iterator next failed"));
                     }
                 };
-                Completion::Normal(interp.promise_resolve_value(&result))
+                // §27.6.3.3 AsyncFromSyncIteratorContinuation:
+                // Extract done FIRST (step 7+8), then value (step 9+10) per spec order.
+                // IfAbruptRejectPromise: if getter throws, return a rejected promise.
+                let done = match interp.obj_get(&result, "done") {
+                    Ok(v) => v,
+                    Err(e) => return interp.create_rejected_promise(e),
+                };
+                let value = match interp.obj_get(&result, "value") {
+                    Ok(v) => v,
+                    Err(e) => return interp.create_rejected_promise(e),
+                };
+                let done_bool = matches!(done, JsValue::Boolean(true));
+                // valueWrapper = PromiseResolve(value) — if value is a promise, this returns it
+                let value_wrapper = interp.promise_resolve_value(&value);
+                // Chain: when valueWrapper resolves to resolvedVal, yield {value: resolvedVal, done}
+                let outer_promise = interp.create_promise_object();
+                let outer_id = if let JsValue::Object(ref o) = outer_promise { o.id } else { 0 };
+                let then_val = interp.obj_get(&value_wrapper, "then").ok();
+                if let Some(then_fn) = then_val.filter(|v| matches!(v, JsValue::Object(_))) {
+                    let outer_promise_clone = outer_promise.clone();
+                    let fulfill_fn = interp.create_function(JsFunction::native(
+                        "".to_string(),
+                        1,
+                        move |interp, _this, args| {
+                            let resolved_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            let iter_result = interp.create_iter_result_object(resolved_val, done_bool);
+                            if let JsValue::Object(ref op) = outer_promise_clone {
+                                interp.fulfill_promise(op.id, iter_result);
+                            }
+                            Completion::Normal(JsValue::Undefined)
+                        },
+                    ));
+                    let outer_promise_clone2 = outer_promise.clone();
+                    let reject_fn = interp.create_function(JsFunction::native(
+                        "".to_string(),
+                        1,
+                        move |interp, _this, args| {
+                            let err = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            if let JsValue::Object(ref op) = outer_promise_clone2 {
+                                interp.reject_promise(op.id, err);
+                            }
+                            Completion::Normal(JsValue::Undefined)
+                        },
+                    ));
+                    let _ = interp.call_function(&then_fn, &value_wrapper, &[fulfill_fn, reject_fn]);
+                } else {
+                    // value_wrapper is not a promise (or doesn't have .then), resolve directly
+                    let iter_result = interp.create_iter_result_object(value, done_bool);
+                    interp.fulfill_promise(outer_id, iter_result);
+                }
+                Completion::Normal(outer_promise)
             },
         ));
         wrapper
@@ -5834,6 +6521,47 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
+                        // Module namespace [[GetOwnProperty]] (§10.4.6.4): live binding
+                        let is_ns = interp
+                            .get_object(o.id)
+                            .map(|obj| obj.borrow().module_namespace.is_some())
+                            .unwrap_or(false);
+                        if is_ns {
+                            let is_export = interp
+                                .get_object(o.id)
+                                .and_then(|obj| {
+                                    let b = obj.borrow();
+                                    let ns = b.module_namespace.as_ref()?;
+                                    Some(ns.export_names.contains(&key))
+                                })
+                                .unwrap_or(false);
+                            if is_export {
+                                let live_val = match interp.get_object_property(
+                                    o.id,
+                                    &key,
+                                    &target.clone(),
+                                ) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    other => return other,
+                                };
+                                let desc = crate::interpreter::types::PropertyDescriptor {
+                                    value: Some(live_val),
+                                    writable: Some(true),
+                                    enumerable: Some(true),
+                                    configurable: Some(false),
+                                    get: None,
+                                    set: None,
+                                };
+                                return Completion::Normal(interp.from_property_descriptor(&desc));
+                            }
+                            if let Some(obj) = interp.get_object(o.id)
+                                && let Some(desc) = obj.borrow().get_own_property(&key)
+                            {
+                                return Completion::Normal(interp.from_property_descriptor(&desc));
+                            }
+                            return Completion::Normal(JsValue::Undefined);
+                        }
                         if let Some(obj) = interp.get_object(o.id)
                             && let Some(desc) = obj.borrow().get_own_property(&key)
                         {
@@ -6288,6 +7016,10 @@ impl Interpreter {
                         && new_id == cur_id
                     {
                         return Completion::Normal(JsValue::Boolean(true));
+                    }
+                    // Immutable prototype check
+                    if obj.borrow().is_immutable_prototype {
+                        return Completion::Normal(JsValue::Boolean(false));
                     }
                     // Step 5: If not extensible, return false
                     if !obj.borrow().extensible {

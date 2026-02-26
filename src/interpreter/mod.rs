@@ -61,6 +61,8 @@ pub struct LoadedModule {
     pub env: EnvRef,
     pub exports: HashMap<String, JsValue>,
     pub export_bindings: HashMap<String, String>, // export_name -> binding_name
+    pub cached_namespace: Option<JsValue>,        // cached namespace object (same identity on re-import)
+    pub error: Option<JsValue>,                   // if module evaluation threw, the error
 }
 
 impl Interpreter {
@@ -497,7 +499,7 @@ impl Interpreter {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
+    pub(crate) fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
         let result = self.create_object();
         let is_accessor = desc.get.is_some() || desc.set.is_some();
         {
@@ -949,10 +951,20 @@ impl Interpreter {
                     global.borrow_mut().strict = true;
                 }
                 let r = self.exec_statements(&program.body, &global);
+                // Drain microtasks before restoring path so async callbacks can use relative imports
+                self.drain_microtasks();
                 self.current_module_path = prev;
-                r
+                return r;
             }
-            SourceType::Module => self.run_module(program, Some(path.to_path_buf())),
+            SourceType::Module => {
+                let r = self.run_module(program, Some(path.to_path_buf()));
+                // Keep path set during microtask draining so async callbacks can use relative imports
+                let prev = self.current_module_path.take();
+                self.current_module_path = Some(path.to_path_buf());
+                self.drain_microtasks();
+                self.current_module_path = prev;
+                return r;
+            }
         };
         self.drain_microtasks();
         result
@@ -984,6 +996,8 @@ impl Interpreter {
             env: module_env.clone(),
             exports: HashMap::new(),
             export_bindings: HashMap::new(),
+            cached_namespace: None,
+            error: None,
         }));
         if let Some(ref path) = module_path {
             let canon_path = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -1219,7 +1233,49 @@ impl Interpreter {
 
         // Check if module is already loaded
         if let Some(existing) = self.module_registry.get(&canon_path) {
+            // If the module previously errored, re-throw the same error
+            if let Some(ref err) = existing.borrow().error.clone() {
+                return Err(err.clone());
+            }
             return Ok(existing.clone());
+        }
+
+        // Handle JSON modules: parse JSON and expose as default export
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            let source = std::fs::read_to_string(path).map_err(|e| {
+                JsValue::String(JsString::from_str(&format!(
+                    "Cannot read module '{}': {}",
+                    path.display(),
+                    e
+                )))
+            })?;
+            let parsed = match crate::interpreter::helpers::json_parse_value(self, &source) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                other => return Err(JsValue::String(JsString::from_str(&format!("JSON parse error in '{}'", path.display())))),
+            };
+            let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
+            module_env.borrow_mut().strict = true;
+            let loaded_module = Rc::new(RefCell::new(LoadedModule {
+                path: canon_path.clone(),
+                env: module_env.clone(),
+                exports: {
+                    let mut m = HashMap::new();
+                    m.insert("default".to_string(), parsed.clone());
+                    m
+                },
+                export_bindings: {
+                    let mut m = HashMap::new();
+                    m.insert("default".to_string(), "*default*".to_string());
+                    m
+                },
+                cached_namespace: None,
+                error: None,
+            }));
+            module_env.borrow_mut().declare("*default*", BindingKind::Const);
+            let _ = module_env.borrow_mut().set("*default*", parsed);
+            self.module_registry.insert(canon_path.clone(), loaded_module.clone());
+            return Ok(loaded_module);
         }
 
         // Read and parse the module
@@ -1261,6 +1317,8 @@ impl Interpreter {
             env: module_env.clone(),
             exports: HashMap::new(),
             export_bindings: HashMap::new(),
+            cached_namespace: None,
+            error: None,
         }));
         self.module_registry
             .insert(canon_path.clone(), loaded_module.clone());
@@ -1333,6 +1391,7 @@ impl Interpreter {
                     let result = self.exec_statement(stmt, &module_env);
                     if let Completion::Throw(e) = result {
                         self.current_module_path = prev_path;
+                        loaded_module.borrow_mut().error = Some(e.clone());
                         return Err(e);
                     }
                 }
@@ -1341,6 +1400,7 @@ impl Interpreter {
                     let result = self.exec_export_declaration(export, &module_env);
                     if let Completion::Throw(e) = result {
                         self.current_module_path = prev_path;
+                        loaded_module.borrow_mut().error = Some(e.clone());
                         return Err(e);
                     }
                     // Collect exports
@@ -1592,21 +1652,25 @@ impl Interpreter {
     fn create_module_namespace(&mut self, module: &Rc<RefCell<LoadedModule>>) -> JsValue {
         use crate::interpreter::types::ModuleNamespaceData;
 
+        // Per §16.2.1.5.2 GetModuleNamespace: return cached namespace if present
+        if let Some(cached) = module.borrow().cached_namespace.clone() {
+            return cached;
+        }
+
         let obj = self.create_object();
-        let module_ref = module.borrow();
-        let env = module_ref.env.clone();
-        let export_bindings = module_ref.export_bindings.clone();
-
-        // Get module path for looking up re-exports dynamically
-        let module_path = if module_ref.path.as_os_str().is_empty() {
-            None
-        } else {
-            Some(module_ref.path.clone())
-        };
-
-        // Collect export names - these will be looked up dynamically
-        let mut export_names: Vec<String> = module_ref.exports.keys().cloned().collect();
-        export_names.sort(); // Module namespace exports are sorted alphabetically
+        let (env, export_bindings, module_path, export_names) = {
+            let module_ref = module.borrow();
+            let env = module_ref.env.clone();
+            let export_bindings = module_ref.export_bindings.clone();
+            let module_path = if module_ref.path.as_os_str().is_empty() {
+                None
+            } else {
+                Some(module_ref.path.clone())
+            };
+            let mut export_names: Vec<String> = module_ref.exports.keys().cloned().collect();
+            export_names.sort();
+            (env, export_bindings, module_path, export_names)
+        }; // module_ref borrow dropped here
 
         // Set module namespace data for live bindings
         obj.borrow_mut().module_namespace = Some(ModuleNamespaceData {
@@ -1645,7 +1709,9 @@ impl Interpreter {
         );
 
         let id = obj.borrow().id.unwrap();
-        JsValue::Object(crate::types::JsObject { id })
+        let ns = JsValue::Object(crate::types::JsObject { id });
+        module.borrow_mut().cached_namespace = Some(ns.clone());
+        ns
     }
 
     fn hoist_module_statement(&mut self, stmt: &Statement, env: &EnvRef) {
@@ -1853,6 +1919,10 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     c => return c,
                 };
+                // §15.2.3.11: IsAnonymousFunctionDefinition => SetFunctionName(value, "default")
+                if expr.is_anonymous_function_definition() {
+                    self.set_function_name(&val, "default");
+                }
                 env.borrow_mut().declare("*default*", BindingKind::Const);
                 let _ = env.borrow_mut().set("*default*", val);
                 Completion::Normal(JsValue::Undefined)
@@ -1878,10 +1948,11 @@ impl Interpreter {
                 };
                 let fn_obj = self.create_function(js_func);
                 if !func.name.is_empty() {
-                    env.borrow_mut().declare(&func.name, BindingKind::Const);
+                    // export default function fn() creates a mutable binding for fn
+                    env.borrow_mut().declare(&func.name, BindingKind::Let);
                     let _ = env.borrow_mut().set(&func.name, fn_obj.clone());
                 }
-                env.borrow_mut().declare("*default*", BindingKind::Const);
+                env.borrow_mut().declare("*default*", BindingKind::Let);
                 let _ = env.borrow_mut().set("*default*", fn_obj);
                 Completion::Normal(JsValue::Undefined)
             }
@@ -2027,9 +2098,11 @@ impl Interpreter {
                 .properties
                 .keys()
                 .filter_map(|k| {
-                    k.parse::<u32>()
+                    k.parse::<u64>()
                         .ok()
-                        .filter(|&idx| idx.to_string() == *k && idx >= new_len && idx < old_len)
+                        .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == *k)
+                        .map(|idx| idx as u32)
+                        .filter(|&idx| idx >= new_len && idx < old_len)
                         .map(|idx| (idx, k.clone()))
                 })
                 .collect();

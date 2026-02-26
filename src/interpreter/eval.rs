@@ -790,8 +790,9 @@ impl Interpreter {
                 self.await_value(&val)
             }
             Expression::ImportMeta => {
-                // Create import.meta object
+                // Create import.meta object - null prototype per spec §9.4.6
                 let meta = self.create_object();
+                meta.borrow_mut().prototype = None; // import.meta has null prototype
                 // Set url property to the current module's file URL
                 if let Some(ref path) = self.current_module_path {
                     let url = format!("file://{}", path.display());
@@ -827,15 +828,39 @@ impl Interpreter {
                                     );
                                     return self.create_rejected_promise(err);
                                 }
-                                // Step 11: Get "with" property
-                                if let JsValue::Object(o) = &opts_val {
-                                    if let Some(obj) = self.get_object(o.id) {
-                                        let wv = obj.borrow().get_property("with");
-                                        if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
+                                // Step 11: Get "with" property (must use [[Get]] to invoke getters)
+                                if let JsValue::Object(o) = &opts_val.clone() {
+                                    let wv = match self.get_object_property(o.id, "with", &opts_val) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return self.create_rejected_promise(e),
+                                        other => return other,
+                                    };
+                                    if !wv.is_undefined() {
+                                        if !matches!(wv, JsValue::Object(_)) {
                                             let err = self.create_type_error(
                                                 "The 'with' option must be an object",
                                             );
                                             return self.create_rejected_promise(err);
+                                        }
+                                        // §2.1.1.1 step 10d: enumerate properties, each value must be a string
+                                        if let JsValue::Object(ref with_obj) = wv {
+                                            let keys = match crate::interpreter::helpers::enumerable_own_keys(self, with_obj.id) {
+                                                Ok(k) => k,
+                                                Err(e) => return self.create_rejected_promise(e),
+                                            };
+                                            for k in keys {
+                                                let v = match self.get_object_property(with_obj.id, &k, &wv) {
+                                                    Completion::Normal(v) => v,
+                                                    Completion::Throw(e) => return self.create_rejected_promise(e),
+                                                    other => return other,
+                                                };
+                                                if !matches!(v, JsValue::String(_)) {
+                                                    let err = self.create_type_error(
+                                                        "Import attribute values must be strings",
+                                                    );
+                                                    return self.create_rejected_promise(err);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -923,7 +948,12 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
-                let err = self.create_type_error("import.source is not yet supported");
+                // Per spec §16.2.1.7.2: GetModuleSource of SourceTextModule always throws SyntaxError
+                let _ = source;
+                let err = self.create_error(
+                    "SyntaxError",
+                    "Source phase imports are not available for this module",
+                );
                 self.create_rejected_promise(err)
             }
             Expression::Template(tmpl) => {
@@ -2794,6 +2824,15 @@ impl Interpreter {
                             }
                             Err(e) => return Completion::Throw(e),
                         }
+                    }
+                    // Module namespace [[Set]] always returns false (§10.4.6.5)
+                    if obj.borrow().module_namespace.is_some() {
+                        if env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}' of object '[object Module]'"
+                            )));
+                        }
+                        return Completion::Normal(final_val);
                     }
                     // Check for setter
                     let desc = obj.borrow().get_property_descriptor(&key);
@@ -6246,7 +6285,11 @@ impl Interpreter {
                     }
                     _ => yield_val,
                 };
-                if is_inline_replay || is_destructuring {
+                // Any Completion::Yield from exec_statements is an inline yield:
+                // it came from a loop body or complex control flow that isn't
+                // decomposed by the state machine transformer. Use InlineYield
+                // to re-enter the same state and fast-forward past previous yields.
+                {
                     let yield_count = ctx_after.map(|c| c.current_yield).unwrap_or(1);
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
@@ -6265,20 +6308,6 @@ impl Interpreter {
                                     },
                                 },
                             ),
-                            delegated_iterator: None,
-                            pending_exception: None,
-                            pending_return: None,
-                        });
-                } else {
-                    obj_rc.borrow_mut().iterator_state =
-                        Some(IteratorState::StateMachineAsyncGenerator {
-                            state_machine,
-                            func_env,
-                            is_strict,
-                            execution_state: StateMachineExecutionState::Completed,
-                            _sent_value: JsValue::Undefined,
-                            try_stack: current_try_stack,
-                            pending_binding: None,
                             delegated_iterator: None,
                             pending_exception: None,
                             pending_return: None,
@@ -9877,6 +9906,14 @@ impl Interpreter {
                             }
                         }
                     }
+                } else if binding_name.starts_with("*ns:") {
+                    // export * as ns from './mod' — binding stored in module.exports
+                    if let Some(ref module_path) = ns_data.module_path
+                        && let Some(module) = self.module_registry.get(module_path)
+                        && let Some(val) = module.borrow().exports.get(key)
+                    {
+                        return Completion::Normal(val.clone());
+                    }
                 } else {
                     let val = ns_data
                         .env
@@ -10343,11 +10380,26 @@ impl Interpreter {
                 let proto_id = proto_rc.borrow().id.unwrap();
                 return self.proxy_set(proto_id, key, value, receiver);
             }
-            // No prototype, create data property on receiver
-            if let JsValue::Object(recv_o) = receiver
-                && let Some(recv_obj) = self.get_object(recv_o.id)
-            {
-                return Ok(recv_obj.borrow_mut().set_property_value(key, value));
+            // No prototype, create data property on receiver via [[DefineOwnProperty]]
+            if let JsValue::Object(recv_o) = receiver {
+                if let Some(recv_obj) = self.get_object(recv_o.id)
+                    && (recv_obj.borrow().is_proxy() || recv_obj.borrow().proxy_revoked)
+                {
+                    // Receiver is a proxy: use proxy_define_own_property
+                    let desc = crate::interpreter::types::PropertyDescriptor {
+                        value: Some(value),
+                        writable: Some(true),
+                        enumerable: Some(true),
+                        configurable: Some(true),
+                        get: None,
+                        set: None,
+                    };
+                    let desc_val = self.from_property_descriptor(&desc);
+                    return self.proxy_define_own_property(recv_o.id, key.to_string(), &desc_val);
+                }
+                if let Some(recv_obj) = self.get_object(recv_o.id) {
+                    return Ok(recv_obj.borrow_mut().set_property_value(key, value));
+                }
             }
             Ok(obj.borrow_mut().set_property_value(key, value))
         } else {
@@ -10702,16 +10754,28 @@ impl Interpreter {
                             self.create_type_error("CreateListFromArrayLike called on non-object")
                         );
                     }
-                    if let JsValue::Object(arr) = &v
-                        && let Some(arr_obj) = self.get_object(arr.id)
-                    {
-                        let len = match arr_obj.borrow().get_property("length") {
-                            JsValue::Number(n) => n as usize,
-                            _ => 0,
+                    if let JsValue::Object(arr) = &v {
+                        let arr_id = arr.id;
+                        // Use [[Get]] for length (spec: CreateListFromArrayLike)
+                        let len_val = match self.get_object_property(arr_id, "length", &v) {
+                            Completion::Normal(lv) => lv,
+                            Completion::Throw(e) => return Err(e),
+                            _ => JsValue::Undefined,
                         };
-                        let keys: Vec<JsValue> = (0..len)
-                            .map(|i| arr_obj.borrow().get_property(&i.to_string()))
-                            .collect();
+                        let len = match len_val {
+                            JsValue::Number(n) => n as usize,
+                            _ => return Err(self.create_type_error("ownKeys trap result length is not a number")),
+                        };
+                        // Use [[Get]] for each element
+                        let mut keys: Vec<JsValue> = Vec::with_capacity(len);
+                        for i in 0..len {
+                            let elem = match self.get_object_property(arr_id, &i.to_string(), &v) {
+                                Completion::Normal(ev) => ev,
+                                Completion::Throw(e) => return Err(e),
+                                _ => JsValue::Undefined,
+                            };
+                            keys.push(elem);
+                        }
                         for key in &keys {
                             if !matches!(key, JsValue::String(_) | JsValue::Symbol(_)) {
                                 return Err(self.create_type_error(
@@ -10743,11 +10807,67 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // OrdinaryOwnPropertyKeys: integer indices (sorted), then string keys (in creation order), then symbol keys
             let b = obj.borrow();
-            Ok(b.property_order
-                .iter()
-                .map(|k| JsValue::String(JsString::from_str(k)))
-                .collect())
+
+            // String exotic objects (§10.4.3.3): virtual char indices included
+            let is_string_wrapper = b.class_name == "String"
+                && matches!(b.primitive_value, Some(JsValue::String(_)));
+            let string_len = if is_string_wrapper {
+                if let Some(JsValue::String(ref s)) = b.primitive_value {
+                    s.code_units.len()
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+
+            let mut int_keys_set: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
+            let mut str_keys: Vec<String> = Vec::new();
+            let mut sym_keys: Vec<String> = Vec::new();
+
+            // String exotic: char indices 0..len are virtual integer indices
+            if is_string_wrapper {
+                for i in 0..string_len {
+                    int_keys_set.insert(i as u64, i.to_string());
+                }
+            }
+
+            for k in &b.property_order {
+                if k.starts_with("Symbol(") {
+                    sym_keys.push(k.clone());
+                } else if let Ok(n) = k.parse::<u64>() {
+                    if n.to_string() == *k {
+                        // This is an integer index - add/overwrite (string char indices take precedence, but we let btreemap handle uniqueness)
+                        int_keys_set.insert(n, k.clone());
+                    } else {
+                        str_keys.push(k.clone());
+                    }
+                } else {
+                    // Skip "length" for string wrappers - it's virtual, added separately
+                    if is_string_wrapper && k == "length" {
+                        continue;
+                    }
+                    str_keys.push(k.clone());
+                }
+            }
+
+            let mut result: Vec<JsValue> = Vec::new();
+            for (_, k) in int_keys_set {
+                result.push(JsValue::String(JsString::from_str(&k)));
+            }
+            for k in str_keys {
+                result.push(JsValue::String(JsString::from_str(&k)));
+            }
+            // String exotic: "length" is a virtual non-enumerable string key (after other str keys, before symbols)
+            if is_string_wrapper {
+                result.push(JsValue::String(JsString::from_str("length")));
+            }
+            for k in sym_keys {
+                result.push(self.symbol_key_to_jsvalue(&k));
+            }
+            Ok(result)
         } else {
             Ok(vec![])
         }

@@ -489,7 +489,7 @@ fn json_quote_js_string(s: &JsString) -> String {
 }
 
 // Proxy-aware IsArray (§7.2.2)
-fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue> {
+pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue> {
     if let Some(obj) = interp.get_object(obj_id) {
         let (is_revoked, is_proxy, target_id, class) = {
             let b = obj.borrow();
@@ -517,7 +517,7 @@ fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue
     Ok(false)
 }
 
-fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
+pub(crate) fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
     let mut indices: Vec<(u64, usize)> = Vec::new();
     let mut strings: Vec<(String, usize)> = Vec::new();
     for (pos, k) in keys.iter().enumerate() {
@@ -540,7 +540,7 @@ fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
     result
 }
 
-fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<String>, JsValue> {
+pub(crate) fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<String>, JsValue> {
     if let Some(obj) = interp.get_object(obj_id) {
         if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
             let target_val = interp.get_proxy_target_val(obj_id);
@@ -603,10 +603,25 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
             }
         }
         let b = obj.borrow();
+        // String exotic object: character indices come first
+        let mut result: Vec<String> = Vec::new();
+        if let Some(JsValue::String(ref s)) = b.primitive_value {
+            let len = s.len();
+            for i in 0..len {
+                result.push(i.to_string());
+            }
+        }
+        let is_string_wrapper = matches!(b.primitive_value, Some(JsValue::String(_)));
         let keys: Vec<String> = b
             .property_order
             .iter()
             .filter(|k| {
+                if result.contains(k) {
+                    return false;
+                }
+                if is_string_wrapper && *k == "length" {
+                    return false;
+                }
                 !k.starts_with("Symbol(")
                     && b.properties
                         .get(*k)
@@ -614,6 +629,10 @@ fn enumerable_own_keys(interp: &mut Interpreter, obj_id: u64) -> Result<Vec<Stri
             })
             .cloned()
             .collect();
+        if is_string_wrapper {
+            result.extend(sort_own_keys(keys));
+            return Ok(result);
+        }
         return Ok(sort_own_keys(keys));
     }
     Ok(Vec::new())
