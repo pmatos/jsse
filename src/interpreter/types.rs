@@ -164,6 +164,9 @@ pub struct Realm {
     pub(crate) syntax_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) uri_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) eval_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) disposable_stack_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) async_disposable_stack_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) suppressed_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
 }
 
 impl Realm {
@@ -250,6 +253,9 @@ impl Realm {
             syntax_error_prototype: None,
             uri_error_prototype: None,
             eval_error_prototype: None,
+            disposable_stack_prototype: None,
+            async_disposable_stack_prototype: None,
+            suppressed_error_prototype: None,
         }
     }
 

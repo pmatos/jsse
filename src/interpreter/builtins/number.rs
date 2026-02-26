@@ -30,100 +30,219 @@ fn format_number_radix(n: f64, radix: u32) -> String {
     }
 }
 
+fn round_digits_half_up(digits: &[u8], keep: usize) -> (Vec<u8>, bool) {
+    let mut result = digits[..keep.min(digits.len())].to_vec();
+    while result.len() < keep {
+        result.push(0);
+    }
+    let round_digit = if keep < digits.len() { digits[keep] } else { 0 };
+    let mut carry_out = false;
+    if round_digit >= 5 {
+        let mut carry = 1u8;
+        for i in (0..result.len()).rev() {
+            let sum = result[i] + carry;
+            result[i] = sum % 10;
+            carry = sum / 10;
+        }
+        if carry > 0 {
+            carry_out = true;
+        }
+    }
+    (result, carry_out)
+}
+
+fn extract_significant_digits(x: f64, n_digits: usize) -> (Vec<u8>, i32) {
+    let prec = n_digits.max(21);
+    let s = format!("{x:.prec$e}", prec = prec);
+    let (mantissa, exp_str) = s.split_once('e').unwrap();
+    let exp: i32 = exp_str.parse().unwrap();
+    let digits: Vec<u8> = mantissa
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .map(|c| c as u8 - b'0')
+        .collect();
+    (digits, exp)
+}
+
+fn format_mantissa_digits(digits: &[u8], f: usize) -> String {
+    if digits.is_empty() {
+        return "0".to_string();
+    }
+    let int_digit = (b'0' + digits[0]) as char;
+    if f == 0 {
+        return int_digit.to_string();
+    }
+    let frac: String = if digits.len() > 1 {
+        digits[1..].iter().map(|&d| (b'0' + d) as char).collect()
+    } else {
+        String::new()
+    };
+    let frac_padded = if frac.len() < f {
+        format!("{}{}", frac, "0".repeat(f - frac.len()))
+    } else {
+        frac
+    };
+    format!("{int_digit}.{frac_padded}")
+}
+
 fn format_exponential(n: f64, fraction_digits: Option<usize>) -> String {
     let negative = n < 0.0;
-    let x = n.abs();
+    let x = if negative { -n } else { n };
+    let sign = if negative { "-" } else { "" };
+
     if x == 0.0 {
-        let sign = if negative { "-" } else { "" };
         return match fraction_digits {
             Some(f) if f > 0 => format!("{sign}0.{}e+0", "0".repeat(f)),
             _ => format!("{sign}0e+0"),
         };
     }
 
-    let e = x.log10().floor() as i32;
     let result = match fraction_digits {
-        Some(f) => {
-            let scaled = x / 10f64.powi(e);
-            let formatted = format!("{scaled:.f$}");
-            // If rounding pushed us to 10.xxx, adjust
-            let parsed: f64 = formatted.parse().unwrap_or(scaled);
-            if parsed >= 10.0 {
-                let scaled2 = x / 10f64.powi(e + 1);
-                let formatted2 = format!("{scaled2:.f$}");
-                let exp = e + 1;
-                let exp_sign = if exp >= 0 { "+" } else { "" };
-                format!("{formatted2}e{exp_sign}{exp}")
-            } else {
-                let exp_sign = if e >= 0 { "+" } else { "" };
-                format!("{formatted}e{exp_sign}{e}")
-            }
-        }
         None => {
-            let scaled = x / 10f64.powi(e);
-            // Use enough precision then strip trailing zeros
-            let formatted = format!("{scaled:.20}");
-            let trimmed = formatted.trim_end_matches('0');
-            let trimmed = trimmed.trim_end_matches('.');
-            let exp_sign = if e >= 0 { "+" } else { "" };
-            format!("{trimmed}e{exp_sign}{e}")
+            // Shortest representation
+            let s = format!("{x:e}");
+            let (mantissa, exp_str) = s.split_once('e').unwrap();
+            let exp: i32 = exp_str.parse().unwrap();
+            let exp_sign = if exp >= 0 { "+" } else { "" };
+            format!("{mantissa}e{exp_sign}{exp}")
+        }
+        Some(f) => {
+            // Use full precision to avoid double-rounding, then apply round-half-up
+            let extra_prec = f.max(20) + 1;
+            let s_extra = format!("{x:.prec$e}", prec = extra_prec);
+            let (mantissa_extra, exp_str) = s_extra.split_once('e').unwrap();
+            let mut exp: i32 = exp_str.parse().unwrap();
+            let mut digits: Vec<u8> = mantissa_extra
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .map(|c| c as u8 - b'0')
+                .collect();
+            let keep = f + 1;
+            let (mantissa_final, carry) = if digits.len() <= keep {
+                while digits.len() < keep {
+                    digits.push(0);
+                }
+                (format_mantissa_digits(&digits, f), false)
+            } else {
+                let round_digit = digits[keep];
+                digits.truncate(keep);
+                let mut carry_out = false;
+                if round_digit >= 5 {
+                    let mut carry = 1u8;
+                    for i in (0..digits.len()).rev() {
+                        let sum = digits[i] + carry;
+                        digits[i] = sum % 10;
+                        carry = sum / 10;
+                    }
+                    if carry > 0 {
+                        carry_out = true;
+                    }
+                }
+                (format_mantissa_digits(&digits, f), carry_out)
+            };
+            if carry {
+                exp += 1;
+                let new_mantissa = if f == 0 {
+                    "1".to_string()
+                } else {
+                    format!("1.{}", "0".repeat(f))
+                };
+                let exp_sign = if exp >= 0 { "+" } else { "" };
+                format!("{new_mantissa}e{exp_sign}{exp}")
+            } else {
+                let exp_sign = if exp >= 0 { "+" } else { "" };
+                format!("{mantissa_final}e{exp_sign}{exp}")
+            }
         }
     };
 
-    if negative {
-        format!("-{result}")
-    } else {
-        result
-    }
+    format!("{sign}{result}")
 }
 
 fn format_precision(n: f64, precision: usize) -> String {
     let negative = n < 0.0;
-    let x = n.abs();
+    let x = if negative { -n } else { n };
+    let sign = if negative { "-" } else { "" };
 
     if x == 0.0 {
-        let sign = if negative { "-" } else { "" };
         if precision == 1 {
             return format!("{sign}0");
         }
         return format!("{sign}0.{}", "0".repeat(precision - 1));
     }
 
-    let e = x.log10().floor() as i32;
+    let (digits, e) = extract_significant_digits(x, precision + 5);
+    let (rounded, carry) = round_digits_half_up(&digits, precision);
+    let (rounded, e) = if carry {
+        let mut new_digits = vec![1u8];
+        new_digits.extend(vec![0u8; precision - 1]);
+        (new_digits, e + 1)
+    } else {
+        (rounded, e)
+    };
 
     if e < -6 || e >= precision as i32 {
         // Exponential notation
         let frac_digits = precision - 1;
-        let scaled = x / 10f64.powi(e);
-        let formatted = format!("{scaled:.frac_digits$}");
-        let parsed: f64 = formatted.parse().unwrap_or(scaled);
-        let (formatted, exp) = if parsed >= 10.0 {
-            let scaled2 = x / 10f64.powi(e + 1);
-            (format!("{scaled2:.frac_digits$}"), e + 1)
+        let int_digit = (b'0' + rounded[0]) as char;
+        if frac_digits == 0 {
+            let exp_sign = if e >= 0 { "+" } else { "" };
+            format!("{sign}{int_digit}e{exp_sign}{e}")
         } else {
-            (formatted, e)
-        };
-        // Strip trailing zeros after decimal if needed - actually spec says keep them
-        let exp_sign = if exp >= 0 { "+" } else { "" };
-        let result = format!("{formatted}e{exp_sign}{exp}");
-        if negative {
-            format!("-{result}")
-        } else {
-            result
+            let frac: String = if rounded.len() > 1 {
+                rounded[1..].iter().map(|&d| (b'0' + d) as char).collect()
+            } else {
+                String::new()
+            };
+            let frac_padded = if frac.len() < frac_digits {
+                format!("{}{}", frac, "0".repeat(frac_digits - frac.len()))
+            } else {
+                frac[..frac_digits].to_string()
+            };
+            let exp_sign = if e >= 0 { "+" } else { "" };
+            format!("{sign}{int_digit}.{frac_padded}e{exp_sign}{e}")
         }
-    } else {
-        // Fixed notation
-        let frac_digits = if precision as i32 > e + 1 {
-            (precision as i32 - e - 1) as usize
+    } else if e >= 0 {
+        // Fixed notation, non-negative exponent
+        let int_count = (e + 1) as usize;
+        let frac_count = if precision > int_count {
+            precision - int_count
         } else {
             0
         };
-        let formatted = format!("{x:.frac_digits$}");
-        if negative {
-            format!("-{formatted}")
+        let int_part: String = if int_count <= rounded.len() {
+            rounded[..int_count].iter().map(|&d| (b'0' + d) as char).collect()
         } else {
-            formatted
+            let s: String = rounded.iter().map(|&d| (b'0' + d) as char).collect();
+            format!("{}{}", s, "0".repeat(int_count - rounded.len()))
+        };
+        if frac_count == 0 {
+            format!("{sign}{int_part}")
+        } else {
+            let frac_src: String = if int_count < rounded.len() {
+                rounded[int_count..].iter().map(|&d| (b'0' + d) as char).collect()
+            } else {
+                String::new()
+            };
+            let frac_part = if frac_src.len() < frac_count {
+                format!("{}{}", frac_src, "0".repeat(frac_count - frac_src.len()))
+            } else {
+                frac_src[..frac_count].to_string()
+            };
+            format!("{sign}{int_part}.{frac_part}")
         }
+    } else {
+        // Fixed notation, negative exponent in [-6, -1]: "0.000...ddd"
+        let leading_zeros = (-e - 1) as usize;
+        let sig_digits: String = rounded.iter().map(|&d| (b'0' + d) as char).collect();
+        let needed_frac = leading_zeros + precision;
+        let frac_part = format!("{}{}", "0".repeat(leading_zeros), sig_digits);
+        let frac_padded = if frac_part.len() < needed_frac {
+            format!("{}{}", frac_part, "0".repeat(needed_frac - frac_part.len()))
+        } else {
+            frac_part[..needed_frac].to_string()
+        };
+        format!("{sign}0.{frac_padded}")
     }
 }
 

@@ -190,7 +190,11 @@ impl JsValue {
 // §6.1.6.1 Number type operations
 pub mod number_ops {
     pub fn unary_minus(x: f64) -> f64 {
-        if x.is_nan() { f64::NAN } else { -x }
+        if x.is_nan() {
+            f64::NAN
+        } else {
+            -x
+        }
     }
 
     pub fn bitwise_not(x: f64) -> f64 {
@@ -199,7 +203,11 @@ pub mod number_ops {
     }
 
     pub fn exponentiate(base: f64, exp: f64) -> f64 {
-        // §6.1.6.1.4: If abs(base) is 1 and exponent is +/-∞, result is NaN
+        // §6.1.6.1.4 step 3: if exponent is NaN, return NaN
+        if exp.is_nan() {
+            return f64::NAN;
+        }
+        // §6.1.6.1.4 step 10: if abs(base) is 1 and exponent is +/-∞, return NaN
         if (base == 1.0 || base == -1.0) && exp.is_infinite() {
             return f64::NAN;
         }

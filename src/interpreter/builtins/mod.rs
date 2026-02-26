@@ -716,92 +716,72 @@ impl Interpreter {
                 "message".to_string(),
                 JsValue::String(JsString::from_str("")),
             );
-            let suppressed_proto_clone = suppressed_proto.clone();
-            self.register_global_fn(
-                "SuppressedError",
-                BindingKind::Var,
-                JsFunction::constructor(
-                    "SuppressedError".to_string(),
-                    3,
-                    move |interp, this, args| {
-                        let error_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let suppressed_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let msg_raw = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                        let options = args.get(3).cloned().unwrap_or(JsValue::Undefined);
 
-                        macro_rules! init_suppressed_error {
-                            ($o:expr) => {
-                                $o.class_name = "SuppressedError".to_string();
-                                $o.prototype = Some(suppressed_proto_clone.clone());
-                                $o.insert_builtin("error".to_string(), error_val.clone());
-                                $o.insert_builtin("suppressed".to_string(), suppressed_val.clone());
-                                if !matches!(msg_raw, JsValue::Undefined) {
-                                    let msg_str = match interp.to_string_value(&msg_raw) {
-                                        Ok(s) => JsValue::String(JsString::from_str(&s)),
-                                        Err(e) => return Completion::Throw(e),
-                                    };
-                                    $o.insert_builtin("message".to_string(), msg_str);
-                                }
-                                if let JsValue::Object(opts) = &options {
-                                    if let Some(opts_obj) = interp.get_object(opts.id) {
-                                        if opts_obj.borrow().has_property("cause") {
-                                            let cause = interp
-                                                .get_object_property(opts.id, "cause", &options);
-                                            match cause {
-                                                Completion::Normal(v) => {
-                                                    $o.insert_builtin("cause".to_string(), v);
-                                                }
-                                                c => return c,
-                                            }
-                                        }
-                                    }
-                                }
+            self.realm_mut().suppressed_error_prototype = Some(suppressed_proto.clone());
+
+            let suppressed_ctor = self.create_function(JsFunction::constructor(
+                "SuppressedError".to_string(),
+                3,
+                move |interp, _this, args| {
+                    let error_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let suppressed_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let msg_raw = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let default_se_proto = interp.realm().suppressed_error_prototype.clone();
+                    let proto = match interp.get_prototype_from_new_target(&default_se_proto) {
+                        Ok(p) => p,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let obj = interp.create_object();
+                    {
+                        let mut o = obj.borrow_mut();
+                        o.class_name = "SuppressedError".to_string();
+                        if let Some(p) = proto {
+                            o.prototype = Some(p);
+                        }
+                        // Per spec: message first, then error, then suppressed
+                        if !matches!(msg_raw, JsValue::Undefined) {
+                            let msg_str = match interp.to_string_value(&msg_raw) {
+                                Ok(s) => JsValue::String(JsString::from_str(&s)),
+                                Err(e) => return Completion::Throw(e),
                             };
+                            o.insert_builtin("message".to_string(), msg_str);
                         }
+                        o.insert_builtin("error".to_string(), error_val.clone());
+                        o.insert_builtin("suppressed".to_string(), suppressed_val.clone());
+                    }
+                    let id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                },
+            ));
 
-                        if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                let mut o = obj.borrow_mut();
-                                init_suppressed_error!(o);
-                            }
-                            return Completion::Normal(this.clone());
-                        }
-                        let obj = interp.create_object();
-                        {
-                            let mut o = obj.borrow_mut();
-                            init_suppressed_error!(o);
-                        }
-                        let id = obj.borrow().id.unwrap();
-                        Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                    },
-                ),
-            );
+            suppressed_proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), suppressed_ctor.clone());
+
+            if let JsValue::Object(ref ctor_ref) = suppressed_ctor
+                && let Some(ctor_obj) = self.get_object(ctor_ref.id)
             {
-                let env = self.realm().global_env.borrow();
-                if let Some(ctor_val) = env.get("SuppressedError") {
-                    suppressed_proto
-                        .borrow_mut()
-                        .insert_builtin("constructor".to_string(), ctor_val);
-                }
+                let proto_id = suppressed_proto.borrow().id.unwrap();
+                ctor_obj.borrow_mut().insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Object(crate::types::JsObject { id: proto_id }),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
             }
-            {
-                let env = self.realm().global_env.borrow();
-                if let Some(ctor_val) = env.get("SuppressedError")
-                    && let JsValue::Object(o) = &ctor_val
-                    && let Some(ctor_obj) = self.get_object(o.id)
-                {
-                    let proto_id = suppressed_proto.borrow().id.unwrap();
-                    ctor_obj.borrow_mut().insert_property(
-                        "prototype".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::Object(crate::types::JsObject { id: proto_id }),
-                            false,
-                            false,
-                            false,
-                        ),
-                    );
-                }
-            }
+
+            let global_env = self.realm().global_env.clone();
+            global_env
+                .borrow_mut()
+                .declare("SuppressedError", BindingKind::Var);
+            let _ = global_env
+                .borrow_mut()
+                .set("SuppressedError", suppressed_ctor);
         }
 
         // AggregateError constructor
@@ -1751,7 +1731,6 @@ impl Interpreter {
             ("abs", f64::abs),
             ("ceil", f64::ceil),
             ("floor", f64::floor),
-            ("round", f64::round),
             ("sqrt", f64::sqrt),
             ("sin", f64::sin),
             ("cos", f64::cos),
@@ -1789,21 +1768,57 @@ impl Interpreter {
                 .borrow_mut()
                 .insert_builtin(name.to_string(), fn_val);
         }
+        // Math.round — spec-correct: -0 for x in [-0.5,0), +0 for x in [0,0.5), integer shortcut
+        let round_fn = self.create_function(JsFunction::native(
+            "round".to_string(),
+            1,
+            |_interp, _this, args| {
+                let x = args.first().map(to_number).unwrap_or(f64::NAN);
+                let result = if x.is_nan() || x.is_infinite() || x == 0.0 {
+                    x
+                } else if x >= -0.5 && x < 0.0 {
+                    -0.0_f64
+                } else if x >= 0.0 && x < 0.5 {
+                    0.0_f64
+                } else if x.fract() == 0.0 {
+                    x
+                } else {
+                    (x + 0.5).floor()
+                };
+                Completion::Normal(JsValue::Number(result))
+            },
+        ));
+        math_obj
+            .borrow_mut()
+            .insert_builtin("round".to_string(), round_fn);
         // Math.max, Math.min, Math.pow, Math.random, Math.atan2
         let max_fn = self.create_function(JsFunction::native(
             "max".to_string(),
             2,
-            |_interp, _this, args| {
+            |interp, _this, args| {
                 if args.is_empty() {
                     return Completion::Normal(JsValue::Number(f64::NEG_INFINITY));
                 }
-                let mut result = f64::NEG_INFINITY;
+                // Coerce all args first (spec step 2), propagating errors
+                let mut coerced = Vec::with_capacity(args.len());
                 for a in args {
-                    let n = to_number(a);
+                    match interp.to_number_value(a) {
+                        Ok(n) => coerced.push(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+                let mut result = f64::NEG_INFINITY;
+                for n in coerced {
                     if n.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
-                    if n > result {
+                    // +0 is considered greater than -0
+                    if n > result
+                        || (n == 0.0
+                            && result == 0.0
+                            && !n.is_sign_negative()
+                            && result.is_sign_negative())
+                    {
                         result = n;
                     }
                 }
@@ -1816,17 +1831,30 @@ impl Interpreter {
         let min_fn = self.create_function(JsFunction::native(
             "min".to_string(),
             2,
-            |_interp, _this, args| {
+            |interp, _this, args| {
                 if args.is_empty() {
                     return Completion::Normal(JsValue::Number(f64::INFINITY));
                 }
-                let mut result = f64::INFINITY;
+                // Coerce all args first (spec step 2), propagating errors
+                let mut coerced = Vec::with_capacity(args.len());
                 for a in args {
-                    let n = to_number(a);
+                    match interp.to_number_value(a) {
+                        Ok(n) => coerced.push(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+                let mut result = f64::INFINITY;
+                for n in coerced {
                     if n.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
-                    if n < result {
+                    // -0 is considered less than +0
+                    if n < result
+                        || (n == 0.0
+                            && result == 0.0
+                            && n.is_sign_negative()
+                            && !result.is_sign_negative())
+                    {
                         result = n;
                     }
                 }
@@ -1842,7 +1870,7 @@ impl Interpreter {
             |_interp, _this, args| {
                 let base = args.first().map(to_number).unwrap_or(f64::NAN);
                 let exp = args.get(1).map(to_number).unwrap_or(f64::NAN);
-                Completion::Normal(JsValue::Number(base.powf(exp)))
+                Completion::Normal(JsValue::Number(number_ops::exponentiate(base, exp)))
             },
         ));
         math_obj
@@ -1873,24 +1901,37 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("atan2".to_string(), atan2_fn);
 
-        // Math.hypot
+        // Math.hypot — coerce all args first, then check infinity before NaN (spec §21.3.2.18)
         let hypot_fn = self.create_function(JsFunction::native(
             "hypot".to_string(),
             2,
-            |_interp, _this, args| {
+            |interp, _this, args| {
                 if args.is_empty() {
                     return Completion::Normal(JsValue::Number(0.0));
                 }
-                let mut sum = 0.0f64;
+                // Step 1-2: coerce all args to numbers first, propagating errors
+                let mut coerced = Vec::with_capacity(args.len());
                 for a in args {
-                    let n = to_number(a);
+                    match interp.to_number_value(a) {
+                        Ok(n) => coerced.push(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+                // Step 3: check for infinity before NaN
+                let mut has_nan = false;
+                let mut sum = 0.0f64;
+                for n in &coerced {
                     if n.is_infinite() {
                         return Completion::Normal(JsValue::Number(f64::INFINITY));
                     }
                     if n.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        has_nan = true;
+                    } else {
+                        sum += n * n;
                     }
-                    sum += n * n;
+                }
+                if has_nan {
+                    return Completion::Normal(JsValue::Number(f64::NAN));
                 }
                 Completion::Normal(JsValue::Number(sum.sqrt()))
             },
@@ -2484,6 +2525,8 @@ impl Interpreter {
                     "RangeError",
                     "URIError",
                     "EvalError",
+                    "SuppressedError",
+                    "AggregateError",
                 ] {
                     let ctor_val = self.realm().global_env.borrow().get(name);
                     if let Some(JsValue::Object(o)) = ctor_val
@@ -3192,6 +3235,9 @@ impl Interpreter {
             "Intl",
             "escape",
             "unescape",
+            "DisposableStack",
+            "AsyncDisposableStack",
+            "SuppressedError",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.realm().global_env.borrow();
