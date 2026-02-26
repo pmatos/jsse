@@ -11555,10 +11555,25 @@ impl Interpreter {
         // Set up inheritance
         if let Some(ref sv) = super_val
             && let JsValue::Object(super_o) = sv
-            && let Some(super_obj) = self.get_object(super_o.id)
         {
+            let super_o_id = super_o.id;
+            let sv_clone = sv.clone();
             // Step 5.e: proto.[[Prototype]] = superclass.prototype
-            let super_proto_val = super_obj.borrow().get_property("prototype");
+            // Must use Get() to invoke accessor properties (e.g. getter-defined prototype)
+            let super_proto_val =
+                match self.get_object_property(super_o_id, "prototype", &sv_clone) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+            // Validate: must be Object or null
+            match &super_proto_val {
+                JsValue::Object(_) | JsValue::Null => {}
+                _ => {
+                    return Completion::Throw(self.create_type_error(
+                        "Class extends value does not have valid prototype property",
+                    ));
+                }
+            }
             if let JsValue::Object(ref sp) = super_proto_val
                 && let Some(super_proto) = self.get_object(sp.id)
                 && let Some(ref proto) = proto_obj
@@ -11568,6 +11583,7 @@ impl Interpreter {
             // Step 7.a: F.[[Prototype]] = superclass (for static method inheritance)
             if let JsValue::Object(ref o) = ctor_val
                 && let Some(ctor_obj) = self.get_object(o.id)
+                && let Some(super_obj) = self.get_object(super_o_id)
             {
                 ctor_obj.borrow_mut().prototype = Some(super_obj);
             }

@@ -1590,6 +1590,9 @@ impl<'a> Parser<'a> {
         let is_generator = self.eat_star()?;
         let prev_static_block = self.in_static_block;
         self.in_static_block = false;
+        let prev_generator = self.in_generator;
+        // FunctionExpression name uses [~Yield]; GeneratorExpression name uses [+Yield]
+        self.in_generator = is_generator;
         let name = if let Some(n) = self.current_identifier_name() {
             self.check_strict_binding_identifier(&n)?;
             self.advance()?;
@@ -1597,9 +1600,10 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let prev_generator = self.in_generator;
         if is_generator {
             self.in_generator = true;
+        } else {
+            self.in_generator = prev_generator;
         }
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
@@ -1635,6 +1639,12 @@ impl<'a> Parser<'a> {
     ) -> Result<Expression, ParseError> {
         self.advance()?; // consume 'function'
         let is_generator = self.eat_star()?;
+        let prev_generator = self.in_generator;
+        let prev_async = self.in_async;
+        if is_generator {
+            self.in_generator = true;
+        }
+        self.in_async = true;
         let name = if matches!(&self.current, Token::Keyword(Keyword::Await)) {
             return Err(self.error("'await' is not allowed as a function name in async functions"));
         } else if let Some(n) = self.current_identifier_name() {
@@ -1644,12 +1654,6 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        let prev_generator = self.in_generator;
-        let prev_async = self.in_async;
-        if is_generator {
-            self.in_generator = true;
-        }
-        self.in_async = true;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
