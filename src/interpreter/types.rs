@@ -1755,6 +1755,26 @@ impl JsObjectData {
     }
 
     pub fn define_own_property(&mut self, key: String, desc: PropertyDescriptor) -> bool {
+        // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
+        if self.class_name == "String"
+            && let Some(JsValue::String(ref s)) = self.primitive_value
+        {
+            if let Ok(idx) = key.parse::<usize>()
+                && idx < s.code_units.len()
+            {
+                // String index property: {value: char, writable: false, enumerable: true, configurable: false}
+                // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
+                if desc.configurable == Some(true) { return false; }
+                if desc.enumerable == Some(false) { return false; }
+                if desc.get.is_some() || desc.set.is_some() { return false; }
+                if desc.writable == Some(true) { return false; }
+                if let Some(ref v) = desc.value {
+                    let char_val = JsValue::String(crate::types::JsString { code_units: vec![s.code_units[idx]] });
+                    if !same_value(v, &char_val) { return false; }
+                }
+                return true;
+            }
+        }
         // Module namespace exotic: §10.4.6.5 [[DefineOwnProperty]]
         if self.module_namespace.is_some() {
             if let Some(current) = self.get_own_property(&key) {
@@ -1943,7 +1963,7 @@ impl JsObjectData {
             let current_is_accessor = current.is_accessor_descriptor();
 
             // Build merged descriptor
-            let merged = if desc_is_data
+            let mut merged = if desc_is_data
                 && !desc_is_accessor
                 && current_is_accessor
                 && !current_is_data
@@ -2000,6 +2020,56 @@ impl JsObjectData {
 
             if !self.property_order.contains(&key) {
                 self.property_order.push(key.clone());
+            }
+            // Array [[DefineOwnProperty]] §10.4.2.1: handle "length" with ArraySetLength semantics
+            if self.class_name == "Array" && key == "length" {
+                if let Some(JsValue::Number(new_len_f)) = &merged.value {
+                    let new_len = *new_len_f as u32;
+                    let old_len = self
+                        .properties
+                        .get("length")
+                        .and_then(|d| d.value.as_ref())
+                        .and_then(|v| if let JsValue::Number(n) = v { Some(*n as u32) } else { None })
+                        .unwrap_or(0);
+                    if new_len < old_len {
+                        let mut idx_keys: Vec<(u32, String)> = self
+                            .properties
+                            .keys()
+                            .filter_map(|k| {
+                                k.parse::<u64>()
+                                    .ok()
+                                    .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == *k)
+                                    .map(|idx| idx as u32)
+                                    .filter(|&idx| idx >= new_len)
+                                    .map(|idx| (idx, k.clone()))
+                            })
+                            .collect();
+                        idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
+                        let mut actual_new_len = new_len;
+                        for (idx, k) in &idx_keys {
+                            let is_non_configurable = self
+                                .properties
+                                .get(k.as_str())
+                                .is_some_and(|d| d.configurable == Some(false));
+                            if is_non_configurable {
+                                actual_new_len = idx + 1;
+                                break;
+                            }
+                            self.properties.remove(k.as_str());
+                            self.property_order.retain(|p| p != k);
+                        }
+                        if let Some(ref mut elements) = self.array_elements {
+                            elements.truncate(actual_new_len as usize);
+                        }
+                        // Update merged length to actual_new_len
+                        merged.value = Some(JsValue::Number(actual_new_len as f64));
+                        // If we couldn't set to requested length due to non-configurable, return false
+                        if actual_new_len > new_len {
+                            self.properties.insert(key, merged);
+                            return false;
+                        }
+                    }
+                }
             }
             self.properties.insert(key, merged);
         } else {

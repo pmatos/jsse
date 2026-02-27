@@ -914,7 +914,7 @@ impl Interpreter {
                             .map(|p| p.borrow().id.unwrap());
                         let new_obj_rc = interp.create_object();
                         let no_id = new_obj_rc.borrow().id.unwrap();
-                        interp.apply_new_target_prototype(no_id, default_proto);
+                        interp.apply_new_target_prototype(no_id, default_proto, |realm| realm.object_prototype.clone());
                         let new_obj_val = JsValue::Object(crate::types::JsObject { id: no_id });
                         return Completion::Normal(new_obj_val);
                     }
@@ -961,7 +961,7 @@ impl Interpreter {
                         .array_prototype
                         .as_ref()
                         .and_then(|p| p.borrow().id);
-                    interp.apply_new_target_prototype(o.id, default_proto_id);
+                    interp.apply_new_target_prototype(o.id, default_proto_id, |realm| realm.array_prototype.clone());
                 }
                 Completion::Normal(arr)
             }),
@@ -7457,6 +7457,13 @@ impl Interpreter {
 
         // Override eval_new behavior: Proxy constructor returns proxy_obj, not new_obj
         // The proxy constructor already returns an Object, so eval_new will use it.
+
+        // Per spec §26.2.2: Proxy constructor has no prototype property
+        if let JsValue::Object(ref pf) = proxy_fn
+            && let Some(proxy_func_obj) = self.get_object(pf.id)
+        {
+            proxy_func_obj.borrow_mut().properties.remove("prototype");
+        }
 
         // Proxy.revocable(target, handler)
         if let JsValue::Object(ref pf) = proxy_fn

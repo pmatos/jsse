@@ -519,6 +519,14 @@ impl Interpreter {
                         // Proxy deleteProperty trap
                         if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                             match self.proxy_delete_property(obj_ref.id, &key) {
+                                Ok(false) => {
+                                    if env.borrow().strict {
+                                        return Completion::Throw(self.create_type_error(
+                                            &format!("Cannot delete property '{key}' of object"),
+                                        ));
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
                                 Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                                 Err(e) => return Completion::Throw(e),
                             }
@@ -2845,8 +2853,8 @@ impl Interpreter {
                         }
                         return Completion::Normal(final_val);
                     }
-                    // Check for setter
-                    let desc = obj.borrow().get_property_descriptor(&key);
+                    // Check for setter — only own properties (prototype chain walked below with proxy support)
+                    let desc = obj.borrow().get_own_property_full(&key);
                     if let Some(ref d) = desc
                         && let Some(ref setter) = d.set
                         && !matches!(setter, JsValue::Undefined)
@@ -9464,6 +9472,12 @@ impl Interpreter {
                     && let Some(proto_rc) = self.get_object(proto_obj.id)
                 {
                     new_obj.borrow_mut().prototype = Some(proto_rc);
+                } else {
+                    // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
+                    let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()));
+                    if let Some(proto_rc) = self.realms[nt_realm_id].object_prototype.clone() {
+                        new_obj.borrow_mut().prototype = Some(proto_rc);
+                    }
                 }
             }
             let new_obj_id = new_obj.borrow().id.unwrap();
@@ -9593,11 +9607,16 @@ impl Interpreter {
 
     // GetPrototypeFromConstructor: if new_target differs from intrinsic default,
     // set obj's prototype to new_target.prototype (using getter-aware property access).
-    pub(crate) fn apply_new_target_prototype(
+    // When new_target.prototype is not an Object, falls back to GetFunctionRealm(newTarget)'s
+    // intrinsic determined by `realm_fallback`.
+    pub(crate) fn apply_new_target_prototype<F>(
         &mut self,
         obj_id: u64,
         default_proto_id: Option<u64>,
-    ) {
+        realm_fallback: F,
+    ) where
+        F: Fn(&crate::interpreter::types::Realm) -> Option<std::rc::Rc<std::cell::RefCell<crate::interpreter::types::JsObjectData>>>,
+    {
         if let Some(ref nt) = self.new_target.clone()
             && let JsValue::Object(nt_o) = nt
         {
@@ -9622,6 +9641,14 @@ impl Interpreter {
                     && let Some(obj_rc) = self.get_object(obj_id)
                 {
                     obj_rc.borrow_mut().prototype = Some(proto_rc);
+                } else {
+                    // proto is not an Object: GetFunctionRealm(newTarget) → realm's intrinsic
+                    let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()));
+                    if let Some(proto_rc) = realm_fallback(&self.realms[nt_realm_id]) {
+                        if let Some(obj_rc) = self.get_object(obj_id) {
+                            obj_rc.borrow_mut().prototype = Some(proto_rc);
+                        }
+                    }
                 }
             }
         }
@@ -9855,17 +9882,24 @@ impl Interpreter {
                 self.create_type_error("Function has non-object prototype in instanceof check"),
             );
         };
-        let Some(proto_data) = self.get_object(proto_ref.id) else {
-            return Completion::Throw(
-                self.create_type_error("Function has non-object prototype in instanceof check"),
-            );
-        };
-        let mut current = inst_obj.borrow().prototype.clone();
-        while let Some(p) = current {
-            if Rc::ptr_eq(&p, &proto_data) {
+        // Step 6: Walk O.[[GetPrototypeOf]]() chain (proxy-aware)
+        let mut current_val = obj.clone();
+        loop {
+            let current_id = match &current_val {
+                JsValue::Object(o) => o.id,
+                _ => break,
+            };
+            let next = match self.proxy_get_prototype_of(current_id) {
+                Ok(v) => v,
+                Err(e) => return Completion::Throw(e),
+            };
+            if matches!(next, JsValue::Null) {
+                return Completion::Normal(JsValue::Boolean(false));
+            }
+            if same_value(&next, &proto_val) {
                 return Completion::Normal(JsValue::Boolean(true));
             }
-            current = p.borrow().prototype.clone();
+            current_val = next;
         }
         Completion::Normal(JsValue::Boolean(false))
     }
@@ -10489,6 +10523,56 @@ impl Interpreter {
                 if desc.writable == Some(false) {
                     return Ok(false);
                 }
+                // OrdinarySetWithOwnDescriptor step 3.c: use Receiver.[[GetOwnProperty]] / [[DefineOwnProperty]]
+                let recv_id = if let JsValue::Object(r) = receiver { Some(r.id) } else { None };
+                if recv_id == Some(obj_id) {
+                    // Common case: receiver is the same object, direct set
+                    return Ok(obj.borrow_mut().set_property_value(key, value));
+                }
+                // Receiver differs: call Receiver.[[GetOwnProperty]](P) and [[DefineOwnProperty]]
+                if let Some(rid) = recv_id {
+                    let existing = match self.proxy_get_own_property_descriptor(rid, key) {
+                        Ok(v) => v,
+                        Err(e) => return Err(e),
+                    };
+                    if matches!(existing, JsValue::Undefined) {
+                        // CreateDataProperty(Receiver, P, V)
+                        let desc = crate::interpreter::types::PropertyDescriptor {
+                            value: Some(value),
+                            writable: Some(true),
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                            get: None,
+                            set: None,
+                        };
+                        let desc_val = self.from_property_descriptor(&desc);
+                        return self.proxy_define_own_property(rid, key.to_string(), &desc_val);
+                    } else {
+                        // existingDescriptor found: check accessor or non-writable
+                        let existing_desc = match self.to_property_descriptor(&existing) {
+                            Ok(d) => d,
+                            Err(Some(e)) => return Err(e),
+                            Err(None) => return Ok(false),
+                        };
+                        if existing_desc.is_accessor_descriptor() {
+                            return Ok(false);
+                        }
+                        if existing_desc.writable == Some(false) {
+                            return Ok(false);
+                        }
+                        // [[DefineOwnProperty]](P, {Value: V})
+                        let val_desc = crate::interpreter::types::PropertyDescriptor {
+                            value: Some(value),
+                            writable: None,
+                            enumerable: None,
+                            configurable: None,
+                            get: None,
+                            set: None,
+                        };
+                        let desc_val = self.from_property_descriptor(&val_desc);
+                        return self.proxy_define_own_property(rid, key.to_string(), &desc_val);
+                    }
+                }
                 return Ok(obj.borrow_mut().set_property_value(key, value));
             }
             // No own property, walk prototype chain
@@ -10497,24 +10581,54 @@ impl Interpreter {
                 let proto_id = proto_rc.borrow().id.unwrap();
                 return self.proxy_set(proto_id, key, value, receiver);
             }
-            // No prototype, create data property on receiver via [[DefineOwnProperty]]
+            // No prototype: OrdinarySetWithOwnDescriptor with synthetic {writable:true,...} ownDesc.
+            // Per spec step 1.c.i + 2.c: call Receiver.[[GetOwnProperty]](P) then act on result.
             if let JsValue::Object(recv_o) = receiver {
-                if let Some(recv_obj) = self.get_object(recv_o.id)
-                    && (recv_obj.borrow().is_proxy() || recv_obj.borrow().proxy_revoked)
-                {
-                    // Receiver is a proxy: use proxy_define_own_property
-                    let desc = crate::interpreter::types::PropertyDescriptor {
-                        value: Some(value),
-                        writable: Some(true),
-                        enumerable: Some(true),
-                        configurable: Some(true),
-                        get: None,
-                        set: None,
+                let recv_id = recv_o.id;
+                let is_proxy_recv = self.get_object(recv_id)
+                    .map_or(false, |o| o.borrow().is_proxy() || o.borrow().proxy_revoked);
+                if is_proxy_recv {
+                    let existing = match self.proxy_get_own_property_descriptor(recv_id, key) {
+                        Ok(v) => v,
+                        Err(e) => return Err(e),
                     };
-                    let desc_val = self.from_property_descriptor(&desc);
-                    return self.proxy_define_own_property(recv_o.id, key.to_string(), &desc_val);
+                    if matches!(existing, JsValue::Undefined) {
+                        // CreateDataProperty(Receiver, P, V)
+                        let create_desc = crate::interpreter::types::PropertyDescriptor {
+                            value: Some(value),
+                            writable: Some(true),
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                            get: None,
+                            set: None,
+                        };
+                        let desc_val = self.from_property_descriptor(&create_desc);
+                        return self.proxy_define_own_property(recv_id, key.to_string(), &desc_val);
+                    } else {
+                        let existing_desc = match self.to_property_descriptor(&existing) {
+                            Ok(d) => d,
+                            Err(Some(e)) => return Err(e),
+                            Err(None) => return Ok(false),
+                        };
+                        if existing_desc.is_accessor_descriptor() {
+                            return Ok(false);
+                        }
+                        if existing_desc.writable == Some(false) {
+                            return Ok(false);
+                        }
+                        let val_desc = crate::interpreter::types::PropertyDescriptor {
+                            value: Some(value),
+                            writable: None,
+                            enumerable: None,
+                            configurable: None,
+                            get: None,
+                            set: None,
+                        };
+                        let desc_val = self.from_property_descriptor(&val_desc);
+                        return self.proxy_define_own_property(recv_id, key.to_string(), &desc_val);
+                    }
                 }
-                if let Some(recv_obj) = self.get_object(recv_o.id) {
+                if let Some(recv_obj) = self.get_object(recv_id) {
                     return Ok(recv_obj.borrow_mut().set_property_value(key, value));
                 }
             }
@@ -10829,6 +10943,15 @@ impl Interpreter {
                                                 "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with writable: true for non-configurable non-writable property in the proxy target",
                                             ));
                                         }
+                                        // Step 21b: non-configurable non-writable result but writable target
+                                        if result_desc.is_data_descriptor()
+                                            && result_desc.writable == Some(false)
+                                            && td.writable == Some(true)
+                                        {
+                                            return Err(self.create_type_error(
+                                                "'getOwnPropertyDescriptor' on proxy: trap returned non-configurable non-writable descriptor for a configurable or writable property in the proxy target",
+                                            ));
+                                        }
                                     }
                                 } else if !target_extensible {
                                     return Err(self.create_type_error(
@@ -11122,32 +11245,24 @@ impl Interpreter {
                     if !self.to_boolean_val(&v) {
                         return Ok(false);
                     }
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object(t.id)
-                        && !tobj.borrow().extensible
-                    {
-                        let actual_proto = {
-                            let b = tobj.borrow();
-                            if let Some(ref p) = b.prototype {
-                                if let Some(pid) = p.borrow().id {
-                                    JsValue::Object(crate::types::JsObject { id: pid })
-                                } else {
-                                    JsValue::Null
-                                }
-                            } else {
-                                JsValue::Null
-                            }
-                        };
-                        let same = match (proto, &actual_proto) {
-                            (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                            (JsValue::Null, JsValue::Null) => true,
-                            _ => false,
-                        };
-                        if !same {
-                            return Err(self.create_type_error(
-                                "'setPrototypeOf' on proxy: trap returned truish for setting a new prototype on the non-extensible proxy target",
-                            ));
-                        }
+                    // Step 8: IsExtensible(target) — may throw, must use proxy-aware check
+                    let target_id = if let JsValue::Object(ref t) = target_val { t.id } else { return Ok(true); };
+                    let extensible_target = self.proxy_is_extensible(target_id)?;
+                    // Step 9: if extensible, no invariant to check
+                    if extensible_target {
+                        return Ok(true);
+                    }
+                    // Step 10: GetPrototypeOf(target) — may throw
+                    let actual_proto = self.proxy_get_prototype_of(target_id)?;
+                    let same = match (proto, &actual_proto) {
+                        (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
+                        (JsValue::Null, JsValue::Null) => true,
+                        _ => false,
+                    };
+                    if !same {
+                        return Err(self.create_type_error(
+                            "'setPrototypeOf' on proxy: trap returned truish for setting a new prototype on the non-extensible proxy target",
+                        ));
                     }
                     Ok(true)
                 }
@@ -11160,6 +11275,29 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // OrdinarySetPrototypeOf
+            let current_proto_id = obj.borrow().prototype.as_ref().and_then(|p| p.borrow().id);
+            let new_proto_id = if let JsValue::Object(p) = proto { Some(p.id) } else { None };
+            let same = (matches!(proto, JsValue::Null) && current_proto_id.is_none())
+                || matches!((new_proto_id, current_proto_id), (Some(a), Some(b)) if a == b);
+            if same {
+                return Ok(true);
+            }
+            if !obj.borrow().extensible {
+                return Ok(false);
+            }
+            // Cycle check
+            if let JsValue::Object(p) = proto {
+                let mut check_id = Some(p.id);
+                while let Some(cid) = check_id {
+                    if cid == obj_id {
+                        return Ok(false);
+                    }
+                    check_id = self
+                        .get_object(cid)
+                        .and_then(|o| o.borrow().prototype.as_ref().and_then(|pr| pr.borrow().id));
+                }
+            }
             match proto {
                 JsValue::Null => {
                     obj.borrow_mut().prototype = None;

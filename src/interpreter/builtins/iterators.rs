@@ -534,6 +534,82 @@ impl Interpreter {
                                     interp.create_iter_result_object(JsValue::Undefined, true),
                                 );
                             }
+                            let is_proxy = interp
+                                .get_object(array_id)
+                                .map_or(false, |o| o.borrow().is_proxy());
+                            if is_proxy {
+                                let arr_val =
+                                    JsValue::Object(crate::types::JsObject { id: array_id });
+                                let len = match interp.get_object_property(
+                                    array_id, "length", &arr_val,
+                                ) {
+                                    Completion::Normal(JsValue::Number(n)) => n as usize,
+                                    Completion::Normal(_) => 0,
+                                    c => return c,
+                                };
+                                if index >= len {
+                                    if let Some(obj) = interp.get_object(o.id) {
+                                        obj.borrow_mut().iterator_state =
+                                            Some(IteratorState::ArrayIterator {
+                                                array_id,
+                                                index: len,
+                                                kind,
+                                                done: true,
+                                            });
+                                    }
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                    );
+                                }
+                                let idx_str = index.to_string();
+                                let v = match kind {
+                                    IteratorKind::Key => JsValue::Number(index as f64),
+                                    IteratorKind::Value => {
+                                        match interp.get_object_property(
+                                            array_id, &idx_str, &arr_val,
+                                        ) {
+                                            Completion::Normal(v) => v,
+                                            c => return c,
+                                        }
+                                    }
+                                    IteratorKind::KeyValue => {
+                                        let elem = match interp.get_object_property(
+                                            array_id, &idx_str, &arr_val,
+                                        ) {
+                                            Completion::Normal(v) => v,
+                                            c => return c,
+                                        };
+                                        let pair = interp.create_array(vec![
+                                            JsValue::Number(index as f64),
+                                            elem,
+                                        ]);
+                                        if let Some(obj) = interp.get_object(o.id) {
+                                            obj.borrow_mut().iterator_state =
+                                                Some(IteratorState::ArrayIterator {
+                                                    array_id,
+                                                    index: index + 1,
+                                                    kind,
+                                                    done: false,
+                                                });
+                                        }
+                                        return Completion::Normal(
+                                            interp.create_iter_result_object(pair, false),
+                                        );
+                                    }
+                                };
+                                if let Some(obj) = interp.get_object(o.id) {
+                                    obj.borrow_mut().iterator_state =
+                                        Some(IteratorState::ArrayIterator {
+                                            array_id,
+                                            index: index + 1,
+                                            kind,
+                                            done: false,
+                                        });
+                                }
+                                return Completion::Normal(
+                                    interp.create_iter_result_object(v, false),
+                                );
+                            }
                             let (len, val) = if let Some(arr_obj) = interp.get_object(array_id) {
                                 let borrowed = arr_obj.borrow();
                                 let len = borrowed
