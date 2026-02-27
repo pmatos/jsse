@@ -22,6 +22,14 @@ impl<'a> Parser<'a> {
         if matches!(&self.current, Token::Keyword(Keyword::Async)) && self.is_async_function() {
             return self.parse_function_declaration();
         }
+        // Decorated class declaration: @decorator class Name {}
+        if self.current == Token::At {
+            self.parse_decorator_list()?;
+            if self.current == Token::Keyword(Keyword::Class) {
+                return self.parse_class_declaration();
+            }
+            return Err(self.error("Expected 'class' after decorator"));
+        }
         match &self.current {
             Token::Keyword(Keyword::Function) => self.parse_function_declaration(),
             Token::Keyword(Keyword::Class) => self.parse_class_declaration(),

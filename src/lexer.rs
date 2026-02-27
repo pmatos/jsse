@@ -85,6 +85,9 @@ pub enum Token {
     // Private identifier
     PrivateName(String), // #name
 
+    // Decorator
+    At, // @
+
     // Special
     LineTerminator,
     Eof,
@@ -1407,6 +1410,8 @@ impl<'a> Lexer<'a> {
                     Ok(Token::Caret)
                 }
             }
+
+            '@' => Ok(Token::At),
 
             _ => Err(self.error(format!("Unexpected character: {ch}"))),
         }

@@ -251,6 +251,74 @@ impl<'a> Parser<'a> {
         }))
     }
 
+    /// Consume and discard a list of decorator expressions (`@expr` prefixes).
+    /// Decorators may appear before class declarations, class expressions, and class elements.
+    /// We parse them for syntax validity but do not yet implement decorator semantics.
+    pub(super) fn parse_decorator_list(&mut self) -> Result<(), ParseError> {
+        while self.current == Token::At {
+            self.advance()?; // consume @
+            self.parse_decorator_expression()?;
+        }
+        Ok(())
+    }
+
+    /// Parse one decorator expression after `@`.
+    /// Grammar:
+    ///   DecoratorMemberExpression . IdentifierName | . PrivateIdentifier (chained)
+    ///   DecoratorMemberExpression ( Arguments )  → DecoratorCallExpression
+    ///   ( Expression )             → DecoratorParenthesizedExpression
+    fn parse_decorator_expression(&mut self) -> Result<(), ParseError> {
+        if self.current == Token::LeftParen {
+            // @( Expression )
+            self.advance()?;
+            self.parse_assignment_expression()?;
+            self.eat(&Token::RightParen)?;
+            return Ok(());
+        }
+        // DecoratorMemberExpression: starts with IdentifierReference, then chains of .name or .#name
+        match &self.current {
+            Token::Identifier(_)
+            | Token::IdentifierWithEscape(_)
+            | Token::Keyword(_)
+            | Token::BooleanLiteral(_)
+            | Token::NullLiteral => {
+                self.advance()?;
+            }
+            _ => return Err(self.error("Expected decorator expression after '@'")),
+        }
+        loop {
+            if self.current == Token::Dot {
+                self.advance()?;
+                match &self.current {
+                    Token::Identifier(_)
+                    | Token::IdentifierWithEscape(_)
+                    | Token::Keyword(_)
+                    | Token::PrivateName(_) => {
+                        self.advance()?;
+                    }
+                    _ => return Err(self.error("Expected property name after '.'")),
+                }
+            } else if self.current == Token::LeftParen {
+                // DecoratorCallExpression: consume argument list
+                self.advance()?; // consume (
+                while self.current != Token::RightParen {
+                    if self.current == Token::Ellipsis {
+                        self.advance()?;
+                    }
+                    self.parse_assignment_expression()?;
+                    if self.current == Token::Comma {
+                        self.advance()?;
+                    }
+                }
+                self.eat(&Token::RightParen)?;
+                break;
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn parse_class_declaration(&mut self) -> Result<Statement, ParseError> {
         let source_start = self.current_token_start;
         self.advance()?; // class
@@ -312,6 +380,11 @@ impl<'a> Parser<'a> {
             if self.current == Token::Semicolon {
                 self.advance()?;
                 continue;
+            }
+            // Consume any decorator list before each class element
+            self.parse_decorator_list()?;
+            if self.current == Token::RightBrace {
+                break;
             }
             let element = self.parse_class_element()?;
 
@@ -752,6 +825,74 @@ impl<'a> Parser<'a> {
                 value,
                 is_static,
                 computed,
+            }));
+        }
+
+        // Handle `accessor FieldName` — auto-accessor syntax from the decorators proposal.
+        // Spec: `accessor [no LineTerminator here] ClassElementName`
+        // If "accessor" is followed by `;`, `=`, `}`, or a line terminator,
+        // it is just a field named "accessor", not an auto-accessor modifier.
+        if matches!(&self.current, Token::Identifier(n) if n == "accessor") {
+            self.advance()?;
+            let next_is_field_name = !self.prev_line_terminator
+                && !matches!(
+                    self.current,
+                    Token::LeftParen
+                        | Token::Assign
+                        | Token::Semicolon
+                        | Token::RightBrace
+                );
+            if next_is_field_name {
+                // auto-accessor field: parse as a normal field (discard accessor semantics)
+                let (key, computed) = self.parse_property_name()?;
+                let value = if self.current == Token::Assign {
+                    self.advance()?;
+                    let expr = self.parse_assignment_expression()?;
+                    if Self::contains_arguments(&expr) {
+                        return Err(self.error("Class field initializer cannot reference 'arguments'"));
+                    }
+                    Some(expr)
+                } else {
+                    None
+                };
+                self.eat_semicolon()?;
+                return Ok(ClassElement::Property(ClassProperty {
+                    key,
+                    value,
+                    is_static,
+                    computed,
+                }));
+            }
+            if self.current == Token::LeftParen {
+                // method named "accessor"
+                let key = PropertyKey::Identifier("accessor".to_string());
+                let func =
+                    self.parse_class_method_function(false, false, false, method_source_start)?;
+                return Ok(ClassElement::Method(ClassMethod {
+                    key,
+                    kind: ClassMethodKind::Method,
+                    value: func,
+                    is_static,
+                    computed: false,
+                }));
+            }
+            // field named "accessor" (followed by =, ;, or })
+            let value = if self.current == Token::Assign {
+                self.advance()?;
+                let expr = self.parse_assignment_expression()?;
+                if Self::contains_arguments(&expr) {
+                    return Err(self.error("Class field initializer cannot reference 'arguments'"));
+                }
+                Some(expr)
+            } else {
+                None
+            };
+            self.eat_semicolon()?;
+            return Ok(ClassElement::Property(ClassProperty {
+                key: PropertyKey::Identifier("accessor".to_string()),
+                value,
+                is_static,
+                computed: false,
             }));
         }
 

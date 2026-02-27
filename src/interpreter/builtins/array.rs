@@ -227,6 +227,17 @@ fn obj_has_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<boo
     }
 }
 
+// AsyncIteratorClose: call iterator.return() if it exists (best-effort)
+fn close_async_iterator(interp: &mut Interpreter, iterator: &JsValue) {
+    if let JsValue::Object(ref io) = *iterator {
+        if let Completion::Normal(return_fn) = interp.get_object_property(io.id, "return", iterator) {
+            if interp.is_callable(&return_fn) {
+                let _ = interp.call_function(&return_fn, iterator, &[]);
+            }
+        }
+    }
+}
+
 fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
     if let Some(obj) = get_obj(interp, o) {
         let mut borrow = obj.borrow_mut();
@@ -3136,11 +3147,15 @@ impl Interpreter {
                         }
                     };
 
-                    // Create the result array
-                    let is_constructor = interp.is_callable(this);
-                    let arr = if is_constructor && !matches!(this, JsValue::Undefined) {
-                        match interp.call_function(this, &JsValue::Undefined, &[JsValue::Number(0.0)]) {
+                    // Create the result array — spec: Construct(C) with no args for iterable path
+                    let is_constructor = interp.is_constructor(this);
+                    let arr = if is_constructor {
+                        match interp.construct(this, &[]) {
                             Completion::Normal(v) if matches!(v, JsValue::Object(_)) => v,
+                            Completion::Throw(e) => {
+                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                return Completion::Normal(promise);
+                            }
                             _ => interp.create_array(vec![]),
                         }
                     } else {
@@ -3176,10 +3191,11 @@ impl Interpreter {
                             }
                             _ => JsValue::Undefined,
                         };
-                        // Await the next result
+                        // Await the next result — if the promise rejects, close the iterator
                         let next_result = match interp.await_value(&next_result) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
+                                close_async_iterator(interp, &iterator);
                                 let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                                 return Completion::Normal(promise);
                             }
@@ -3195,14 +3211,11 @@ impl Interpreter {
                             false
                         };
                         if done {
-                            // Set length and resolve
-                            if let JsValue::Object(ref o) = arr
-                                && let Some(obj) = interp.get_object(o.id) {
-                                    obj.borrow_mut().insert_property(
-                                        "length".to_string(),
-                                        PropertyDescriptor::data(JsValue::Number(k as f64), true, false, false),
-                                    );
-                                }
+                            // Set(A, "length", k, true)
+                            if let Err(e) = set_length_throw(interp, &arr, k as usize) {
+                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                return Completion::Normal(promise);
+                            }
                             let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
                             return Completion::Normal(promise);
                         }
@@ -3219,50 +3232,38 @@ impl Interpreter {
                         } else {
                             JsValue::Undefined
                         };
-                        // Await the value
-                        value = match interp.await_value(&value) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                return Completion::Normal(promise);
-                            }
-                            _ => JsValue::Undefined,
-                        };
+                        // For async iterables, do NOT await the raw value — spec only awaits
+                        // the iterator result (the promise from next()), not the value inside.
                         // Apply mapFn if present
                         if has_map {
                             value = match interp.call_function(&map_fn, &this_arg, &[value, JsValue::Number(k as f64)]) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => {
+                                    // IfAbruptCloseAsyncIterator — close iterator then reject
+                                    close_async_iterator(interp, &iterator);
                                     let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                                     return Completion::Normal(promise);
                                 }
                                 _ => JsValue::Undefined,
                             };
-                            // Await mapped value
+                            // Await mapped value (spec step 6.c: mappedValue = Await(mappedValue))
                             value = match interp.await_value(&value) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => {
+                                    close_async_iterator(interp, &iterator);
                                     let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                                     return Completion::Normal(promise);
                                 }
                                 _ => JsValue::Undefined,
                             };
                         }
-                        // Set element
+                        // CreateDataPropertyOrThrow(A, Pk, mappedValue)
                         let key_str = k.to_string();
-                        if let JsValue::Object(ref o) = arr
-                            && let Some(obj) = interp.get_object(o.id) {
-                                obj.borrow_mut().insert_property(
-                                    key_str,
-                                    PropertyDescriptor::data(value, true, true, true),
-                                );
-                                if let Some(ref mut elems) = obj.borrow_mut().array_elements {
-                                    // Keep elements in sync
-                                    while elems.len() <= k as usize {
-                                        elems.push(JsValue::Undefined);
-                                    }
-                                }
-                            }
+                        if let Err(e) = create_data_property_or_throw(interp, &arr, &key_str, value) {
+                            close_async_iterator(interp, &iterator);
+                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            return Completion::Normal(promise);
+                        }
                         k += 1;
                     }
                 } else {
@@ -3279,29 +3280,33 @@ impl Interpreter {
                             return Completion::Normal(promise);
                         }
                     };
-                    let len = if let JsValue::Object(ref o) = array_like {
-                        match interp.get_object_property(o.id, "length", &array_like) {
-                            Completion::Normal(v) => {
-                                let n = to_number(&v);
-                                if n.is_nan() || n < 0.0 { 0u64 } else { n as u64 }
-                            }
+                    // LengthOfArrayLike(arrayLike) — throws for BigInt, etc.
+                    let len = match length_of_array_like(interp, &array_like) {
+                        Ok(n) => n as u64,
+                        Err(Completion::Throw(e)) => {
+                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            return Completion::Normal(promise);
+                        }
+                        Err(_) => 0u64,
+                    };
+
+                    // spec: Construct(C, [len]) for array-like path; ArrayCreate(len) otherwise
+                    let is_constructor = interp.is_constructor(this);
+                    let arr = if is_constructor {
+                        match interp.construct(this, &[JsValue::Number(len as f64)]) {
+                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => v,
                             Completion::Throw(e) => {
                                 let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                                 return Completion::Normal(promise);
                             }
-                            _ => 0u64,
-                        }
-                    } else {
-                        0u64
-                    };
-
-                    let is_constructor = interp.is_callable(this);
-                    let arr = if is_constructor && !matches!(this, JsValue::Undefined) {
-                        match interp.call_function(this, &JsValue::Undefined, &[JsValue::Number(len as f64)]) {
-                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => v,
                             _ => interp.create_array(vec![]),
                         }
                     } else {
+                        if len > 0xFFFF_FFFF {
+                            let e = interp.create_range_error("Invalid array length");
+                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            return Completion::Normal(promise);
+                        }
                         interp.create_array(vec![])
                     };
 
@@ -3319,7 +3324,7 @@ impl Interpreter {
                         } else {
                             JsValue::Undefined
                         };
-                        // Await the value
+                        // Await the value (array-like path does await each element)
                         value = match interp.await_value(&value) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
@@ -3346,27 +3351,17 @@ impl Interpreter {
                                 _ => JsValue::Undefined,
                             };
                         }
-                        if let JsValue::Object(ref o) = arr
-                            && let Some(obj) = interp.get_object(o.id) {
-                                obj.borrow_mut().insert_property(
-                                    key_str,
-                                    PropertyDescriptor::data(value, true, true, true),
-                                );
-                                if let Some(ref mut elems) = obj.borrow_mut().array_elements {
-                                    while elems.len() <= k as usize {
-                                        elems.push(JsValue::Undefined);
-                                    }
-                                }
-                            }
-                    }
-                    // Set length and resolve
-                    if let JsValue::Object(ref o) = arr
-                        && let Some(obj) = interp.get_object(o.id) {
-                            obj.borrow_mut().insert_property(
-                                "length".to_string(),
-                                PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
-                            );
+                        // CreateDataPropertyOrThrow(A, Pk, mappedValue)
+                        if let Err(e) = create_data_property_or_throw(interp, &arr, &key_str, value) {
+                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            return Completion::Normal(promise);
                         }
+                    }
+                    // Set(A, "length", len, true)
+                    if let Err(e) = set_length_throw(interp, &arr, len as usize) {
+                        let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                        return Completion::Normal(promise);
+                    }
                     let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
                     Completion::Normal(promise)
                 }

@@ -7781,7 +7781,24 @@ impl Interpreter {
             }
             let callable = obj.borrow().callable.clone();
             if let Some(func) = callable {
-                return match func {
+                // [[Call]] vs [[Construct]] new.target semantics:
+                // - [[Call]]: new.target = undefined (clear for non-arrow functions)
+                // - [[Construct]]: new.target = newTarget (preserve, set by construct_with_new_target)
+                // - Arrow functions: inherit new.target from enclosing scope (don't clear)
+                let is_arrow_func =
+                    matches!(func, JsFunction::User { is_arrow, .. } if is_arrow);
+                let was_construct =
+                    std::mem::replace(&mut self.calling_as_construct, false);
+                let outer_new_target = if !is_arrow_func {
+                    let nt = self.new_target.take();
+                    if was_construct {
+                        self.new_target = nt.clone();
+                    }
+                    Some(nt)
+                } else {
+                    None
+                };
+                let result = match func {
                     JsFunction::Native(_, _, f, _) => {
                         // Root args and this_val so GC doesn't collect them
                         // during native function execution (e.g. Array.prototype.map callback)
@@ -8202,6 +8219,10 @@ impl Interpreter {
                         }
                     }
                 };
+                if let Some(nt) = outer_new_target {
+                    self.new_target = nt;
+                }
+                return result;
             }
         }
         let desc = match func_val {
@@ -9125,6 +9146,17 @@ impl Interpreter {
                 Err(e) => return Completion::Throw(e),
             }
         }
+        // Bound functions: delegate to construct_with_new_target which handles new_target resolution
+        if let JsValue::Object(ref co) = callee_val
+            && let Some(func_obj) = self.get_object(co.id)
+            && func_obj.borrow().bound_target_function.is_some()
+        {
+            return self.construct_with_new_target(
+                &callee_val,
+                &evaluated_args,
+                callee_val.clone(),
+            );
+        }
         // Check if this is a derived class constructor
         let is_derived = if let JsValue::Object(o) = &callee_val
             && let Some(func_obj) = self.get_object(o.id)
@@ -9142,6 +9174,7 @@ impl Interpreter {
             self.last_call_this_value = None;
             let prev_constructing_derived = self.constructing_derived;
             self.constructing_derived = true;
+            self.calling_as_construct = true;
             let result = self.call_function(&callee_val, &JsValue::Undefined, &evaluated_args);
             self.constructing_derived = prev_constructing_derived;
             let had_explicit_return = self.last_call_had_explicit_return;
@@ -9280,6 +9313,7 @@ impl Interpreter {
             self.new_target = Some(callee_val.clone());
             self.last_call_had_explicit_return = false;
             self.last_call_this_value = None;
+            self.calling_as_construct = true;
             let result = self.call_function(&callee_val, &this_val, &evaluated_args);
             let had_explicit_return = self.last_call_had_explicit_return;
             let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
@@ -9387,6 +9421,7 @@ impl Interpreter {
             self.last_call_this_value = None;
             let prev_constructing_derived = self.constructing_derived;
             self.constructing_derived = true;
+            self.calling_as_construct = true;
             let result = self.call_function(constructor, &JsValue::Undefined, args);
             self.constructing_derived = prev_constructing_derived;
             let had_explicit_return = self.last_call_had_explicit_return;
@@ -9541,6 +9576,7 @@ impl Interpreter {
             self.new_target = Some(new_target.clone());
             self.last_call_had_explicit_return = false;
             self.last_call_this_value = None;
+            self.calling_as_construct = true;
             let result = self.call_function(constructor, &this_val, args);
             let had_explicit_return = self.last_call_had_explicit_return;
             let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());

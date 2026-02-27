@@ -1170,6 +1170,15 @@ impl<'a> Parser<'a> {
             Token::LeftBrace => self.parse_object_literal(),
             Token::Keyword(Keyword::Function) => self.parse_function_expression(),
             Token::Keyword(Keyword::Class) => self.parse_class_expression(),
+            Token::At => {
+                // Decorated class expression: @decorator class {}
+                self.parse_decorator_list()?;
+                if self.current == Token::Keyword(Keyword::Class) {
+                    self.parse_class_expression()
+                } else {
+                    Err(self.error("Expected 'class' after decorator"))
+                }
+            }
             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                 let tmpl = self.parse_template_literal_expr(false)?;
                 Ok(Expression::Template(tmpl))
