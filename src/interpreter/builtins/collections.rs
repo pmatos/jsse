@@ -2012,6 +2012,113 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("delete".to_string(), delete_fn);
 
+        // WeakMap.prototype.getOrInsert
+        let get_or_insert_fn = self.create_function(JsFunction::native(
+            "getOrInsert".to_string(),
+            2,
+            |interp, this, args| {
+                if let JsValue::Object(o) = &this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let is_weakmap = obj.borrow().map_data.is_some()
+                        && obj.borrow().class_name == "WeakMap";
+                    if is_weakmap {
+                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        if !interp.can_be_held_weakly(&key) {
+                            let err = interp
+                                .create_type_error("Invalid value used as weak map key");
+                            return Completion::Throw(err);
+                        }
+                        {
+                            let borrowed = obj.borrow();
+                            let entries = borrowed.map_data.as_ref().unwrap();
+                            for entry in entries.iter().flatten() {
+                                if strict_equality(&entry.0, &key) {
+                                    return Completion::Normal(entry.1.clone());
+                                }
+                            }
+                        }
+                        let mut borrowed = obj.borrow_mut();
+                        let entries = borrowed.map_data.as_mut().unwrap();
+                        entries.push(Some((key, value.clone())));
+                        return Completion::Normal(value);
+                    }
+                }
+                let err = interp
+                    .create_type_error("WeakMap.prototype.getOrInsert requires a WeakMap");
+                Completion::Throw(err)
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("getOrInsert".to_string(), get_or_insert_fn);
+
+        // WeakMap.prototype.getOrInsertComputed
+        let get_or_insert_computed_fn = self.create_function(JsFunction::native(
+            "getOrInsertComputed".to_string(),
+            2,
+            |interp, this, args| {
+                if let JsValue::Object(o) = &this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let is_weakmap = obj.borrow().map_data.is_some()
+                        && obj.borrow().class_name == "WeakMap";
+                    if is_weakmap {
+                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let callbackfn = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        if !interp.can_be_held_weakly(&key) {
+                            let err = interp
+                                .create_type_error("Invalid value used as weak map key");
+                            return Completion::Throw(err);
+                        }
+                        let is_callable = matches!(&callbackfn, JsValue::Object(co)
+                            if interp.get_object(co.id).is_some_and(|ob| ob.borrow().callable.is_some()));
+                        if !is_callable {
+                            let err = interp
+                                .create_type_error("callbackfn is not a function");
+                            return Completion::Throw(err);
+                        }
+                        {
+                            let borrowed = obj.borrow();
+                            let entries = borrowed.map_data.as_ref().unwrap();
+                            for entry in entries.iter().flatten() {
+                                if strict_equality(&entry.0, &key) {
+                                    return Completion::Normal(entry.1.clone());
+                                }
+                            }
+                        }
+                        let value = match interp.call_function(
+                            &callbackfn,
+                            &JsValue::Undefined,
+                            &[key.clone()],
+                        ) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let obj = interp.get_object(o.id).unwrap();
+                        let mut borrowed = obj.borrow_mut();
+                        let entries = borrowed.map_data.as_mut().unwrap();
+                        for entry in entries.iter_mut().flatten() {
+                            if strict_equality(&entry.0, &key) {
+                                entry.1 = value.clone();
+                                return Completion::Normal(value);
+                            }
+                        }
+                        entries.push(Some((key, value.clone())));
+                        return Completion::Normal(value);
+                    }
+                }
+                let err = interp.create_type_error(
+                    "WeakMap.prototype.getOrInsertComputed requires a WeakMap",
+                );
+                Completion::Throw(err)
+            },
+        ));
+        proto
+            .borrow_mut()
+            .insert_builtin("getOrInsertComputed".to_string(), get_or_insert_computed_fn);
+
         // @@toStringTag
         proto.borrow_mut().insert_property(
             "Symbol(Symbol.toStringTag)".to_string(),
