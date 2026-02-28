@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
+use crate::types::JsValue;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -86,6 +87,7 @@ pub enum SentValueBindingKind {
     Discard,
     InlineYield {
         yield_target: usize,
+        prev_sent: Vec<JsValue>,
     },
 }
 

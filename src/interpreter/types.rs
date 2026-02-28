@@ -42,6 +42,8 @@ pub(crate) struct GeneratorContext {
     pub(crate) target_yield: usize,
     pub(crate) current_yield: usize,
     pub(crate) sent_value: JsValue,
+    /// Values sent to previous yields (index k = value passed to next() after yield k)
+    pub(crate) prev_sent_values: Vec<JsValue>,
     pub(crate) is_async: bool,
 }
 
@@ -49,7 +51,11 @@ pub(crate) struct GeneratorContext {
 #[allow(dead_code)]
 pub enum GeneratorExecutionState {
     SuspendedStart,
-    SuspendedYield { target_yield: usize },
+    SuspendedYield {
+        target_yield: usize,
+        /// Values sent to yields 0..target_yield-1
+        prev_sent: Vec<JsValue>,
+    },
     Executing,
     Completed,
 }
@@ -1283,6 +1289,7 @@ pub struct JsObjectData {
     pub is_raw_json: bool,
     pub is_class_constructor: bool,
     pub is_derived_class_constructor: bool,
+    pub is_default_derived_constructor: bool,
     pub bound_target_function: Option<JsValue>,
     pub bound_args: Option<Vec<JsValue>>,
     pub shadow_realm_id: Option<usize>,
@@ -1342,6 +1349,7 @@ impl JsObjectData {
             is_raw_json: false,
             is_class_constructor: false,
             is_derived_class_constructor: false,
+            is_default_derived_constructor: false,
             bound_target_function: None,
             bound_args: None,
             shadow_realm_id: None,

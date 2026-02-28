@@ -177,9 +177,16 @@ impl Interpreter {
         for idef in &instance_field_defs {
             match idef {
                 InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
+                    let source_name = name.split('#').next().unwrap_or(name);
+                    let display_name = format!("#{source_name}");
                     let val = if let Some(init) = initializer {
                         match self.eval_expr(init, &init_env) {
-                            Completion::Normal(v) => v,
+                            Completion::Normal(v) => {
+                                if init.is_anonymous_function_definition() {
+                                    self.set_function_name(&v, &display_name);
+                                }
+                                v
+                            }
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::Undefined,
                         }
@@ -205,7 +212,12 @@ impl Interpreter {
                 InstanceFieldDef::Public(key, initializer) => {
                     let val = if let Some(init) = initializer {
                         match self.eval_expr(init, &init_env) {
-                            Completion::Normal(v) => v,
+                            Completion::Normal(v) => {
+                                if init.is_anonymous_function_definition() {
+                                    self.set_function_name(&v, key);
+                                }
+                                v
+                            }
                             Completion::Throw(e) => return Err(e),
                             _ => JsValue::Undefined,
                         }
@@ -782,8 +794,13 @@ impl Interpreter {
                         let current = ctx.current_yield;
                         ctx.current_yield += 1;
                         if current < ctx.target_yield {
-                            // Fast-forwarding past this yield - return sent_value
-                            return Completion::Normal(ctx.sent_value.clone());
+                            // Fast-forwarding past this yield — use the historically sent value
+                            let ff_val = ctx
+                                .prev_sent_values
+                                .get(current)
+                                .cloned()
+                                .unwrap_or(JsValue::Undefined);
+                            return Completion::Normal(ff_val);
                         }
                     }
                     // Yield the value - callers handle this completion type
@@ -2466,6 +2483,54 @@ impl Interpreter {
                     Completion::Throw(e) => return Err(e),
                     _ => return Ok(()),
                 };
+                if let MemberProperty::Private(name) = prop {
+                    let branded = self.resolve_private_name(name, env);
+                    return match &obj_val {
+                        JsValue::Object(o) => {
+                            if let Some(obj) = self.get_object(o.id) {
+                                let elem = obj.borrow().private_fields.get(&branded).cloned();
+                                match elem {
+                                    Some(PrivateElement::Field(_)) => {
+                                        obj.borrow_mut().private_fields.insert(
+                                            branded,
+                                            PrivateElement::Field(value),
+                                        );
+                                        Ok(())
+                                    }
+                                    Some(PrivateElement::Method(_)) => Err(self
+                                        .create_type_error(&format!(
+                                            "Cannot assign to private method #{name}"
+                                        ))),
+                                    Some(PrivateElement::Accessor { set, .. }) => {
+                                        if let Some(setter) = set {
+                                            let obj_val2 = obj_val.clone();
+                                            match self.call_function(
+                                                &setter,
+                                                &obj_val2,
+                                                std::slice::from_ref(&value),
+                                            ) {
+                                                Completion::Throw(e) => Err(e),
+                                                _ => Ok(()),
+                                            }
+                                        } else {
+                                            Err(self.create_type_error(&format!(
+                                                "Cannot set private member #{name} which has no setter"
+                                            )))
+                                        }
+                                    }
+                                    None => Err(self.create_type_error(&format!(
+                                        "Cannot write private member #{name} to an object whose class did not declare it"
+                                    ))),
+                                }
+                            } else {
+                                Ok(())
+                            }
+                        }
+                        _ => Err(self.create_type_error(&format!(
+                            "Cannot write private member #{name} to a non-object"
+                        ))),
+                    };
+                }
                 let key = match prop {
                     MemberProperty::Dot(name) => name.clone(),
                     MemberProperty::Computed(cexpr) => {
@@ -2476,7 +2541,7 @@ impl Interpreter {
                         };
                         self.to_property_key(&v)?
                     }
-                    MemberProperty::Private(_) => return Ok(()),
+                    MemberProperty::Private(_) => unreachable!(),
                 };
                 if let JsValue::Object(ref o) = obj_val
                     && let Some(obj) = self.get_object(o.id)
@@ -2644,7 +2709,10 @@ impl Interpreter {
                                                 }
                                             };
                                             let setter = setter.clone();
-                                            self.call_function(&setter, &obj_val, std::slice::from_ref(&final_val));
+                                            match self.call_function(&setter, &obj_val, std::slice::from_ref(&final_val)) {
+                                                Completion::Throw(e) => return Completion::Throw(e),
+                                                _ => {}
+                                            }
                                             Completion::Normal(final_val)
                                         } else {
                                             Completion::Throw(self.create_type_error(&format!(
@@ -3596,7 +3664,16 @@ impl Interpreter {
             Completion::Throw(e) => return Err(e),
             _ => return Ok(()),
         };
+        self.set_member_property_with_base(obj_val, prop, val, env)
+    }
 
+    fn set_member_property_with_base(
+        &mut self,
+        obj_val: JsValue,
+        prop: &MemberProperty,
+        val: JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
         if let MemberProperty::Private(name) = prop {
             let branded = self.resolve_private_name(name, env);
             return match &obj_val {
@@ -4121,6 +4198,32 @@ impl Interpreter {
                     };
                     excluded_keys.push(key.clone());
 
+                    // Per spec §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
+                    let (target, default_expr) = if let Expression::Assign(
+                        AssignOp::Assign,
+                        target,
+                        default,
+                    ) = &prop.value
+                    {
+                        (target.as_ref(), Some(default.as_ref()))
+                    } else {
+                        (&prop.value, None)
+                    };
+
+                    // If target is a member expression, pre-evaluate the base as lref
+                    // before invoking GetV (spec step 1 must happen before step 2).
+                    let pre_base: Option<(JsValue, &MemberProperty)> =
+                        if let Expression::Member(base_expr, prop_member) = target {
+                            match self.eval_expr(base_expr, env) {
+                                Completion::Normal(v) => Some((v, prop_member)),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                Completion::Yield(v) => return Completion::Yield(v),
+                                other => return other,
+                            }
+                        } else {
+                            None
+                        };
+
                     // Get property via get_object_property (invokes getters/Proxy)
                     let val = if let JsValue::Object(o) = &obj_val {
                         match self.get_object_property(o.id, &key, &obj_val) {
@@ -4131,18 +4234,6 @@ impl Interpreter {
                         }
                     } else {
                         JsValue::Undefined
-                    };
-
-                    // Extract target and default from value
-                    let (target, default_expr) = if let Expression::Assign(
-                        AssignOp::Assign,
-                        target,
-                        default,
-                    ) = &prop.value
-                    {
-                        (target.as_ref(), Some(default.as_ref()))
-                    } else {
-                        (&prop.value, None)
                     };
 
                     let val = if val.is_undefined() {
@@ -4167,9 +4258,16 @@ impl Interpreter {
                         val
                     };
 
-                    match self.put_value_to_target(target, val, env) {
-                        Completion::Normal(_) | Completion::Empty => {}
-                        other => return other,
+                    if let Some((base_val, prop_member)) = pre_base {
+                        match self.set_member_property_with_base(base_val, prop_member, val, env) {
+                            Ok(()) => {}
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        match self.put_value_to_target(target, val, env) {
+                            Completion::Normal(_) | Completion::Empty => {}
+                            other => return other,
+                        }
                     }
                 }
                 _ => continue,
@@ -4309,6 +4407,12 @@ impl Interpreter {
                 };
                 // super.method() - look up on [[Prototype]] of HomeObject, bind this
                 if is_super_call {
+                    // Per spec §13.5.6: GetThisBinding() throws ReferenceError if this is in TDZ
+                    if Self::this_is_in_tdz(env) {
+                        return Completion::Throw(self.create_reference_error(
+                            "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                        ));
+                    }
                     let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
                     let home = env.borrow().get("__home_object__");
                     if let Some(JsValue::Object(ref ho)) = home
@@ -4480,8 +4584,8 @@ impl Interpreter {
             return Completion::Throw(err);
         };
 
-        // Determine target_yield based on execution state
-        let target_yield = match &execution_state {
+        // Determine target_yield and previous sent values based on execution state
+        let (target_yield, prev_sent, is_suspended_start) = match &execution_state {
             GeneratorExecutionState::Completed => {
                 return Completion::Normal(
                     self.create_iter_result_object(JsValue::Undefined, true),
@@ -4490,9 +4594,20 @@ impl Interpreter {
             GeneratorExecutionState::Executing => {
                 return Completion::Throw(self.create_type_error("Generator is already executing"));
             }
-            GeneratorExecutionState::SuspendedStart => 0,
-            GeneratorExecutionState::SuspendedYield { target_yield } => *target_yield,
+            GeneratorExecutionState::SuspendedStart => (0, Vec::new(), true),
+            GeneratorExecutionState::SuspendedYield { target_yield, prev_sent } => {
+                (*target_yield, prev_sent.clone(), false)
+            }
         };
+
+        // Build the full prev_sent_values for this call by appending the current sent_value.
+        // prev_sent_values[k] = the value that yield k evaluates to when fast-forwarded.
+        // Yield (target_yield-1) evaluates to the current sent_value (since we're resuming from it).
+        // NOTE: For SuspendedStart (first call), sent_value is irrelevant (no yield to resume from).
+        let mut new_prev_sent = prev_sent.clone();
+        if !is_suspended_start {
+            new_prev_sent.push(sent_value.clone());
+        }
 
         // Mark as executing
         obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
@@ -4507,6 +4622,7 @@ impl Interpreter {
             target_yield,
             current_yield: 0,
             sent_value,
+            prev_sent_values: new_prev_sent.clone(),
             is_async: false,
         });
 
@@ -4524,6 +4640,7 @@ impl Interpreter {
                     is_strict,
                     execution_state: GeneratorExecutionState::SuspendedYield {
                         target_yield: target_yield + 1,
+                        prev_sent: new_prev_sent,
                     },
                 });
                 Completion::Normal(self.create_iter_result_object(v, false))
@@ -4802,6 +4919,7 @@ impl Interpreter {
         use crate::interpreter::generator_transform::SentValueBindingKind;
         let mut initial_inline_yield_target: Option<usize> = None;
         let mut initial_inline_yield_sent: Option<JsValue> = None;
+        let mut initial_inline_yield_prev_sent: Option<Vec<JsValue>> = None;
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
@@ -4812,9 +4930,12 @@ impl Interpreter {
                         self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard => {}
-                SentValueBindingKind::InlineYield { yield_target } => {
+                SentValueBindingKind::InlineYield { yield_target, prev_sent } => {
                     initial_inline_yield_target = Some(*yield_target);
                     initial_inline_yield_sent = Some(sent_value.clone());
+                    let mut new_prev = prev_sent.clone();
+                    new_prev.push(sent_value.clone());
+                    initial_inline_yield_prev_sent = Some(new_prev);
                 }
             }
         }
@@ -4826,6 +4947,7 @@ impl Interpreter {
         let mut pending_return: Option<JsValue> = stored_pending_return;
         let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
+        let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
 
         loop {
             let (statements, terminator) = {
@@ -4836,10 +4958,12 @@ impl Interpreter {
             let is_inline_replay = inline_yield_target.is_some();
             if let Some(target) = inline_yield_target.take() {
                 let sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
+                let prev = inline_yield_prev_sent.take().unwrap_or_default();
                 self.generator_context = Some(GeneratorContext {
                     target_yield: target,
                     current_yield: 0,
                     sent_value: sv,
+                    prev_sent_values: prev,
                     is_async: false,
                 });
             }
@@ -4853,7 +4977,8 @@ impl Interpreter {
 
             if let Completion::Yield(yield_val) = stmt_result {
                 self.destructuring_yield = false;
-                let yield_count = ctx_after.map(|c| c.current_yield).unwrap_or(1);
+                let yield_count = ctx_after.as_ref().map(|c| c.current_yield).unwrap_or(1);
+                let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
                 // Save any iterators that need IteratorClose if generator.return() is called
                 let pending = std::mem::take(&mut self.pending_iter_close);
                 if !pending.is_empty() {
@@ -4872,6 +4997,7 @@ impl Interpreter {
                         crate::interpreter::generator_transform::SentValueBinding {
                             kind: SentValueBindingKind::InlineYield {
                                 yield_target: yield_count,
+                                prev_sent: inline_prev,
                             },
                         },
                     ),
@@ -6164,6 +6290,7 @@ impl Interpreter {
         use crate::interpreter::generator_transform::SentValueBindingKind;
         let mut initial_inline_yield_target: Option<usize> = None;
         let mut initial_inline_yield_sent: Option<JsValue> = None;
+        let mut initial_inline_yield_prev_sent: Option<Vec<JsValue>> = None;
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
@@ -6174,9 +6301,12 @@ impl Interpreter {
                         self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard => {}
-                SentValueBindingKind::InlineYield { yield_target } => {
+                SentValueBindingKind::InlineYield { yield_target, prev_sent } => {
                     initial_inline_yield_target = Some(*yield_target);
                     initial_inline_yield_sent = Some(sent_value.clone());
+                    let mut new_prev = prev_sent.clone();
+                    new_prev.push(sent_value.clone());
+                    initial_inline_yield_prev_sent = Some(new_prev);
                 }
             }
         }
@@ -6188,6 +6318,7 @@ impl Interpreter {
         let mut pending_return: Option<JsValue> = stored_pending_return;
         let mut inline_yield_target: Option<usize> = initial_inline_yield_target;
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
+        let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
 
         loop {
             let (statements, terminator) = {
@@ -6198,10 +6329,12 @@ impl Interpreter {
             let is_inline_replay = inline_yield_target.is_some();
             if let Some(target) = inline_yield_target.take() {
                 let sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
+                let prev = inline_yield_prev_sent.take().unwrap_or_default();
                 self.generator_context = Some(GeneratorContext {
                     target_yield: target,
                     current_yield: 0,
                     sent_value: sv,
+                    prev_sent_values: prev,
                     is_async: true,
                 });
             }
@@ -6312,7 +6445,8 @@ impl Interpreter {
                 // decomposed by the state machine transformer. Use InlineYield
                 // to re-enter the same state and fast-forward past previous yields.
                 {
-                    let yield_count = ctx_after.map(|c| c.current_yield).unwrap_or(1);
+                    let yield_count = ctx_after.as_ref().map(|c| c.current_yield).unwrap_or(1);
+                    let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine: state_machine.clone(),
@@ -6327,6 +6461,7 @@ impl Interpreter {
                                 crate::interpreter::generator_transform::SentValueBinding {
                                     kind: SentValueBindingKind::InlineYield {
                                         yield_target: yield_count,
+                                        prev_sent: inline_prev,
                                     },
                                 },
                             ),
@@ -7018,8 +7153,8 @@ impl Interpreter {
         };
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
 
-        // Determine target_yield based on execution state
-        let target_yield = match &execution_state {
+        // Determine target_yield and previous sent values based on execution state
+        let (target_yield, prev_sent, is_suspended_start) = match &execution_state {
             GeneratorExecutionState::Completed => {
                 let result = self.create_iter_result_object(JsValue::Undefined, true);
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[result]);
@@ -7032,9 +7167,18 @@ impl Interpreter {
                 self.drain_microtasks();
                 return Completion::Normal(promise);
             }
-            GeneratorExecutionState::SuspendedStart => 0,
-            GeneratorExecutionState::SuspendedYield { target_yield } => *target_yield,
+            GeneratorExecutionState::SuspendedStart => (0, Vec::new(), true),
+            GeneratorExecutionState::SuspendedYield { target_yield, prev_sent } => {
+                (*target_yield, prev_sent.clone(), false)
+            }
         };
+
+        // Build the full prev_sent_values for this call by appending the current sent_value.
+        // For SuspendedStart (first call), sent_value is irrelevant (no yield to resume from).
+        let mut new_prev_sent = prev_sent.clone();
+        if !is_suspended_start {
+            new_prev_sent.push(sent_value.clone());
+        }
 
         // Mark as executing
         obj_rc.borrow_mut().iterator_state = Some(IteratorState::AsyncGenerator {
@@ -7048,6 +7192,7 @@ impl Interpreter {
             target_yield,
             current_yield: 0,
             sent_value,
+            prev_sent_values: new_prev_sent.clone(),
             is_async: true,
         });
 
@@ -7086,6 +7231,7 @@ impl Interpreter {
                     is_strict,
                     execution_state: GeneratorExecutionState::SuspendedYield {
                         target_yield: target_yield + 1,
+                        prev_sent: new_prev_sent,
                     },
                 });
                 let iter_result = self.create_iter_result_object(awaited, false);
@@ -8596,6 +8742,10 @@ impl Interpreter {
                 return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
             }
         };
+        // Validate private name usage in eval-in-class context
+        if let Err(e) = p.validate_eval_private_names() {
+            return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
+        }
         if in_field_initializer {
             if Self::stmts_contain_arguments(&program.body) {
                 return Completion::Throw(self.create_error(
@@ -9174,6 +9324,56 @@ impl Interpreter {
             false
         };
 
+        // Fast path for default derived constructor: bypass the synthetic body to avoid
+        // invoking Symbol.iterator on the rest parameter (spec §15.7.14).
+        if is_derived {
+            let is_default_derived = if let JsValue::Object(o) = &callee_val
+                && let Some(func_obj) = self.get_object(o.id)
+            {
+                func_obj.borrow().is_default_derived_constructor
+            } else {
+                false
+            };
+            if is_default_derived {
+                let super_ctor = if let JsValue::Object(o) = &callee_val
+                    && let Some(func_obj) = self.get_object(o.id)
+                    && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable.clone()
+                {
+                    closure.borrow().get("__super__").unwrap_or(JsValue::Undefined)
+                } else {
+                    JsValue::Undefined
+                };
+                let prev_new_target = self.new_target.take();
+                self.new_target = Some(callee_val.clone());
+                let result = self.construct_with_new_target(&super_ctor, &evaluated_args, callee_val.clone());
+                if let Completion::Normal(ref new_obj) = result {
+                    // Fix prototype: native constructors (e.g. Temporal.*) may create their own
+                    // object ignoring `this`. Re-stamp the prototype using the derived class's
+                    // .prototype, mirroring what super() call processing does (spec §13.3.7.1).
+                    if let JsValue::Object(this_obj) = new_obj
+                        && let JsValue::Object(nt_o) = &callee_val
+                        && let Some(nt_func) = self.get_object(nt_o.id)
+                    {
+                        let proto_val = nt_func.borrow().get_property_value("prototype");
+                        if let Some(JsValue::Object(proto_obj)) = proto_val
+                            && let Some(proto_rc) = self.get_object(proto_obj.id)
+                            && let Some(obj) = self.get_object(this_obj.id)
+                        {
+                            obj.borrow_mut().prototype = Some(proto_rc);
+                        }
+                    }
+                    // initialize_instance_elements reads self.new_target to find class fields,
+                    // so keep new_target set to callee_val until after it returns.
+                    if let Err(e) = self.initialize_instance_elements(new_obj.clone(), env) {
+                        self.new_target = prev_new_target;
+                        return Completion::Throw(e);
+                    }
+                }
+                self.new_target = prev_new_target;
+                return result;
+            }
+        }
+
         if is_derived {
             // Derived constructor: don't create this, let super() handle it
             let prev_new_target = self.new_target.take();
@@ -9307,9 +9507,16 @@ impl Interpreter {
             for idef in &instance_field_defs {
                 match idef {
                     InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
+                        let source_name = name.split('#').next().unwrap_or(name);
+                        let display_name = format!("#{source_name}");
                         let val = if let Some(init) = initializer {
                             match self.eval_expr(init, &init_env) {
-                                Completion::Normal(v) => v,
+                                Completion::Normal(v) => {
+                                    if init.is_anonymous_function_definition() {
+                                        self.set_function_name(&v, &display_name);
+                                    }
+                                    v
+                                }
                                 other => return other,
                             }
                         } else {
@@ -9334,7 +9541,12 @@ impl Interpreter {
                     InstanceFieldDef::Public(key, initializer) => {
                         let val = if let Some(init) = initializer {
                             match self.eval_expr(init, &init_env) {
-                                Completion::Normal(v) => v,
+                                Completion::Normal(v) => {
+                                    if init.is_anonymous_function_definition() {
+                                        self.set_function_name(&v, key);
+                                    }
+                                    v
+                                }
                                 other => return other,
                             }
                         } else {
@@ -9587,9 +9799,16 @@ impl Interpreter {
                 for idef in &instance_field_defs {
                     match idef {
                         InstanceFieldDef::Private(PrivateFieldDef::Field { name, initializer }) => {
+                            let source_name = name.split('#').next().unwrap_or(name);
+                            let display_name = format!("#{source_name}");
                             let val = if let Some(init) = initializer {
                                 match self.eval_expr(init, &init_env) {
-                                    Completion::Normal(v) => v,
+                                    Completion::Normal(v) => {
+                                        if init.is_anonymous_function_definition() {
+                                            self.set_function_name(&v, &display_name);
+                                        }
+                                        v
+                                    }
                                     other => return other,
                                 }
                             } else {
@@ -9604,7 +9823,12 @@ impl Interpreter {
                         InstanceFieldDef::Public(key, initializer) => {
                             let val = if let Some(init) = initializer {
                                 match self.eval_expr(init, &init_env) {
-                                    Completion::Normal(v) => v,
+                                    Completion::Normal(v) => {
+                                        if init.is_anonymous_function_definition() {
+                                            self.set_function_name(&v, key);
+                                        }
+                                        v
+                                    }
                                     other => return other,
                                 }
                             } else {
@@ -11483,6 +11707,12 @@ impl Interpreter {
         let _ = computed_raw;
         // super.x - look up on [[Prototype]] of HomeObject
         if matches!(obj, Expression::Super) {
+            // Per spec §13.5.6: GetThisBinding() throws ReferenceError if this is in TDZ
+            if Self::this_is_in_tdz(env) {
+                return Completion::Throw(self.create_reference_error(
+                    "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                ));
+            }
             let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
             let home = env.borrow().get("__home_object__");
             if let Some(JsValue::Object(ref ho)) = home
@@ -11658,9 +11888,19 @@ impl Interpreter {
             None
         });
 
-        // Evaluate super class if present
+        // Per spec §15.7.14: Create class environment FIRST so heritage expression
+        // is evaluated in it, and closures in heritage capture the class name binding.
+        let class_env = Environment::new(Some(env.clone()));
+        class_env.borrow_mut().class_private_names = self.class_private_names.last().cloned();
+        class_env.borrow_mut().strict = true;
+        // Pre-declare class name as uninitialized immutable binding (spec step 4a)
+        if !name.is_empty() {
+            class_env.borrow_mut().declare(name, BindingKind::Const);
+        }
+
+        // Evaluate super class in class_env context (spec step 6a-6b)
         let super_val = if let Some(sc) = super_class {
-            match self.eval_expr(sc, env) {
+            match self.eval_expr(sc, &class_env) {
                 Completion::Normal(v) => Some(v),
                 other => return other,
             }
@@ -11678,9 +11918,6 @@ impl Interpreter {
             );
         }
 
-        // Create class environment with __super__ binding and private names
-        let class_env = Environment::new(Some(env.clone()));
-        class_env.borrow_mut().class_private_names = self.class_private_names.last().cloned();
         if let Some(ref sv) = super_val {
             class_env
                 .borrow_mut()
@@ -11744,6 +11981,9 @@ impl Interpreter {
             func_obj.borrow_mut().is_class_constructor = true;
             if super_val.is_some() {
                 func_obj.borrow_mut().is_derived_class_constructor = true;
+                if ctor_method.is_none() {
+                    func_obj.borrow_mut().is_default_derived_constructor = true;
+                }
             }
             // Per spec §14.6.13: class .prototype is {writable: false, enumerable: false, configurable: false}
             let proto_val_for_desc = func_obj.borrow().get_property("prototype");
@@ -11753,9 +11993,8 @@ impl Interpreter {
             );
         }
 
-        // Bind class name as immutable binding in class_env (spec §15.7.14 step 2.e)
+        // Initialize class name binding (pre-declared above; spec §15.7.14 step 18.c/26.d)
         if !name.is_empty() {
-            class_env.borrow_mut().declare(name, BindingKind::Const);
             let _ = class_env.borrow_mut().set(name, ctor_val.clone());
         }
 
@@ -11867,7 +12106,8 @@ impl Interpreter {
         // Phase 2: Execute static field initializers and static blocks in order.
         enum DeferredStatic {
             PublicField(String, Option<Expression>),
-            PrivateField(String, Option<Expression>),
+            // (source_name, branded_name, initializer)
+            PrivateField(String, String, Option<Expression>),
             Block(Vec<Statement>),
         }
         let mut deferred_static: Vec<DeferredStatic> = Vec::new();
@@ -12183,8 +12423,11 @@ impl Interpreter {
                             }
                         } else {
                             // Defer static private field initializer to phase 2
-                            deferred_static
-                                .push(DeferredStatic::PrivateField(branded, p.value.clone()));
+                            deferred_static.push(DeferredStatic::PrivateField(
+                                name.clone(),
+                                branded,
+                                p.value.clone(),
+                            ));
                         }
                         continue;
                     }
@@ -12245,7 +12488,12 @@ impl Interpreter {
                 DeferredStatic::PublicField(key, initializer) => {
                     let val = if let Some(ref expr) = initializer {
                         match self.eval_expr(expr, &static_field_env) {
-                            Completion::Normal(v) => v,
+                            Completion::Normal(v) => {
+                                if expr.is_anonymous_function_definition() {
+                                    self.set_function_name(&v, &key);
+                                }
+                                v
+                            }
                             other => return other,
                         }
                     } else {
@@ -12257,10 +12505,16 @@ impl Interpreter {
                         func_obj.borrow_mut().insert_value(key, val);
                     }
                 }
-                DeferredStatic::PrivateField(branded, initializer) => {
+                DeferredStatic::PrivateField(source_name, branded, initializer) => {
+                    let display_name = format!("#{source_name}");
                     let val = if let Some(ref expr) = initializer {
                         match self.eval_expr(expr, &static_field_env) {
-                            Completion::Normal(v) => v,
+                            Completion::Normal(v) => {
+                                if expr.is_anonymous_function_definition() {
+                                    self.set_function_name(&v, &display_name);
+                                }
+                                v
+                            }
                             other => return other,
                         }
                     } else {
@@ -12269,6 +12523,16 @@ impl Interpreter {
                     if let JsValue::Object(ref o) = ctor_val
                         && let Some(func_obj) = self.get_object(o.id)
                     {
+                        if !func_obj.borrow().extensible {
+                            return Completion::Throw(self.create_type_error(
+                                "Cannot add private field to non-extensible object",
+                            ));
+                        }
+                        if func_obj.borrow().private_fields.contains_key(&branded) {
+                            return Completion::Throw(self.create_type_error(
+                                "Cannot initialize private field twice on the same object",
+                            ));
+                        }
                         func_obj
                             .borrow_mut()
                             .private_fields
@@ -12579,30 +12843,8 @@ impl Interpreter {
         if is_arrow {
             func_env.borrow_mut().is_arrow_scope = true;
         }
-        for (i, param) in params.iter().enumerate() {
-            if let Pattern::Rest(inner) = param {
-                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                let rest_arr = self.create_array(rest);
-                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
-                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                    self.drain_microtasks();
-                    self.gc_unroot_value(&reject_fn);
-                    self.gc_unroot_value(&resolve_fn);
-                    self.gc_unroot_value(&promise);
-                    return Completion::Normal(promise);
-                }
-                break;
-            }
-            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                self.drain_microtasks();
-                self.gc_unroot_value(&reject_fn);
-                self.gc_unroot_value(&resolve_fn);
-                self.gc_unroot_value(&promise);
-                return Completion::Normal(promise);
-            }
-        }
+        // Set up `this` and `arguments` before binding parameters so that
+        // default parameter expressions can reference `arguments`.
         if !is_arrow {
             let effective_this = if !is_strict
                 && !closure_strict
@@ -12654,6 +12896,30 @@ impl Interpreter {
             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
             if is_strict || !is_simple {
                 func_env.borrow_mut().arguments_immutable = true;
+            }
+        }
+        for (i, param) in params.iter().enumerate() {
+            if let Pattern::Rest(inner) = param {
+                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
+                let rest_arr = self.create_array(rest);
+                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
+                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                    self.drain_microtasks();
+                    self.gc_unroot_value(&reject_fn);
+                    self.gc_unroot_value(&resolve_fn);
+                    self.gc_unroot_value(&promise);
+                    return Completion::Normal(promise);
+                }
+                break;
+            }
+            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
+            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
+                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                self.drain_microtasks();
+                self.gc_unroot_value(&reject_fn);
+                self.gc_unroot_value(&resolve_fn);
+                self.gc_unroot_value(&promise);
+                return Completion::Normal(promise);
             }
         }
 

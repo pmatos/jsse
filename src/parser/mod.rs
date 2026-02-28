@@ -236,6 +236,13 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    pub fn validate_eval_private_names(&mut self) -> Result<(), ParseError> {
+        while !self.private_name_scopes.is_empty() {
+            self.pop_private_scope()?;
+        }
+        Ok(())
+    }
+
     fn pop_private_scope(&mut self) -> Result<(), ParseError> {
         if let Some((declared, used)) = self.private_name_scopes.pop() {
             for (name, _pos) in &used {
