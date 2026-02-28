@@ -9264,6 +9264,16 @@ impl Interpreter {
                 match idef {
                     InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
                         if let Some(obj) = self.get_object(new_obj_id) {
+                            if !obj.borrow().extensible {
+                                return Completion::Throw(self.create_type_error(
+                                    "Cannot define private method on non-extensible object",
+                                ));
+                            }
+                            if obj.borrow().private_fields.contains_key(name) {
+                                return Completion::Throw(self.create_type_error(
+                                    "Cannot add private method to object twice",
+                                ));
+                            }
                             obj.borrow_mut()
                                 .private_fields
                                 .insert(name.clone(), PrivateElement::Method(value.clone()));
@@ -9271,6 +9281,16 @@ impl Interpreter {
                     }
                     InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
                         if let Some(obj) = self.get_object(new_obj_id) {
+                            if !obj.borrow().extensible {
+                                return Completion::Throw(self.create_type_error(
+                                    "Cannot define private accessor on non-extensible object",
+                                ));
+                            }
+                            if obj.borrow().private_fields.contains_key(name) {
+                                return Completion::Throw(self.create_type_error(
+                                    "Cannot add private accessor to object twice",
+                                ));
+                            }
                             obj.borrow_mut().private_fields.insert(
                                 name.clone(),
                                 PrivateElement::Accessor {
@@ -9296,6 +9316,16 @@ impl Interpreter {
                             JsValue::Undefined
                         };
                         if let Some(obj) = self.get_object(new_obj_id) {
+                            if !obj.borrow().extensible {
+                                return Completion::Throw(self.create_type_error(
+                                    "Cannot define private field on non-extensible object",
+                                ));
+                            }
+                            if obj.borrow().private_fields.contains_key(name) {
+                                return Completion::Throw(self.create_type_error(
+                                    "Cannot initialize private field twice on the same object",
+                                ));
+                            }
                             obj.borrow_mut()
                                 .private_fields
                                 .insert(name.clone(), PrivateElement::Field(val));
@@ -9310,8 +9340,11 @@ impl Interpreter {
                         } else {
                             JsValue::Undefined
                         };
-                        if let Some(obj) = self.get_object(new_obj_id) {
-                            obj.borrow_mut().insert_value(key.clone(), val);
+                        match crate::interpreter::builtins::array::create_data_property_or_throw(
+                            self, &this_val, key, val,
+                        ) {
+                            Ok(()) => {}
+                            Err(e) => return Completion::Throw(e),
                         }
                     }
                     _ => {} // Methods/accessors handled in pass 1
@@ -11786,6 +11819,20 @@ impl Interpreter {
             proto.borrow_mut().prototype = None;
         }
 
+        // Set __home_object__ in class_env for the constructor (which uses class_env as
+        // its closure directly). Non-constructor methods get per-method closures that
+        // shadow this with their own __home_object__ binding.
+        let ctor_home = if let Some(ref p) = proto_obj {
+            let pid = p.borrow().id.unwrap();
+            JsValue::Object(crate::types::JsObject { id: pid })
+        } else {
+            JsValue::Undefined
+        };
+        class_env
+            .borrow_mut()
+            .declare("__home_object__", BindingKind::Const);
+        let _ = class_env.borrow_mut().set("__home_object__", ctor_home);
+
         // Create environment for static field initializers with `this` = constructor
         let static_field_env = Environment::new_function_scope(Some(class_env.clone()));
         {
@@ -11862,11 +11909,26 @@ impl Interpreter {
                         },
                         PropertyKey::Private(name) => {
                             let branded = self.resolve_private_name(name, &class_env);
+                            let priv_home_target = if m.is_static {
+                                ctor_val.clone()
+                            } else if let Some(ref p) = proto_obj {
+                                let pid = p.borrow().id.unwrap();
+                                JsValue::Object(crate::types::JsObject { id: pid })
+                            } else {
+                                JsValue::Undefined
+                            };
+                            let method_closure = Environment::new(Some(class_env.clone()));
+                            method_closure
+                                .borrow_mut()
+                                .declare("__home_object__", BindingKind::Const);
+                            let _ = method_closure
+                                .borrow_mut()
+                                .set("__home_object__", priv_home_target);
                             let method_func = JsFunction::User {
                                 name: Some(format!("#{name}")),
                                 params: m.value.params.clone(),
                                 body: m.value.body.clone(),
-                                closure: class_env.clone(),
+                                closure: method_closure,
                                 is_arrow: false,
                                 is_strict: true,
                                 is_generator: m.value.is_generator,
@@ -12019,21 +12081,6 @@ impl Interpreter {
                         ClassMethodKind::Set => format!("set {fn_name_for_key}"),
                         _ => fn_name_for_key.clone(),
                     };
-                    let method_func = JsFunction::User {
-                        name: Some(method_display_name),
-                        params: m.value.params.clone(),
-                        body: m.value.body.clone(),
-                        closure: class_env.clone(),
-                        is_arrow: false,
-                        is_strict: true,
-                        is_generator: m.value.is_generator,
-                        is_async: m.value.is_async,
-                        is_method: true,
-                        source_text: m.value.source_text.clone(),
-                    };
-                    let method_val = self.create_function(method_func);
-
-                    // Set __home_object__ for super property access
                     let home_target = if m.is_static {
                         ctor_val.clone()
                     } else if let Some(ref p) = proto_obj {
@@ -12042,16 +12089,26 @@ impl Interpreter {
                     } else {
                         JsValue::Undefined
                     };
-                    if let JsValue::Object(ref fo) = method_val
-                        && let Some(func_obj) = self.get_object(fo.id)
-                        && let Some(JsFunction::User { ref closure, .. }) =
-                            func_obj.borrow().callable
-                    {
-                        closure
-                            .borrow_mut()
-                            .declare("__home_object__", BindingKind::Const);
-                        let _ = closure.borrow_mut().set("__home_object__", home_target);
-                    }
+                    let method_closure = Environment::new(Some(class_env.clone()));
+                    method_closure
+                        .borrow_mut()
+                        .declare("__home_object__", BindingKind::Const);
+                    let _ = method_closure
+                        .borrow_mut()
+                        .set("__home_object__", home_target);
+                    let method_func = JsFunction::User {
+                        name: Some(method_display_name),
+                        params: m.value.params.clone(),
+                        body: m.value.body.clone(),
+                        closure: method_closure,
+                        is_arrow: false,
+                        is_strict: true,
+                        is_generator: m.value.is_generator,
+                        is_async: m.value.is_async,
+                        is_method: true,
+                        source_text: m.value.source_text.clone(),
+                    };
+                    let method_val = self.create_function(method_func);
 
                     let target = if m.is_static {
                         if let JsValue::Object(ref o) = ctor_val {
@@ -12063,7 +12120,7 @@ impl Interpreter {
                         proto_obj.clone()
                     };
                     if let Some(ref t) = target {
-                        match m.kind {
+                        let ok = match m.kind {
                             ClassMethodKind::Get => {
                                 let mut desc = t.borrow().properties.get(&key).cloned().unwrap_or(
                                     PropertyDescriptor {
@@ -12078,7 +12135,7 @@ impl Interpreter {
                                 desc.get = Some(method_val);
                                 desc.value = None;
                                 desc.writable = None;
-                                t.borrow_mut().insert_property(key, desc);
+                                t.borrow_mut().define_own_property(key, desc)
                             }
                             ClassMethodKind::Set => {
                                 let mut desc = t.borrow().properties.get(&key).cloned().unwrap_or(
@@ -12094,11 +12151,17 @@ impl Interpreter {
                                 desc.set = Some(method_val);
                                 desc.value = None;
                                 desc.writable = None;
-                                t.borrow_mut().insert_property(key, desc);
+                                t.borrow_mut().define_own_property(key, desc)
                             }
                             _ => {
-                                t.borrow_mut().insert_builtin(key, method_val);
+                                let desc = PropertyDescriptor::data(method_val, true, false, true);
+                                t.borrow_mut().define_own_property(key, desc)
                             }
+                        };
+                        if !ok {
+                            return Completion::Throw(self.create_type_error(
+                                "Cannot redefine non-configurable property",
+                            ));
                         }
                     }
                 }

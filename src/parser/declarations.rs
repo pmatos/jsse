@@ -911,6 +911,16 @@ impl<'a> Parser<'a> {
                         computed: false,
                     }));
                 }
+                // ASI: if the next token is `*`, `get` is a field and `*` starts a generator method
+                if self.current == Token::Star {
+                    self.eat_semicolon()?;
+                    return Ok(ClassElement::Property(ClassProperty {
+                        key: PropertyKey::Identifier("get".to_string()),
+                        value: None,
+                        is_static,
+                        computed: false,
+                    }));
+                }
                 ClassMethodKind::Get
             }
             Token::Identifier(n) if n == "set" => {
@@ -923,6 +933,16 @@ impl<'a> Parser<'a> {
                         key,
                         kind: ClassMethodKind::Method,
                         value: func,
+                        is_static,
+                        computed: false,
+                    }));
+                }
+                // ASI: if the next token is `*`, `set` is a field and `*` starts a generator method
+                if self.current == Token::Star {
+                    self.eat_semicolon()?;
+                    return Ok(ClassElement::Property(ClassProperty {
+                        key: PropertyKey::Identifier("set".to_string()),
+                        value: None,
                         is_static,
                         computed: false,
                     }));
