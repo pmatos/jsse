@@ -4496,14 +4496,23 @@ impl Interpreter {
                 Completion::Throw(e) => return Err(Completion::Throw(e)),
                 _ => return Ok(Vec::new()),
             };
-            let len = match self.to_number_value(&len_val) {
-                Ok(n) => to_integer(n) as usize,
+            let len_f = match self.to_number_value(&len_val) {
+                Ok(n) => to_integer(n),
                 Err(e) => return Err(Completion::Throw(e)),
             };
+            // §22.2.4.4 step 4+6: AllocateTypedArrayBuffer requires len <= 2^53-1
+            if len_f > 9007199254740991.0 {
+                return Err(Completion::Throw(self.create_error(
+                    "RangeError",
+                    "Invalid typed array length",
+                )));
+            }
+            let len = len_f as usize;
             let mut values = Vec::new();
             for i in 0..len {
                 let v = match self.get_object_property(o.id, &i.to_string(), val) {
                     Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(Completion::Throw(e)),
                     _ => JsValue::Undefined,
                 };
                 values.push(v);

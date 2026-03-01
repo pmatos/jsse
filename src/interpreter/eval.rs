@@ -11079,6 +11079,99 @@ impl Interpreter {
         true
     }
 
+    /// §10.4.5.6 TypedArray [[DefineOwnProperty]](P, Desc)
+    /// Returns Ok(None) if not a typed array numeric index (caller should use generic path).
+    /// Returns Ok(Some(bool)) if handled by TypedArray exotic logic.
+    /// Returns Err(JsValue) if an error occurred (e.g., ToBigInt/ToNumber throws).
+    pub(crate) fn typed_array_define_own_property(
+        &mut self,
+        obj_id: u64,
+        key: &str,
+        desc: &PropertyDescriptor,
+    ) -> Result<Option<bool>, JsValue> {
+        use crate::interpreter::types::{canonical_numeric_index_string, is_valid_integer_index};
+
+        let (is_ta, is_bigint) = {
+            if let Some(obj) = self.get_object(obj_id) {
+                let b = obj.borrow();
+                if let Some(ref ta) = b.typed_array_info {
+                    (true, ta.kind.is_bigint())
+                } else {
+                    (false, false)
+                }
+            } else {
+                (false, false)
+            }
+        };
+
+        if !is_ta {
+            return Ok(None);
+        }
+
+        let index = match canonical_numeric_index_string(key) {
+            Some(idx) => idx,
+            None => return Ok(None),
+        };
+
+        // §10.4.5.6 step 3b.i: if not a valid integer index, return false
+        {
+            let valid = if let Some(obj) = self.get_object(obj_id) {
+                let b = obj.borrow();
+                b.typed_array_info.as_ref().map(|ta| is_valid_integer_index(ta, index)).unwrap_or(false)
+            } else {
+                false
+            };
+            if !valid {
+                return Ok(Some(false));
+            }
+        }
+
+        // §10.4.5.6 step 3b.ii: accessor descriptors not allowed
+        if desc.get.is_some() || desc.set.is_some() {
+            return Ok(Some(false));
+        }
+        // §10.4.5.6 step 3b.iii: configurable must not be false
+        if desc.configurable == Some(false) {
+            return Ok(Some(false));
+        }
+        // §10.4.5.6 step 3b.iv: enumerable must not be false
+        if desc.enumerable == Some(false) {
+            return Ok(Some(false));
+        }
+        // §10.4.5.6 step 3b.v: writable must not be false
+        if desc.writable == Some(false) {
+            return Ok(Some(false));
+        }
+
+        // §10.4.5.6 step 3b.vi: if [[Value]] present, call IntegerIndexedElementSet
+        if let Some(ref value) = desc.value {
+            // IntegerIndexedElementSet: ToNumber/ToBigInt first (may throw), then check valid
+            let num_val = if is_bigint {
+                self.to_bigint_value(value)?
+            } else {
+                JsValue::Number(self.to_number_value(value)?)
+            };
+            // After conversion, re-read ta info (buffer may have been detached during conversion)
+            if let Some(obj) = self.get_object(obj_id) {
+                let b = obj.borrow();
+                if let Some(ref ta) = b.typed_array_info {
+                    if is_valid_integer_index(ta, index) {
+                        let ta_clone2 = ta.clone();
+                        drop(b);
+                        crate::interpreter::types::typed_array_set_index(
+                            &ta_clone2,
+                            index as usize,
+                            &num_val,
+                        );
+                    }
+                }
+            }
+            return Ok(Some(true));
+        }
+
+        Ok(Some(true))
+    }
+
     pub(crate) fn proxy_define_own_property(
         &mut self,
         obj_id: u64,

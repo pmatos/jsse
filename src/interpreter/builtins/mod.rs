@@ -4209,6 +4209,7 @@ impl Interpreter {
                         match interp.to_property_descriptor(&desc_val) {
                             Ok(desc) => {
                                 let is_array = obj.borrow().class_name == "Array";
+                                let is_ta = obj.borrow().typed_array_info.is_some();
                                 if is_array {
                                     match interp.array_define_own_property(o.id as usize, &key, desc) {
                                         Ok(true) => {}
@@ -4216,6 +4217,23 @@ impl Interpreter {
                                             return Completion::Throw(interp.create_type_error(
                                                 "Cannot define property, object is not extensible or property is non-configurable",
                                             ));
+                                        }
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                } else if is_ta {
+                                    match interp.typed_array_define_own_property(o.id, &key, &desc) {
+                                        Ok(Some(true)) => {}
+                                        Ok(Some(false)) => {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot define property, object is not extensible or property is non-configurable",
+                                            ));
+                                        }
+                                        Ok(None) => {
+                                            if !obj.borrow_mut().define_own_property(key, desc) {
+                                                return Completion::Throw(interp.create_type_error(
+                                                    "Cannot define property, object is not extensible or property is non-configurable",
+                                                ));
+                                            }
                                         }
                                         Err(e) => return Completion::Throw(e),
                                     }
@@ -6715,10 +6733,22 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
+                    let is_ta = obj.borrow().typed_array_info.is_some();
                     match interp.to_property_descriptor(&desc_val) {
                         Ok(desc) => {
-                            let result = obj.borrow_mut().define_own_property(key, desc);
-                            return Completion::Normal(JsValue::Boolean(result));
+                            if is_ta {
+                                match interp.typed_array_define_own_property(o.id, &key, &desc) {
+                                    Ok(Some(result)) => return Completion::Normal(JsValue::Boolean(result)),
+                                    Ok(None) => {
+                                        let result = obj.borrow_mut().define_own_property(key, desc);
+                                        return Completion::Normal(JsValue::Boolean(result));
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else {
+                                let result = obj.borrow_mut().define_own_property(key, desc);
+                                return Completion::Normal(JsValue::Boolean(result));
+                            }
                         }
                         Err(Some(e)) => return Completion::Throw(e),
                         Err(None) => {}
@@ -6955,20 +6985,11 @@ impl Interpreter {
                     Ok(k) => k,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let JsValue::Object(ref o) = target
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let res = {
-                        let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
-                    };
-                    if res {
-                        match interp.proxy_has_property(o.id, &key) {
-                            Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
-                            Err(e) => return Completion::Throw(e),
-                        }
+                if let JsValue::Object(ref o) = target {
+                    match interp.proxy_has_property(o.id, &key) {
+                        Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
+                        Err(e) => return Completion::Throw(e),
                     }
-                    return Completion::Normal(JsValue::Boolean(obj.borrow().has_property(&key)));
                 }
                 Completion::Normal(JsValue::Boolean(false))
             },
