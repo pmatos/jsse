@@ -3480,8 +3480,20 @@ impl Interpreter {
                             interp.create_type_error(&format!("{} is not a constructor", kind.name())),
                         );
                     }
-                    // OrdinaryCreateFromConstructor: get prototype from NewTarget
-                    let proto = match interp.get_prototype_from_new_target(&Some(type_proto_clone.clone())) {
+                    // OrdinaryCreateFromConstructor: get prototype from NewTarget's realm
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| match kind {
+                        TypedArrayKind::Int8 => realm.int8array_prototype.clone(),
+                        TypedArrayKind::Uint8 => realm.uint8array_prototype.clone(),
+                        TypedArrayKind::Uint8Clamped => realm.uint8clampedarray_prototype.clone(),
+                        TypedArrayKind::Int16 => realm.int16array_prototype.clone(),
+                        TypedArrayKind::Uint16 => realm.uint16array_prototype.clone(),
+                        TypedArrayKind::Int32 => realm.int32array_prototype.clone(),
+                        TypedArrayKind::Uint32 => realm.uint32array_prototype.clone(),
+                        TypedArrayKind::Float32 => realm.float32array_prototype.clone(),
+                        TypedArrayKind::Float64 => realm.float64array_prototype.clone(),
+                        TypedArrayKind::BigInt64 => realm.bigint64array_prototype.clone(),
+                        TypedArrayKind::BigUint64 => realm.biguint64array_prototype.clone(),
+                    }) {
                         Ok(p) => p.unwrap_or_else(|| type_proto_clone.clone()),
                         Err(e) => return Completion::Throw(e),
                     };
@@ -3496,12 +3508,6 @@ impl Interpreter {
                                 let src_ref = src_obj.borrow();
                                 // Case: new XArray(arraybuffer, byteOffset?, length?)
                                 if let Some(ref ab_data) = src_ref.arraybuffer_data {
-                                    if let Some(ref det) = src_ref.arraybuffer_detached
-                                        && det.get() {
-                                            return Completion::Throw(interp.create_type_error(
-                                                "Cannot construct TypedArray from detached ArrayBuffer"
-                                            ));
-                                        }
                                     let buf_rc = ab_data.clone();
                                     let detached = src_ref.arraybuffer_detached.clone()
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
@@ -3516,6 +3522,12 @@ impl Interpreter {
                                         };
                                         if let JsValue::Number(n) = offset_val { n as usize } else { 0 }
                                     } else { 0 };
+                                    // §22.2.4.5 step 9: check detach after byteOffset ToIndex
+                                    if detached.get() {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Cannot construct TypedArray from detached ArrayBuffer"
+                                        ));
+                                    }
                                     if byte_offset % bpe != 0 {
                                         return Completion::Throw(interp.create_error("RangeError",
                                             "start offset of typed array should be a multiple of BYTES_PER_ELEMENT"
@@ -3529,6 +3541,12 @@ impl Interpreter {
                                             Completion::Throw(e) => return Completion::Throw(e),
                                             _ => return Completion::Normal(JsValue::Undefined),
                                         };
+                                        // §22.2.4.5: check detach after length ToIndex
+                                        if detached.get() {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot construct TypedArray from detached ArrayBuffer"
+                                            ));
+                                        }
                                         if let JsValue::Number(n) = len_val { n as usize } else { 0 }
                                     } else {
                                         if buf_len < byte_offset {

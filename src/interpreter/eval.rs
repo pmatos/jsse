@@ -2987,6 +2987,18 @@ impl Interpreter {
                         let mut proto_opt = obj.borrow().prototype.clone();
                         while let Some(proto_rc) = proto_opt {
                             let proto_id = proto_rc.borrow().id.unwrap();
+                            // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
+                            {
+                                let proto_borrow = proto_rc.borrow();
+                                if let Some(ref ta) = proto_borrow.typed_array_info {
+                                    if let Some(index) = canonical_numeric_index_string(&key) {
+                                        if !is_valid_integer_index(ta, index) {
+                                            return Completion::Normal(final_val);
+                                        }
+                                        // Valid index: fall through to data descriptor path below
+                                    }
+                                }
+                            }
                             if self.has_proxy_in_prototype_chain(proto_id) {
                                 let receiver = obj_val.clone();
                                 match self.proxy_set(proto_id, &key, final_val.clone(), &receiver) {
@@ -3591,6 +3603,19 @@ impl Interpreter {
                 let mut proto_opt = obj.borrow().prototype.clone();
                 while let Some(proto_rc) = proto_opt {
                     let proto_id = proto_rc.borrow().id.unwrap();
+                    // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
+                    {
+                        let proto_borrow = proto_rc.borrow();
+                        if let Some(ref ta) = proto_borrow.typed_array_info {
+                            if let Some(index) = canonical_numeric_index_string(key) {
+                                if !is_valid_integer_index(ta, index) {
+                                    // Not a valid integer index: TypedArray [[Set]] returns true silently
+                                    return Ok(());
+                                }
+                                // Valid index: fall through to data descriptor path below
+                            }
+                        }
+                    }
                     if self.has_proxy_in_prototype_chain(proto_id) {
                         let receiver = obj_val.clone();
                         match self.proxy_set(proto_id, key, val, &receiver) {
@@ -10736,28 +10761,45 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
-            // TypedArray [[Set]]
+            // TypedArray [[Set]] §10.4.5.5
             let is_ta = obj.borrow().typed_array_info.is_some();
             if is_ta && let Some(index) = canonical_numeric_index_string(key) {
-                let is_bigint = obj
-                    .borrow()
-                    .typed_array_info
-                    .as_ref()
-                    .map(|ta| ta.kind.is_bigint())
-                    .unwrap_or(false);
-                let num_val = if is_bigint {
-                    self.to_bigint_value(&value)?
+                let same_val = if let JsValue::Object(ref r) = *receiver { r.id == obj_id } else { false };
+                if same_val {
+                    // SameValue(O, Receiver): IntegerIndexedElementSet
+                    let is_bigint = obj
+                        .borrow()
+                        .typed_array_info
+                        .as_ref()
+                        .map(|ta| ta.kind.is_bigint())
+                        .unwrap_or(false);
+                    let num_val = if is_bigint {
+                        self.to_bigint_value(&value)?
+                    } else {
+                        JsValue::Number(self.to_number_value(&value)?)
+                    };
+                    let obj_ref = obj.borrow();
+                    let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                    if is_valid_integer_index(ta, index) {
+                        let ta_clone = ta.clone();
+                        drop(obj_ref);
+                        typed_array_set_index(&ta_clone, index as usize, &num_val);
+                    }
+                    return Ok(true);
                 } else {
-                    JsValue::Number(self.to_number_value(&value)?)
-                };
-                let obj_ref = obj.borrow();
-                let ta = obj_ref.typed_array_info.as_ref().unwrap();
-                if is_valid_integer_index(ta, index) {
-                    let ta_clone = ta.clone();
-                    drop(obj_ref);
-                    typed_array_set_index(&ta_clone, index as usize, &num_val);
+                    // Different receiver: if invalid index return true without coercing
+                    let valid = {
+                        let obj_ref = obj.borrow();
+                        let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                        is_valid_integer_index(ta, index)
+                    };
+                    if !valid {
+                        return Ok(true);
+                    }
+                    // Valid index, different receiver: fall through to OrdinarySet below
+                    // OrdinarySet will find writable data descriptor from TypedArray [[GetOwnProperty]],
+                    // then CreateDataProperty(receiver, P, V)
                 }
-                return Ok(true);
             }
             // OrdinarySetWithOwnDescriptor
             let own_desc = obj.borrow().get_own_property(key);

@@ -6683,8 +6683,12 @@ impl Interpreter {
                     pattern_str.clone()
                 };
 
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| realm.regexp_prototype.clone()) {
+                    Ok(p) => p,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let mut obj = JsObjectData::new();
-                obj.prototype = Some(regexp_proto_rc.clone());
+                obj.prototype = proto.or(Some(regexp_proto_rc.clone()));
                 obj.class_name = "RegExp".to_string();
                 // Store internal slots as non-enumerable hidden properties
                 obj.insert_property(

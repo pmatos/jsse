@@ -1131,6 +1131,21 @@ impl Interpreter {
                         }
                     }
                 };
+                if interp.new_target.is_some() {
+                    if let JsValue::Object(o) = this
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        let proto = match interp.get_prototype_from_new_target_realm(
+                            |realm| realm.string_prototype.clone()
+                        ) {
+                            Ok(p) => p,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if let Some(proto_rc) = proto {
+                            obj.borrow_mut().prototype = Some(proto_rc);
+                        }
+                    }
+                }
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -7196,15 +7211,137 @@ impl Interpreter {
                 {
                     return Completion::Normal(JsValue::Boolean(false));
                 }
+                // TypedArray [[Set]] exotic — §10.4.5.5
+                if let JsValue::Object(ref o) = target {
+                    let ta_info_opt = interp.get_object(o.id)
+                        .and_then(|obj| obj.borrow().typed_array_info.clone());
+                    if let Some(ta_info) = ta_info_opt {
+                        if let Some(index) = canonical_numeric_index_string(&key) {
+                            let same = if let JsValue::Object(ref r) = receiver {
+                                r.id == o.id
+                            } else {
+                                false
+                            };
+                            if same {
+                                let is_bigint = ta_info.kind.is_bigint();
+                                let num_val = if is_bigint {
+                                    match interp.to_bigint_value(&value) {
+                                        Ok(v) => v,
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                } else {
+                                    JsValue::Number(match interp.to_number_value(&value) {
+                                        Ok(n) => n,
+                                        Err(e) => return Completion::Throw(e),
+                                    })
+                                };
+                                if is_valid_integer_index(&ta_info, index) {
+                                    typed_array_set_index(&ta_info, index as usize, &num_val);
+                                }
+                                return Completion::Normal(JsValue::Boolean(true));
+                            }
+                            // Not same: if index is out of bounds in target, silently succeed
+                            if !is_valid_integer_index(&ta_info, index) {
+                                return Completion::Normal(JsValue::Boolean(true));
+                            }
+                            // Index is in bounds in target: OrdinarySet to receiver
+                            if let JsValue::Object(ref r) = receiver {
+                                let recv_ta_opt = interp.get_object(r.id)
+                                    .and_then(|obj| obj.borrow().typed_array_info.clone());
+                                if let Some(recv_ta) = recv_ta_opt {
+                                    // Receiver is TypedArray: IntegerIndexedElementSet
+                                    if !is_valid_integer_index(&recv_ta, index) {
+                                        return Completion::Normal(JsValue::Boolean(false));
+                                    }
+                                    let is_bigint = recv_ta.kind.is_bigint();
+                                    let num_val = if is_bigint {
+                                        match interp.to_bigint_value(&value) {
+                                            Ok(v) => v,
+                                            Err(e) => return Completion::Throw(e),
+                                        }
+                                    } else {
+                                        JsValue::Number(match interp.to_number_value(&value) {
+                                            Ok(n) => n,
+                                            Err(e) => return Completion::Throw(e),
+                                        })
+                                    };
+                                    typed_array_set_index(&recv_ta, index as usize, &num_val);
+                                    return Completion::Normal(JsValue::Boolean(true));
+                                } else if let Some(recv_obj) = interp.get_object(r.id) {
+                                    // Non-TypedArray receiver: create plain property, no coercion
+                                    let existing = recv_obj.borrow().get_own_property(&key);
+                                    if let Some(ref ed) = existing {
+                                        if ed.get.is_some() || ed.set.is_some() {
+                                            return Completion::Normal(JsValue::Boolean(false));
+                                        }
+                                        if ed.writable == Some(false) {
+                                            return Completion::Normal(JsValue::Boolean(false));
+                                        }
+                                        let update_desc = PropertyDescriptor {
+                                            value: Some(value),
+                                            writable: None,
+                                            enumerable: None,
+                                            configurable: None,
+                                            get: None,
+                                            set: None,
+                                        };
+                                        recv_obj.borrow_mut().define_own_property(key, update_desc);
+                                    } else {
+                                        let success = recv_obj.borrow_mut().set_property_value(&key, value);
+                                        return Completion::Normal(JsValue::Boolean(success));
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(true));
+                                }
+                            }
+                            return Completion::Normal(JsValue::Boolean(false));
+                        }
+                    }
+                }
                 // OrdinarySet: find ownDesc on target, walking prototype chain
                 let mut own_desc: Option<PropertyDescriptor> = None;
                 if let JsValue::Object(ref o) = target {
                     let mut cur_id = Some(o.id);
-                    while let Some(cid) = cur_id {
+                    'proto_walk: while let Some(cid) = cur_id {
                         if let Some(cur_obj) = interp.get_object(cid) {
+                            // TypedArray [[Set]] §10.4.5.5 via prototype chain
+                            {
+                                let borrow = cur_obj.borrow();
+                                if let Some(ref ta) = borrow.typed_array_info {
+                                    if let Some(index) = canonical_numeric_index_string(&key) {
+                                        let same = if let JsValue::Object(ref r) = receiver {
+                                            r.id == cid
+                                        } else {
+                                            false
+                                        };
+                                        if same {
+                                            let is_bigint = ta.kind.is_bigint();
+                                            let ta_clone = ta.clone();
+                                            drop(borrow);
+                                            let num_val = if is_bigint {
+                                                match interp.to_bigint_value(&value) {
+                                                    Ok(v) => v,
+                                                    Err(e) => return Completion::Throw(e),
+                                                }
+                                            } else {
+                                                JsValue::Number(match interp.to_number_value(&value) {
+                                                    Ok(n) => n,
+                                                    Err(e) => return Completion::Throw(e),
+                                                })
+                                            };
+                                            if is_valid_integer_index(&ta_clone, index) {
+                                                typed_array_set_index(&ta_clone, index as usize, &num_val);
+                                            }
+                                            return Completion::Normal(JsValue::Boolean(true));
+                                        } else if !is_valid_integer_index(ta, index) {
+                                            return Completion::Normal(JsValue::Boolean(true));
+                                        }
+                                        // Valid index, not same: fall through to get_own_property
+                                    }
+                                }
+                            }
                             if let Some(d) = cur_obj.borrow().get_own_property(&key) {
                                 own_desc = Some(d);
-                                break;
+                                break 'proto_walk;
                             }
                             cur_id = cur_obj
                                 .borrow()
