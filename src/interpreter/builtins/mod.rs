@@ -406,6 +406,29 @@ impl Interpreter {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
+                    let msg_str = if !matches!(msg_raw, JsValue::Undefined) {
+                        match interp.to_string_value(&msg_raw) {
+                            Ok(s) => Some(JsValue::String(JsString::from_str(&s))),
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        None
+                    };
+                    // §20.5.8.1 InstallErrorCause — use proxy-aware HasProperty
+                    let cause_val = if let JsValue::Object(opts) = &options {
+                        match interp.proxy_has_property(opts.id, "cause") {
+                            Ok(true) => {
+                                match interp.get_object_property(opts.id, "cause", &options) {
+                                    Completion::Normal(v) => Some(v),
+                                    c => return c,
+                                }
+                            }
+                            Ok(false) => None,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        None
+                    };
 
                     macro_rules! init_error {
                         ($o:expr) => {
@@ -413,26 +436,11 @@ impl Interpreter {
                             if let Some(p) = &proto {
                                 $o.prototype = Some(p.clone());
                             }
-                            if !matches!(msg_raw, JsValue::Undefined) {
-                                let msg_str = match interp.to_string_value(&msg_raw) {
-                                    Ok(s) => JsValue::String(JsString::from_str(&s)),
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                $o.insert_builtin("message".to_string(), msg_str);
+                            if let Some(ref ms) = msg_str {
+                                $o.insert_builtin("message".to_string(), ms.clone());
                             }
-                            if let JsValue::Object(opts) = &options {
-                                if let Some(opts_obj) = interp.get_object(opts.id) {
-                                    if opts_obj.borrow().has_property("cause") {
-                                        let cause =
-                                            interp.get_object_property(opts.id, "cause", &options);
-                                        match cause {
-                                            Completion::Normal(v) => {
-                                                $o.insert_builtin("cause".to_string(), v);
-                                            }
-                                            c => return c,
-                                        }
-                                    }
-                                }
+                            if let Some(ref cv) = cause_val {
+                                $o.insert_builtin("cause".to_string(), cv.clone());
                             }
                         };
                     }
@@ -669,30 +677,39 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
+                    let msg_str = if !matches!(msg_raw, JsValue::Undefined) {
+                        match interp.to_string_value(&msg_raw) {
+                            Ok(s) => Some(JsValue::String(JsString::from_str(&s))),
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        None
+                    };
+                    // §20.5.8.1 InstallErrorCause — use proxy-aware HasProperty
+                    let cause_val = if let JsValue::Object(opts) = &options {
+                        match interp.proxy_has_property(opts.id, "cause") {
+                            Ok(true) => {
+                                match interp.get_object_property(opts.id, "cause", &options) {
+                                    Completion::Normal(v) => Some(v),
+                                    c => return c,
+                                }
+                            }
+                            Ok(false) => None,
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        None
+                    };
+
                     macro_rules! init_native_error {
                         ($o:expr) => {
                             $o.class_name = error_name_clone.clone();
                             $o.prototype = Some(proto.clone());
-                            if !matches!(msg_raw, JsValue::Undefined) {
-                                let msg_str = match interp.to_string_value(&msg_raw) {
-                                    Ok(s) => JsValue::String(JsString::from_str(&s)),
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                $o.insert_builtin("message".to_string(), msg_str);
+                            if let Some(ref ms) = msg_str {
+                                $o.insert_builtin("message".to_string(), ms.clone());
                             }
-                            if let JsValue::Object(opts) = &options {
-                                if let Some(opts_obj) = interp.get_object(opts.id) {
-                                    if opts_obj.borrow().has_property("cause") {
-                                        let cause =
-                                            interp.get_object_property(opts.id, "cause", &options);
-                                        match cause {
-                                            Completion::Normal(v) => {
-                                                $o.insert_builtin("cause".to_string(), v);
-                                            }
-                                            c => return c,
-                                        }
-                                    }
-                                }
+                            if let Some(ref cv) = cause_val {
+                                $o.insert_builtin("cause".to_string(), cv.clone());
                             }
                         };
                     }
@@ -871,31 +888,40 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
 
+                        let msg_str = if !matches!(msg_raw, JsValue::Undefined) {
+                            match interp.to_string_value(&msg_raw) {
+                                Ok(s) => Some(JsValue::String(JsString::from_str(&s))),
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else {
+                            None
+                        };
+                        // §20.5.8.1 InstallErrorCause — use proxy-aware HasProperty
+                        let cause_val = if let JsValue::Object(opts) = &options {
+                            match interp.proxy_has_property(opts.id, "cause") {
+                                Ok(true) => {
+                                    match interp.get_object_property(opts.id, "cause", &options) {
+                                        Completion::Normal(v) => Some(v),
+                                        c => return c,
+                                    }
+                                }
+                                Ok(false) => None,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else {
+                            None
+                        };
+
                         macro_rules! init_agg_error {
                             ($o:expr) => {
                                 $o.class_name = "AggregateError".to_string();
                                 $o.prototype = Some(proto.clone());
                                 $o.insert_builtin("errors".to_string(), errors_arr.clone());
-                                if !matches!(msg_raw, JsValue::Undefined) {
-                                    let msg_str = match interp.to_string_value(&msg_raw) {
-                                        Ok(s) => JsValue::String(JsString::from_str(&s)),
-                                        Err(e) => return Completion::Throw(e),
-                                    };
-                                    $o.insert_builtin("message".to_string(), msg_str);
+                                if let Some(ref ms) = msg_str {
+                                    $o.insert_builtin("message".to_string(), ms.clone());
                                 }
-                                if let JsValue::Object(opts) = &options {
-                                    if let Some(opts_obj) = interp.get_object(opts.id) {
-                                        if opts_obj.borrow().has_property("cause") {
-                                            let cause = interp
-                                                .get_object_property(opts.id, "cause", &options);
-                                            match cause {
-                                                Completion::Normal(v) => {
-                                                    $o.insert_builtin("cause".to_string(), v);
-                                                }
-                                                c => return c,
-                                            }
-                                        }
-                                    }
+                                if let Some(ref cv) = cause_val {
+                                    $o.insert_builtin("cause".to_string(), cv.clone());
                                 }
                             };
                         }
@@ -1636,7 +1662,10 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("isNaN".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let n = interp.to_number_coerce(&val);
+                let n = match interp.to_number_value(&val) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 Completion::Normal(JsValue::Boolean(n.is_nan()))
             }),
         );
@@ -1646,7 +1675,10 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("isFinite".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let n = interp.to_number_coerce(&val);
+                let n = match interp.to_number_value(&val) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
                 Completion::Normal(JsValue::Boolean(n.is_finite()))
             }),
         );
