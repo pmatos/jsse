@@ -330,10 +330,16 @@ impl Interpreter {
             Expression::Update(op, prefix, arg) => self.eval_update(*op, *prefix, arg, env),
             Expression::Assign(op, left, right) => self.eval_assign(*op, left, right, env),
             Expression::Conditional(test, cons, alt) => {
+                let saved_tail = self.in_tail_position;
+                self.in_tail_position = false;
                 let test_val = match self.eval_expr(test, env) {
                     Completion::Normal(v) => v,
-                    other => return other,
+                    other => {
+                        self.in_tail_position = saved_tail;
+                        return other;
+                    }
                 };
+                self.in_tail_position = saved_tail;
                 if self.to_boolean_val(&test_val) {
                     self.eval_expr(cons, env)
                 } else {
@@ -705,12 +711,15 @@ impl Interpreter {
                 }
             },
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                let saved_tail = self.in_tail_position;
+                let last_idx = exprs.len().saturating_sub(1);
                 let mut result = JsValue::Undefined;
-                for e in exprs {
-                    result = match self.eval_expr(e, env) {
-                        Completion::Normal(v) => v,
+                for (i, e) in exprs.iter().enumerate() {
+                    self.in_tail_position = if i == last_idx { saved_tail } else { false };
+                    match self.eval_expr(e, env) {
+                        Completion::Normal(v) => result = v,
                         other => return other,
-                    };
+                    }
                 }
                 Completion::Normal(result)
             }
@@ -1128,6 +1137,8 @@ impl Interpreter {
                 self.eval_optional_chain_tail_with_base_this(&base_val, &base_this, prop, env)
             }
             Expression::TaggedTemplate(tag_expr, tmpl) => {
+                let saved_tail = self.in_tail_position;
+                self.in_tail_position = false;
                 let (func_val, this_val) = match tag_expr.as_ref() {
                     Expression::Member(obj_expr, prop) => {
                         let obj_val = match self.eval_expr(obj_expr, env) {
@@ -1181,6 +1192,13 @@ impl Interpreter {
                     }
                 }
 
+                if saved_tail {
+                    return Completion::TailCall {
+                        func: func_val,
+                        this: this_val,
+                        args: call_args,
+                    };
+                }
                 self.call_function(&func_val, &this_val, &call_args)
             }
         }
@@ -2275,10 +2293,16 @@ impl Interpreter {
         right: &Expression,
         env: &EnvRef,
     ) -> Completion {
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
         let lval = match self.eval_expr(left, env) {
             Completion::Normal(v) => v,
-            other => return other,
+            other => {
+                self.in_tail_position = saved_tail;
+                return other;
+            }
         };
+        self.in_tail_position = saved_tail;
         match op {
             LogicalOp::And => {
                 if !self.to_boolean_val(&lval) {
@@ -4321,6 +4345,9 @@ impl Interpreter {
     }
 
     fn eval_call(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
+
         // Handle super() calls - call parent constructor with current this
         if matches!(callee, Expression::Super) {
             let super_ctor = env.borrow().get("__super__").unwrap_or(JsValue::Undefined);
@@ -4441,6 +4468,13 @@ impl Interpreter {
                                         other => return other,
                                     },
                                 }
+                            }
+                            if saved_tail {
+                                return Completion::TailCall {
+                                    func: func_val,
+                                    this: obj_val,
+                                    args: evaluated_args,
+                                };
                             }
                             return self.call_function(&func_val, &obj_val, &evaluated_args);
                         }
@@ -4602,6 +4636,13 @@ impl Interpreter {
 
         self.gc_unroot_value(&this_val);
         self.gc_unroot_value(&func_val);
+        if saved_tail && !self.is_builtin_eval(&func_val) {
+            return Completion::TailCall {
+                func: func_val,
+                this: this_val,
+                args: evaluated_args,
+            };
+        }
         self.call_function(&func_val, &this_val, &evaluated_args)
     }
 
@@ -7943,6 +7984,27 @@ impl Interpreter {
     pub(crate) fn call_function(
         &mut self,
         func_val: &JsValue,
+        this_val: &JsValue,
+        args: &[JsValue],
+    ) -> Completion {
+        let mut result = self.call_function_inner(func_val, this_val, args);
+        loop {
+            match result {
+                Completion::TailCall {
+                    func,
+                    this,
+                    args: tc_args,
+                } => {
+                    result = self.call_function_inner(&func, &this, &tc_args);
+                }
+                other => return other,
+            }
+        }
+    }
+
+    fn call_function_inner(
+        &mut self,
+        func_val: &JsValue,
         _this_val: &JsValue,
         args: &[JsValue],
     ) -> Completion {
@@ -8399,6 +8461,7 @@ impl Interpreter {
                         };
                         exec_env.borrow_mut().strict = is_strict;
                         self.call_stack_envs.push(exec_env.clone());
+                        self.in_tail_position = false;
                         let result = self.exec_statements(&body, &exec_env);
                         self.call_stack_envs.pop();
                         let result = self.dispose_resources(&exec_env, result);
@@ -8407,6 +8470,10 @@ impl Interpreter {
                             Completion::Return(v) => {
                                 self.last_call_had_explicit_return = true;
                                 Completion::Normal(v)
+                            }
+                            Completion::TailCall { .. } => {
+                                self.last_call_had_explicit_return = true;
+                                result
                             }
                             Completion::Normal(_) | Completion::Empty => {
                                 self.last_call_had_explicit_return = false;
@@ -13078,8 +13145,15 @@ impl Interpreter {
         }
 
         func_env.borrow_mut().strict = is_strict;
+        self.in_tail_position = false;
         let result = self.exec_statements(body, &func_env);
         let result = self.dispose_resources(&func_env, result);
+        let result = match result {
+            Completion::TailCall { func, this, args } => {
+                self.call_function(&func, &this, &args)
+            }
+            other => other,
+        };
         match result {
             Completion::Return(v) | Completion::Normal(v) => {
                 let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);

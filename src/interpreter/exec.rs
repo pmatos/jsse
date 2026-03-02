@@ -747,8 +747,17 @@ impl Interpreter {
             Statement::ForOf(fo) => self.exec_for_of(fo, env, None),
             Statement::Return(expr) => {
                 let val = if let Some(e) = expr {
-                    match self.eval_expr(e, env) {
+                    let can_tco = env.borrow().strict
+                        && self.generator_context.is_none()
+                        && Self::expr_may_contain_tail_call(e);
+                    if can_tco {
+                        self.in_tail_position = true;
+                    }
+                    let result = self.eval_expr(e, env);
+                    self.in_tail_position = false;
+                    match result {
                         Completion::Normal(v) => v,
+                        Completion::TailCall { .. } => return result,
                         other => return other,
                     }
                 } else {
@@ -2041,6 +2050,21 @@ impl Interpreter {
             }
         } else {
             Completion::Throw(self.create_type_error(&format!("{name} is not defined")))
+        }
+    }
+
+    fn expr_may_contain_tail_call(expr: &Expression) -> bool {
+        match expr {
+            Expression::Call(_, _) | Expression::TaggedTemplate(_, _) => true,
+            Expression::Conditional(_, cons, alt) => {
+                Self::expr_may_contain_tail_call(cons)
+                    || Self::expr_may_contain_tail_call(alt)
+            }
+            Expression::Logical(_, _, right) => Self::expr_may_contain_tail_call(right),
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                exprs.last().map_or(false, |e| Self::expr_may_contain_tail_call(e))
+            }
+            _ => false,
         }
     }
 }

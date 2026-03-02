@@ -55,6 +55,7 @@ pub struct Interpreter {
     pub(crate) regexp_legacy_parens: [String; 9],
     pub(crate) regexp_constructor_id: Option<u64>,
     pub(crate) function_realm_map: HashMap<u64, usize>,
+    pub(crate) in_tail_position: bool,
 }
 
 pub struct LoadedModule {
@@ -126,6 +127,7 @@ impl Interpreter {
             regexp_legacy_parens: Default::default(),
             regexp_constructor_id: None,
             function_realm_map: HashMap::new(),
+            in_tail_position: false,
         };
         interp.setup_globals();
         interp

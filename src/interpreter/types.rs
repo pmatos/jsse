@@ -14,6 +14,11 @@ pub enum Completion {
     Break(Option<String>, Option<JsValue>),
     Continue(Option<String>, Option<JsValue>),
     Yield(JsValue),
+    TailCall {
+        func: JsValue,
+        this: JsValue,
+        args: Vec<JsValue>,
+    },
     Empty,
 }
 
