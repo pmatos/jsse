@@ -1491,22 +1491,10 @@ impl Interpreter {
                     return Completion::Normal(JsValue::Number(f64::NAN));
                 }
                 // Handle Infinity/-Infinity
-                if let Some(rest) = s.strip_prefix("Infinity")
-                    && (rest.is_empty()
-                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.'))
-                {
+                if s.starts_with("Infinity") || s.starts_with("+Infinity") {
                     return Completion::Normal(JsValue::Number(f64::INFINITY));
                 }
-                if let Some(rest) = s.strip_prefix("+Infinity")
-                    && (rest.is_empty()
-                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.'))
-                {
-                    return Completion::Normal(JsValue::Number(f64::INFINITY));
-                }
-                if let Some(rest) = s.strip_prefix("-Infinity")
-                    && (rest.is_empty()
-                        || !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '.'))
-                {
+                if s.starts_with("-Infinity") {
                     return Completion::Normal(JsValue::Number(f64::NEG_INFINITY));
                 }
                 // Find longest valid float prefix
@@ -1598,9 +1586,9 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("encodeURI".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let code_units = match &val {
-                    JsValue::String(s) => s.code_units.clone(),
-                    other => JsString::from_str(&to_js_string(other)).code_units,
+                let code_units = match interp.to_js_string(&val) {
+                    Ok(s) => s.code_units,
+                    Err(e) => return Completion::Throw(e),
                 };
                 match encode_uri_string(&code_units, true) {
                     Ok(encoded) => {
@@ -1619,9 +1607,9 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let code_units = match &val {
-                        JsValue::String(s) => s.code_units.clone(),
-                        other => JsString::from_str(&to_js_string(other)).code_units,
+                    let code_units = match interp.to_js_string(&val) {
+                        Ok(s) => s.code_units,
+                        Err(e) => return Completion::Throw(e),
                     };
                     match encode_uri_string(&code_units, false) {
                         Ok(encoded) => {
@@ -1638,9 +1626,9 @@ impl Interpreter {
             BindingKind::Var,
             JsFunction::native("decodeURI".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let code_units = match &val {
-                    JsValue::String(s) => s.code_units.clone(),
-                    other => JsString::from_str(&to_js_string(other)).code_units,
+                let code_units = match interp.to_js_string(&val) {
+                    Ok(s) => s.code_units,
+                    Err(e) => return Completion::Throw(e),
                 };
                 match decode_uri_string(&code_units, true) {
                     Ok(decoded) => Completion::Normal(JsValue::String(JsString {
@@ -1659,9 +1647,9 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let code_units = match &val {
-                        JsValue::String(s) => s.code_units.clone(),
-                        other => JsString::from_str(&to_js_string(other)).code_units,
+                    let code_units = match interp.to_js_string(&val) {
+                        Ok(s) => s.code_units,
+                        Err(e) => return Completion::Throw(e),
                     };
                     match decode_uri_string(&code_units, false) {
                         Ok(decoded) => Completion::Normal(JsValue::String(JsString {
