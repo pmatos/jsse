@@ -1304,6 +1304,7 @@ pub struct JsObjectData {
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
     pub(crate) temporal_data: Option<TemporalData>,
     pub(crate) intl_data: Option<IntlData>,
+    pub(crate) generator_realm_id: Option<usize>,
     pub(crate) is_htmldda: bool,
     pub(crate) is_immutable_prototype: bool,
 }
@@ -1364,6 +1365,7 @@ impl JsObjectData {
             module_namespace: None,
             temporal_data: None,
             intl_data: None,
+            generator_realm_id: None,
             is_htmldda: false,
             is_immutable_prototype: false,
         }

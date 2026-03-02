@@ -4711,12 +4711,18 @@ impl Interpreter {
             is_async: false,
         });
 
+        let caller_realm = self.current_realm_id;
+        if let Some(gen_realm) = obj_rc.borrow().generator_realm_id {
+            self.current_realm_id = gen_realm;
+        }
+
         func_env.borrow_mut().strict = is_strict;
         self.call_stack_envs.push(func_env.clone());
         let result = self.exec_statements(&body, &func_env);
         self.call_stack_envs.pop();
         let _ctx = self.generator_context.take();
 
+        self.current_realm_id = caller_realm;
         match result {
             Completion::Yield(v) => {
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
@@ -4828,6 +4834,24 @@ impl Interpreter {
     }
 
     pub(crate) fn generator_next_state_machine(
+        &mut self,
+        this: &JsValue,
+        sent_value: JsValue,
+    ) -> Completion {
+        let caller_realm = self.current_realm_id;
+        if let JsValue::Object(o) = this {
+            if let Some(obj_rc) = self.get_object(o.id) {
+                if let Some(realm_id) = obj_rc.borrow().generator_realm_id {
+                    self.current_realm_id = realm_id;
+                }
+            }
+        }
+        let result = self.generator_next_state_machine_impl(this, sent_value);
+        self.current_realm_id = caller_realm;
+        result
+    }
+
+    fn generator_next_state_machine_impl(
         &mut self,
         this: &JsValue,
         sent_value: JsValue,
@@ -6113,6 +6137,24 @@ impl Interpreter {
         this: &JsValue,
         sent_value: JsValue,
     ) -> Completion {
+        let caller_realm = self.current_realm_id;
+        if let JsValue::Object(o) = this {
+            if let Some(obj_rc) = self.get_object(o.id) {
+                if let Some(realm_id) = obj_rc.borrow().generator_realm_id {
+                    self.current_realm_id = realm_id;
+                }
+            }
+        }
+        let result = self.async_generator_next_state_machine_impl(this, sent_value);
+        self.current_realm_id = caller_realm;
+        result
+    }
+
+    fn async_generator_next_state_machine_impl(
+        &mut self,
+        this: &JsValue,
+        sent_value: JsValue,
+    ) -> Completion {
         use crate::interpreter::generator_transform::StateTerminator;
 
         let JsValue::Object(o) = this else {
@@ -7281,12 +7323,18 @@ impl Interpreter {
             is_async: true,
         });
 
+        let caller_realm = self.current_realm_id;
+        if let Some(gen_realm) = obj_rc.borrow().generator_realm_id {
+            self.current_realm_id = gen_realm;
+        }
+
         func_env.borrow_mut().strict = is_strict;
         self.call_stack_envs.push(func_env.clone());
         let result = self.exec_statements(&body, &func_env);
         self.call_stack_envs.pop();
         let _ctx = self.generator_context.take();
 
+        self.current_realm_id = caller_realm;
         match result {
             Completion::Yield(v) => {
                 let awaited = match self.await_value(&v) {
@@ -8086,8 +8134,14 @@ impl Interpreter {
                         is_async,
                         ..
                     } => {
+                        // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
+                        let caller_realm = self.current_realm_id;
+                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                            self.current_realm_id = fn_realm;
+                        }
+
                         if is_async && !is_generator {
-                            return self.call_async_function(
+                            let result = self.call_async_function(
                                 &params,
                                 &body,
                                 closure.clone(),
@@ -8097,6 +8151,8 @@ impl Interpreter {
                                 args,
                                 func_val,
                             );
+                            self.current_realm_id = caller_realm;
+                            return result;
                         }
                         if is_async && is_generator {
                             let gen_obj = self.create_object();
@@ -8152,6 +8208,7 @@ impl Interpreter {
                                         BindingKind::Var,
                                         &func_env,
                                     ) {
+                                        self.current_realm_id = caller_realm;
                                         return Completion::Throw(e);
                                     }
                                     break;
@@ -8160,6 +8217,7 @@ impl Interpreter {
                                 if let Err(e) =
                                     self.bind_pattern(param, val, BindingKind::Var, &func_env)
                                 {
+                                    self.current_realm_id = caller_realm;
                                     return Completion::Throw(e);
                                 }
                             }
@@ -8210,6 +8268,10 @@ impl Interpreter {
                                     pending_return: None,
                                 });
                             let gen_id = gen_obj.borrow().id.unwrap();
+                            if let Some(obj_rc) = self.get_object(gen_id) {
+                                obj_rc.borrow_mut().generator_realm_id = Some(self.current_realm_id);
+                            }
+                            self.current_realm_id = caller_realm;
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {
                                 id: gen_id,
                             }));
@@ -8268,6 +8330,7 @@ impl Interpreter {
                                         BindingKind::Var,
                                         &func_env,
                                     ) {
+                                        self.current_realm_id = caller_realm;
                                         return Completion::Throw(e);
                                     }
                                     break;
@@ -8276,6 +8339,7 @@ impl Interpreter {
                                 if let Err(e) =
                                     self.bind_pattern(param, val, BindingKind::Var, &func_env)
                                 {
+                                    self.current_realm_id = caller_realm;
                                     return Completion::Throw(e);
                                 }
                             }
@@ -8326,6 +8390,10 @@ impl Interpreter {
                                     pending_return: None,
                                 });
                             let gen_id = gen_obj.borrow().id.unwrap();
+                            if let Some(obj_rc) = self.get_object(gen_id) {
+                                obj_rc.borrow_mut().generator_realm_id = Some(self.current_realm_id);
+                            }
+                            self.current_realm_id = caller_realm;
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {
                                 id: gen_id,
                             }));
@@ -8426,6 +8494,7 @@ impl Interpreter {
                                 if let Err(e) =
                                     self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env)
                                 {
+                                    self.current_realm_id = caller_realm;
                                     return Completion::Throw(e);
                                 }
                                 break;
@@ -8434,6 +8503,7 @@ impl Interpreter {
                             if let Err(e) =
                                 self.bind_pattern(param, val, BindingKind::Var, &func_env)
                             {
+                                self.current_realm_id = caller_realm;
                                 return Completion::Throw(e);
                             }
                         }
@@ -8466,6 +8536,7 @@ impl Interpreter {
                         self.call_stack_envs.pop();
                         let result = self.dispose_resources(&exec_env, result);
                         self.last_call_this_value = func_env.borrow().get("this");
+                        self.current_realm_id = caller_realm;
                         match result {
                             Completion::Return(v) => {
                                 self.last_call_had_explicit_return = true;
