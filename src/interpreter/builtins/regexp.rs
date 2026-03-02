@@ -1216,6 +1216,297 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     translate_js_pattern_ex(source, flags).map(|r| r.pattern)
 }
 
+/// Find the closing ')' matching the '(' at position `open` in `chars`.
+/// Returns None if not found.
+fn find_matching_close_paren(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut i = open;
+    let len = chars.len();
+    let mut in_cc = false;
+    while i < len {
+        match chars[i] {
+            '\\' if i + 1 < len => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc => depth += 1,
+            ')' if !in_cc => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Check if `body` (JS pattern fragment) contains a `\k<name>` reference to any
+/// name in `names`. Used to decide if it's safe to strip named groups from a copy.
+fn body_has_named_backref_to(chars: &[char], names: &std::collections::HashSet<String>) -> bool {
+    let len = chars.len();
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < len {
+        match chars[i] {
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '\\' if !in_cc && i + 1 < len && chars[i + 1] == 'k' => {
+                if i + 2 < len && chars[i + 2] == '<' {
+                    let start = i + 3;
+                    if let Some(end_off) = chars[start..].iter().position(|&c| c == '>') {
+                        let name: String = chars[start..start + end_off].iter().collect();
+                        if names.contains(&name) {
+                            return true;
+                        }
+                    }
+                }
+                i += 2;
+                continue;
+            }
+            '\\' if i + 1 < len => {
+                i += 2;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Check if `body` contains any named capturing group whose name is in `names`.
+fn body_has_dup_named_group(chars: &[char], names: &std::collections::HashSet<String>) -> bool {
+    let len = chars.len();
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < len {
+        match chars[i] {
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '\\' if i + 1 < len => {
+                i += 2;
+                continue;
+            }
+            '(' if !in_cc
+                && i + 2 < len
+                && chars[i + 1] == '?'
+                && chars[i + 2] == '<'
+                && i + 3 < len
+                && chars[i + 3] != '='
+                && chars[i + 3] != '!' =>
+            {
+                let name_start = i + 3;
+                if let Some(end_off) = chars[name_start..].iter().position(|&c| c == '>') {
+                    let name: String = chars[name_start..name_start + end_off].iter().collect();
+                    if names.contains(&name) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Strip named groups from a JS pattern fragment: replace `(?<name>` with `(?:` and
+/// `(?<name>` (capture) with non-capturing `(?:`. This strips ALL capturing group names
+/// AND converts plain capturing groups `(` to non-capturing `(?:` too, so that the
+/// group count in the source is preserved only in the last copy.
+///
+/// Actually: we only strip NAMED groups (replace `(?<name>` with `(`). Plain capturing
+/// groups stay as capturing so the group numbering is maintained by the translator.
+fn anonymize_named_groups(chars: &[char]) -> String {
+    let len = chars.len();
+    let mut result = String::new();
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < len {
+        match chars[i] {
+            '[' if !in_cc => {
+                in_cc = true;
+                result.push('[');
+            }
+            ']' if in_cc => {
+                in_cc = false;
+                result.push(']');
+            }
+            '\\' if i + 1 < len => {
+                result.push('\\');
+                result.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            '(' if !in_cc
+                && i + 2 < len
+                && chars[i + 1] == '?'
+                && chars[i + 2] == '<'
+                && i + 3 < len
+                && chars[i + 3] != '='
+                && chars[i + 3] != '!' =>
+            {
+                // Named group: (?<name>... → (?:...
+                // Skip past the name
+                let name_start = i + 3;
+                if let Some(end_off) = chars[name_start..].iter().position(|&c| c == '>') {
+                    result.push_str("(?:");
+                    i = name_start + end_off + 1; // skip past '>'
+                    continue;
+                } else {
+                    result.push(chars[i]);
+                }
+            }
+            c => result.push(c),
+        }
+        i += 1;
+    }
+    result
+}
+
+/// Preprocess a JS regex source to expand `(?:BODY){N}` where N >= 2, BODY contains
+/// duplicate-named groups, and BODY has no internal backreferences to those names.
+/// Expands to `(?:ANON_BODY){N-1}(?:BODY)` so that stale captures from earlier
+/// iterations don't pollute the `\k<name>` semantics for the last iteration.
+fn expand_quantified_dup_groups(
+    source: &str,
+    dup_names: &std::collections::HashSet<String>,
+) -> String {
+    if dup_names.is_empty() {
+        return source.to_string();
+    }
+    let chars: Vec<char> = source.chars().collect();
+    let len = chars.len();
+    let mut result = String::new();
+    let mut i = 0;
+    let mut in_cc = false;
+
+    while i < len {
+        match chars[i] {
+            '[' if !in_cc => {
+                in_cc = true;
+                result.push('[');
+                i += 1;
+            }
+            ']' if in_cc => {
+                in_cc = false;
+                result.push(']');
+                i += 1;
+            }
+            '\\' if i + 1 < len => {
+                result.push('\\');
+                result.push(chars[i + 1]);
+                i += 2;
+            }
+            '(' if !in_cc && i + 2 < len && chars[i + 1] == '?' && chars[i + 2] == ':' => {
+                // Found (?:  — check if it's followed by {N} after matching close
+                let open = i;
+                if let Some(close) = find_matching_close_paren(&chars, open) {
+                    let body = &chars[open + 3..close]; // content between (?:  and  )
+                    // Check for {N} after ')'
+                    let after = close + 1;
+                    if after < len && chars[after] == '{' {
+                        // Parse {N} or {N,M}
+                        let mut j = after + 1;
+                        let num_start = j;
+                        while j < len && chars[j].is_ascii_digit() {
+                            j += 1;
+                        }
+                        if j > num_start && j < len {
+                            let num_str: String = chars[num_start..j].iter().collect();
+                            let n: u32 = num_str.parse().unwrap_or(0);
+                            // Only expand exact {N} quantifiers (not {N,M})
+                            if chars[j] == '}' && n >= 2 {
+                                let quant_end = j + 1;
+                                // Check optional lazy '?'
+                                let quant_end = if quant_end < len && chars[quant_end] == '?' {
+                                    quant_end + 1
+                                } else {
+                                    quant_end
+                                };
+                                // Check if body has dup-named groups and no internal backref
+                                if body_has_dup_named_group(body, dup_names)
+                                    && !body_has_named_backref_to(body, dup_names)
+                                {
+                                    // Recursively expand the body first
+                                    let body_str: String = body.iter().collect();
+                                    let expanded_body =
+                                        expand_quantified_dup_groups(&body_str, dup_names);
+                                    let expanded_body_chars: Vec<char> =
+                                        expanded_body.chars().collect();
+                                    let anon_body = anonymize_named_groups(&expanded_body_chars);
+                                    // Emit: (?:ANON_BODY){N-1}(?:BODY)
+                                    if n - 1 == 1 {
+                                        result.push_str(&format!("(?:{})", anon_body));
+                                    } else {
+                                        result.push_str(&format!("(?:{}){{{}}}", anon_body, n - 1));
+                                    }
+                                    result.push_str(&format!("(?:{})", expanded_body));
+                                    i = quant_end;
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    // Not a candidate for expansion — recurse into body
+                    let body_str: String = body.iter().collect();
+                    let expanded_body = expand_quantified_dup_groups(&body_str, dup_names);
+                    result.push_str("(?:");
+                    result.push_str(&expanded_body);
+                    result.push(')');
+                    // Copy any quantifier that follows
+                    i = close + 1;
+                    while i < len {
+                        match chars[i] {
+                            '{' => {
+                                result.push('{');
+                                i += 1;
+                                while i < len && chars[i] != '}' {
+                                    result.push(chars[i]);
+                                    i += 1;
+                                }
+                                if i < len {
+                                    result.push('}');
+                                    i += 1;
+                                }
+                                if i < len && chars[i] == '?' {
+                                    result.push('?');
+                                    i += 1;
+                                }
+                                break;
+                            }
+                            '*' | '+' | '?' => {
+                                result.push(chars[i]);
+                                i += 1;
+                                if i < len && chars[i] == '?' {
+                                    result.push('?');
+                                    i += 1;
+                                }
+                                break;
+                            }
+                            _ => break,
+                        }
+                    }
+                    continue;
+                } else {
+                    result.push(chars[i]);
+                    i += 1;
+                }
+            }
+            c => {
+                result.push(c);
+                i += 1;
+            }
+        }
+    }
+    result
+}
+
 pub(super) fn translate_js_pattern_ex(
     source: &str,
     flags: &str,
@@ -1334,6 +1625,59 @@ pub(super) fn translate_js_pattern_ex(
         .filter(|(_, count)| *count > 1)
         .map(|(name, _)| name)
         .collect();
+
+    // Preprocess: expand (?:BODY){N} quantifiers where BODY has duplicate-named
+    // groups and no internal backreferences to those names. This ensures that
+    // captures from earlier iterations don't bleed into later iterations (PCRE
+    // retains captures across quantifier iterations, but ECMAScript resets them).
+    let (chars, len, all_group_names) = if !duplicated_names.is_empty() {
+        let preprocessed = expand_quantified_dup_groups(source, &duplicated_names);
+        if preprocessed != source {
+            let new_chars: Vec<char> = preprocessed.chars().collect();
+            let new_len = new_chars.len();
+            // Re-scan group names from expanded source
+            let mut new_names: Vec<String> = Vec::new();
+            {
+                let mut j = 0;
+                let mut in_cc2 = false;
+                while j < new_len {
+                    match new_chars[j] {
+                        '[' if !in_cc2 => in_cc2 = true,
+                        ']' if in_cc2 => in_cc2 = false,
+                        '\\' if j + 1 < new_len => { j += 1; }
+                        '(' if !in_cc2
+                            && j + 2 < new_len
+                            && new_chars[j + 1] == '?'
+                            && new_chars[j + 2] == '<'
+                            && j + 3 < new_len
+                            && new_chars[j + 3] != '='
+                            && new_chars[j + 3] != '!' =>
+                        {
+                            let name_start = j + 3;
+                            let mut k = name_start;
+                            while k < new_len && new_chars[k] != '>' { k += 1; }
+                            if k < new_len {
+                                let name = decode_group_name_raw(&new_chars[name_start..k]);
+                                new_names.push(name);
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+            }
+            (new_chars, new_len, new_names)
+        } else {
+            (chars, len, all_group_names)
+        }
+    } else {
+        (chars, len, all_group_names)
+    };
+
+    // When any named groups exist, fancy_regex requires ALL backreferences to
+    // use named syntax. We auto-name unnamed capturing groups with a special
+    // prefix so we can use named backreferences throughout.
+    let has_named_groups = !all_group_names.is_empty();
     // Track how many times we've seen each duplicated name during translation
     let mut dup_seen_count: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
@@ -2135,6 +2479,16 @@ pub(super) fn translate_js_pattern_ex(
                     group_result_start.push(Some(result.len()));
                 } else {
                     group_result_start.push(None);
+                }
+                // When pattern has named groups, fancy_regex requires all backrefs
+                // to use named syntax. Auto-name this unnamed group so we can
+                // generate named backreferences to it if needed.
+                if has_named_groups {
+                    let auto_name = format!("__jsse_g{}__", groups_seen);
+                    group_num_to_name.insert(groups_seen, auto_name.clone());
+                    result.push_str(&format!("(?P<{}>", auto_name));
+                    i += 1;
+                    continue;
                 }
             } else {
                 let is_la = i + 2 < len && (chars[i + 2] == '=' || chars[i + 2] == '!');
@@ -4043,7 +4397,6 @@ fn build_regex_ex(
     let tr = translate_js_pattern_ex(source, flags)?;
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
-
     // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
     if lookbehind_needs_custom_rtl(source)
         && let Some(result) =
