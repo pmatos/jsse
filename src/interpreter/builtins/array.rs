@@ -362,7 +362,7 @@ fn array_species_create(
         return Ok(arr);
     }
     // Get constructor
-    let c = if let JsValue::Object(o) = original_array {
+    let mut c = if let JsValue::Object(o) = original_array {
         match interp.get_object_property(o.id, "constructor", original_array) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(Completion::Throw(e)),
@@ -371,6 +371,21 @@ fn array_species_create(
     } else {
         JsValue::Undefined
     };
+    // §9.4.2.3 step 5-6: If C is a constructor from a different realm and
+    // equals that realm's intrinsic %Array%, set C to undefined
+    if interp.is_constructor(&c) {
+        if let JsValue::Object(co) = &c {
+            let c_realm = interp.get_function_realm(&JsValue::Object(co.clone()));
+            if c_realm != interp.current_realm_id {
+                let realm_array = interp.realms[c_realm].global_env.borrow().get("Array");
+                if let Some(ref ra) = realm_array {
+                    if same_value(&c, ra) {
+                        c = JsValue::Undefined;
+                    }
+                }
+            }
+        }
+    }
     // If C is Object, get C[@@species]
     let c = if let JsValue::Object(co) = &c {
         let sym_key = interp.get_symbol_key("species");

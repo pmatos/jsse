@@ -488,25 +488,12 @@ impl Interpreter {
                 };
                 let buf_rc = Rc::new(RefCell::new(buf));
                 let detached = Rc::new(Cell::new(false));
-                let proto = if let Some(ref nt) = interp.new_target {
-                    if let JsValue::Object(o) = nt
-                        && let Some(nt_obj) = interp.get_object(o.id)
-                    {
-                        let proto_val = nt_obj.borrow().get_property("prototype");
-                        if let JsValue::Object(po) = &proto_val {
-                            if let Some(p) = interp.get_object(po.id) {
-                                Some(p.clone())
-                            } else {
-                                Some(ab_proto_clone.clone())
-                            }
-                        } else {
-                            Some(ab_proto_clone.clone())
-                        }
-                    } else {
-                        Some(ab_proto_clone.clone())
-                    }
-                } else {
-                    Some(ab_proto_clone.clone())
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.arraybuffer_prototype.clone()
+                }) {
+                    Ok(p) => Some(p.unwrap_or_else(|| ab_proto_clone.clone())),
+                    Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
                 {
@@ -932,25 +919,12 @@ impl Interpreter {
                 };
                 let buf = vec![0u8; len];
                 let buf_rc = Rc::new(RefCell::new(buf));
-                let proto = if let Some(ref nt) = interp.new_target {
-                    if let JsValue::Object(o) = nt
-                        && let Some(nt_obj) = interp.get_object(o.id)
-                    {
-                        let proto_val = nt_obj.borrow().get_property("prototype");
-                        if let JsValue::Object(po) = &proto_val {
-                            if let Some(p) = interp.get_object(po.id) {
-                                Some(p.clone())
-                            } else {
-                                Some(sab_proto_clone.clone())
-                            }
-                        } else {
-                            Some(sab_proto_clone.clone())
-                        }
-                    } else {
-                        Some(sab_proto_clone.clone())
-                    }
-                } else {
-                    Some(sab_proto_clone.clone())
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.shared_arraybuffer_prototype.clone()
+                }) {
+                    Ok(p) => Some(p.unwrap_or_else(|| sab_proto_clone.clone())),
+                    Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
                 {
@@ -5186,11 +5160,18 @@ impl Interpreter {
                         is_detached: detached_flag,
                         is_length_tracking,
                     };
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let dv_proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.dataview_prototype.clone()
+                    }) {
+                        Ok(p) => p.unwrap_or_else(|| dv_proto_clone.clone()),
+                        Err(e) => return Completion::Throw(e),
+                    };
                     let result = interp.create_object();
                     {
                         let mut r = result.borrow_mut();
                         r.class_name = "DataView".to_string();
-                        r.prototype = Some(dv_proto_clone.clone());
+                        r.prototype = Some(dv_proto);
                         if let JsValue::Object(ref bobj) = buf_arg {
                             r.view_buffer_object_id = Some(bobj.id);
                         }

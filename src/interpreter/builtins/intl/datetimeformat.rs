@@ -1171,11 +1171,19 @@ fn era_long(year: i32) -> &'static str {
 }
 
 fn era_short(year: i32) -> &'static str {
-    if year > 0 { "AD" } else { "BC" }
+    if year > 0 {
+        "AD"
+    } else {
+        "BC"
+    }
 }
 
 fn era_narrow(year: i32) -> &'static str {
-    if year > 0 { "A" } else { "B" }
+    if year > 0 {
+        "A"
+    } else {
+        "B"
+    }
 }
 
 fn day_period_text(hour: u32, style: &str) -> &'static str {
@@ -5031,8 +5039,14 @@ impl Interpreter {
                 }
 
                 let has_era = era.is_some();
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.intl_date_time_format_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::DateTimeFormat {
                     locale,

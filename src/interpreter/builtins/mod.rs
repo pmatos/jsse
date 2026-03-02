@@ -399,9 +399,20 @@ impl Interpreter {
                     let msg_raw = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.error_prototype.clone()
+                    }) {
+                        Ok(p) => p,
+                        Err(e) => return Completion::Throw(e),
+                    };
+
                     macro_rules! init_error {
                         ($o:expr) => {
                             $o.class_name = "Error".to_string();
+                            if let Some(p) = &proto {
+                                $o.prototype = Some(p.clone());
+                            }
                             if !matches!(msg_raw, JsValue::Undefined) {
                                 let msg_str = match interp.to_string_value(&msg_raw) {
                                     Ok(s) => JsValue::String(JsString::from_str(&s)),
@@ -464,6 +475,7 @@ impl Interpreter {
                 None
             }
         };
+        self.realm_mut().error_prototype = error_prototype.clone();
 
         // Add toString to Error.prototype
         if let Some(ref ep) = error_prototype {
@@ -621,6 +633,17 @@ impl Interpreter {
                 JsValue::String(JsString::from_str("")),
             );
 
+            // Store native error prototype on realm
+            match name {
+                "SyntaxError" => self.realm_mut().syntax_error_prototype = Some(native_proto.clone()),
+                "TypeError" => self.realm_mut().type_error_prototype = Some(native_proto.clone()),
+                "ReferenceError" => self.realm_mut().reference_error_prototype = Some(native_proto.clone()),
+                "RangeError" => self.realm_mut().range_error_prototype = Some(native_proto.clone()),
+                "URIError" => self.realm_mut().uri_error_prototype = Some(native_proto.clone()),
+                "EvalError" => self.realm_mut().eval_error_prototype = Some(native_proto.clone()),
+                _ => {}
+            }
+
             let native_proto_clone = native_proto.clone();
             let error_name_clone = error_name.clone();
             self.register_global_fn(
@@ -630,10 +653,26 @@ impl Interpreter {
                     let msg_raw = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        match error_name_clone.as_str() {
+                            "SyntaxError" => realm.syntax_error_prototype.clone(),
+                            "TypeError" => realm.type_error_prototype.clone(),
+                            "ReferenceError" => realm.reference_error_prototype.clone(),
+                            "RangeError" => realm.range_error_prototype.clone(),
+                            "URIError" => realm.uri_error_prototype.clone(),
+                            "EvalError" => realm.eval_error_prototype.clone(),
+                            _ => None,
+                        }
+                    }) {
+                        Ok(p) => p.unwrap_or_else(|| native_proto_clone.clone()),
+                        Err(e) => return Completion::Throw(e),
+                    };
+
                     macro_rules! init_native_error {
                         ($o:expr) => {
                             $o.class_name = error_name_clone.clone();
-                            $o.prototype = Some(native_proto_clone.clone());
+                            $o.prototype = Some(proto.clone());
                             if !matches!(msg_raw, JsValue::Undefined) {
                                 let msg_str = match interp.to_string_value(&msg_raw) {
                                     Ok(s) => JsValue::String(JsString::from_str(&s)),
@@ -734,8 +773,9 @@ impl Interpreter {
                     let msg_raw = args.get(2).cloned().unwrap_or(JsValue::Undefined);
 
                     // OrdinaryCreateFromConstructor — realm-aware prototype
-                    let default_se_proto = interp.realm().suppressed_error_prototype.clone();
-                    let proto = match interp.get_prototype_from_new_target(&default_se_proto) {
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.suppressed_error_prototype.clone()
+                    }) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -823,10 +863,18 @@ impl Interpreter {
                         };
                         let errors_arr = interp.create_array(errors_vec);
 
+                        // OrdinaryCreateFromConstructor — realm-aware prototype
+                        let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                            realm.aggregate_error_prototype.clone()
+                        }) {
+                            Ok(p) => p.unwrap_or_else(|| agg_proto_clone.clone()),
+                            Err(e) => return Completion::Throw(e),
+                        };
+
                         macro_rules! init_agg_error {
                             ($o:expr) => {
                                 $o.class_name = "AggregateError".to_string();
-                                $o.prototype = Some(agg_proto_clone.clone());
+                                $o.prototype = Some(proto.clone());
                                 $o.insert_builtin("errors".to_string(), errors_arr.clone());
                                 if !matches!(msg_raw, JsValue::Undefined) {
                                     let msg_str = match interp.to_string_value(&msg_raw) {
@@ -1260,8 +1308,19 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    obj.borrow_mut().primitive_value = Some(JsValue::Number(n));
-                    obj.borrow_mut().class_name = "Number".to_string();
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.number_prototype.clone()
+                    }) {
+                        Ok(p) => p,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let mut b = obj.borrow_mut();
+                    b.primitive_value = Some(JsValue::Number(n));
+                    b.class_name = "Number".to_string();
+                    if let Some(p) = proto {
+                        b.prototype = Some(p);
+                    }
                 }
                 Completion::Normal(JsValue::Number(n))
             }),
@@ -1387,8 +1446,19 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    obj.borrow_mut().primitive_value = Some(JsValue::Boolean(b));
-                    obj.borrow_mut().class_name = "Boolean".to_string();
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.boolean_prototype.clone()
+                    }) {
+                        Ok(p) => p,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let mut bo = obj.borrow_mut();
+                    bo.primitive_value = Some(JsValue::Boolean(b));
+                    bo.class_name = "Boolean".to_string();
+                    if let Some(p) = proto {
+                        bo.prototype = Some(p);
+                    }
                 }
                 Completion::Normal(JsValue::Boolean(b))
             }),
@@ -2204,8 +2274,9 @@ impl Interpreter {
                     let old_realm = interp.current_realm_id;
                     interp.current_realm_id = eval_realm_id;
                     let global = interp.realm().global_env.clone();
+                    let result = interp.perform_eval(args, false, false, &global);
                     interp.current_realm_id = old_realm;
-                    interp.perform_eval(args, false, false, &global)
+                    result
                 },
             ));
             if let JsValue::Object(ref o) = eval_fn {
@@ -2308,6 +2379,19 @@ impl Interpreter {
                         interp.current_realm_id = fn_ctor_realm_id;
                         let result = interp.create_function(js_func);
                         interp.current_realm_id = old_realm;
+                        // OrdinaryCreateFromConstructor — realm-aware prototype
+                        let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                            realm.function_prototype.clone()
+                        }) {
+                            Ok(p) => p,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if let Some(p) = proto
+                            && let JsValue::Object(fo) = &result
+                            && let Some(fobj) = interp.get_object(fo.id)
+                        {
+                            fobj.borrow_mut().prototype = Some(p);
+                        }
                         Completion::Normal(result)
                     } else {
                         Completion::Throw(

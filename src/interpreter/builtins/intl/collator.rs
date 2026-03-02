@@ -652,8 +652,15 @@ impl Interpreter {
                     }
                 };
 
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.intl_collator_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "Intl.Collator".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::Collator {
                     locale,

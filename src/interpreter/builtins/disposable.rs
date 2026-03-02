@@ -351,8 +351,10 @@ impl Interpreter {
                             interp.create_type_error("Constructor DisposableStack requires 'new'"),
                         );
                     }
-                    let default_proto = interp.realm().disposable_stack_prototype.clone();
-                    let proto = match interp.get_prototype_from_new_target(&default_proto) {
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.disposable_stack_prototype.clone()
+                    }) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -800,8 +802,10 @@ impl Interpreter {
                             ),
                         );
                     }
-                    let default_proto = interp.realm().async_disposable_stack_prototype.clone();
-                    let proto = match interp.get_prototype_from_new_target(&default_proto) {
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.async_disposable_stack_prototype.clone()
+                    }) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };

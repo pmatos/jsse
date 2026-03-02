@@ -1,7 +1,7 @@
 use super::super::super::*;
 use fixed_decimal::{Decimal, FloatPrecision};
 use icu::experimental::relativetime::{
-    RelativeTimeFormatter, RelativeTimeFormatterOptions, options::Numeric,
+    options::Numeric, RelativeTimeFormatter, RelativeTimeFormatterOptions,
 };
 use icu::locale::Locale as IcuLocale;
 
@@ -821,8 +821,14 @@ impl Interpreter {
                     }
                 };
 
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.intl_relative_time_format_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "Intl.RelativeTimeFormat".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::RelativeTimeFormat {
                     locale,

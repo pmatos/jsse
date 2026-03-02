@@ -592,8 +592,15 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
 
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.map_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| map_proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(map_proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "Map".to_string();
                 obj.borrow_mut().map_data = Some(Vec::new());
                 let obj_id = obj.borrow().id.unwrap();
@@ -1770,8 +1777,15 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
 
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.set_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| set_proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(set_proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "Set".to_string();
                 obj.borrow_mut().set_data = Some(Vec::new());
                 let obj_id = obj.borrow().id.unwrap();
@@ -2144,8 +2158,15 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
 
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.weakmap_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| weakmap_proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(weakmap_proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "WeakMap".to_string();
                 obj.borrow_mut().map_data = Some(Vec::new());
                 let obj_id = obj.borrow().id.unwrap();
@@ -2384,8 +2405,15 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
 
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.weakset_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| weakset_proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(weakset_proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "WeakSet".to_string();
                 obj.borrow_mut().set_data = Some(Vec::new());
                 let obj_id = obj.borrow().id.unwrap();

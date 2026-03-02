@@ -396,6 +396,20 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                 }
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.iterator_prototype.clone()
+                    }) {
+                        Ok(p) => p,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if let Some(p) = proto {
+                        obj.borrow_mut().prototype = Some(p);
+                    }
+                }
                 Completion::Normal(this.clone())
             },
         ));

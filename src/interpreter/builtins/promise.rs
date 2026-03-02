@@ -397,7 +397,20 @@ impl Interpreter {
                     let err = interp.create_type_error("Promise resolver is not a function");
                     return Completion::Throw(err);
                 }
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.promise_prototype.clone()
+                }) {
+                    Ok(p) => p,
+                    Err(e) => return Completion::Throw(e),
+                };
                 let promise = interp.create_promise_object();
+                if let Some(p) = proto
+                    && let JsValue::Object(po) = &promise
+                    && let Some(pobj) = interp.get_object(po.id)
+                {
+                    pobj.borrow_mut().prototype = Some(p);
+                }
                 let promise_id = if let JsValue::Object(ref o) = promise {
                     o.id
                 } else {

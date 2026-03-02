@@ -936,8 +936,14 @@ impl Interpreter {
                 let raw_locale = interp.intl_resolve_locale(&requested);
                 let locale = base_locale(&raw_locale);
 
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.intl_plural_rules_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "Intl.PluralRules".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::PluralRules {
                     locale,

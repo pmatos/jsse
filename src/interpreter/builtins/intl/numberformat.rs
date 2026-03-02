@@ -1242,7 +1242,11 @@ pub(crate) fn format_number_internal(
             }
             _ => {
                 // "auto"
-                if value < 0.0 { "-" } else { "" }
+                if value < 0.0 {
+                    "-"
+                } else {
+                    ""
+                }
             }
         };
         let num_str = format!("{}{}", sign_prefix, inf_str);
@@ -1403,7 +1407,11 @@ pub(crate) fn format_number_internal(
                 } else {
                     let lo_v = (lo * ri).round() as i64;
                     let hi_v = (hi * ri).round() as i64;
-                    if lo_v % 2 == 0 { lo * ri } else { hi * ri }
+                    if lo_v % 2 == 0 {
+                        lo * ri
+                    } else {
+                        hi * ri
+                    }
                 }
             }
             _ => {
@@ -4387,8 +4395,14 @@ impl Interpreter {
                     base.clone()
                 };
 
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.intl_number_format_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "Intl.NumberFormat".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::NumberFormat {
                     locale,

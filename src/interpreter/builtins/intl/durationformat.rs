@@ -265,7 +265,11 @@ fn base_locale(locale_str: &str) -> String {
 }
 
 fn normalize_zero(v: f64) -> f64 {
-    if v == 0.0 { 0.0 } else { v }
+    if v == 0.0 {
+        0.0
+    } else {
+        v
+    }
 }
 
 fn format_f64_no_trailing(v: f64) -> String {
@@ -1697,8 +1701,15 @@ impl Interpreter {
                     base.clone()
                 };
 
+                // OrdinaryCreateFromConstructor — realm-aware prototype
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.intl_duration_format_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto_clone.clone());
+                obj.borrow_mut().prototype = Some(proto);
                 obj.borrow_mut().class_name = "Intl.DurationFormat".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::DurationFormat {
                     locale,

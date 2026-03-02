@@ -1344,10 +1344,17 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    // OrdinaryCreateFromConstructor — realm-aware prototype
+                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                        realm.date_prototype.clone()
+                    }) {
+                        Ok(p) => p.unwrap_or_else(|| date_proto_clone.clone()),
+                        Err(e) => return Completion::Throw(e),
+                    };
                     let mut b = obj.borrow_mut();
                     b.class_name = "Date".to_string();
                     b.primitive_value = Some(JsValue::Number(time_val));
-                    b.prototype = Some(date_proto_clone.clone());
+                    b.prototype = Some(proto);
                 }
                 Completion::Normal(this.clone())
             },

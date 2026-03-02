@@ -1347,9 +1347,16 @@ impl Interpreter {
                     }
                 }
 
+                let locale_proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.intl_locale_prototype.clone()
+                }) {
+                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Err(e) => return Completion::Throw(e),
+                };
+
                 if is_fallback_tag {
                     let obj = interp.create_object();
-                    obj.borrow_mut().prototype = Some(proto_clone.clone());
+                    obj.borrow_mut().prototype = Some(locale_proto.clone());
                     obj.borrow_mut().class_name = "Intl.Locale".to_string();
                     let lower_tag = tag_string.to_ascii_lowercase();
                     obj.borrow_mut().intl_data = Some(IntlData::Locale {
@@ -1375,7 +1382,7 @@ impl Interpreter {
                     canonicalize_unicode_keyword_values(&mut locale);
 
                     let obj = interp.create_object();
-                    obj.borrow_mut().prototype = Some(proto_clone.clone());
+                    obj.borrow_mut().prototype = Some(locale_proto);
                     obj.borrow_mut().class_name = "Intl.Locale".to_string();
                     obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(&locale));
                     let obj_id = obj.borrow().id.unwrap();
