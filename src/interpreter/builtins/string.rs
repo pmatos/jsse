@@ -1,4 +1,5 @@
 use super::super::*;
+use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
 
 fn is_ecma_whitespace(ch: char) -> bool {
     matches!(
@@ -745,51 +746,6 @@ impl Interpreter {
                 }),
             ),
             (
-                "toString",
-                0,
-                Rc::new(|interp, this_val, _args| {
-                    // Must be a string primitive or a String wrapper object
-                    match this_val {
-                        JsValue::String(s) => Completion::Normal(JsValue::String(s.clone())),
-                        JsValue::Object(o) => {
-                            if let Some(obj) = interp.get_object(o.id)
-                                && obj.borrow().class_name == "String"
-                                && let Some(ref pv) = obj.borrow().primitive_value
-                            {
-                                return Completion::Normal(pv.clone());
-                            }
-                            Completion::Throw(interp.create_type_error(
-                                "String.prototype.toString requires that 'this' be a String",
-                            ))
-                        }
-                        _ => Completion::Throw(interp.create_type_error(
-                            "String.prototype.toString requires that 'this' be a String",
-                        )),
-                    }
-                }),
-            ),
-            (
-                "valueOf",
-                0,
-                Rc::new(|interp, this_val, _args| match this_val {
-                    JsValue::String(s) => Completion::Normal(JsValue::String(s.clone())),
-                    JsValue::Object(o) => {
-                        if let Some(obj) = interp.get_object(o.id)
-                            && obj.borrow().class_name == "String"
-                            && let Some(ref pv) = obj.borrow().primitive_value
-                        {
-                            return Completion::Normal(pv.clone());
-                        }
-                        Completion::Throw(interp.create_type_error(
-                            "String.prototype.valueOf requires that 'this' be a String",
-                        ))
-                    }
-                    _ => Completion::Throw(interp.create_type_error(
-                        "String.prototype.valueOf requires that 'this' be a String",
-                    )),
-                }),
-            ),
-            (
                 "split",
                 2,
                 Rc::new(|interp, this_val, args| {
@@ -1427,16 +1383,18 @@ impl Interpreter {
                         },
                         _ => "NFC".to_string(),
                     };
-                    match form.as_str() {
-                        "NFC" | "NFD" | "NFKC" | "NFKD" => {}
+                    let normalized = match form.as_str() {
+                        "NFC" => ComposingNormalizerBorrowed::new_nfc().normalize(&s),
+                        "NFD" => DecomposingNormalizerBorrowed::new_nfd().normalize(&s),
+                        "NFKC" => ComposingNormalizerBorrowed::new_nfkc().normalize(&s),
+                        "NFKD" => DecomposingNormalizerBorrowed::new_nfkd().normalize(&s),
                         _ => {
                             return Completion::Throw(interp.create_range_error(
                                 &format!("The normalization form should be one of NFC, NFD, NFKC, NFKD. Got: {form}"),
                             ));
                         }
-                    }
-                    // For now, return the string as-is (proper Unicode normalization would need a crate)
-                    Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                    };
+                    Completion::Normal(JsValue::String(JsString::from_str(&normalized)))
                 }),
             ),
             (
@@ -1527,6 +1485,64 @@ impl Interpreter {
             let fn_val =
                 self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
             proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+        }
+
+        // toString and valueOf: realm-aware so cross-realm calls throw the right realm's TypeError
+        {
+            let realm_id = self.current_realm_id;
+            let tostring_fn = self.create_function(JsFunction::native(
+                "toString".to_string(),
+                0,
+                move |interp, this_val, _args| match this_val {
+                    JsValue::String(s) => Completion::Normal(JsValue::String(s.clone())),
+                    JsValue::Object(o) => {
+                        if let Some(obj) = interp.get_object(o.id)
+                            && obj.borrow().class_name == "String"
+                            && let Some(ref pv) = obj.borrow().primitive_value
+                        {
+                            return Completion::Normal(pv.clone());
+                        }
+                        Completion::Throw(interp.create_error_in_realm(
+                            realm_id,
+                            "TypeError",
+                            "String.prototype.toString requires that 'this' be a String",
+                        ))
+                    }
+                    _ => Completion::Throw(interp.create_error_in_realm(
+                        realm_id,
+                        "TypeError",
+                        "String.prototype.toString requires that 'this' be a String",
+                    )),
+                },
+            ));
+            proto.borrow_mut().insert_builtin("toString".to_string(), tostring_fn);
+
+            let valueof_fn = self.create_function(JsFunction::native(
+                "valueOf".to_string(),
+                0,
+                move |interp, this_val, _args| match this_val {
+                    JsValue::String(s) => Completion::Normal(JsValue::String(s.clone())),
+                    JsValue::Object(o) => {
+                        if let Some(obj) = interp.get_object(o.id)
+                            && obj.borrow().class_name == "String"
+                            && let Some(ref pv) = obj.borrow().primitive_value
+                        {
+                            return Completion::Normal(pv.clone());
+                        }
+                        Completion::Throw(interp.create_error_in_realm(
+                            realm_id,
+                            "TypeError",
+                            "String.prototype.valueOf requires that 'this' be a String",
+                        ))
+                    }
+                    _ => Completion::Throw(interp.create_error_in_realm(
+                        realm_id,
+                        "TypeError",
+                        "String.prototype.valueOf requires that 'this' be a String",
+                    )),
+                },
+            ));
+            proto.borrow_mut().insert_builtin("valueOf".to_string(), valueof_fn);
         }
 
         // Annex B: HTML methods

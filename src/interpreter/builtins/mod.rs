@@ -1114,8 +1114,10 @@ impl Interpreter {
                     JsString::from_str("")
                 } else {
                     let val = &args[0];
-                    // §22.1.1.1: If value is Symbol, return SymbolDescriptiveString
-                    if let JsValue::Symbol(sym) = val {
+                    // §22.1.1.1 step 2a: only when NewTarget is undefined AND value is Symbol
+                    if interp.new_target.is_none()
+                        && let JsValue::Symbol(sym) = val
+                    {
                         let desc = if let Some(desc) = &sym.description {
                             format!("Symbol({desc})")
                         } else {
@@ -1125,6 +1127,7 @@ impl Interpreter {
                     } else if let JsValue::String(s) = val {
                         s.clone()
                     } else {
+                        // §22.1.1.1 step 2b: ToString(value) — throws TypeError for Symbol
                         match interp.to_string_value(val) {
                             Ok(s) => JsString::from_str(&s),
                             Err(e) => return Completion::Throw(e),
@@ -1184,7 +1187,8 @@ impl Interpreter {
                         let length_val = match interp.get_object_property(o.id, "length", &raw_obj)
                         {
                             Completion::Normal(v) => v,
-                            _ => JsValue::Number(0.0),
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            other => return other,
                         };
                         let n = match interp.to_number_value(&length_val) {
                             Ok(n) => n,
@@ -1207,7 +1211,8 @@ impl Interpreter {
                         let next_seg = if let JsValue::Object(o) = &raw_obj {
                             match interp.get_object_property(o.id, &i.to_string(), &raw_obj) {
                                 Completion::Normal(v) => v,
-                                _ => JsValue::Undefined,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
                             }
                         } else {
                             JsValue::Undefined
@@ -3232,29 +3237,58 @@ impl Interpreter {
                 let from_char_code = self.create_function(JsFunction::native(
                     "fromCharCode".to_string(),
                     1,
-                    |_interp, _this, args: &[JsValue]| {
-                        let code_units: Vec<u16> = args
-                            .iter()
-                            .map(|a| {
-                                let n = to_number(a) as u32;
-                                (n & 0xFFFF) as u16
-                            })
-                            .collect();
+                    |interp, _this, args: &[JsValue]| {
+                        let mut code_units: Vec<u16> = Vec::with_capacity(args.len());
+                        for a in args {
+                            // ToUint16 calls ToNumber which throws for Symbol/BigInt
+                            let n = match interp.to_number_value(a) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            // ToUint16 (§7.1.7): NaN/±0/±Infinity → 0; otherwise modulo 2^16
+                            let cu = if n.is_nan() || n == 0.0 || n.is_infinite() {
+                                0u16
+                            } else {
+                                // floor(abs(n)) mod 2^16, with sign handling
+                                let int = n.abs().floor();
+                                let int16bit = (int % 65536.0) as u32;
+                                if n < 0.0 && int16bit != 0 { (65536 - int16bit) as u16 } else { int16bit as u16 }
+                            };
+                            code_units.push(cu);
+                        }
                         Completion::Normal(JsValue::String(JsString { code_units }))
                     },
                 ));
                 let from_code_point = self.create_function(JsFunction::native(
                     "fromCodePoint".to_string(),
                     1,
-                    |_interp, _this, args: &[JsValue]| {
-                        let mut s = String::new();
+                    |interp, _this, args: &[JsValue]| {
+                        let mut code_units: Vec<u16> = Vec::new();
                         for a in args {
-                            let n = to_number(a) as u32;
-                            if let Some(c) = char::from_u32(n) {
-                                s.push(c);
+                            // ToNumber throws for Symbol/BigInt
+                            let next_cp = match interp.to_number_value(a) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            // Not an integral Number → RangeError
+                            if next_cp != next_cp.trunc() || next_cp.is_infinite() {
+                                return Completion::Throw(interp.create_range_error(&format!(
+                                    "Invalid code point {next_cp}"
+                                )));
+                            }
+                            let cp = next_cp as i64;
+                            if cp < 0 || cp > 0x10FFFF {
+                                return Completion::Throw(interp.create_range_error(&format!(
+                                    "Invalid code point {cp}"
+                                )));
+                            }
+                            if let Some(c) = char::from_u32(cp as u32) {
+                                let mut buf = [0u16; 2];
+                                let encoded = c.encode_utf16(&mut buf);
+                                code_units.extend_from_slice(encoded);
                             }
                         }
-                        Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                        Completion::Normal(JsValue::String(JsString { code_units }))
                     },
                 ));
                 if let Some(obj) = self.get_object(o.id) {

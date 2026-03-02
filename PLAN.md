@@ -43,7 +43,8 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | annexB | 99% | 1,362/1,377 |
 | RegExp | 98% | 3,682/3,756 |
 | DisposableStack | 99% | 180/182 |
-| String | 97% | 2,362/2,427 |
+| String | 99.8% | 2,423/2,427 |
+| arguments | 100% | 460/460 |
 | DataView | 97% | 1,090/1,122 |
 | Set | 97% | 742/764 |
 | Math | 100% | 654/654 |
@@ -265,7 +266,7 @@ These are tracked across all phases:
 | `built-ins/RegExp` | 3,756 | 3,682 (98.0%) |
 | `built-ins/TypedArray` | 2,864 | 2,864 (100.0%) |
 | `built-ins/TypedArrayConstructors` | 1,442 | 1,280 (88.8%) |
-| `built-ins/String` | 2,427 | 2,362 (97.3%) |
+| `built-ins/String` | 2,427 | 2,423 (99.8%) |
 | `built-ins/DataView` | 1,122 | 1,090 (97.1%) |
 | `built-ins/Proxy` | 607 | 598 (98.5%) |
 | `built-ins/` (rest) | ~16,000+ | All other built-ins |
@@ -288,5 +289,5 @@ These are tracked across all phases:
 | M6 | All expressions + statements | ~15,000 | 🟡 ~12,000 |
 | M7 | Built-in objects (Object, Array, String, Number, Math, JSON) | ~25,000 | 🟡 ~16,828 |
 | M8 | Classes, iterators, generators, async/await | ~65,000 | ✅ ~70,000 |
-| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 89,903 |
+| M9 | RegExp, Proxy, Reflect, Promise, modules | ~85,000 | ✅ 89,974 |
 | M10 | Full spec compliance | ~92,788 | ⬜ |

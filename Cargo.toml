@@ -17,3 +17,4 @@ icu = { version = "2.0", features = ["experimental"] }
 icu_calendar = { version = "2.0", features = ["unstable"] }
 fixed_decimal = { version = "0.7", features = ["ryu"] }
 tinystr = "0.8"
+icu_normalizer = "2.1.1"

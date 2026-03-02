@@ -663,7 +663,9 @@ impl Interpreter {
             ),
         );
         // Annex B: sloppy non-arrow, non-generator, non-async functions get
-        // own caller/arguments = null to shadow the ThrowTypeError accessor
+        // own caller/arguments to shadow the ThrowTypeError accessor.
+        // We use undefined here (not null) so that code checking `caller === undefined`
+        // correctly identifies the "not supported" case (legacy feature, Annex B.3.5).
         if let Some(JsFunction::User {
             is_strict,
             is_arrow,
@@ -678,7 +680,7 @@ impl Interpreter {
         {
             obj_data.insert_property(
                 "caller".to_string(),
-                PropertyDescriptor::data(JsValue::Null, false, false, true),
+                PropertyDescriptor::data(JsValue::Undefined, false, false, true),
             );
             obj_data.insert_property(
                 "arguments".to_string(),
@@ -859,22 +861,17 @@ impl Interpreter {
             }
         }
 
-        // Add Symbol.iterator (Array.prototype[@@iterator]) to both strict and non-strict
+        // Add Symbol.iterator = %Array.prototype.values% (spec §10.4.4.6 step 20 / §10.4.4.7 step 22)
+        // Must be the exact same function object as Array.prototype[@@iterator]
         if let Some(key) = self.get_symbol_iterator_key() {
-            let iter_fn = self.create_function(JsFunction::native(
-                "[Symbol.iterator]".to_string(),
-                0,
-                |interp, this_val, _args| {
-                    if let JsValue::Object(o) = this_val {
-                        return Completion::Normal(
-                            interp.create_array_iterator(o.id, IteratorKind::Value),
-                        );
-                    }
-                    let err = interp.create_type_error("Symbol.iterator called on non-object");
-                    Completion::Throw(err)
-                },
-            ));
-            if let JsValue::Object(ref o) = result
+            let array_iter_fn = self
+                .realm()
+                .array_prototype
+                .as_ref()
+                .map(|proto| proto.borrow().get_property(&key));
+            if let Some(iter_fn) = array_iter_fn
+                && !matches!(iter_fn, JsValue::Undefined)
+                && let JsValue::Object(ref o) = result
                 && let Some(obj_rc) = self.get_object(o.id)
             {
                 obj_rc

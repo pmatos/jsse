@@ -994,7 +994,27 @@ fn parse_v_class_atom(chars: &[char], i: &mut usize, flags: &str) -> Result<VCla
                 // Regular escape
                 *i += 1; // skip backslash
                 if let Some(cp) = parse_v_class_escape(chars, i) {
-                    result.add_codepoint(cp);
+                    // If lead surrogate, try to combine with following \uDC00-\uDFFF
+                    let final_cp = if (0xD800..=0xDBFF).contains(&cp)
+                        && *i + 1 < chars.len()
+                        && chars[*i] == '\\'
+                        && chars[*i + 1] == 'u'
+                    {
+                        let saved = *i;
+                        *i += 1; // skip backslash only; parse_v_class_escape reads from after it
+                        if let Some(trail) = parse_v_class_escape(chars, i)
+                            && (0xDC00..=0xDFFF).contains(&trail)
+                        {
+                            // Combine surrogate pair into Unicode code point
+                            ((cp - 0xD800) << 10) + (trail - 0xDC00) + 0x10000
+                        } else {
+                            *i = saved;
+                            cp
+                        }
+                    } else {
+                        cp
+                    };
+                    result.add_codepoint(final_cp);
                     return check_range(chars, i, result, flags);
                 }
                 return Ok(result);
@@ -1002,7 +1022,7 @@ fn parse_v_class_atom(chars: &[char], i: &mut usize, flags: &str) -> Result<VCla
         }
     }
 
-    // Regular character
+    // Regular character (not a backslash escape)
     *i += 1;
     let cp = c as u32;
     result.add_codepoint(cp);
@@ -5557,12 +5577,14 @@ impl Interpreter {
                                     Completion::Normal(v) => v,
                                     other => return other,
                                 };
-                            let match_str = match interp.to_string_value(&matched_val) {
+                            // Use to_js_string to preserve lone surrogates (not lossy)
+                            let match_js_str = match interp.to_js_string(&matched_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            results.push(JsValue::String(JsString::from_str(&match_str)));
-                            if match_str.is_empty() {
+                            let is_empty = match_js_str.code_units.is_empty();
+                            results.push(JsValue::String(match_js_str));
+                            if is_empty {
                                 let rx_val2 = JsValue::Object(crate::types::JsObject { id: rx_id });
                                 let li_val = match interp.get_object_property(
                                     rx_id,
@@ -5908,8 +5930,9 @@ impl Interpreter {
                             return other;
                         }
                     };
-                    // Convert position from UTF-16 code units to byte offset in PUA-mapped string
-                    let position = {
+                    // Keep UTF-16 position for passing to replacement function;
+                    // convert to byte offset for string slicing in PUA-mapped string.
+                    let (position_utf16, position) = {
                         let n = match interp.to_number_value(&index_val) {
                             Ok(n) => n,
                             Err(e) => {
@@ -5919,7 +5942,7 @@ impl Interpreter {
                         };
                         let int = to_integer_or_infinity(n);
                         let utf16_pos = int.max(0.0) as usize;
-                        utf16_to_byte_offset(&s, utf16_pos).min(length_s)
+                        (utf16_pos, utf16_to_byte_offset(&s, utf16_pos).min(length_s))
                     };
 
                     // g-i. Get captures
@@ -5965,8 +5988,9 @@ impl Interpreter {
                         for cap in &captures {
                             replacer_args.push(cap.clone());
                         }
-                        replacer_args.push(JsValue::Number(position as f64));
-                        replacer_args.push(JsValue::String(JsString::from_str(&s)));
+                        // Pass UTF-16 position and the primitive string S (non-PUA)
+                        replacer_args.push(JsValue::Number(position_utf16 as f64));
+                        replacer_args.push(JsValue::String(regex_output_to_js_string(&s)));
                         if !named_captures.is_undefined() {
                             replacer_args.push(named_captures.clone());
                         }

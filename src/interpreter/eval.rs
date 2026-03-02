@@ -589,6 +589,25 @@ impl Interpreter {
                             }
                         }
                         let is_strict = env.borrow().strict;
+                        // String exotic: length and index properties are non-configurable (§10.4.3.4)
+                        {
+                            let obj_b = obj.borrow();
+                            if let Some(JsValue::String(ref s)) = obj_b.primitive_value
+                                && obj_b.class_name == "String"
+                            {
+                                let is_exotic = key == "length"
+                                    || key.parse::<usize>().is_ok_and(|i| i < s.code_units.len());
+                                if is_exotic {
+                                    drop(obj_b);
+                                    if is_strict {
+                                        return Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot delete property '{key}' of object"
+                                        )));
+                                    }
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                            }
+                        }
                         let mut obj_mut = obj.borrow_mut();
                         if let Some(desc) = obj_mut.properties.get(&key)
                             && desc.configurable == Some(false)

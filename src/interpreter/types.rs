@@ -1612,7 +1612,15 @@ impl JsObjectData {
         }
         // Symbol keys: fall through to ordinary
         if let Some(desc) = self.properties.get(key) {
-            return Some(desc.clone());
+            let mut d = desc.clone();
+            // Mapped arguments: update value from the live binding (§10.4.4.1)
+            if let Some(ref map) = self.parameter_map
+                && let Some((env_ref, param_name)) = map.get(key)
+                && let Some(val) = env_ref.borrow().get(param_name)
+            {
+                d.value = Some(val);
+            }
+            return Some(d);
         }
         // TypedArray: §10.4.5.1
         if let Some(ref ta) = self.typed_array_info
@@ -1762,7 +1770,7 @@ impl JsObjectData {
         false
     }
 
-    pub fn define_own_property(&mut self, key: String, desc: PropertyDescriptor) -> bool {
+    pub fn define_own_property(&mut self, key: String, mut desc: PropertyDescriptor) -> bool {
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
             && let Some(JsValue::String(ref s)) = self.primitive_value
@@ -1945,30 +1953,23 @@ impl JsObjectData {
             let desc_has_get = desc.get.is_some();
             let desc_has_set = desc.set.is_some();
             let desc_writable = desc.writable;
+            let desc_has_value = desc.value.is_some();
 
-            // Handle parameter map before consuming desc
-            if let Some(ref mut map) = self.parameter_map
-                && map.contains_key(&key)
+            // §10.4.4.3 step 4: if isMapped && data desc && writable:false but no value,
+            // inject the current live binding value so the stored property gets the right value.
+            if desc_is_data && !desc_is_accessor && desc_writable == Some(false) && !desc_has_value
+                && let Some(ref map) = self.parameter_map
+                && let Some((env_ref, param_name)) = map.get(&key)
+                && let Some(live_val) = env_ref.borrow().get(param_name)
             {
-                if let Some(ref val) = desc.value
-                    && let Some((env_ref, param_name)) = map.get(&key)
-                {
-                    let _ = env_ref.borrow_mut().set(param_name, val.clone());
-                }
-                if desc_has_get || desc_has_set {
-                    map.remove(&key);
-                } else if desc_writable == Some(false) {
-                    if let Some(ref val) = desc.value
-                        && let Some((env_ref, param_name)) = map.get(&key)
-                    {
-                        let _ = env_ref.borrow_mut().set(param_name, val.clone());
-                    }
-                    map.remove(&key);
-                }
+                desc.value = Some(live_val);
             }
 
             let current_is_data = current.is_data_descriptor();
             let current_is_accessor = current.is_accessor_descriptor();
+
+            // Save original desc value for step 7 parameter_map handling (before it's moved into merged)
+            let desc_value_for_step7: Option<JsValue> = if desc_has_value { desc.value.clone() } else { None };
 
             // Build merged descriptor
             let mut merged = if desc_is_data
@@ -2079,7 +2080,33 @@ impl JsObjectData {
                     }
                 }
             }
+            // Save key before it's moved into insert
+            let key_for_step7 = if self.parameter_map.is_some() { Some(key.clone()) } else { None };
             self.properties.insert(key, merged);
+
+            // §10.4.4.3 step 7: post-define parameter map handling
+            if let Some(key_ref) = key_for_step7
+                && let Some(ref mut map) = self.parameter_map
+                && map.contains_key(&key_ref)
+            {
+                if desc_has_get || desc_has_set {
+                    // Accessor descriptor: delete mapping
+                    map.remove(&key_ref);
+                } else {
+                    // Data descriptor
+                    if desc_has_value
+                        && let Some((env_ref, param_name)) = map.get(&key_ref)
+                        && let Some(ref val) = desc_value_for_step7
+                    {
+                        // Update the live binding with the new value
+                        let _ = env_ref.borrow_mut().set(param_name, val.clone());
+                    }
+                    if desc_writable == Some(false) {
+                        // Make non-writable: delete mapping
+                        map.remove(&key_ref);
+                    }
+                }
+            }
         } else {
             if !self.extensible {
                 return false;
@@ -2232,6 +2259,14 @@ impl JsObjectData {
             desc.value = Some(value);
             true
         } else {
+            // String exotic: length and index properties are non-writable (§10.4.3.2)
+            if let Some(JsValue::String(ref s)) = self.primitive_value
+                && self.class_name == "String"
+            {
+                if key == "length" || (key.parse::<usize>().is_ok_and(|i| i < s.code_units.len())) {
+                    return false;
+                }
+            }
             if !self.extensible {
                 return false;
             }

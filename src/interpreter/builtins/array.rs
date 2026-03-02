@@ -3004,29 +3004,13 @@ impl Interpreter {
         ));
         proto
             .borrow_mut()
-            .insert_builtin("values".to_string(), values_fn);
+            .insert_builtin("values".to_string(), values_fn.clone());
 
-        // Array.prototype[@@iterator] = Array.prototype.values
-        let iter_fn = self.create_function(JsFunction::native(
-            "[Symbol.iterator]".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if let JsValue::Object(obj_ref) = &o {
-                    return Completion::Normal(
-                        interp.create_array_iterator(obj_ref.id, IteratorKind::Value),
-                    );
-                }
-                Completion::Throw(interp.create_type_error("Symbol.iterator called on non-object"))
-            },
-        ));
+        // Array.prototype[@@iterator] is the same function as Array.prototype.values (spec §23.1.3.35)
         if let Some(key) = self.get_symbol_iterator_key() {
             proto
                 .borrow_mut()
-                .insert_property(key, PropertyDescriptor::data(iter_fn, true, false, true));
+                .insert_property(key, PropertyDescriptor::data(values_fn, true, false, true));
         }
 
         // Array.fromAsync

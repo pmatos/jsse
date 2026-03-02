@@ -712,6 +712,7 @@ dependencies = [
  "iana-time-zone",
  "icu",
  "icu_calendar",
+ "icu_normalizer",
  "num-bigint",
  "regex",
  "ryu-js",
