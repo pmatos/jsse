@@ -1389,10 +1389,88 @@ fn anonymize_named_groups(chars: &[char]) -> String {
     result
 }
 
+/// Rename named groups and backreferences in a pattern body for a specific iteration.
+/// `(?<name>...)` → `(?<__jsse_qi{idx}__name>...)` and `\k<name>` → `\k<__jsse_qi{idx}__name>`
+/// for names in the duplicate set.
+fn rename_groups_and_backrefs(
+    chars: &[char],
+    dup_names: &std::collections::HashSet<String>,
+    idx: u32,
+) -> String {
+    let len = chars.len();
+    let mut result = String::new();
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < len {
+        match chars[i] {
+            '[' if !in_cc => {
+                in_cc = true;
+                result.push('[');
+            }
+            ']' if in_cc => {
+                in_cc = false;
+                result.push(']');
+            }
+            '\\' if !in_cc && i + 1 < len && chars[i + 1] == 'k' => {
+                if i + 2 < len && chars[i + 2] == '<' {
+                    let start = i + 3;
+                    if let Some(end_off) = chars[start..].iter().position(|&c| c == '>') {
+                        let name: String = chars[start..start + end_off].iter().collect();
+                        if dup_names.contains(&name) {
+                            result.push_str(&format!("\\k<__jsse_qi{}__{}>" , idx, name));
+                            i = start + end_off + 1;
+                            continue;
+                        }
+                    }
+                }
+                result.push('\\');
+                result.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            '\\' if i + 1 < len => {
+                result.push('\\');
+                result.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            '(' if !in_cc
+                && i + 2 < len
+                && chars[i + 1] == '?'
+                && chars[i + 2] == '<'
+                && i + 3 < len
+                && chars[i + 3] != '='
+                && chars[i + 3] != '!' =>
+            {
+                let name_start = i + 3;
+                if let Some(end_off) = chars[name_start..].iter().position(|&c| c == '>') {
+                    let name: String = chars[name_start..name_start + end_off].iter().collect();
+                    if dup_names.contains(&name) {
+                        result.push_str(&format!("(?<__jsse_qi{}__{}>" , idx, name));
+                        i = name_start + end_off + 1;
+                        continue;
+                    } else {
+                        result.push_str("(?<");
+                        result.push_str(&name);
+                        result.push('>');
+                        i = name_start + end_off + 1;
+                        continue;
+                    }
+                } else {
+                    result.push(chars[i]);
+                }
+            }
+            c => result.push(c),
+        }
+        i += 1;
+    }
+    result
+}
+
 /// Preprocess a JS regex source to expand `(?:BODY){N}` where N >= 2, BODY contains
-/// duplicate-named groups, and BODY has no internal backreferences to those names.
-/// Expands to `(?:ANON_BODY){N-1}(?:BODY)` so that stale captures from earlier
-/// iterations don't pollute the `\k<name>` semantics for the last iteration.
+/// duplicate-named groups. If BODY has no backreferences to duplicate names, expands to
+/// `(?:ANON_BODY){N-1}(?:BODY)`. If BODY has backreferences, uses renaming to keep
+/// groups and backrefs paired per iteration.
 fn expand_quantified_dup_groups(
     source: &str,
     dup_names: &std::collections::HashSet<String>,
@@ -1449,22 +1527,36 @@ fn expand_quantified_dup_groups(
                                 } else {
                                     quant_end
                                 };
-                                // Check if body has dup-named groups and no internal backref
-                                if body_has_dup_named_group(body, dup_names)
-                                    && !body_has_named_backref_to(body, dup_names)
-                                {
+                                if body_has_dup_named_group(body, dup_names) {
+                                    let has_backrefs =
+                                        body_has_named_backref_to(body, dup_names);
                                     // Recursively expand the body first
                                     let body_str: String = body.iter().collect();
                                     let expanded_body =
                                         expand_quantified_dup_groups(&body_str, dup_names);
                                     let expanded_body_chars: Vec<char> =
                                         expanded_body.chars().collect();
-                                    let anon_body = anonymize_named_groups(&expanded_body_chars);
-                                    // Emit: (?:ANON_BODY){N-1}(?:BODY)
-                                    if n - 1 == 1 {
-                                        result.push_str(&format!("(?:{})", anon_body));
+
+                                    if has_backrefs {
+                                        // Rename groups+backrefs for each non-last iteration
+                                        for iter_i in 0..(n - 1) {
+                                            let renamed = rename_groups_and_backrefs(
+                                                &expanded_body_chars,
+                                                dup_names,
+                                                iter_i,
+                                            );
+                                            result.push_str(&format!("(?:{})", renamed));
+                                        }
                                     } else {
-                                        result.push_str(&format!("(?:{}){{{}}}", anon_body, n - 1));
+                                        let anon_body =
+                                            anonymize_named_groups(&expanded_body_chars);
+                                        if n - 1 == 1 {
+                                            result.push_str(&format!("(?:{})", anon_body));
+                                        } else {
+                                            result.push_str(&format!(
+                                                "(?:{}){{{}}}", anon_body, n - 1
+                                            ));
+                                        }
                                     }
                                     result.push_str(&format!("(?:{})", expanded_body));
                                     i = quant_end;
@@ -1640,16 +1732,16 @@ pub(super) fn translate_js_pattern_ex(
     for name in &all_group_names {
         *name_count.entry(name.clone()).or_insert(0) += 1;
     }
-    let duplicated_names: std::collections::HashSet<String> = name_count
+    let mut duplicated_names: std::collections::HashSet<String> = name_count
         .into_iter()
         .filter(|(_, count)| *count > 1)
         .map(|(name, _)| name)
         .collect();
 
     // Preprocess: expand (?:BODY){N} quantifiers where BODY has duplicate-named
-    // groups and no internal backreferences to those names. This ensures that
-    // captures from earlier iterations don't bleed into later iterations (PCRE
-    // retains captures across quantifier iterations, but ECMAScript resets them).
+    // groups. This ensures that captures from earlier iterations don't bleed into
+    // later iterations (PCRE retains captures across quantifier iterations, but
+    // ECMAScript resets them).
     let (chars, len, all_group_names) = if !duplicated_names.is_empty() {
         let preprocessed = expand_quantified_dup_groups(source, &duplicated_names);
         if preprocessed != source {
@@ -1686,6 +1778,18 @@ pub(super) fn translate_js_pattern_ex(
                     j += 1;
                 }
             }
+            // Re-compute duplicated_names from expanded source (renamed groups
+            // like __jsse_qi0__x are also duplicates)
+            let mut new_name_count: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for name in &new_names {
+                *new_name_count.entry(name.clone()).or_insert(0) += 1;
+            }
+            duplicated_names = new_name_count
+                .into_iter()
+                .filter(|(_, count)| *count > 1)
+                .map(|(name, _)| name)
+                .collect();
             (new_chars, new_len, new_names)
         } else {
             (chars, len, all_group_names)
@@ -2282,7 +2386,9 @@ pub(super) fn translate_js_pattern_ex(
                 let name = decode_group_name_raw(&chars[name_start..k]);
                 open_group_names.push(Some(name.clone()));
                 group_num_to_name.insert(groups_seen, name.clone());
-                if group_name_seen.insert(name.clone()) {
+                if group_name_seen.insert(name.clone())
+                    && !name.starts_with("__jsse_qi")
+                {
                     group_name_order.push(name.clone());
                 }
                 if duplicated_names.contains(&name) {
@@ -4153,6 +4259,31 @@ fn clear_stale_dup_captures(caps: &mut RegexCaptures, dup_map: &DupGroupMap) {
     }
 }
 
+/// Remove capture groups whose names start with `__jsse_qi` (renamed groups from
+/// quantifier expansion with backrefs). These are internal and shouldn't appear
+/// in the match result array or groups object.
+fn strip_renamed_qi_captures(caps: &mut RegexCaptures) {
+    let qi_indices: Vec<usize> = caps
+        .names
+        .iter()
+        .enumerate()
+        .filter(|(_, name_opt)| {
+            name_opt
+                .as_ref()
+                .map_or(false, |n| n.starts_with("__jsse_qi"))
+        })
+        .map(|(i, _)| i)
+        .collect();
+    if qi_indices.is_empty() {
+        return;
+    }
+    // Remove in reverse order to maintain valid indices
+    for &idx in qi_indices.iter().rev() {
+        caps.groups.remove(idx);
+        caps.names.remove(idx);
+    }
+}
+
 fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
     build_regex_ex(source, flags).map(|(re, _, _)| re)
 }
@@ -5004,6 +5135,7 @@ fn regexp_exec_raw(
     };
 
     clear_stale_dup_captures(&mut caps, &dup_map);
+    strip_renamed_qi_captures(&mut caps);
 
     let full_match = caps.get(0).unwrap();
     // Convert absolute byte offsets to UTF-16 code unit offsets
