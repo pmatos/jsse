@@ -1869,7 +1869,7 @@ impl Interpreter {
                     Completion::Break(None, break_val) => {
                         return Some(Completion::Normal(break_val.unwrap_or_else(|| v.clone())));
                     }
-                    other => return Some(other),
+                    other => return Some(other.update_empty(v.clone())),
                 }
             }
         }

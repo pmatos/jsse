@@ -1183,6 +1183,7 @@ impl<'a> Parser<'a> {
         let mut cases = Vec::new();
         let mut lexical_names: Vec<String> = Vec::new();
         let mut func_decl_names: Vec<String> = Vec::new();
+        let mut has_default = false;
         while self.current != Token::RightBrace {
             let test = if self.current == Token::Keyword(Keyword::Case) {
                 self.advance()?;
@@ -1190,6 +1191,12 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::Colon)?;
                 Some(expr)
             } else {
+                if has_default {
+                    return Err(ParseError {
+                        message: "A switch statement may only have one default clause".into(),
+                    });
+                }
+                has_default = true;
                 self.eat(&Token::Keyword(Keyword::Default))?;
                 self.eat(&Token::Colon)?;
                 None
@@ -1212,6 +1219,22 @@ impl<'a> Parser<'a> {
             }
             self.in_switch_case = prev_sc;
             cases.push(SwitchCase { test, consequent });
+        }
+        // §14.12.1 — VarDeclaredNames must not overlap LexicallyDeclaredNames in CaseBlock
+        if !lexical_names.is_empty() {
+            let mut var_names = Vec::new();
+            for case in &cases {
+                for stmt in &case.consequent {
+                    Self::collect_var_declared_names(stmt, &mut var_names);
+                }
+            }
+            for name in &var_names {
+                if lexical_names.contains(name) {
+                    return Err(ParseError {
+                        message: format!("Identifier '{name}' has already been declared"),
+                    });
+                }
+            }
         }
         self.in_switch -= 1;
         self.eat(&Token::RightBrace)?;
