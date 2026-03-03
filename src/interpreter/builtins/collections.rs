@@ -982,7 +982,10 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     return Completion::Normal(create_set_iterator(
                         interp,
@@ -1017,7 +1020,10 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     return Completion::Normal(create_set_iterator(
                         interp,
@@ -1041,7 +1047,10 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_set = { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" };
+                    let has_set = {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    };
                     if has_set {
                         let mut value = args.first().cloned().unwrap_or(JsValue::Undefined);
                         if let JsValue::Number(n) = &value
@@ -1075,7 +1084,13 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let (is_set, set_data) = { let b = obj.borrow(); (b.set_data.is_some() && b.class_name != "WeakSet", b.set_data.clone()) };
+                    let (is_set, set_data) = {
+                        let b = obj.borrow();
+                        (
+                            b.set_data.is_some() && b.class_name != "WeakSet",
+                            b.set_data.clone(),
+                        )
+                    };
                     if is_set && let Some(entries) = set_data {
                         let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                         for entry in entries.iter().flatten() {
@@ -1100,7 +1115,10 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_set = { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" };
+                    let has_set = {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    };
                     if has_set {
                         let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let mut borrowed = obj.borrow_mut();
@@ -1132,7 +1150,10 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_set = { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" };
+                    let has_set = {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    };
                     if has_set {
                         obj.borrow_mut().set_data = Some(Vec::new());
                         return Completion::Normal(JsValue::Undefined);
@@ -1194,7 +1215,13 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let (has_set, set_data) = { let b = obj.borrow(); (b.set_data.is_some() && b.class_name != "WeakSet", b.set_data.clone()) };
+                    let (has_set, set_data) = {
+                        let b = obj.borrow();
+                        (
+                            b.set_data.is_some() && b.class_name != "WeakSet",
+                            b.set_data.clone(),
+                        )
+                    };
                     if has_set {
                         if let Some(entries) = set_data {
                             let count = entries.iter().filter(|e| e.is_some()).count();
@@ -1361,7 +1388,10 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1407,7 +1437,10 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1471,7 +1504,10 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1537,7 +1573,10 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1594,7 +1633,10 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1646,7 +1688,10 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1692,7 +1737,10 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
+                    && {
+                        let b = obj.borrow();
+                        b.set_data.is_some() && b.class_name != "WeakSet"
+                    }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -2061,14 +2109,14 @@ impl Interpreter {
                 if let JsValue::Object(o) = &this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let is_weakmap = obj.borrow().map_data.is_some()
-                        && obj.borrow().class_name == "WeakMap";
+                    let is_weakmap =
+                        obj.borrow().map_data.is_some() && obj.borrow().class_name == "WeakMap";
                     if is_weakmap {
                         let key = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         if !interp.can_be_held_weakly(&key) {
-                            let err = interp
-                                .create_type_error("Invalid value used as weak map key");
+                            let err =
+                                interp.create_type_error("Invalid value used as weak map key");
                             return Completion::Throw(err);
                         }
                         {
@@ -2086,8 +2134,8 @@ impl Interpreter {
                         return Completion::Normal(value);
                     }
                 }
-                let err = interp
-                    .create_type_error("WeakMap.prototype.getOrInsert requires a WeakMap");
+                let err =
+                    interp.create_type_error("WeakMap.prototype.getOrInsert requires a WeakMap");
                 Completion::Throw(err)
             },
         ));

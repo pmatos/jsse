@@ -1823,13 +1823,25 @@ impl JsObjectData {
             {
                 // String index property: {value: char, writable: false, enumerable: true, configurable: false}
                 // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
-                if desc.configurable == Some(true) { return false; }
-                if desc.enumerable == Some(false) { return false; }
-                if desc.get.is_some() || desc.set.is_some() { return false; }
-                if desc.writable == Some(true) { return false; }
+                if desc.configurable == Some(true) {
+                    return false;
+                }
+                if desc.enumerable == Some(false) {
+                    return false;
+                }
+                if desc.get.is_some() || desc.set.is_some() {
+                    return false;
+                }
+                if desc.writable == Some(true) {
+                    return false;
+                }
                 if let Some(ref v) = desc.value {
-                    let char_val = JsValue::String(crate::types::JsString { code_units: vec![s.code_units[idx]] });
-                    if !same_value(v, &char_val) { return false; }
+                    let char_val = JsValue::String(crate::types::JsString {
+                        code_units: vec![s.code_units[idx]],
+                    });
+                    if !same_value(v, &char_val) {
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -2000,7 +2012,10 @@ impl JsObjectData {
 
             // §10.4.4.3 step 4: if isMapped && data desc && writable:false but no value,
             // inject the current live binding value so the stored property gets the right value.
-            if desc_is_data && !desc_is_accessor && desc_writable == Some(false) && !desc_has_value
+            if desc_is_data
+                && !desc_is_accessor
+                && desc_writable == Some(false)
+                && !desc_has_value
                 && let Some(ref map) = self.parameter_map
                 && let Some((env_ref, param_name)) = map.get(&key)
                 && let Some(live_val) = env_ref.borrow().get(param_name)
@@ -2012,7 +2027,11 @@ impl JsObjectData {
             let current_is_accessor = current.is_accessor_descriptor();
 
             // Save original desc value for step 7 parameter_map handling (before it's moved into merged)
-            let desc_value_for_step7: Option<JsValue> = if desc_has_value { desc.value.clone() } else { None };
+            let desc_value_for_step7: Option<JsValue> = if desc_has_value {
+                desc.value.clone()
+            } else {
+                None
+            };
 
             // Build merged descriptor
             let mut merged = if desc_is_data
@@ -2077,7 +2096,11 @@ impl JsObjectData {
             // handled by array_set_length() in mod.rs, which calls this function.
             // Do NOT duplicate that logic here.
             // Save key before it's moved into insert
-            let key_for_step7 = if self.parameter_map.is_some() { Some(key.clone()) } else { None };
+            let key_for_step7 = if self.parameter_map.is_some() {
+                Some(key.clone())
+            } else {
+                None
+            };
             self.properties.insert(key, merged);
 
             // §10.4.4.3 step 7: post-define parameter map handling

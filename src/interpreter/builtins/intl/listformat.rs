@@ -1,6 +1,6 @@
 use super::super::super::*;
-use icu::list::options::{ListFormatterOptions, ListLength};
 use icu::list::ListFormatter;
+use icu::list::options::{ListFormatterOptions, ListLength};
 use icu::locale::Locale as IcuLocale;
 
 pub(crate) fn create_list_formatter(

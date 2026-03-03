@@ -1171,19 +1171,11 @@ fn era_long(year: i32) -> &'static str {
 }
 
 fn era_short(year: i32) -> &'static str {
-    if year > 0 {
-        "AD"
-    } else {
-        "BC"
-    }
+    if year > 0 { "AD" } else { "BC" }
 }
 
 fn era_narrow(year: i32) -> &'static str {
-    if year > 0 {
-        "A"
-    } else {
-        "B"
-    }
+    if year > 0 { "A" } else { "B" }
 }
 
 fn day_period_text(hour: u32, style: &str) -> &'static str {

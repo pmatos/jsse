@@ -821,7 +821,18 @@ impl Interpreter {
                             has_simple_params: true,
                             is_simple_catch_scope: false,
                         }));
-                        self.exec_statement(body, &with_env)
+                        let c = self.exec_statement(body, &with_env);
+                        // UpdateEmpty(C, undefined) per §14.11.2 step 9
+                        match c {
+                            Completion::Empty => Completion::Normal(JsValue::Undefined),
+                            Completion::Break(label, None) => {
+                                Completion::Break(label, Some(JsValue::Undefined))
+                            }
+                            Completion::Continue(label, None) => {
+                                Completion::Continue(label, Some(JsValue::Undefined))
+                            }
+                            other => other,
+                        }
                     } else {
                         Completion::Normal(JsValue::Undefined)
                     }
@@ -2057,13 +2068,12 @@ impl Interpreter {
         match expr {
             Expression::Call(_, _) | Expression::TaggedTemplate(_, _) => true,
             Expression::Conditional(_, cons, alt) => {
-                Self::expr_may_contain_tail_call(cons)
-                    || Self::expr_may_contain_tail_call(alt)
+                Self::expr_may_contain_tail_call(cons) || Self::expr_may_contain_tail_call(alt)
             }
             Expression::Logical(_, _, right) => Self::expr_may_contain_tail_call(right),
-            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                exprs.last().map_or(false, |e| Self::expr_may_contain_tail_call(e))
-            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => exprs
+                .last()
+                .map_or(false, |e| Self::expr_may_contain_tail_call(e)),
             _ => false,
         }
     }

@@ -190,11 +190,7 @@ impl JsValue {
 // §6.1.6.1 Number type operations
 pub mod number_ops {
     pub fn unary_minus(x: f64) -> f64 {
-        if x.is_nan() {
-            f64::NAN
-        } else {
-            -x
-        }
+        if x.is_nan() { f64::NAN } else { -x }
     }
 
     pub fn bitwise_not(x: f64) -> f64 {

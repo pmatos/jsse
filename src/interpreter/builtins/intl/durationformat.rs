@@ -265,11 +265,7 @@ fn base_locale(locale_str: &str) -> String {
 }
 
 fn normalize_zero(v: f64) -> f64 {
-    if v == 0.0 {
-        0.0
-    } else {
-        v
-    }
+    if v == 0.0 { 0.0 } else { v }
 }
 
 fn format_f64_no_trailing(v: f64) -> String {

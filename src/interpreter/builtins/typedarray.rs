@@ -4476,10 +4476,9 @@ impl Interpreter {
             };
             // §22.2.4.4 step 4+6: AllocateTypedArrayBuffer requires len <= 2^53-1
             if len_f > 9007199254740991.0 {
-                return Err(Completion::Throw(self.create_error(
-                    "RangeError",
-                    "Invalid typed array length",
-                )));
+                return Err(Completion::Throw(
+                    self.create_error("RangeError", "Invalid typed array length"),
+                ));
             }
             let len = len_f as usize;
             let mut values = Vec::new();

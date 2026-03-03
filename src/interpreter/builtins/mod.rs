@@ -400,9 +400,9 @@ impl Interpreter {
                     let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
                     // OrdinaryCreateFromConstructor — realm-aware prototype
-                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.error_prototype.clone()
-                    }) {
+                    let proto = match interp
+                        .get_prototype_from_new_target_realm(|realm| realm.error_prototype.clone())
+                    {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -645,9 +645,13 @@ impl Interpreter {
 
             // Store native error prototype on realm
             match name {
-                "SyntaxError" => self.realm_mut().syntax_error_prototype = Some(native_proto.clone()),
+                "SyntaxError" => {
+                    self.realm_mut().syntax_error_prototype = Some(native_proto.clone())
+                }
                 "TypeError" => self.realm_mut().type_error_prototype = Some(native_proto.clone()),
-                "ReferenceError" => self.realm_mut().reference_error_prototype = Some(native_proto.clone()),
+                "ReferenceError" => {
+                    self.realm_mut().reference_error_prototype = Some(native_proto.clone())
+                }
                 "RangeError" => self.realm_mut().range_error_prototype = Some(native_proto.clone()),
                 "URIError" => self.realm_mut().uri_error_prototype = Some(native_proto.clone()),
                 "EvalError" => self.realm_mut().eval_error_prototype = Some(native_proto.clone()),
@@ -1039,7 +1043,9 @@ impl Interpreter {
                         .array_prototype
                         .as_ref()
                         .and_then(|p| p.borrow().id);
-                    interp.apply_new_target_prototype(o.id, default_proto_id, |realm| realm.array_prototype.clone());
+                    interp.apply_new_target_prototype(o.id, default_proto_id, |realm| {
+                        realm.array_prototype.clone()
+                    });
                 }
                 Completion::Normal(arr)
             }),
@@ -1216,9 +1222,9 @@ impl Interpreter {
                     if let JsValue::Object(o) = this
                         && let Some(obj) = interp.get_object(o.id)
                     {
-                        let proto = match interp.get_prototype_from_new_target_realm(
-                            |realm| realm.string_prototype.clone()
-                        ) {
+                        let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                            realm.string_prototype.clone()
+                        }) {
                             Ok(p) => p,
                             Err(e) => return Completion::Throw(e),
                         };
@@ -1339,9 +1345,9 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
-                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.number_prototype.clone()
-                    }) {
+                    let proto = match interp
+                        .get_prototype_from_new_target_realm(|realm| realm.number_prototype.clone())
+                    {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -2863,7 +2869,12 @@ impl Interpreter {
                 && let Some(af) = self.get_object(af_obj.id)
             {
                 // §27.7.1 %AsyncFunction% inherits from %Function%
-                let function_ctor = self.realm().global_env.borrow().get("Function").unwrap_or(JsValue::Undefined);
+                let function_ctor = self
+                    .realm()
+                    .global_env
+                    .borrow()
+                    .get("Function")
+                    .unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(fc) = &function_ctor {
                     if let Some(fc_obj) = self.get_object(fc.id) {
                         af.borrow_mut().prototype = Some(fc_obj.clone());
@@ -2989,7 +3000,12 @@ impl Interpreter {
                 && let Some(gf) = self.get_object(gf_obj.id)
             {
                 // §27.3.1 %GeneratorFunction% inherits from %Function%
-                let function_ctor = self.realm().global_env.borrow().get("Function").unwrap_or(JsValue::Undefined);
+                let function_ctor = self
+                    .realm()
+                    .global_env
+                    .borrow()
+                    .get("Function")
+                    .unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(fc) = &function_ctor {
                     if let Some(fc_obj) = self.get_object(fc.id) {
                         gf.borrow_mut().prototype = Some(fc_obj.clone());
@@ -3117,7 +3133,12 @@ impl Interpreter {
                 && let Some(agf) = self.get_object(agf_obj.id)
             {
                 // §27.4.1 %AsyncGeneratorFunction% inherits from %Function%
-                let function_ctor = self.realm().global_env.borrow().get("Function").unwrap_or(JsValue::Undefined);
+                let function_ctor = self
+                    .realm()
+                    .global_env
+                    .borrow()
+                    .get("Function")
+                    .unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(fc) = &function_ctor {
                     if let Some(fc_obj) = self.get_object(fc.id) {
                         agf.borrow_mut().prototype = Some(fc_obj.clone());
@@ -3381,7 +3402,11 @@ impl Interpreter {
                                 // floor(abs(n)) mod 2^16, with sign handling
                                 let int = n.abs().floor();
                                 let int16bit = (int % 65536.0) as u32;
-                                if n < 0.0 && int16bit != 0 { (65536 - int16bit) as u16 } else { int16bit as u16 }
+                                if n < 0.0 && int16bit != 0 {
+                                    (65536 - int16bit) as u16
+                                } else {
+                                    int16bit as u16
+                                }
                             };
                             code_units.push(cu);
                         }
@@ -3401,15 +3426,17 @@ impl Interpreter {
                             };
                             // Not an integral Number → RangeError
                             if next_cp != next_cp.trunc() || next_cp.is_infinite() {
-                                return Completion::Throw(interp.create_range_error(&format!(
-                                    "Invalid code point {next_cp}"
-                                )));
+                                return Completion::Throw(
+                                    interp.create_range_error(&format!(
+                                        "Invalid code point {next_cp}"
+                                    )),
+                                );
                             }
                             let cp = next_cp as i64;
                             if cp < 0 || cp > 0x10FFFF {
-                                return Completion::Throw(interp.create_range_error(&format!(
-                                    "Invalid code point {cp}"
-                                )));
+                                return Completion::Throw(
+                                    interp.create_range_error(&format!("Invalid code point {cp}")),
+                                );
                             }
                             if let Some(c) = char::from_u32(cp as u32) {
                                 let mut buf = [0u16; 2];
@@ -3633,7 +3660,9 @@ impl Interpreter {
             for name in &global_names {
                 match *name {
                     "NaN" | "Infinity" | "undefined" => continue,
-                    _ => { env.bindings.remove(*name); }
+                    _ => {
+                        env.bindings.remove(*name);
+                    }
                 }
             }
         }
@@ -4701,11 +4730,16 @@ impl Interpreter {
                             {
                                 let b = obj.borrow();
                                 if b.typed_array_info.is_some() {
-                                    let has_elements = b.typed_array_info.as_ref()
+                                    let has_elements = b
+                                        .typed_array_info
+                                        .as_ref()
                                         .map_or(false, |ta| ta.array_length > 0);
-                                    let is_resizable = b.view_buffer_object_id
+                                    let is_resizable = b
+                                        .view_buffer_object_id
                                         .and_then(|buf_id| interp.get_object(buf_id))
-                                        .map_or(false, |buf| buf.borrow().arraybuffer_max_byte_length.is_some());
+                                        .map_or(false, |buf| {
+                                            buf.borrow().arraybuffer_max_byte_length.is_some()
+                                        });
                                     if has_elements || is_resizable {
                                         return Completion::Throw(interp.create_type_error(
                                             "Cannot freeze array buffer views with elements",
@@ -6934,9 +6968,12 @@ impl Interpreter {
                         Ok(desc) => {
                             if is_ta {
                                 match interp.typed_array_define_own_property(o.id, &key, &desc) {
-                                    Ok(Some(result)) => return Completion::Normal(JsValue::Boolean(result)),
+                                    Ok(Some(result)) => {
+                                        return Completion::Normal(JsValue::Boolean(result));
+                                    }
                                     Ok(None) => {
-                                        let result = obj.borrow_mut().define_own_property(key, desc);
+                                        let result =
+                                            obj.borrow_mut().define_own_property(key, desc);
                                         return Completion::Normal(JsValue::Boolean(result));
                                     }
                                     Err(e) => return Completion::Throw(e),
@@ -7430,7 +7467,8 @@ impl Interpreter {
                 }
                 // TypedArray [[Set]] exotic — §10.4.5.5
                 if let JsValue::Object(ref o) = target {
-                    let ta_info_opt = interp.get_object(o.id)
+                    let ta_info_opt = interp
+                        .get_object(o.id)
                         .and_then(|obj| obj.borrow().typed_array_info.clone());
                     if let Some(ta_info) = ta_info_opt {
                         if let Some(index) = canonical_numeric_index_string(&key) {
@@ -7463,7 +7501,8 @@ impl Interpreter {
                             }
                             // Index is in bounds in target: OrdinarySet to receiver
                             if let JsValue::Object(ref r) = receiver {
-                                let recv_ta_opt = interp.get_object(r.id)
+                                let recv_ta_opt = interp
+                                    .get_object(r.id)
                                     .and_then(|obj| obj.borrow().typed_array_info.clone());
                                 if let Some(recv_ta) = recv_ta_opt {
                                     // Receiver is TypedArray: IntegerIndexedElementSet
@@ -7504,7 +7543,8 @@ impl Interpreter {
                                         };
                                         recv_obj.borrow_mut().define_own_property(key, update_desc);
                                     } else {
-                                        let success = recv_obj.borrow_mut().set_property_value(&key, value);
+                                        let success =
+                                            recv_obj.borrow_mut().set_property_value(&key, value);
                                         return Completion::Normal(JsValue::Boolean(success));
                                     }
                                     return Completion::Normal(JsValue::Boolean(true));
@@ -7549,13 +7589,19 @@ impl Interpreter {
                                                     Err(e) => return Completion::Throw(e),
                                                 }
                                             } else {
-                                                JsValue::Number(match interp.to_number_value(&value) {
-                                                    Ok(n) => n,
-                                                    Err(e) => return Completion::Throw(e),
-                                                })
+                                                JsValue::Number(
+                                                    match interp.to_number_value(&value) {
+                                                        Ok(n) => n,
+                                                        Err(e) => return Completion::Throw(e),
+                                                    },
+                                                )
                                             };
                                             if is_valid_integer_index(&ta_clone, index) {
-                                                typed_array_set_index(&ta_clone, index as usize, &num_val);
+                                                typed_array_set_index(
+                                                    &ta_clone,
+                                                    index as usize,
+                                                    &num_val,
+                                                );
                                             }
                                             return Completion::Normal(JsValue::Boolean(true));
                                         } else if !is_valid_integer_index(ta, index) {
@@ -7607,32 +7653,83 @@ impl Interpreter {
                 if !matches!(receiver, JsValue::Object(_)) {
                     return Completion::Normal(JsValue::Boolean(false));
                 }
-                if let JsValue::Object(ref r) = receiver
-                    && let Some(recv_obj) = interp.get_object(r.id)
-                {
-                    let existing = recv_obj.borrow().get_own_property(&key);
-                    if let Some(ref ed) = existing {
-                        // If receiver's own prop is accessor, return false
-                        if ed.get.is_some() || ed.set.is_some() {
-                            return Completion::Normal(JsValue::Boolean(false));
+                if let JsValue::Object(ref r) = receiver {
+                    let is_proxy_recv = interp.get_proxy_info(r.id).is_some();
+                    if is_proxy_recv {
+                        // §10.1.9.2: Receiver.[[GetOwnProperty]](P)
+                        let existing_val =
+                            match interp.proxy_get_own_property_descriptor(r.id, &key) {
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                        if matches!(existing_val, JsValue::Undefined) {
+                            // CreateDataProperty(Receiver, P, V)
+                            let create_desc = PropertyDescriptor {
+                                value: Some(value),
+                                writable: Some(true),
+                                enumerable: Some(true),
+                                configurable: Some(true),
+                                get: None,
+                                set: None,
+                            };
+                            let desc_val = interp.from_property_descriptor(&create_desc);
+                            match interp.proxy_define_own_property(r.id, key, &desc_val) {
+                                Ok(success) => {
+                                    return Completion::Normal(JsValue::Boolean(success));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else {
+                            let existing_desc = match interp.to_property_descriptor(&existing_val) {
+                                Ok(d) => d,
+                                Err(Some(e)) => return Completion::Throw(e),
+                                Err(None) => return Completion::Normal(JsValue::Boolean(false)),
+                            };
+                            if existing_desc.is_accessor_descriptor() {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
+                            if existing_desc.writable == Some(false) {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
+                            // Receiver.[[DefineOwnProperty]](P, {[[Value]]: V})
+                            let val_desc = PropertyDescriptor {
+                                value: Some(value),
+                                writable: None,
+                                enumerable: None,
+                                configurable: None,
+                                get: None,
+                                set: None,
+                            };
+                            let desc_val = interp.from_property_descriptor(&val_desc);
+                            match interp.proxy_define_own_property(r.id, key, &desc_val) {
+                                Ok(success) => {
+                                    return Completion::Normal(JsValue::Boolean(success));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
                         }
-                        // If non-writable, return false
-                        if ed.writable == Some(false) {
-                            return Completion::Normal(JsValue::Boolean(false));
+                    }
+                    if let Some(recv_obj) = interp.get_object(r.id) {
+                        let existing = recv_obj.borrow().get_own_property(&key);
+                        if let Some(ref ed) = existing {
+                            if ed.get.is_some() || ed.set.is_some() {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
+                            if ed.writable == Some(false) {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
+                            let update_desc = PropertyDescriptor {
+                                value: Some(value),
+                                writable: None,
+                                enumerable: None,
+                                configurable: None,
+                                get: None,
+                                set: None,
+                            };
+                            recv_obj.borrow_mut().define_own_property(key, update_desc);
+                        } else {
+                            recv_obj.borrow_mut().set_property_value(&key, value);
                         }
-                        // Update value via defineProperty
-                        let update_desc = PropertyDescriptor {
-                            value: Some(value),
-                            writable: None,
-                            enumerable: None,
-                            configurable: None,
-                            get: None,
-                            set: None,
-                        };
-                        recv_obj.borrow_mut().define_own_property(key, update_desc);
-                    } else {
-                        // Create new data property on receiver
-                        recv_obj.borrow_mut().set_property_value(&key, value);
                     }
                     return Completion::Normal(JsValue::Boolean(true));
                 }
@@ -8276,18 +8373,19 @@ impl Interpreter {
                 let old_realm = interp.current_realm_id;
                 interp.current_realm_id = eval_realm_id;
 
-                let module_path = match interp.resolve_module_specifier(&specifier, referrer.as_deref()) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        interp.current_realm_id = old_realm;
-                        let err = interp.create_error_in_realm(
-                            caller_realm_id,
-                            "TypeError",
-                            "ShadowRealm importValue: cannot resolve module",
-                        );
-                        return interp.create_rejected_promise(err);
-                    }
-                };
+                let module_path =
+                    match interp.resolve_module_specifier(&specifier, referrer.as_deref()) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            interp.current_realm_id = old_realm;
+                            let err = interp.create_error_in_realm(
+                                caller_realm_id,
+                                "TypeError",
+                                "ShadowRealm importValue: cannot resolve module",
+                            );
+                            return interp.create_rejected_promise(err);
+                        }
+                    };
 
                 let module = match interp.load_module(&module_path) {
                     Ok(m) => m,
@@ -8324,7 +8422,10 @@ impl Interpreter {
                         let err = interp.create_error_in_realm(
                             caller_realm_id,
                             "TypeError",
-                            &format!("ShadowRealm importValue: export '{}' not found", export_name),
+                            &format!(
+                                "ShadowRealm importValue: export '{}' not found",
+                                export_name
+                            ),
                         );
                         return interp.create_rejected_promise(err);
                     }

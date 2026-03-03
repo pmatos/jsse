@@ -1242,11 +1242,7 @@ pub(crate) fn format_number_internal(
             }
             _ => {
                 // "auto"
-                if value < 0.0 {
-                    "-"
-                } else {
-                    ""
-                }
+                if value < 0.0 { "-" } else { "" }
             }
         };
         let num_str = format!("{}{}", sign_prefix, inf_str);
@@ -1407,11 +1403,7 @@ pub(crate) fn format_number_internal(
                 } else {
                     let lo_v = (lo * ri).round() as i64;
                     let hi_v = (hi * ri).round() as i64;
-                    if lo_v % 2 == 0 {
-                        lo * ri
-                    } else {
-                        hi * ri
-                    }
+                    if lo_v % 2 == 0 { lo * ri } else { hi * ri }
                 }
             }
             _ => {

@@ -1252,7 +1252,19 @@ impl<'a> Parser<'a> {
         self.eat(&Token::LeftParen)?;
         let expr = self.parse_expression()?;
         self.eat(&Token::RightParen)?;
+        // §14.11.1: FunctionDeclaration, GeneratorDeclaration, ClassDeclaration
+        // are not allowed in Statement position of WithStatement
+        if matches!(self.current, Token::Keyword(Keyword::Function)) {
+            return Err(self.error("Function declaration not allowed in statement position"));
+        }
+        if matches!(self.current, Token::Keyword(Keyword::Class)) {
+            return Err(self.error("Class declaration not allowed in statement position"));
+        }
         let body = self.parse_statement()?;
+        // §14.11.1: IsLabelledFunction(Statement) must be false
+        if Self::is_labelled_function(&body) {
+            return Err(self.error("Labelled function declaration not allowed in with statement"));
+        }
         Ok(Statement::With(expr, Box::new(body)))
     }
     fn parse_expression_statement(&mut self) -> Result<Statement, ParseError> {

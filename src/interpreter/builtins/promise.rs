@@ -398,9 +398,9 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 // OrdinaryCreateFromConstructor — realm-aware prototype
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.promise_prototype.clone()
-                }) {
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.promise_prototype.clone())
+                {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
                 };

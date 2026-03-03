@@ -1417,7 +1417,7 @@ fn rename_groups_and_backrefs(
                     if let Some(end_off) = chars[start..].iter().position(|&c| c == '>') {
                         let name: String = chars[start..start + end_off].iter().collect();
                         if dup_names.contains(&name) {
-                            result.push_str(&format!("\\k<__jsse_qi{}__{}>" , idx, name));
+                            result.push_str(&format!("\\k<__jsse_qi{}__{}>", idx, name));
                             i = start + end_off + 1;
                             continue;
                         }
@@ -1446,7 +1446,7 @@ fn rename_groups_and_backrefs(
                 if let Some(end_off) = chars[name_start..].iter().position(|&c| c == '>') {
                     let name: String = chars[name_start..name_start + end_off].iter().collect();
                     if dup_names.contains(&name) {
-                        result.push_str(&format!("(?<__jsse_qi{}__{}>" , idx, name));
+                        result.push_str(&format!("(?<__jsse_qi{}__{}>", idx, name));
                         i = name_start + end_off + 1;
                         continue;
                     } else {
@@ -1528,8 +1528,7 @@ fn expand_quantified_dup_groups(
                                     quant_end
                                 };
                                 if body_has_dup_named_group(body, dup_names) {
-                                    let has_backrefs =
-                                        body_has_named_backref_to(body, dup_names);
+                                    let has_backrefs = body_has_named_backref_to(body, dup_names);
                                     // Recursively expand the body first
                                     let body_str: String = body.iter().collect();
                                     let expanded_body =
@@ -1554,7 +1553,9 @@ fn expand_quantified_dup_groups(
                                             result.push_str(&format!("(?:{})", anon_body));
                                         } else {
                                             result.push_str(&format!(
-                                                "(?:{}){{{}}}", anon_body, n - 1
+                                                "(?:{}){{{}}}",
+                                                anon_body,
+                                                n - 1
                                             ));
                                         }
                                     }
@@ -1756,7 +1757,9 @@ pub(super) fn translate_js_pattern_ex(
                     match new_chars[j] {
                         '[' if !in_cc2 => in_cc2 = true,
                         ']' if in_cc2 => in_cc2 = false,
-                        '\\' if j + 1 < new_len => { j += 1; }
+                        '\\' if j + 1 < new_len => {
+                            j += 1;
+                        }
                         '(' if !in_cc2
                             && j + 2 < new_len
                             && new_chars[j + 1] == '?'
@@ -1767,7 +1770,9 @@ pub(super) fn translate_js_pattern_ex(
                         {
                             let name_start = j + 3;
                             let mut k = name_start;
-                            while k < new_len && new_chars[k] != '>' { k += 1; }
+                            while k < new_len && new_chars[k] != '>' {
+                                k += 1;
+                            }
                             if k < new_len {
                                 let name = decode_group_name_raw(&new_chars[name_start..k]);
                                 new_names.push(name);
@@ -2386,9 +2391,7 @@ pub(super) fn translate_js_pattern_ex(
                 let name = decode_group_name_raw(&chars[name_start..k]);
                 open_group_names.push(Some(name.clone()));
                 group_num_to_name.insert(groups_seen, name.clone());
-                if group_name_seen.insert(name.clone())
-                    && !name.starts_with("__jsse_qi")
-                {
+                if group_name_seen.insert(name.clone()) && !name.starts_with("__jsse_qi") {
                     group_name_order.push(name.clone());
                 }
                 if duplicated_names.contains(&name) {
@@ -5542,12 +5545,11 @@ impl Interpreter {
                     };
                     if let Some(pobj) = interp.get_object(po_id) {
                         let b = pobj.borrow();
-                        pattern_str =
-                            if let Some(ref s) = b.regexp_original_source {
-                                s.to_rust_string()
-                            } else {
-                                "(?:)".to_string()
-                            };
+                        pattern_str = if let Some(ref s) = b.regexp_original_source {
+                            s.to_rust_string()
+                        } else {
+                            "(?:)".to_string()
+                        };
                         flags_str = if let Some(ref s) = b.regexp_original_flags {
                             s.to_rust_string()
                         } else {
@@ -7175,7 +7177,9 @@ impl Interpreter {
                     pattern_str.clone()
                 };
 
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| realm.regexp_prototype.clone()) {
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.regexp_prototype.clone())
+                {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
                 };

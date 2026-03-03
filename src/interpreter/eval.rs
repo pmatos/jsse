@@ -10628,18 +10628,7 @@ impl Interpreter {
             let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
             let key = "Symbol(Symbol.unscopables)";
             match self.get_object_property(obj_id, key, &this_val) {
-                Completion::Normal(v) => {
-                    if matches!(v, JsValue::Undefined) {
-                        let key2 = "[Symbol.unscopables]";
-                        match self.get_object_property(obj_id, key2, &this_val) {
-                            Completion::Normal(v2) => v2,
-                            Completion::Throw(e) => return Err(e),
-                            _ => JsValue::Undefined,
-                        }
-                    } else {
-                        v
-                    }
-                }
+                Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,
             }
@@ -10762,6 +10751,21 @@ impl Interpreter {
         }
     }
 
+    /// PutValue for unresolvable reference in sloppy mode (§6.2.5.6):
+    /// Set property on the global object.
+    fn set_global_implicit(&mut self, name: &str, value: JsValue) -> Completion {
+        let global_env = self.realm().global_env.clone();
+        if !global_env.borrow().bindings.contains_key(name) {
+            global_env
+                .borrow_mut()
+                .declare_deletable(name, BindingKind::Var);
+        }
+        match global_env.borrow_mut().set(name, value.clone()) {
+            Ok(()) => Completion::Normal(value),
+            Err(_) => Completion::Throw(self.create_type_error("Assignment to constant variable.")),
+        }
+    }
+
     /// Write a value through a captured identifier reference.
     fn put_value_by_ref(
         &mut self,
@@ -10801,16 +10805,7 @@ impl Interpreter {
                                 self.create_reference_error(&format!("{name} is not defined")),
                             )
                         } else {
-                            let var_scope = Environment::find_var_scope(env);
-                            if !var_scope.borrow().bindings.contains_key(name) {
-                                var_scope.borrow_mut().declare(name, BindingKind::Var);
-                            }
-                            match var_scope.borrow_mut().set(name, value.clone()) {
-                                Ok(()) => Completion::Normal(value),
-                                Err(_) => Completion::Throw(
-                                    self.create_type_error("Assignment to constant variable."),
-                                ),
-                            }
+                            self.set_global_implicit(name, value)
                         }
                     }
                     SetBindingCheck::Ok => {
@@ -10845,16 +10840,7 @@ impl Interpreter {
                             self.create_reference_error(&format!("{name} is not defined")),
                         )
                     } else {
-                        let var_scope = Environment::find_var_scope(env);
-                        if !var_scope.borrow().bindings.contains_key(name) {
-                            var_scope.borrow_mut().declare(name, BindingKind::Var);
-                        }
-                        match var_scope.borrow_mut().set(name, value.clone()) {
-                            Ok(()) => Completion::Normal(value),
-                            Err(_) => Completion::Throw(
-                                self.create_type_error("Assignment to constant variable."),
-                            ),
-                        }
+                        self.set_global_implicit(name, value)
                     }
                 }
                 SetBindingCheck::Ok => match env.borrow_mut().set(name, value.clone()) {

@@ -1,7 +1,7 @@
 use super::super::super::*;
 use fixed_decimal::{Decimal, FloatPrecision};
 use icu::experimental::relativetime::{
-    options::Numeric, RelativeTimeFormatter, RelativeTimeFormatterOptions,
+    RelativeTimeFormatter, RelativeTimeFormatterOptions, options::Numeric,
 };
 use icu::locale::Locale as IcuLocale;
 

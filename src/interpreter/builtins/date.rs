@@ -1374,9 +1374,9 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
-                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.date_prototype.clone()
-                    }) {
+                    let proto = match interp
+                        .get_prototype_from_new_target_realm(|realm| realm.date_prototype.clone())
+                    {
                         Ok(p) => p.unwrap_or_else(|| date_proto_clone.clone()),
                         Err(e) => return Completion::Throw(e),
                     };

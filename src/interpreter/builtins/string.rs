@@ -1515,7 +1515,9 @@ impl Interpreter {
                     )),
                 },
             ));
-            proto.borrow_mut().insert_builtin("toString".to_string(), tostring_fn);
+            proto
+                .borrow_mut()
+                .insert_builtin("toString".to_string(), tostring_fn);
 
             let valueof_fn = self.create_function(JsFunction::native(
                 "valueOf".to_string(),
@@ -1542,7 +1544,9 @@ impl Interpreter {
                     )),
                 },
             ));
-            proto.borrow_mut().insert_builtin("valueOf".to_string(), valueof_fn);
+            proto
+                .borrow_mut()
+                .insert_builtin("valueOf".to_string(), valueof_fn);
         }
 
         // Annex B: HTML methods

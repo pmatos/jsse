@@ -554,9 +554,9 @@ impl Interpreter {
                             if is_proxy {
                                 let arr_val =
                                     JsValue::Object(crate::types::JsObject { id: array_id });
-                                let len = match interp.get_object_property(
-                                    array_id, "length", &arr_val,
-                                ) {
+                                let len = match interp
+                                    .get_object_property(array_id, "length", &arr_val)
+                                {
                                     Completion::Normal(JsValue::Number(n)) => n as usize,
                                     Completion::Normal(_) => 0,
                                     c => return c,
@@ -579,17 +579,17 @@ impl Interpreter {
                                 let v = match kind {
                                     IteratorKind::Key => JsValue::Number(index as f64),
                                     IteratorKind::Value => {
-                                        match interp.get_object_property(
-                                            array_id, &idx_str, &arr_val,
-                                        ) {
+                                        match interp
+                                            .get_object_property(array_id, &idx_str, &arr_val)
+                                        {
                                             Completion::Normal(v) => v,
                                             c => return c,
                                         }
                                     }
                                     IteratorKind::KeyValue => {
-                                        let elem = match interp.get_object_property(
-                                            array_id, &idx_str, &arr_val,
-                                        ) {
+                                        let elem = match interp
+                                            .get_object_property(array_id, &idx_str, &arr_val)
+                                        {
                                             Completion::Normal(v) => v,
                                             c => return c,
                                         };

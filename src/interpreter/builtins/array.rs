@@ -230,7 +230,8 @@ fn obj_has_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<boo
 // AsyncIteratorClose: call iterator.return() if it exists (best-effort)
 fn close_async_iterator(interp: &mut Interpreter, iterator: &JsValue) {
     if let JsValue::Object(ref io) = *iterator {
-        if let Completion::Normal(return_fn) = interp.get_object_property(io.id, "return", iterator) {
+        if let Completion::Normal(return_fn) = interp.get_object_property(io.id, "return", iterator)
+        {
             if interp.is_callable(&return_fn) {
                 let _ = interp.call_function(&return_fn, iterator, &[]);
             }
