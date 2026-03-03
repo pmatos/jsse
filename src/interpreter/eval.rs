@@ -10093,7 +10093,7 @@ impl Interpreter {
         }
     }
 
-    fn get_proxy_info(&self, obj_id: u64) -> Option<(bool, Option<u64>, Option<u64>)> {
+    pub(crate) fn get_proxy_info(&self, obj_id: u64) -> Option<(bool, Option<u64>, Option<u64>)> {
         if let Some(obj) = self.get_object(obj_id) {
             let b = obj.borrow();
             if b.is_proxy() || b.proxy_revoked {
@@ -11152,6 +11152,23 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // String exotic [[Delete]]: "length" and valid indices are non-configurable
+            {
+                let borrow = obj.borrow();
+                if borrow.class_name == "String" {
+                    if let Some(JsValue::String(ref s)) = borrow.primitive_value {
+                        if key == "length" {
+                            return Ok(false);
+                        }
+                        if let Ok(idx) = key.parse::<usize>() {
+                            let char_len = s.to_string().chars().count();
+                            if idx < char_len {
+                                return Ok(false);
+                            }
+                        }
+                    }
+                }
+            }
             let mut m = obj.borrow_mut();
             if let Some(desc) = m.properties.get(key)
                 && desc.configurable == Some(false)
@@ -11409,8 +11426,15 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            let is_array = obj.borrow().class_name == "Array";
             match self.to_property_descriptor(desc_val) {
-                Ok(desc) => Ok(obj.borrow_mut().define_own_property(key, desc)),
+                Ok(desc) => {
+                    if is_array {
+                        self.array_define_own_property(obj_id as usize, &key, desc)
+                    } else {
+                        Ok(obj.borrow_mut().define_own_property(key, desc))
+                    }
+                }
                 Err(Some(e)) => Err(e),
                 Err(None) => Ok(false),
             }

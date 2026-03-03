@@ -55,7 +55,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | TypedArray | 96% | 2,732/2,860 |
 | Date | 95% | 1,130/1,188 |
 | Function | 95% | 847/893 |
-| Proxy | 99% | 599/607 |
+| Proxy | 100% | 607/607 |
 | TypedArrayConstructors | 95% | 1,384/1,442 |
 
 ---

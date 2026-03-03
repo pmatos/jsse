@@ -7461,6 +7461,15 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target {
                     let mut cur_id = Some(o.id);
                     'proto_walk: while let Some(cid) = cur_id {
+                        // If cur_obj is a Proxy, delegate to proxy_set
+                        if interp.get_proxy_info(cid).is_some() {
+                            match interp.proxy_set(cid, &key, value.clone(), &receiver) {
+                                Ok(success) => {
+                                    return Completion::Normal(JsValue::Boolean(success));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        }
                         if let Some(cur_obj) = interp.get_object(cid) {
                             // TypedArray [[Set]] §10.4.5.5 via prototype chain
                             {
