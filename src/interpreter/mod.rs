@@ -2154,8 +2154,10 @@ impl Interpreter {
                 len_desc.value = Some(JsValue::Number(actual_new_len as f64));
             }
             // 13.d.iii.2. If newWritable is false, set length writable to false.
-            if !new_writable && let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.writable = Some(false);
+            if !new_writable {
+                if let Some(len_desc) = obj.properties.get_mut("length") {
+                    len_desc.writable = Some(false);
+                }
             }
             return Ok(false);
         }

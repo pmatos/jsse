@@ -505,7 +505,9 @@ impl Interpreter {
                             Completion::Normal(v) => to_js_string(&v),
                             other => return other,
                         };
-                        return if msg.is_empty() {
+                        return if name.is_empty() {
+                            Completion::Normal(JsValue::String(JsString::from_str(&msg)))
+                        } else if msg.is_empty() {
                             Completion::Normal(JsValue::String(JsString::from_str(&name)))
                         } else {
                             Completion::Normal(JsValue::String(JsString::from_str(&format!(

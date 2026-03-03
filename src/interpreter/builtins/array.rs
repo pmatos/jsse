@@ -2773,9 +2773,15 @@ impl Interpreter {
                     );
                 }
 
-                // Check for iterable via @@iterator using get_object_property
-                let using_iterator = if let JsValue::Object(o) = &source {
-                    if let Some(key) = interp.get_symbol_key("iterator") {
+                // §23.1.2.1 step 4: Let usingIterator be ? GetMethod(items, @@iterator).
+                // GetMethod calls GetV which works on any value via ToObject.
+                let using_iterator = if let Some(key) = interp.get_symbol_key("iterator") {
+                    let obj_val = match interp.to_object(&source) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        other => return other,
+                    };
+                    if let JsValue::Object(o) = &obj_val {
                         match interp.get_object_property(o.id, &key, &source) {
                             Completion::Normal(v)
                                 if !matches!(v, JsValue::Undefined | JsValue::Null) =>
@@ -2785,25 +2791,6 @@ impl Interpreter {
                             Completion::Normal(_) => None,
                             Completion::Throw(e) => return Completion::Throw(e),
                             other => return other,
-                        }
-                    } else {
-                        None
-                    }
-                } else if matches!(source, JsValue::String(_)) {
-                    // Strings are iterable
-                    if let Some(key) = interp.get_symbol_key("iterator") {
-                        if let Some(sp) = interp.realm().string_prototype.clone() {
-                            let sp_id = sp.borrow().id.unwrap();
-                            match interp.get_object_property(sp_id, &key, &source) {
-                                Completion::Normal(v)
-                                    if !matches!(v, JsValue::Undefined | JsValue::Null) =>
-                                {
-                                    Some(v)
-                                }
-                                _ => None,
-                            }
-                        } else {
-                            None
                         }
                     } else {
                         None

@@ -2037,56 +2037,9 @@ impl JsObjectData {
             if !self.property_order.contains(&key) {
                 self.property_order.push(key.clone());
             }
-            // Array [[DefineOwnProperty]] §10.4.2.1: handle "length" with ArraySetLength semantics
-            if self.class_name == "Array" && key == "length" {
-                if let Some(JsValue::Number(new_len_f)) = &merged.value {
-                    let new_len = *new_len_f as u32;
-                    let old_len = self
-                        .properties
-                        .get("length")
-                        .and_then(|d| d.value.as_ref())
-                        .and_then(|v| if let JsValue::Number(n) = v { Some(*n as u32) } else { None })
-                        .unwrap_or(0);
-                    if new_len < old_len {
-                        let mut idx_keys: Vec<(u32, String)> = self
-                            .properties
-                            .keys()
-                            .filter_map(|k| {
-                                k.parse::<u64>()
-                                    .ok()
-                                    .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == *k)
-                                    .map(|idx| idx as u32)
-                                    .filter(|&idx| idx >= new_len)
-                                    .map(|idx| (idx, k.clone()))
-                            })
-                            .collect();
-                        idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
-                        let mut actual_new_len = new_len;
-                        for (idx, k) in &idx_keys {
-                            let is_non_configurable = self
-                                .properties
-                                .get(k.as_str())
-                                .is_some_and(|d| d.configurable == Some(false));
-                            if is_non_configurable {
-                                actual_new_len = idx + 1;
-                                break;
-                            }
-                            self.properties.remove(k.as_str());
-                            self.property_order.retain(|p| p != k);
-                        }
-                        if let Some(ref mut elements) = self.array_elements {
-                            elements.truncate(actual_new_len as usize);
-                        }
-                        // Update merged length to actual_new_len
-                        merged.value = Some(JsValue::Number(actual_new_len as f64));
-                        // If we couldn't set to requested length due to non-configurable, return false
-                        if actual_new_len > new_len {
-                            self.properties.insert(key, merged);
-                            return false;
-                        }
-                    }
-                }
-            }
+            // NOTE: Array length shrinking semantics (ArraySetLength §10.4.2.4) are
+            // handled by array_set_length() in mod.rs, which calls this function.
+            // Do NOT duplicate that logic here.
             // Save key before it's moved into insert
             let key_for_step7 = if self.parameter_map.is_some() { Some(key.clone()) } else { None };
             self.properties.insert(key, merged);
