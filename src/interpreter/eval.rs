@@ -6,6 +6,15 @@ enum IdentifierRef {
     SpecificEnv(EnvRef),
 }
 
+/// Pre-evaluated lref for destructuring assignment targets.
+/// ToPropertyKey is deferred to PutValue time per spec §13.15.5.
+enum DestructLRef {
+    /// Regular member: base object + raw key (before ToPropertyKey)
+    Member(JsValue, JsValue),
+    /// Private field: base object + private name
+    Private(JsValue, String),
+}
+
 impl Interpreter {
     fn resolve_private_name(&self, source_name: &str, env: &EnvRef) -> String {
         let mut current = Some(env.clone());
@@ -606,9 +615,9 @@ impl Interpreter {
                                 if is_exotic {
                                     drop(obj_b);
                                     if is_strict {
-                                        return Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot delete property '{key}' of object"
-                                        )));
+                                        return Completion::Throw(self.create_type_error(
+                                            &format!("Cannot delete property '{key}' of object"),
+                                        ));
                                     }
                                     return Completion::Normal(JsValue::Boolean(false));
                                 }
@@ -3702,6 +3711,57 @@ impl Interpreter {
         self.set_member_property_with_base(obj_val, prop, val, env)
     }
 
+    fn set_private_field(
+        &mut self,
+        obj_val: &JsValue,
+        name: &str,
+        val: JsValue,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        let branded = self.resolve_private_name(name, env);
+        match obj_val {
+            JsValue::Object(o) => {
+                if let Some(obj) = self.get_object(o.id) {
+                    let elem = obj.borrow().private_fields.get(&branded).cloned();
+                    match elem {
+                        Some(PrivateElement::Field(_)) => {
+                            obj.borrow_mut()
+                                .private_fields
+                                .insert(branded, PrivateElement::Field(val));
+                            Ok(())
+                        }
+                        Some(PrivateElement::Method(_)) => Err(self.create_type_error(
+                            &format!("Cannot assign to private method #{name}"),
+                        )),
+                        Some(PrivateElement::Accessor { set, .. }) => {
+                            if let Some(setter) = &set {
+                                let setter = setter.clone();
+                                let obj_val = obj_val.clone();
+                                match self.call_function(&setter, &obj_val, &[val]) {
+                                    Completion::Normal(_) => Ok(()),
+                                    Completion::Throw(e) => Err(e),
+                                    _ => Ok(()),
+                                }
+                            } else {
+                                Err(self.create_type_error(&format!(
+                                    "Cannot set private member #{name} which has no setter"
+                                )))
+                            }
+                        }
+                        None => Err(self.create_type_error(&format!(
+                            "Cannot write private member #{name} to an object whose class did not declare it"
+                        ))),
+                    }
+                } else {
+                    Ok(())
+                }
+            }
+            _ => Err(self.create_type_error(&format!(
+                "Cannot write private member #{name} to a non-object"
+            ))),
+        }
+    }
+
     fn set_member_property_with_base(
         &mut self,
         obj_val: JsValue,
@@ -3710,47 +3770,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         if let MemberProperty::Private(name) = prop {
-            let branded = self.resolve_private_name(name, env);
-            return match &obj_val {
-                JsValue::Object(o) => {
-                    if let Some(obj) = self.get_object(o.id) {
-                        let elem = obj.borrow().private_fields.get(&branded).cloned();
-                        match elem {
-                            Some(PrivateElement::Field(_)) => {
-                                obj.borrow_mut()
-                                    .private_fields
-                                    .insert(branded, PrivateElement::Field(val));
-                                Ok(())
-                            }
-                            Some(PrivateElement::Method(_)) => Err(self.create_type_error(
-                                &format!("Cannot assign to private method #{name}"),
-                            )),
-                            Some(PrivateElement::Accessor { set, .. }) => {
-                                if let Some(setter) = &set {
-                                    let setter = setter.clone();
-                                    match self.call_function(&setter, &obj_val, &[val]) {
-                                        Completion::Normal(_) => Ok(()),
-                                        Completion::Throw(e) => Err(e),
-                                        _ => Ok(()),
-                                    }
-                                } else {
-                                    Err(self.create_type_error(&format!(
-                                        "Cannot set private member #{name} which has no setter"
-                                    )))
-                                }
-                            }
-                            None => Err(self.create_type_error(&format!(
-                                "Cannot write private member #{name} to an object whose class did not declare it"
-                            ))),
-                        }
-                    } else {
-                        Ok(())
-                    }
-                }
-                _ => Err(self.create_type_error(&format!(
-                    "Cannot write private member #{name} to a non-object"
-                ))),
-            };
+            return self.set_private_field(&obj_val, name, val, env);
         }
 
         let key = match prop {
@@ -3894,19 +3914,17 @@ impl Interpreter {
     /// Ok(None) for non-member expressions (handled lazily),
     /// Err(e) if evaluation throws.
     /// Sets *yield_val if a yield is encountered.
+    /// Evaluate a member expression as an lref (Reference) for destructuring.
+    /// Returns base + key info — ToPropertyKey is deferred to PutValue time per spec.
     fn eval_member_lhs_ref(
         &mut self,
         target: &Expression,
         env: &EnvRef,
         yield_val: &mut Option<JsValue>,
-    ) -> Result<Option<(JsValue, String)>, JsValue> {
+    ) -> Result<Option<DestructLRef>, JsValue> {
         let Expression::Member(obj_expr, prop) = target else {
             return Ok(None);
         };
-        // Skip private members — they can't throw during key evaluation
-        if matches!(prop, MemberProperty::Private(_)) {
-            return Ok(None);
-        }
 
         let base = match self.eval_expr(obj_expr, env) {
             Completion::Normal(v) => v,
@@ -3918,10 +3936,13 @@ impl Interpreter {
             _ => return Ok(None),
         };
 
-        let key = match prop {
-            MemberProperty::Dot(name) => name.clone(),
+        match prop {
+            MemberProperty::Dot(name) => Ok(Some(DestructLRef::Member(
+                base,
+                JsValue::String(JsString::from_str(name)),
+            ))),
             MemberProperty::Computed(key_expr) => {
-                let kv = match self.eval_expr(key_expr, env) {
+                let raw_key = match self.eval_expr(key_expr, env) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
                     Completion::Yield(v) => {
@@ -3930,12 +3951,10 @@ impl Interpreter {
                     }
                     _ => return Ok(None),
                 };
-                self.to_property_key(&kv)?
+                Ok(Some(DestructLRef::Member(base, raw_key)))
             }
-            MemberProperty::Private(_) => unreachable!(),
-        };
-
-        Ok(Some((base, key)))
+            MemberProperty::Private(name) => Ok(Some(DestructLRef::Private(base, name.clone()))),
+        }
     }
 
     fn destructure_array_assignment(
@@ -4012,9 +4031,23 @@ impl Interpreter {
                     if error.is_none() {
                         let arr = self.create_array(rest);
                         match precomp {
-                            Some((base, key)) => {
-                                let strict = env.borrow().strict;
-                                if let Err(e) = self.set_object_with_key(base, &key, arr, strict) {
+                            Some(DestructLRef::Member(base, raw_key)) => {
+                                match self.to_property_key(&raw_key) {
+                                    Ok(key) => {
+                                        let strict = env.borrow().strict;
+                                        if let Err(e) =
+                                            self.set_object_with_key(base, &key, arr, strict)
+                                        {
+                                            error = Some(e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error = Some(e);
+                                    }
+                                }
+                            }
+                            Some(DestructLRef::Private(base, ref name)) => {
+                                if let Err(e) = self.set_private_field(&base, name, arr, env) {
                                     error = Some(e);
                                 }
                             }
@@ -4106,9 +4139,25 @@ impl Interpreter {
                     };
 
                     match precomp {
-                        Some((base, key)) => {
-                            let strict = env.borrow().strict;
-                            if let Err(e) = self.set_object_with_key(base, &key, val, strict) {
+                        Some(DestructLRef::Member(base, raw_key)) => {
+                            match self.to_property_key(&raw_key) {
+                                Ok(key) => {
+                                    let strict = env.borrow().strict;
+                                    if let Err(e) =
+                                        self.set_object_with_key(base, &key, val, strict)
+                                    {
+                                        error = Some(e);
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    error = Some(e);
+                                    break;
+                                }
+                            }
+                        }
+                        Some(DestructLRef::Private(base, ref name)) => {
+                            if let Err(e) = self.set_private_field(&base, name, val, env) {
                                 error = Some(e);
                                 break;
                             }
@@ -4245,19 +4294,16 @@ impl Interpreter {
                         (&prop.value, None)
                     };
 
-                    // If target is a member expression, pre-evaluate the base as lref
-                    // before invoking GetV (spec step 1 must happen before step 2).
-                    let pre_base: Option<(JsValue, &MemberProperty)> =
-                        if let Expression::Member(base_expr, prop_member) = target {
-                            match self.eval_expr(base_expr, env) {
-                                Completion::Normal(v) => Some((v, prop_member)),
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                Completion::Yield(v) => return Completion::Yield(v),
-                                other => return other,
-                            }
-                        } else {
-                            None
-                        };
+                    // §13.15.5.6 step 1: evaluate lref (base + key expression)
+                    // before GetV. ToPropertyKey is deferred to PutValue time.
+                    let mut yield_val: Option<JsValue> = None;
+                    let pre_ref = match self.eval_member_lhs_ref(target, env, &mut yield_val) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if let Some(yv) = yield_val {
+                        return Completion::Yield(yv);
+                    }
 
                     // Get property via get_object_property (invokes getters/Proxy)
                     let val = if let JsValue::Object(o) = &obj_val {
@@ -4293,10 +4339,26 @@ impl Interpreter {
                         val
                     };
 
-                    if let Some((base_val, prop_member)) = pre_base {
-                        match self.set_member_property_with_base(base_val, prop_member, val, env) {
-                            Ok(()) => {}
-                            Err(e) => return Completion::Throw(e),
+                    if let Some(lref) = pre_ref {
+                        match lref {
+                            DestructLRef::Member(base_val, raw_key) => {
+                                match self.to_property_key(&raw_key) {
+                                    Ok(key) => {
+                                        let strict = env.borrow().strict;
+                                        if let Err(e) =
+                                            self.set_object_with_key(base_val, &key, val, strict)
+                                        {
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                            DestructLRef::Private(base_val, ref name) => {
+                                if let Err(e) = self.set_private_field(&base_val, name, val, env) {
+                                    return Completion::Throw(e);
+                                }
+                            }
                         }
                     } else {
                         match self.put_value_to_target(target, val, env) {
@@ -4647,9 +4709,10 @@ impl Interpreter {
                 return Completion::Throw(self.create_type_error("Generator is already executing"));
             }
             GeneratorExecutionState::SuspendedStart => (0, Vec::new(), true),
-            GeneratorExecutionState::SuspendedYield { target_yield, prev_sent } => {
-                (*target_yield, prev_sent.clone(), false)
-            }
+            GeneratorExecutionState::SuspendedYield {
+                target_yield,
+                prev_sent,
+            } => (*target_yield, prev_sent.clone(), false),
         };
 
         // Build the full prev_sent_values for this call by appending the current sent_value.
@@ -5006,7 +5069,10 @@ impl Interpreter {
                         self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard => {}
-                SentValueBindingKind::InlineYield { yield_target, prev_sent } => {
+                SentValueBindingKind::InlineYield {
+                    yield_target,
+                    prev_sent,
+                } => {
                     initial_inline_yield_target = Some(*yield_target);
                     initial_inline_yield_sent = Some(sent_value.clone());
                     let mut new_prev = prev_sent.clone();
@@ -6395,7 +6461,10 @@ impl Interpreter {
                         self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
                 }
                 SentValueBindingKind::Discard => {}
-                SentValueBindingKind::InlineYield { yield_target, prev_sent } => {
+                SentValueBindingKind::InlineYield {
+                    yield_target,
+                    prev_sent,
+                } => {
                     initial_inline_yield_target = Some(*yield_target);
                     initial_inline_yield_sent = Some(sent_value.clone());
                     let mut new_prev = prev_sent.clone();
@@ -7262,9 +7331,10 @@ impl Interpreter {
                 return Completion::Normal(promise);
             }
             GeneratorExecutionState::SuspendedStart => (0, Vec::new(), true),
-            GeneratorExecutionState::SuspendedYield { target_yield, prev_sent } => {
-                (*target_yield, prev_sent.clone(), false)
-            }
+            GeneratorExecutionState::SuspendedYield {
+                target_yield,
+                prev_sent,
+            } => (*target_yield, prev_sent.clone(), false),
         };
 
         // Build the full prev_sent_values for this call by appending the current sent_value.
@@ -8060,10 +8130,8 @@ impl Interpreter {
                 // - [[Call]]: new.target = undefined (clear for non-arrow functions)
                 // - [[Construct]]: new.target = newTarget (preserve, set by construct_with_new_target)
                 // - Arrow functions: inherit new.target from enclosing scope (don't clear)
-                let is_arrow_func =
-                    matches!(func, JsFunction::User { is_arrow, .. } if is_arrow);
-                let was_construct =
-                    std::mem::replace(&mut self.calling_as_construct, false);
+                let is_arrow_func = matches!(func, JsFunction::User { is_arrow, .. } if is_arrow);
+                let was_construct = std::mem::replace(&mut self.calling_as_construct, false);
                 let outer_new_target = if !is_arrow_func {
                     let nt = self.new_target.take();
                     if was_construct {
@@ -8236,7 +8304,8 @@ impl Interpreter {
                                 });
                             let gen_id = gen_obj.borrow().id.unwrap();
                             if let Some(obj_rc) = self.get_object(gen_id) {
-                                obj_rc.borrow_mut().generator_realm_id = Some(self.current_realm_id);
+                                obj_rc.borrow_mut().generator_realm_id =
+                                    Some(self.current_realm_id);
                             }
                             self.current_realm_id = caller_realm;
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {
@@ -8358,7 +8427,8 @@ impl Interpreter {
                                 });
                             let gen_id = gen_obj.borrow().id.unwrap();
                             if let Some(obj_rc) = self.get_object(gen_id) {
-                                obj_rc.borrow_mut().generator_realm_id = Some(self.current_realm_id);
+                                obj_rc.borrow_mut().generator_realm_id =
+                                    Some(self.current_realm_id);
                             }
                             self.current_realm_id = caller_realm;
                             return Completion::Normal(JsValue::Object(crate::types::JsObject {
@@ -9486,15 +9556,23 @@ impl Interpreter {
             if is_default_derived {
                 let super_ctor = if let JsValue::Object(o) = &callee_val
                     && let Some(func_obj) = self.get_object(o.id)
-                    && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable.clone()
+                    && let Some(JsFunction::User { ref closure, .. }) =
+                        func_obj.borrow().callable.clone()
                 {
-                    closure.borrow().get("__super__").unwrap_or(JsValue::Undefined)
+                    closure
+                        .borrow()
+                        .get("__super__")
+                        .unwrap_or(JsValue::Undefined)
                 } else {
                     JsValue::Undefined
                 };
                 let prev_new_target = self.new_target.take();
                 self.new_target = Some(callee_val.clone());
-                let result = self.construct_with_new_target(&super_ctor, &evaluated_args, callee_val.clone());
+                let result = self.construct_with_new_target(
+                    &super_ctor,
+                    &evaluated_args,
+                    callee_val.clone(),
+                );
                 if let Completion::Normal(ref new_obj) = result {
                     // Fix prototype: native constructors (e.g. Temporal.*) may create their own
                     // object ignoring `this`. Re-stamp the prototype using the derived class's
@@ -10021,7 +10099,10 @@ impl Interpreter {
         default_proto_id: Option<u64>,
         realm_fallback: F,
     ) where
-        F: Fn(&crate::interpreter::types::Realm) -> Option<std::rc::Rc<std::cell::RefCell<crate::interpreter::types::JsObjectData>>>,
+        F: Fn(
+            &crate::interpreter::types::Realm,
+        )
+            -> Option<std::rc::Rc<std::cell::RefCell<crate::interpreter::types::JsObjectData>>>,
     {
         if let Some(ref nt) = self.new_target.clone()
             && let JsValue::Object(nt_o) = nt
@@ -10888,7 +10969,11 @@ impl Interpreter {
             // TypedArray [[Set]] §10.4.5.5
             let is_ta = obj.borrow().typed_array_info.is_some();
             if is_ta && let Some(index) = canonical_numeric_index_string(key) {
-                let same_val = if let JsValue::Object(ref r) = *receiver { r.id == obj_id } else { false };
+                let same_val = if let JsValue::Object(ref r) = *receiver {
+                    r.id == obj_id
+                } else {
+                    false
+                };
                 if same_val {
                     // SameValue(O, Receiver): IntegerIndexedElementSet
                     let is_bigint = obj
@@ -10947,7 +11032,11 @@ impl Interpreter {
                     return Ok(false);
                 }
                 // OrdinarySetWithOwnDescriptor step 3.c: use Receiver.[[GetOwnProperty]] / [[DefineOwnProperty]]
-                let recv_id = if let JsValue::Object(r) = receiver { Some(r.id) } else { None };
+                let recv_id = if let JsValue::Object(r) = receiver {
+                    Some(r.id)
+                } else {
+                    None
+                };
                 if recv_id == Some(obj_id) {
                     // Common case: receiver is the same object, direct set
                     return Ok(obj.borrow_mut().set_property_value(key, value));
@@ -11008,7 +11097,8 @@ impl Interpreter {
             // Per spec step 1.c.i + 2.c: call Receiver.[[GetOwnProperty]](P) then act on result.
             if let JsValue::Object(recv_o) = receiver {
                 let recv_id = recv_o.id;
-                let is_proxy_recv = self.get_object(recv_id)
+                let is_proxy_recv = self
+                    .get_object(recv_id)
                     .map_or(false, |o| o.borrow().is_proxy() || o.borrow().proxy_revoked);
                 if is_proxy_recv {
                     let existing = match self.proxy_get_own_property_descriptor(recv_id, key) {
@@ -11258,7 +11348,10 @@ impl Interpreter {
         {
             let valid = if let Some(obj) = self.get_object(obj_id) {
                 let b = obj.borrow();
-                b.typed_array_info.as_ref().map(|ta| is_valid_integer_index(ta, index)).unwrap_or(false)
+                b.typed_array_info
+                    .as_ref()
+                    .map(|ta| is_valid_integer_index(ta, index))
+                    .unwrap_or(false)
             } else {
                 false
             };
@@ -11786,7 +11879,11 @@ impl Interpreter {
                         return Ok(false);
                     }
                     // Step 8: IsExtensible(target) — may throw, must use proxy-aware check
-                    let target_id = if let JsValue::Object(ref t) = target_val { t.id } else { return Ok(true); };
+                    let target_id = if let JsValue::Object(ref t) = target_val {
+                        t.id
+                    } else {
+                        return Ok(true);
+                    };
                     let extensible_target = self.proxy_is_extensible(target_id)?;
                     // Step 9: if extensible, no invariant to check
                     if extensible_target {
@@ -11817,7 +11914,11 @@ impl Interpreter {
         } else if let Some(obj) = self.get_object(obj_id) {
             // OrdinarySetPrototypeOf
             let current_proto_id = obj.borrow().prototype.as_ref().and_then(|p| p.borrow().id);
-            let new_proto_id = if let JsValue::Object(p) = proto { Some(p.id) } else { None };
+            let new_proto_id = if let JsValue::Object(p) = proto {
+                Some(p.id)
+            } else {
+                None
+            };
             let same = (matches!(proto, JsValue::Null) && current_proto_id.is_none())
                 || matches!((new_proto_id, current_proto_id), (Some(a), Some(b)) if a == b);
             if same {
@@ -12305,11 +12406,11 @@ impl Interpreter {
             let sv_clone = sv.clone();
             // Step 5.e: proto.[[Prototype]] = superclass.prototype
             // Must use Get() to invoke accessor properties (e.g. getter-defined prototype)
-            let super_proto_val =
-                match self.get_object_property(super_o_id, "prototype", &sv_clone) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
+            let super_proto_val = match self.get_object_property(super_o_id, "prototype", &sv_clone)
+            {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
             // Validate: must be Object or null
             match &super_proto_val {
                 JsValue::Object(_) | JsValue::Null => {}
@@ -12682,9 +12783,9 @@ impl Interpreter {
                             }
                         };
                         if !ok {
-                            return Completion::Throw(self.create_type_error(
-                                "Cannot redefine non-configurable property",
-                            ));
+                            return Completion::Throw(
+                                self.create_type_error("Cannot redefine non-configurable property"),
+                            );
                         }
                     }
                 }
@@ -13211,9 +13312,7 @@ impl Interpreter {
         let result = self.exec_statements(body, &func_env);
         let result = self.dispose_resources(&func_env, result);
         let result = match result {
-            Completion::TailCall { func, this, args } => {
-                self.call_function(&func, &this, &args)
-            }
+            Completion::TailCall { func, this, args } => self.call_function(&func, &this, &args),
             other => other,
         };
         match result {
@@ -13345,7 +13444,12 @@ impl Interpreter {
         self.create_resolved_promise(ns)
     }
 
-    pub(crate) fn create_error_in_realm(&mut self, realm_id: usize, error_type: &str, msg: &str) -> JsValue {
+    pub(crate) fn create_error_in_realm(
+        &mut self,
+        realm_id: usize,
+        error_type: &str,
+        msg: &str,
+    ) -> JsValue {
         let old_realm = self.current_realm_id;
         self.current_realm_id = realm_id;
         let err = self.create_error(error_type, msg);
@@ -13353,7 +13457,11 @@ impl Interpreter {
         err
     }
 
-    pub(crate) fn get_wrapped_value(&mut self, caller_realm_id: usize, value: &JsValue) -> Result<JsValue, JsValue> {
+    pub(crate) fn get_wrapped_value(
+        &mut self,
+        caller_realm_id: usize,
+        value: &JsValue,
+    ) -> Result<JsValue, JsValue> {
         match value {
             JsValue::Undefined
             | JsValue::Null
@@ -13375,7 +13483,11 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn wrapped_function_create(&mut self, caller_realm_id: usize, target_func: &JsValue) -> Result<JsValue, JsValue> {
+    pub(crate) fn wrapped_function_create(
+        &mut self,
+        caller_realm_id: usize,
+        target_func: &JsValue,
+    ) -> Result<JsValue, JsValue> {
         let old_realm = self.current_realm_id;
         self.current_realm_id = caller_realm_id;
 
@@ -13385,11 +13497,9 @@ impl Interpreter {
             let mut o = func_obj.borrow_mut();
             o.prototype = self.realms[caller_realm_id].function_prototype.clone();
             o.class_name = "Function".to_string();
-            o.callable = Some(JsFunction::native(
-                "".to_string(),
-                0,
-                |_, _, _| Completion::Normal(JsValue::Undefined),
-            ));
+            o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
+                Completion::Normal(JsValue::Undefined)
+            }));
             if let JsValue::Object(tf) = target_func {
                 o.wrapped_target_function_id = Some(tf.id);
             }
@@ -13493,7 +13603,7 @@ impl Interpreter {
                 None => {
                     return Completion::Throw(
                         self.create_type_error("WrappedFunction: missing target"),
-                    )
+                    );
                 }
             };
             let b = obj.borrow();
@@ -13502,11 +13612,14 @@ impl Interpreter {
                 None => {
                     return Completion::Throw(
                         self.create_type_error("WrappedFunction: missing target"),
-                    )
+                    );
                 }
             };
             let caller_realm_id = b.wrapped_caller_realm_id.unwrap_or(self.current_realm_id);
-            (JsValue::Object(crate::types::JsObject { id: target_id }), caller_realm_id)
+            (
+                JsValue::Object(crate::types::JsObject { id: target_id }),
+                caller_realm_id,
+            )
         };
 
         let target_realm_id = self.get_function_realm(&target);
@@ -13562,17 +13675,21 @@ impl Interpreter {
             let mut parser = match Parser::new(source_text) {
                 Ok(p) => p,
                 Err(_) => {
-                    return Completion::Throw(
-                        self.create_error_in_realm(caller_realm_id, "SyntaxError", "Invalid source text"),
-                    );
+                    return Completion::Throw(self.create_error_in_realm(
+                        caller_realm_id,
+                        "SyntaxError",
+                        "Invalid source text",
+                    ));
                 }
             };
             match parser.parse_program() {
                 Ok(prog) => prog,
                 Err(e) => {
-                    return Completion::Throw(
-                        self.create_error_in_realm(caller_realm_id, "SyntaxError", &e.to_string()),
-                    );
+                    return Completion::Throw(self.create_error_in_realm(
+                        caller_realm_id,
+                        "SyntaxError",
+                        &e.to_string(),
+                    ));
                 }
             }
         };
@@ -13586,9 +13703,11 @@ impl Interpreter {
             Completion::Normal(v) => v,
             Completion::Empty => JsValue::Undefined,
             _ => {
-                return Completion::Throw(
-                    self.create_error_in_realm(caller_realm_id, "TypeError", "ShadowRealm evaluate error"),
-                );
+                return Completion::Throw(self.create_error_in_realm(
+                    caller_realm_id,
+                    "TypeError",
+                    "ShadowRealm evaluate error",
+                ));
             }
         };
 
