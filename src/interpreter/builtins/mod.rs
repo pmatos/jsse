@@ -6377,7 +6377,6 @@ impl Interpreter {
 
     fn create_async_from_sync_iterator(&mut self, sync_iter: JsValue) -> JsValue {
         let wrapper = self.create_object();
-        // Cache the sync iterator's next method per spec (Iterator Record [[NextMethod]])
         let cached_next = if let JsValue::Object(io) = &sync_iter {
             match self.get_object_property(io.id, "next", &sync_iter) {
                 Completion::Normal(v) if !matches!(v, JsValue::Undefined) => v,
@@ -6386,6 +6385,8 @@ impl Interpreter {
         } else {
             JsValue::Undefined
         };
+
+        // §27.1.2.1 next()
         let sync_for_next = sync_iter.clone();
         let next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
@@ -6397,126 +6398,82 @@ impl Interpreter {
                     std::slice::from_ref(&args[0])
                 };
                 let result = match interp.call_function(&cached_next, &sync_for_next, call_args) {
-                    Completion::Normal(v) => {
-                        if matches!(v, JsValue::Object(_)) {
-                            v
-                        } else {
-                            return Completion::Throw(
-                                interp.create_type_error("Iterator result is not an object"),
-                            );
-                        }
-                    }
-                    Completion::Throw(e) => {
-                        // §27.6.3.2: If syncResult is an abrupt completion, return a rejected promise
+                    Completion::Normal(v) if matches!(v, JsValue::Object(_)) => v,
+                    Completion::Normal(_) => {
+                        let e = interp.create_type_error("Iterator result is not an object");
                         return interp.create_rejected_promise(e);
                     }
+                    Completion::Throw(e) => return interp.create_rejected_promise(e),
                     _ => {
-                        return Completion::Throw(interp.create_type_error("Iterator next failed"));
+                        let e = interp.create_type_error("Iterator next failed");
+                        return interp.create_rejected_promise(e);
                     }
                 };
-                // §27.6.3.3 AsyncFromSyncIteratorContinuation:
-                // Extract done FIRST (step 7+8), then value (step 9+10) per spec order.
-                // IfAbruptRejectPromise: if getter throws, return a rejected promise.
-                let done = match interp.obj_get(&result, "done") {
-                    Ok(v) => v,
-                    Err(e) => return interp.create_rejected_promise(e),
-                };
-                let value = match interp.obj_get(&result, "value") {
-                    Ok(v) => v,
-                    Err(e) => return interp.create_rejected_promise(e),
-                };
-                let done_bool = matches!(done, JsValue::Boolean(true));
-                // valueWrapper = PromiseResolve(value) — if value is a promise, this returns it
-                let value_wrapper = interp.promise_resolve_value(&value);
-                // Chain: when valueWrapper resolves to resolvedVal, yield {value: resolvedVal, done}
-                let outer_promise = interp.create_promise_object();
-                let outer_id = if let JsValue::Object(ref o) = outer_promise {
-                    o.id
-                } else {
-                    0
-                };
-                let then_val = interp.obj_get(&value_wrapper, "then").ok();
-                if let Some(then_fn) = then_val.filter(|v| matches!(v, JsValue::Object(_))) {
-                    let outer_promise_clone = outer_promise.clone();
-                    let fulfill_fn = interp.create_function(JsFunction::native(
-                        "".to_string(),
-                        1,
-                        move |interp, _this, args| {
-                            let resolved_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            let iter_result =
-                                interp.create_iter_result_object(resolved_val, done_bool);
-                            if let JsValue::Object(ref op) = outer_promise_clone {
-                                interp.fulfill_promise(op.id, iter_result);
-                            }
-                            Completion::Normal(JsValue::Undefined)
-                        },
-                    ));
-                    let outer_promise_clone2 = outer_promise.clone();
-                    let reject_fn = interp.create_function(JsFunction::native(
-                        "".to_string(),
-                        1,
-                        move |interp, _this, args| {
-                            let err = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            if let JsValue::Object(ref op) = outer_promise_clone2 {
-                                interp.reject_promise(op.id, err);
-                            }
-                            Completion::Normal(JsValue::Undefined)
-                        },
-                    ));
-                    let _ =
-                        interp.call_function(&then_fn, &value_wrapper, &[fulfill_fn, reject_fn]);
-                } else {
-                    // value_wrapper is not a promise (or doesn't have .then), resolve directly
-                    let iter_result = interp.create_iter_result_object(value, done_bool);
-                    interp.fulfill_promise(outer_id, iter_result);
-                }
-                Completion::Normal(outer_promise)
+                // AsyncFromSyncIteratorContinuation(result, promiseCap, syncIterRec, closeOnRejection=true)
+                interp.async_from_sync_continuation(result, sync_for_next.clone(), true)
             },
         ));
         wrapper
             .borrow_mut()
             .insert_builtin("next".to_string(), next_fn);
 
+        // §27.1.2.2 return()
         let sync_for_return = sync_iter.clone();
         let return_fn = self.create_function(JsFunction::native(
             "return".to_string(),
             1,
             move |interp, _this, args| {
+                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value_present = !args.is_empty();
                 if let JsValue::Object(io) = &sync_for_return {
+                    // GetMethod(syncIterator, "return")
                     let ret_fn = match interp.get_object_property(io.id, "return", &sync_for_return)
                     {
-                        Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
-                        Completion::Throw(e) => return Completion::Throw(e),
+                        Completion::Normal(v) if interp.is_callable(&v) => Some(v),
+                        Completion::Throw(e) => return interp.create_rejected_promise(e),
                         _ => None,
                     };
                     if let Some(ret_fn) = ret_fn {
-                        match interp.call_function(&ret_fn, &sync_for_return, args) {
-                            Completion::Normal(v) => {
-                                if !matches!(v, JsValue::Object(_)) {
-                                    return Completion::Throw(
-                                        interp
-                                            .create_type_error("Iterator result is not an object"),
-                                    );
+                        // §27.1.2.2 step 8-9: pass value only if present
+                        let call_args: &[JsValue] = if value_present {
+                            std::slice::from_ref(&value)
+                        } else {
+                            &[]
+                        };
+                        let return_result =
+                            match interp.call_function(&ret_fn, &sync_for_return, call_args) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    return interp.create_rejected_promise(e);
                                 }
-                                Completion::Normal(interp.promise_resolve_value(&v))
-                            }
-                            Completion::Throw(e) => Completion::Throw(e),
-                            _ => {
-                                let result =
-                                    interp.create_iter_result_object(JsValue::Undefined, true);
-                                Completion::Normal(interp.promise_resolve_value(&result))
-                            }
+                                _ => JsValue::Undefined,
+                            };
+                        if !matches!(return_result, JsValue::Object(_)) {
+                            let e = interp.create_type_error("Iterator result is not an object");
+                            return interp.create_rejected_promise(e);
                         }
+                        // AsyncFromSyncIteratorContinuation(returnResult, promiseCap, syncIterRec, closeOnRejection=false)
+                        interp.async_from_sync_continuation(
+                            return_result,
+                            sync_for_return.clone(),
+                            false,
+                        )
                     } else {
-                        let result = interp.create_iter_result_object(
-                            args.first().cloned().unwrap_or(JsValue::Undefined),
-                            true,
-                        );
-                        Completion::Normal(interp.promise_resolve_value(&result))
+                        // return is undefined: resolve with {value, done: true}
+                        let iter_result = interp.create_iter_result_object(value, true);
+                        let promise = interp.create_promise_object();
+                        if let JsValue::Object(ref o) = promise {
+                            interp.fulfill_promise(o.id, iter_result);
+                        }
+                        Completion::Normal(promise)
                     }
                 } else {
-                    let result = interp.create_iter_result_object(JsValue::Undefined, true);
-                    Completion::Normal(interp.promise_resolve_value(&result))
+                    let iter_result = interp.create_iter_result_object(JsValue::Undefined, true);
+                    let promise = interp.create_promise_object();
+                    if let JsValue::Object(ref o) = promise {
+                        interp.fulfill_promise(o.id, iter_result);
+                    }
+                    Completion::Normal(promise)
                 }
             },
         ));
@@ -6524,39 +6481,52 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("return".to_string(), return_fn);
 
+        // §27.1.2.3 throw()
         let sync_for_throw = sync_iter;
         let throw_fn = self.create_function(JsFunction::native(
             "throw".to_string(),
             1,
             move |interp, _this, args| {
+                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(io) = &sync_for_throw {
+                    // GetMethod(syncIterator, "throw")
                     let throw_method =
                         match interp.get_object_property(io.id, "throw", &sync_for_throw) {
-                            Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
-                            Completion::Throw(e) => return Completion::Throw(e),
+                            Completion::Normal(v) if interp.is_callable(&v) => Some(v),
+                            Completion::Throw(e) => return interp.create_rejected_promise(e),
                             _ => None,
                         };
                     if let Some(throw_method) = throw_method {
-                        match interp.call_function(&throw_method, &sync_for_throw, args) {
-                            Completion::Normal(v) => {
-                                if !matches!(v, JsValue::Object(_)) {
-                                    return Completion::Throw(
-                                        interp
-                                            .create_type_error("Iterator result is not an object"),
-                                    );
-                                }
-                                Completion::Normal(interp.promise_resolve_value(&v))
-                            }
-                            Completion::Throw(e) => Completion::Throw(e),
-                            _ => {
-                                Completion::Throw(interp.create_type_error("Iterator throw failed"))
-                            }
+                        let throw_result =
+                            match interp.call_function(&throw_method, &sync_for_throw, &[value]) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return interp.create_rejected_promise(e),
+                                _ => JsValue::Undefined,
+                            };
+                        if !matches!(throw_result, JsValue::Object(_)) {
+                            let e = interp.create_type_error("Iterator result is not an object");
+                            return interp.create_rejected_promise(e);
                         }
+                        // AsyncFromSyncIteratorContinuation(throwResult, promiseCap, syncIterRec, closeOnRejection=false)
+                        interp.async_from_sync_continuation(
+                            throw_result,
+                            sync_for_throw.clone(),
+                            false,
+                        )
                     } else {
-                        Completion::Throw(args.first().cloned().unwrap_or(JsValue::Undefined))
+                        // §27.1.2.3 step 8: throw is undefined
+                        // Close the iterator, then reject with TypeError
+                        let close_err = interp.iterator_close_result(&sync_for_throw);
+                        if let Err(e) = close_err {
+                            return interp.create_rejected_promise(e);
+                        }
+                        let e = interp
+                            .create_type_error("The iterator does not provide a 'throw' method");
+                        interp.create_rejected_promise(e)
                     }
                 } else {
-                    Completion::Throw(args.first().cloned().unwrap_or(JsValue::Undefined))
+                    let e = interp.create_type_error("Iterator is not an object");
+                    interp.create_rejected_promise(e)
                 }
             },
         ));
@@ -6566,6 +6536,101 @@ impl Interpreter {
 
         let id = wrapper.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })
+    }
+
+    /// §27.1.2.4 AsyncFromSyncIteratorContinuation(result, promiseCap, syncIterRec, closeOnRejection)
+    fn async_from_sync_continuation(
+        &mut self,
+        result: JsValue,
+        sync_iter: JsValue,
+        close_on_rejection: bool,
+    ) -> Completion {
+        // Step 1-2: IteratorComplete(result) — get done
+        let done = match self.obj_get(&result, "done") {
+            Ok(v) => v,
+            Err(e) => return self.create_rejected_promise(e),
+        };
+        // Step 3-4: IteratorValue(result) — get value
+        let value = match self.obj_get(&result, "value") {
+            Ok(v) => v,
+            Err(e) => return self.create_rejected_promise(e),
+        };
+        let done_bool = matches!(done, JsValue::Boolean(true));
+
+        // Step 5: valueWrapper = PromiseResolve(%Promise%, value)
+        let promise_ctor = self
+            .realm()
+            .global_env
+            .borrow()
+            .get("Promise")
+            .unwrap_or(JsValue::Undefined);
+        let value_wrapper = match self.promise_resolve_with_constructor(&promise_ctor, &value) {
+            Ok(w) => w,
+            Err(e) => {
+                // Step 6: If abrupt, !done, closeOnRejection → IteratorClose first
+                let err = if !done_bool && close_on_rejection {
+                    match self.iterator_close_result(&sync_iter) {
+                        Err(close_err) => close_err,
+                        Ok(_) => e,
+                    }
+                } else {
+                    e
+                };
+                // Step 7: IfAbruptRejectPromise
+                return self.create_rejected_promise(err);
+            }
+        };
+
+        // Steps 8-12: Chain .then(onFulfilled, onRejected) on valueWrapper
+        let outer_promise = self.create_promise_object();
+
+        // onFulfilled: unwrap resolved value into {value: v, done}
+        let outer_clone1 = outer_promise.clone();
+        let on_fulfilled = self.create_function(JsFunction::native(
+            "".to_string(),
+            1,
+            move |interp, _this, args| {
+                let resolved_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iter_result = interp.create_iter_result_object(resolved_val, done_bool);
+                if let JsValue::Object(ref op) = outer_clone1 {
+                    interp.fulfill_promise(op.id, iter_result);
+                }
+                Completion::Normal(JsValue::Undefined)
+            },
+        ));
+
+        // onRejected: if !done && closeOnRejection → close iterator, then reject
+        let outer_clone2 = outer_promise.clone();
+        let on_rejected = if !done_bool && close_on_rejection {
+            let sync_for_close = sync_iter.clone();
+            self.create_function(JsFunction::native(
+                "".to_string(),
+                1,
+                move |interp, _this, args| {
+                    let err = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let _ = interp.iterator_close_result(&sync_for_close);
+                    if let JsValue::Object(ref op) = outer_clone2 {
+                        interp.reject_promise(op.id, err);
+                    }
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ))
+        } else {
+            self.create_function(JsFunction::native(
+                "".to_string(),
+                1,
+                move |interp, _this, args| {
+                    let err = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Object(ref op) = outer_clone2 {
+                        interp.reject_promise(op.id, err);
+                    }
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ))
+        };
+
+        let _ = self.promise_then(&value_wrapper, &on_fulfilled, &on_rejected);
+        Completion::Normal(outer_promise)
     }
 
     pub(crate) fn iterator_next(&mut self, iterator: &JsValue) -> Result<JsValue, JsValue> {

@@ -6058,12 +6058,48 @@ impl Interpreter {
                     Ok(Some(iter_result)) => {
                         let done = match self.iterator_complete(&iter_result) {
                             Ok(d) => d,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineGenerator {
+                                        state_machine: state_machine.clone(),
+                                        func_env: func_env.clone(),
+                                        is_strict,
+                                        execution_state:
+                                            StateMachineExecutionState::SuspendedAtState {
+                                                state_id: resume_state,
+                                            },
+                                        _sent_value: JsValue::Undefined,
+                                        try_stack: try_stack.clone(),
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                        pending_return: None,
+                                    });
+                                return self.generator_throw_state_machine(this, e);
+                            }
                         };
                         if done {
                             let result_value = match self.iterator_value(&iter_result) {
                                 Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
+                                Err(e) => {
+                                    obj_rc.borrow_mut().iterator_state =
+                                        Some(IteratorState::StateMachineGenerator {
+                                            state_machine: state_machine.clone(),
+                                            func_env: func_env.clone(),
+                                            is_strict,
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedAtState {
+                                                    state_id: resume_state,
+                                                },
+                                            _sent_value: JsValue::Undefined,
+                                            try_stack: try_stack.clone(),
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        });
+                                    return self.generator_throw_state_machine(this, e);
+                                }
                             };
                             // Clear delegation and propagate return through
                             // generator's try-finally stack
@@ -6271,12 +6307,48 @@ impl Interpreter {
                     Ok(Some(iter_result)) => {
                         let done = match self.iterator_complete(&iter_result) {
                             Ok(d) => d,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => {
+                                obj_rc.borrow_mut().iterator_state =
+                                    Some(IteratorState::StateMachineGenerator {
+                                        state_machine: state_machine.clone(),
+                                        func_env: func_env.clone(),
+                                        is_strict,
+                                        execution_state:
+                                            StateMachineExecutionState::SuspendedAtState {
+                                                state_id: resume_state,
+                                            },
+                                        _sent_value: JsValue::Undefined,
+                                        try_stack: try_stack.clone(),
+                                        pending_binding: None,
+                                        delegated_iterator: None,
+                                        pending_exception: None,
+                                        pending_return: None,
+                                    });
+                                return self.generator_throw_state_machine(this, e);
+                            }
                         };
                         if done {
                             let result_value = match self.iterator_value(&iter_result) {
                                 Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
+                                Err(e) => {
+                                    obj_rc.borrow_mut().iterator_state =
+                                        Some(IteratorState::StateMachineGenerator {
+                                            state_machine: state_machine.clone(),
+                                            func_env: func_env.clone(),
+                                            is_strict,
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedAtState {
+                                                    state_id: resume_state,
+                                                },
+                                            _sent_value: JsValue::Undefined,
+                                            try_stack: try_stack.clone(),
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        });
+                                    return self.generator_throw_state_machine(this, e);
+                                }
                             };
                             use crate::interpreter::generator_transform::SentValueBindingKind;
                             if let Some(ref bind) = binding {
@@ -6345,18 +6417,20 @@ impl Interpreter {
                         if let Err(e) = self.iterator_close_result(&iterator) {
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineGenerator {
-                                    state_machine,
-                                    func_env,
+                                    state_machine: state_machine.clone(),
+                                    func_env: func_env.clone(),
                                     is_strict,
-                                    execution_state: StateMachineExecutionState::Completed,
+                                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                                        state_id: resume_state,
+                                    },
                                     _sent_value: JsValue::Undefined,
-                                    try_stack: vec![],
+                                    try_stack: try_stack.clone(),
                                     pending_binding: None,
                                     delegated_iterator: None,
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            return Completion::Throw(e);
+                            return self.generator_throw_state_machine(this, e);
                         }
                         let type_err = self
                             .create_type_error("The iterator does not provide a 'throw' method");
@@ -6381,18 +6455,20 @@ impl Interpreter {
                     Err(e) => {
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
+                                state_machine: state_machine.clone(),
+                                func_env: func_env.clone(),
                                 is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
+                                execution_state: StateMachineExecutionState::SuspendedAtState {
+                                    state_id: resume_state,
+                                },
                                 _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
+                                try_stack: try_stack.clone(),
                                 pending_binding: None,
                                 delegated_iterator: None,
                                 pending_exception: None,
                                 pending_return: None,
                             });
-                        return Completion::Throw(e);
+                        return self.generator_throw_state_machine(this, e);
                     }
                 }
             }

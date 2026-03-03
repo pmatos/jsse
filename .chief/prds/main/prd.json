@@ -77,7 +77,7 @@
         "No regressions in generator/async-generator suites"
       ],
       "priority": 5,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-006",

@@ -1609,7 +1609,6 @@ impl Interpreter {
                 match self.await_value(&step_result) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => {
-                        self.iterator_close(iterator, e.clone());
                         return Completion::Throw(e);
                     }
                     other => return other,
