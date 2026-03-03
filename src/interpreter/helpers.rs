@@ -1672,6 +1672,17 @@ pub(crate) fn month_name(m: f64) -> &'static str {
     }
 }
 
+fn format_year_string(y: f64) -> String {
+    let yi = y as i64;
+    if (0..=9999).contains(&yi) {
+        format!("{:04}", yi)
+    } else if yi < 0 {
+        format!("-{:04}", yi.unsigned_abs())
+    } else {
+        format!("+{}", yi)
+    }
+}
+
 pub(crate) fn format_date_string(t: f64) -> String {
     let lt = local_time(t);
     let wd = week_day(lt);
@@ -1691,11 +1702,11 @@ pub(crate) fn format_date_string(t: f64) -> String {
 
     let tz_abbr = chrono::Local::now().format("%Z").to_string();
     format!(
-        "{} {} {:02} {:04} {:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
+        "{} {} {:02} {} {:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         day_name(wd),
         month_name(m),
         d as i32,
-        y as i32,
+        format_year_string(y),
         h as i32,
         min as i32,
         s as i32,
@@ -1748,11 +1759,11 @@ pub(crate) fn format_utc_string(t: f64) -> String {
     let min = min_from_time(t);
     let s = sec_from_time(t);
     format!(
-        "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
+        "{}, {:02} {} {} {:02}:{:02}:{:02} GMT",
         day_name(wd),
         d as i32,
         month_name(m),
-        y as i32,
+        format_year_string(y),
         h as i32,
         min as i32,
         s as i32
@@ -1766,11 +1777,11 @@ pub(crate) fn format_date_only_string(t: f64) -> String {
     let m = month_from_time(lt);
     let d = date_from_time(lt);
     format!(
-        "{} {} {:02} {:04}",
+        "{} {} {:02} {}",
         day_name(wd),
         month_name(m),
         d as i32,
-        y as i32
+        format_year_string(y)
     )
 }
 
@@ -1807,6 +1818,11 @@ pub(crate) fn parse_date_string(s: &str) -> f64 {
 
     // Try toString() format: "Wed Jan 29 2026 12:34:56 GMT+0100 (CET)"
     if let Some(t) = parse_tostring_format(s) {
+        return t;
+    }
+
+    // Try toUTCString() format: "Thu, 01 Jan 1970 00:00:00 GMT"
+    if let Some(t) = parse_utcstring_format(s) {
         return t;
     }
 
@@ -1940,6 +1956,9 @@ fn parse_iso_year(s: &str) -> Option<(i64, usize)> {
         // Extended year ±YYYYYY
         let sign: i64 = if bytes[0] == b'+' { 1 } else { -1 };
         let yr: i64 = s.get(1..7)?.parse().ok()?;
+        if sign == -1 && yr == 0 {
+            return None;
+        }
         Some((sign * yr, 7))
     } else {
         let yr: i64 = s.get(0..4)?.parse().ok()?;
@@ -2002,6 +2021,50 @@ fn parse_tostring_format(s: &str) -> Option<f64> {
 
     // Assume local
     Some(time_clip(utc_time(dt)))
+}
+
+fn parse_utcstring_format(s: &str) -> Option<f64> {
+    // "Thu, 01 Jan 1970 00:00:00 GMT"
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    if parts.len() < 5 {
+        return None;
+    }
+    // Day name must end with comma
+    let day_name = parts[0];
+    if !day_name.ends_with(',') {
+        return None;
+    }
+    let day_val: i32 = parts[1].parse().ok()?;
+    let month_idx = match parts[2] {
+        "Jan" => 0,
+        "Feb" => 1,
+        "Mar" => 2,
+        "Apr" => 3,
+        "May" => 4,
+        "Jun" => 5,
+        "Jul" => 6,
+        "Aug" => 7,
+        "Sep" => 8,
+        "Oct" => 9,
+        "Nov" => 10,
+        "Dec" => 11,
+        _ => return None,
+    };
+    let year: i64 = parts[3].parse().ok()?;
+    let time_parts: Vec<&str> = parts[4].split(':').collect();
+    if time_parts.len() != 3 {
+        return None;
+    }
+    let hour: i32 = time_parts[0].parse().ok()?;
+    let min: i32 = time_parts[1].parse().ok()?;
+    let sec: i32 = time_parts[2].parse().ok()?;
+
+    let d = make_day(year as f64, month_idx as f64, day_val as f64);
+    let time = make_time(hour as f64, min as f64, sec as f64, 0.0);
+    let dt = make_date(d, time);
+
+    // toUTCString is always UTC
+    Some(time_clip(dt))
 }
 
 pub(crate) fn find_json_colon(s: &str) -> Option<usize> {

@@ -1158,6 +1158,35 @@ impl Interpreter {
                     date_to_locale_string(interp, this, args, "time", "time")
                 }),
             ),
+            (
+                "toTemporalInstant",
+                0,
+                Rc::new(|interp, this, _args| {
+                    // §21.4.4.45 Date.prototype.toTemporalInstant()
+                    let t = this_time_value(interp, this);
+                    let Some(t) = t else {
+                        let e = interp.create_type_error("this is not a Date object");
+                        return Completion::Throw(e);
+                    };
+                    if t.is_nan() {
+                        let e = interp.create_range_error("Invalid time value");
+                        return Completion::Throw(e);
+                    }
+                    let ms = num_bigint::BigInt::from(t as i64);
+                    let ns = ms * num_bigint::BigInt::from(1_000_000i64);
+                    let obj = interp.create_object();
+                    obj.borrow_mut().class_name = "Temporal.Instant".to_string();
+                    if let Some(ref proto) = interp.realm().temporal_instant_prototype {
+                        obj.borrow_mut().prototype = Some(proto.clone());
+                    }
+                    obj.borrow_mut().temporal_data =
+                        Some(crate::interpreter::types::TemporalData::Instant {
+                            epoch_nanoseconds: ns,
+                        });
+                    let id = obj.borrow().id.unwrap();
+                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                }),
+            ),
         ];
 
         for (name, arity, func) in methods {

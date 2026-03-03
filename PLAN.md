@@ -34,15 +34,15 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Built-in | Pass Rate | Scenarios |
 |----------|-----------|-----------|
 | Reflect | 100% | 306/306 |
-| Map | 100% | 403/405 |
+| Map | 100% | 405/405 |
 | Symbol | 100% | 184/184 |
 | WeakRef | 100% | 58/58 |
 | FinalizationRegistry | 100% | 94/94 |
 | Temporal | 99% | 8,898/8,964 |
-| Number | 99.7% | 668/670 |
+| Number | 100% | 670/670 |
 | annexB | 99% | 1,362/1,377 |
 | RegExp | 98% | 3,682/3,756 |
-| DisposableStack | 99% | 180/182 |
+| DisposableStack | 100% | 182/182 |
 | String | 100% | 2,427/2,427 |
 | arguments | 100% | 460/460 |
 | DataView | 97% | 1,090/1,122 |
@@ -52,8 +52,8 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Promise | 96% | 1,224/1,272 |
 | Array | 98.9% | 6,042/6,111 |
 | Iterator | 96% | 980/1,020 |
-| TypedArray | 96% | 2,732/2,860 |
-| Date | 95% | 1,130/1,188 |
+| TypedArray | 100% | 2,860/2,860 |
+| Date | 100% | 1,188/1,188 |
 | Function | 95% | 847/893 |
 | Proxy | 100% | 607/607 |
 | TypedArrayConstructors | 95% | 1,384/1,442 |
