@@ -160,7 +160,16 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(PropertyKey::String(s))
             }
-            Token::NumericLiteral(n) => {
+            Token::NumericLiteral(n)
+            | Token::LegacyOctalLiteral(n)
+            | Token::NonOctalDecimalLiteral(n) => {
+                if matches!(
+                    &self.current,
+                    Token::LegacyOctalLiteral(_) | Token::NonOctalDecimalLiteral(_)
+                ) && self.strict
+                {
+                    return Err(self.error("Octal literals are not allowed in strict mode"));
+                }
                 let n = *n;
                 self.advance()?;
                 Ok(PropertyKey::Number(n))
@@ -837,10 +846,7 @@ impl<'a> Parser<'a> {
             let next_is_field_name = !self.prev_line_terminator
                 && !matches!(
                     self.current,
-                    Token::LeftParen
-                        | Token::Assign
-                        | Token::Semicolon
-                        | Token::RightBrace
+                    Token::LeftParen | Token::Assign | Token::Semicolon | Token::RightBrace
                 );
             if next_is_field_name {
                 // auto-accessor field: parse as a normal field (discard accessor semantics)
@@ -849,7 +855,9 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let expr = self.parse_assignment_expression()?;
                     if Self::contains_arguments(&expr) {
-                        return Err(self.error("Class field initializer cannot reference 'arguments'"));
+                        return Err(
+                            self.error("Class field initializer cannot reference 'arguments'")
+                        );
                     }
                     Some(expr)
                 } else {
@@ -1033,8 +1041,15 @@ impl<'a> Parser<'a> {
             let s = String::from_utf16_lossy(s);
             self.advance()?;
             Ok((PropertyKey::String(s), false))
-        } else if let Token::NumericLiteral(n) | Token::LegacyOctalLiteral(n) = &self.current {
-            if matches!(&self.current, Token::LegacyOctalLiteral(_)) && self.strict {
+        } else if let Token::NumericLiteral(n)
+        | Token::LegacyOctalLiteral(n)
+        | Token::NonOctalDecimalLiteral(n) = &self.current
+        {
+            if matches!(
+                &self.current,
+                Token::LegacyOctalLiteral(_) | Token::NonOctalDecimalLiteral(_)
+            ) && self.strict
+            {
                 return Err(self.error("Octal literals are not allowed in strict mode"));
             }
             let n = *n;

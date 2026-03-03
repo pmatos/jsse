@@ -977,7 +977,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Literal(Literal::Number(n)))
             }
-            Token::LegacyOctalLiteral(n) => {
+            Token::LegacyOctalLiteral(n) | Token::NonOctalDecimalLiteral(n) => {
                 if self.strict {
                     return Err(self.error("Octal literals are not allowed in strict mode"));
                 }
@@ -1299,6 +1299,7 @@ impl<'a> Parser<'a> {
                         | Token::StringLiteral(_)
                         | Token::NumericLiteral(_)
                         | Token::LegacyOctalLiteral(_)
+                        | Token::NonOctalDecimalLiteral(_)
                         | Token::LeftBracket
                         | Token::Keyword(_)
                         | Token::PrivateName(_)
@@ -1415,6 +1416,7 @@ impl<'a> Parser<'a> {
                     | Token::StringLiteral(_)
                     | Token::NumericLiteral(_)
                     | Token::LegacyOctalLiteral(_)
+                    | Token::NonOctalDecimalLiteral(_)
                     | Token::LeftBracket
                     | Token::Keyword(_)
                     | Token::PrivateName(_)

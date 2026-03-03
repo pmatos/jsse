@@ -11,6 +11,7 @@ pub enum Token {
     // Literals
     NumericLiteral(f64),
     LegacyOctalLiteral(f64),
+    NonOctalDecimalLiteral(f64),
     BigIntLiteral(String),
     StringLiteral(Vec<u16>),
     BooleanLiteral(bool),
@@ -653,10 +654,14 @@ impl<'a> Lexer<'a> {
         // Decimal
         self.read_decimal_digits(&mut s)?;
 
+        let mut has_dot = first == '.';
+        let mut has_exponent = false;
+
         if self.peek() == Some('.') {
             if s.ends_with('_') {
                 return Err(self.error("Numeric separator cannot appear adjacent to '.'"));
             }
+            has_dot = true;
             s.push('.');
             self.advance();
             if self.peek() == Some('_') {
@@ -669,6 +674,7 @@ impl<'a> Lexer<'a> {
             if s.ends_with('_') {
                 return Err(self.error("Numeric separator cannot appear adjacent to exponent"));
             }
+            has_exponent = true;
             s.push(self.advance().unwrap());
             if self.peek().is_some_and(|c| c == '+' || c == '-') {
                 s.push(self.advance().unwrap());
@@ -680,6 +686,9 @@ impl<'a> Lexer<'a> {
         }
 
         if self.peek() == Some('n') {
+            if has_dot || has_exponent {
+                return Err(self.error("Invalid BigInt literal"));
+            }
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
             return Ok(Token::BigIntLiteral(clean));
@@ -812,12 +821,15 @@ impl<'a> Lexer<'a> {
             Ok(Token::LegacyOctalLiteral(val as f64))
         } else {
             // Non-octal decimal (e.g. 09, 0.5 after leading zero digits)
+            let mut has_dot_or_exp = false;
             if self.peek() == Some('.') {
+                has_dot_or_exp = true;
                 s.push('.');
                 self.advance();
                 self.read_decimal_digits(&mut s)?;
             }
             if self.peek().is_some_and(|c| c == 'e' || c == 'E') {
+                has_dot_or_exp = true;
                 s.push(self.advance().unwrap());
                 if self.peek().is_some_and(|c| c == '+' || c == '-') {
                     s.push(self.advance().unwrap());
@@ -827,7 +839,11 @@ impl<'a> Lexer<'a> {
             let val: f64 = s
                 .parse()
                 .map_err(|_| self.error("Invalid numeric literal"))?;
-            Ok(Token::NumericLiteral(val))
+            if has_dot_or_exp {
+                Ok(Token::NumericLiteral(val))
+            } else {
+                Ok(Token::NonOctalDecimalLiteral(val))
+            }
         }
     }
 
@@ -1099,10 +1115,22 @@ impl<'a> Lexer<'a> {
 
             // Numeric literals
             if ch.is_ascii_digit() {
-                return self.read_numeric_literal(ch);
+                let tok = self.read_numeric_literal(ch)?;
+                if let Some(next) = self.peek() {
+                    if Self::is_identifier_start(next) {
+                        return Err(self.error("Identifier directly after number"));
+                    }
+                }
+                return Ok(tok);
             }
             if ch == '.' && self.peek().is_some_and(|c| c.is_ascii_digit()) {
-                return self.read_numeric_literal(ch);
+                let tok = self.read_numeric_literal(ch)?;
+                if let Some(next) = self.peek() {
+                    if Self::is_identifier_start(next) {
+                        return Err(self.error("Identifier directly after number"));
+                    }
+                }
+                return Ok(tok);
             }
 
             // Identifiers (including those starting with unicode escape)
