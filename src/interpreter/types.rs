@@ -544,7 +544,26 @@ impl Environment {
     /// Per §9.1.1.4.17 CreateGlobalVarBinding: var declarations in global scope
     /// create non-configurable properties on the global object.
     pub fn declare_global_var(&mut self, name: &str) {
-        self.declare(name, BindingKind::Var);
+        if !self.bindings.contains_key(name) {
+            // If property already exists on global object, initialize binding with its value
+            let existing_val = self.global_object.as_ref().and_then(|g| {
+                let gb = g.borrow();
+                gb.properties.get(name).and_then(|d| d.value.clone())
+            });
+            if let Some(val) = existing_val {
+                self.bindings.insert(
+                    name.to_string(),
+                    Binding {
+                        value: val,
+                        kind: BindingKind::Var,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+            } else {
+                self.declare(name, BindingKind::Var);
+            }
+        }
         if let Some(ref global_obj) = self.global_object {
             let mut gb = global_obj.borrow_mut();
             if !gb.properties.contains_key(name) {
@@ -653,9 +672,13 @@ impl Environment {
         } else {
             // Global implicit declaration (sloppy mode)
             if let Some(ref global_obj) = self.global_object {
+                let already_on_global = global_obj.borrow().has_own_property(name);
                 global_obj
                     .borrow_mut()
                     .set_property_value(name, value.clone());
+                if already_on_global {
+                    return Ok(());
+                }
             }
             self.bindings.insert(
                 name.to_string(),
@@ -1316,6 +1339,8 @@ pub struct JsObjectData {
     pub(crate) generator_realm_id: Option<usize>,
     pub(crate) is_htmldda: bool,
     pub(crate) is_immutable_prototype: bool,
+    pub(crate) regexp_original_source: Option<JsString>,
+    pub(crate) regexp_original_flags: Option<JsString>,
 }
 
 #[derive(Clone)]
@@ -1377,6 +1402,8 @@ impl JsObjectData {
             generator_realm_id: None,
             is_htmldda: false,
             is_immutable_prototype: false,
+            regexp_original_source: None,
+            regexp_original_flags: None,
         }
     }
 

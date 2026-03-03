@@ -48,7 +48,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | DataView | 97% | 1,090/1,122 |
 | Set | 100% | 764/764 |
 | Math | 100% | 654/654 |
-| Object | 99.7% | 6,645/6,664 |
+| Object | 100% | 6,802/6,802 |
 | Promise | 96% | 1,224/1,272 |
 | Array | 98.9% | 6,042/6,111 |
 | Iterator | 96% | 980/1,020 |

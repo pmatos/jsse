@@ -4750,12 +4750,12 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
         && let Some(obj) = interp.get_object(o.id)
     {
         let b = obj.borrow();
-        let source = if let JsValue::String(s) = b.get_property("__original_source__") {
+        let source = if let Some(ref s) = b.regexp_original_source {
             s.to_rust_string()
         } else {
             return None;
         };
-        let flags = if let JsValue::String(s) = b.get_property("__original_flags__") {
+        let flags = if let Some(ref s) = b.regexp_original_flags {
             s.to_rust_string()
         } else {
             String::new()
@@ -4886,12 +4886,12 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, s: &str) -> Comple
         }
         let (source, flags) = if let Some(obj) = interp.get_object(rx_id) {
             let b = obj.borrow();
-            let src = if let JsValue::String(s) = b.get_property("__original_source__") {
+            let src = if let Some(ref s) = b.regexp_original_source {
                 s.to_rust_string()
             } else {
                 String::new()
             };
-            let fl = if let JsValue::String(s) = b.get_property("__original_flags__") {
+            let fl = if let Some(ref s) = b.regexp_original_flags {
                 s.to_rust_string()
             } else {
                 String::new()
@@ -5543,13 +5543,12 @@ impl Interpreter {
                     if let Some(pobj) = interp.get_object(po_id) {
                         let b = pobj.borrow();
                         pattern_str =
-                            if let JsValue::String(s) = b.get_property("__original_source__") {
+                            if let Some(ref s) = b.regexp_original_source {
                                 s.to_rust_string()
                             } else {
                                 "(?:)".to_string()
                             };
-                        flags_str = if let JsValue::String(s) = b.get_property("__original_flags__")
-                        {
+                        flags_str = if let Some(ref s) = b.regexp_original_flags {
                             s.to_rust_string()
                         } else {
                             String::new()
@@ -5616,24 +5615,8 @@ impl Interpreter {
                 // 5. Return ? RegExpInitialize(O, P, F).
                 if let Some(obj) = interp.get_object(obj_id) {
                     let mut b = obj.borrow_mut();
-                    b.insert_property(
-                        "__original_source__".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&source_str)),
-                            false,
-                            false,
-                            false,
-                        ),
-                    );
-                    b.insert_property(
-                        "__original_flags__".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&flags_str)),
-                            false,
-                            false,
-                            false,
-                        ),
-                    );
+                    b.regexp_original_source = Some(JsString::from_str(&source_str));
+                    b.regexp_original_flags = Some(JsString::from_str(&flags_str));
                 }
                 // Set lastIndex to 0 with strict mode (throws TypeError if non-writable)
                 if let Err(e) = set_last_index_strict(interp, obj_id, 0.0) {
@@ -6974,8 +6957,8 @@ impl Interpreter {
                             name
                         )));
                     }
-                    let flags_val = obj.borrow().get_property("__original_flags__");
-                    if let JsValue::String(s) = flags_val {
+                    let flags_opt = obj.borrow().regexp_original_flags.clone();
+                    if let Some(s) = flags_opt {
                         Completion::Normal(JsValue::Boolean(s.to_rust_string().contains(flag_char)))
                     } else {
                         Completion::Normal(JsValue::Undefined)
@@ -7021,8 +7004,8 @@ impl Interpreter {
                         "RegExp.prototype.source requires that 'this' be a RegExp object",
                     ));
                 }
-                let source_val = obj.borrow().get_property("__original_source__");
-                if let JsValue::String(ref s) = source_val {
+                let source_opt = obj.borrow().regexp_original_source.clone();
+                if let Some(ref s) = source_opt {
                     let escaped = escape_regexp_pattern_code_units(&s.code_units);
                     Completion::Normal(JsValue::String(escaped))
                 } else {
@@ -7200,24 +7183,8 @@ impl Interpreter {
                 obj.prototype = proto.or(Some(regexp_proto_rc.clone()));
                 obj.class_name = "RegExp".to_string();
                 // Store internal slots as non-enumerable hidden properties
-                obj.insert_property(
-                    "__original_source__".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&source_str)),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
-                obj.insert_property(
-                    "__original_flags__".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&flags_str)),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
+                obj.regexp_original_source = Some(JsString::from_str(&source_str));
+                obj.regexp_original_flags = Some(JsString::from_str(&flags_str));
                 obj.insert_property(
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),

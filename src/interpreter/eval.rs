@@ -1500,19 +1500,8 @@ impl Interpreter {
                 } else {
                     crate::interpreter::builtins::regexp::regex_output_to_js_string(pattern)
                 };
-                obj.insert_property(
-                    "__original_source__".to_string(),
-                    PropertyDescriptor::data(JsValue::String(source_js), false, false, false),
-                );
-                obj.insert_property(
-                    "__original_flags__".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(flags)),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
+                obj.regexp_original_source = Some(source_js);
+                obj.regexp_original_flags = Some(JsString::from_str(flags));
                 obj.insert_property(
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
@@ -1549,24 +1538,8 @@ impl Interpreter {
             .or(self.realm().object_prototype.clone());
         obj.class_name = "RegExp".to_string();
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
-        obj.insert_property(
-            "__original_source__".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str(source_str)),
-                false,
-                false,
-                false,
-            ),
-        );
-        obj.insert_property(
-            "__original_flags__".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str(flags)),
-                false,
-                false,
-                false,
-            ),
-        );
+        obj.regexp_original_source = Some(JsString::from_str(source_str));
+        obj.regexp_original_flags = Some(JsString::from_str(flags));
         obj.insert_property(
             "lastIndex".to_string(),
             PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),

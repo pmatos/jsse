@@ -3623,6 +3623,21 @@ impl Interpreter {
         self.realm().global_env.borrow_mut().global_object = Some(global_obj.clone());
         self.realm_mut().global_object = Some(global_obj);
 
+        // Per §9.1.1.4, built-in global names live on the global object (Object
+        // Environment Record), not as declarative bindings. Remove the bootstrapping
+        // bindings so that identifier resolution falls through to the global object.
+        // Keep NaN/Infinity/undefined — they are non-writable/non-configurable
+        // (ImmutableValue bindings that must shadow global object writes).
+        {
+            let mut env = self.realm().global_env.borrow_mut();
+            for name in &global_names {
+                match *name {
+                    "NaN" | "Infinity" | "undefined" => continue,
+                    _ => { env.bindings.remove(*name); }
+                }
+            }
+        }
+
         // $262 test harness object (must be after global object is created)
         {
             let realm_id = self.current_realm_id;
@@ -4680,6 +4695,24 @@ impl Interpreter {
                                 }
                             }
                         } else if let Some(obj) = interp.get_object(obj_id) {
+                            // §20.1.2.6 / §7.3.16: TypedArray [[DefineOwnProperty]] returns
+                            // false for configurable:false on indexed elements, so freeze must
+                            // throw TypeError. For resizable-buffer-backed TAs, throw always.
+                            {
+                                let b = obj.borrow();
+                                if b.typed_array_info.is_some() {
+                                    let has_elements = b.typed_array_info.as_ref()
+                                        .map_or(false, |ta| ta.array_length > 0);
+                                    let is_resizable = b.view_buffer_object_id
+                                        .and_then(|buf_id| interp.get_object(buf_id))
+                                        .map_or(false, |buf| buf.borrow().arraybuffer_max_byte_length.is_some());
+                                    if has_elements || is_resizable {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Cannot freeze array buffer views with elements",
+                                        ));
+                                    }
+                                }
+                            }
                             obj.borrow_mut().extensible = false;
                             let keys_and_descs: Vec<(String, PropertyDescriptor)> = {
                                 let b = obj.borrow();
