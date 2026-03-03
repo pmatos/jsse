@@ -45,3 +45,20 @@
   - When changing `eval_member_lhs_ref`, private member fields MUST still evaluate the base expression (e.g., `this.#field` needs `this` evaluation for TDZ checks)
   - The `destructure_object_assignment` had a separate hand-coded pre_base evaluation that only covered the base, not the key. Unifying via `eval_member_lhs_ref` was cleaner.
 ---
+
+## 2026-03-03 - US-003
+- **What was implemented**: Fixed `with` statement scope semantics — four categories of fixes
+  1. **PutValue unresolvable refs in sloppy mode (§6.2.5.6)**: Added `set_global_implicit` helper that sets on `self.realm().global_env` instead of `Environment::find_var_scope()` (which returned nearest function scope, not global). Fixed both `IdentifierRef::SpecificEnv` and `IdentifierRef::Binding` Unresolvable branches.
+  2. **With statement completion value (§14.11.2)**: Added UpdateEmpty(C, undefined) after executing with body — converts `Completion::Empty` to `Completion::Normal(JsValue::Undefined)`.
+  3. **Parser declaration restrictions (§14.11.1)**: Added early error checks rejecting `function` and `class` keywords in with body position, plus `IsLabelledFunction` post-parse check.
+  4. **Reflect.set proxy trap propagation (§10.1.9.2)**: When OrdinarySetWithOwnDescriptor receiver is a proxy, use `proxy_get_own_property_descriptor` and `proxy_define_own_property` instead of direct object access.
+  5. **Symbol.unscopables cleanup**: Removed spurious fallback `"[Symbol.unscopables]"` lookup in `check_unscopables_dynamic`.
+- **Files changed**: `src/interpreter/eval.rs`, `src/interpreter/exec.rs`, `src/parser/statements.rs`, `src/interpreter/builtins/mod.rs`, `test262-pass.txt`
+- **Results**: 37 new passes, 0 regressions. 90,420/91,986 (98.30%)
+  - With statement tests: 182/182 (100%)
+  - Additional passes from `set_global_implicit` fix affecting sloppy-mode implicit global creation
+- **Learnings for future iterations:**
+  - `Environment::find_var_scope()` returns the nearest function scope, NOT the global scope. For PutValue on unresolvable references per §6.2.5.6, must use `self.realm().global_env` directly.
+  - `check_unscopables_dynamic` had a fallback lookup for `"[Symbol.unscopables]"` that caused extra proxy trap invocations — only the `"Symbol(Symbol.unscopables)"` key should be used.
+  - `Reflect.set` must propagate through proxy traps when receiver is a proxy — `proxy_get_own_property_descriptor` returns `Result<JsValue, JsValue>` (not `Option<PropertyDescriptor>`), and `proxy_define_own_property` takes `(u64, String, &JsValue)`.
+---
