@@ -982,7 +982,7 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     return Completion::Normal(create_set_iterator(
                         interp,
@@ -1017,7 +1017,7 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     return Completion::Normal(create_set_iterator(
                         interp,
@@ -1041,7 +1041,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_set = obj.borrow().set_data.is_some();
+                    let has_set = { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" };
                     if has_set {
                         let mut value = args.first().cloned().unwrap_or(JsValue::Undefined);
                         if let JsValue::Number(n) = &value
@@ -1075,8 +1075,8 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
+                    let (is_set, set_data) = { let b = obj.borrow(); (b.set_data.is_some() && b.class_name != "WeakSet", b.set_data.clone()) };
+                    if is_set && let Some(entries) = set_data {
                         let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                         for entry in entries.iter().flatten() {
                             if same_value_zero(entry, &value) {
@@ -1100,7 +1100,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_set = obj.borrow().set_data.is_some();
+                    let has_set = { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" };
                     if has_set {
                         let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let mut borrowed = obj.borrow_mut();
@@ -1132,7 +1132,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let has_set = obj.borrow().set_data.is_some();
+                    let has_set = { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" };
                     if has_set {
                         obj.borrow_mut().set_data = Some(Vec::new());
                         return Completion::Normal(JsValue::Undefined);
@@ -1153,7 +1153,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id) {
-                        let has_set = obj.borrow().set_data.is_some();
+                        let has_set = { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" };
                         if has_set {
                             let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
                             if !matches!(&callback, JsValue::Object(co) if interp.get_object(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
@@ -1194,10 +1194,12 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let set_data = obj.borrow().set_data.clone();
-                    if let Some(entries) = set_data {
-                        let count = entries.iter().filter(|e| e.is_some()).count();
-                        return Completion::Normal(JsValue::Number(count as f64));
+                    let (has_set, set_data) = { let b = obj.borrow(); (b.set_data.is_some() && b.class_name != "WeakSet", b.set_data.clone()) };
+                    if has_set {
+                        if let Some(entries) = set_data {
+                            let count = entries.iter().filter(|e| e.is_some()).count();
+                            return Completion::Normal(JsValue::Number(count as f64));
+                        }
                     }
                 }
                 let err = interp.create_type_error("Set.prototype.size requires a Set");
@@ -1359,7 +1361,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1405,7 +1407,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1469,7 +1471,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1535,7 +1537,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1592,7 +1594,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1644,7 +1646,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1690,7 +1692,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
-                    && obj.borrow().set_data.is_some()
+                    && { let b = obj.borrow(); b.set_data.is_some() && b.class_name != "WeakSet" }
                 {
                     let other = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let other_rec = match spec_get_set_record(interp, &other) {
@@ -1793,7 +1795,11 @@ impl Interpreter {
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !iterable.is_undefined() && !iterable.is_null() {
-                    let adder = obj.borrow().get_property("add");
+                    // §24.2.1.1 step 7a: Let adder be ? Get(set, "add").
+                    let adder = match interp.get_object_property(obj_id, "add", &this_val) {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
                     if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("Set.prototype.add is not a function");
                         return Completion::Throw(err);
@@ -1831,11 +1837,32 @@ impl Interpreter {
                             other => return other,
                         };
 
-                        let (done, value) = extract_iter_result(interp, &next_result);
+                        // Use getter-aware property access for done/value
+                        let done = if let JsValue::Object(ro) = &next_result {
+                            match interp.get_object_property(ro.id, "done", &next_result) {
+                                Completion::Normal(v) => interp.to_boolean_val(&v),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            }
+                        } else { false };
                         if done { break; }
+                        let value = if let JsValue::Object(ro) = &next_result {
+                            match interp.get_object_property(ro.id, "value", &next_result) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    interp.iterator_close(&iterator, e.clone());
+                                    return Completion::Throw(e);
+                                }
+                                other => return other,
+                            }
+                        } else { JsValue::Undefined };
 
                         match interp.call_function(&adder, &this_val, &[value]) {
                             Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                interp.iterator_close(&iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
                             other => return other,
                         }
                     }
@@ -2174,7 +2201,11 @@ impl Interpreter {
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !iterable.is_undefined() && !iterable.is_null() {
-                    let adder = obj.borrow().get_property("set");
+                    // §24.3.1.1 step 7a: Let adder be ? Get(map, "set").
+                    let adder = match interp.get_object_property(obj_id, "set", &this_val) {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
                     if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("WeakMap.prototype.set is not a function");
                         return Completion::Throw(err);
@@ -2221,28 +2252,55 @@ impl Interpreter {
 
                         if done { break; }
 
+                        // §24.3.1.1 step 9d: Get value via Get (invokes getters)
                         let value = if let JsValue::Object(ro) = &next_result {
-                            if let Some(result_obj) = interp.get_object(ro.id) {
-                                result_obj.borrow().get_property("value")
-                            } else { JsValue::Undefined }
+                            match interp.get_object_property(ro.id, "value", &next_result) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let e2 = interp.iterator_close(&iterator, e);
+                                    return Completion::Throw(e2);
+                                }
+                                other => return other,
+                            }
                         } else { JsValue::Undefined };
 
-                        let (k, v) = if let JsValue::Object(vo) = &value {
-                            if let Some(val_obj) = interp.get_object(vo.id) {
-                                let borrowed = val_obj.borrow();
-                                let k = borrowed.get_property("0");
-                                let v = borrowed.get_property("1");
-                                (k, v)
-                            } else {
-                                (JsValue::Undefined, JsValue::Undefined)
-                            }
-                        } else {
+                        // §24.3.1.1 step 9e: If value is not Object, close iterator + throw
+                        if !matches!(&value, JsValue::Object(_)) {
                             let err = interp.create_type_error("Iterator value is not an object");
-                            return Completion::Throw(err);
+                            let e2 = interp.iterator_close(&iterator, err);
+                            return Completion::Throw(e2);
+                        }
+
+                        // Get key and value from the [key, value] pair
+                        let (k, v) = if let JsValue::Object(vo) = &value {
+                            let k = match interp.get_object_property(vo.id, "0", &value) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let e2 = interp.iterator_close(&iterator, e);
+                                    return Completion::Throw(e2);
+                                }
+                                other => return other,
+                            };
+                            let v = match interp.get_object_property(vo.id, "1", &value) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let e2 = interp.iterator_close(&iterator, e);
+                                    return Completion::Throw(e2);
+                                }
+                                other => return other,
+                            };
+                            (k, v)
+                        } else {
+                            unreachable!()
                         };
 
+                        // §24.3.1.1 step 9f-g: Call adder, IteratorClose on failure
                         match interp.call_function(&adder, &this_val, &[k, v]) {
                             Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                let e2 = interp.iterator_close(&iterator, e);
+                                return Completion::Throw(e2);
+                            }
                             other => return other,
                         }
                     }
@@ -2421,7 +2479,11 @@ impl Interpreter {
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !iterable.is_undefined() && !iterable.is_null() {
-                    let adder = obj.borrow().get_property("add");
+                    // §24.4.1.1 step 7a: Let adder be ? Get(set, "add").
+                    let adder = match interp.get_object_property(obj_id, "add", &this_val) {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
                     if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("WeakSet.prototype.add is not a function");
                         return Completion::Throw(err);
@@ -2459,11 +2521,30 @@ impl Interpreter {
                             other => return other,
                         };
 
-                        let (done, value) = extract_iter_result(interp, &next_result);
+                        let (done, _) = extract_iter_result(interp, &next_result);
                         if done { break; }
 
+                        // §24.4.1.1 step 9d: Get value via Get (invokes getters)
+                        let value = if let JsValue::Object(ro) = &next_result {
+                            match interp.get_object_property(ro.id, "value", &next_result) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => {
+                                    let e2 = interp.iterator_close(&iterator, e);
+                                    return Completion::Throw(e2);
+                                }
+                                other => return other,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+
+                        // §24.4.1.1 step 9f-g: Call adder, IteratorClose on failure
                         match interp.call_function(&adder, &this_val, &[value]) {
                             Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                let e2 = interp.iterator_close(&iterator, e);
+                                return Completion::Throw(e2);
+                            }
                             other => return other,
                         }
                     }

@@ -95,7 +95,10 @@ fn string_to_number(s: &JsString) -> f64 {
 }
 
 pub(crate) fn to_js_string(val: &JsValue) -> String {
-    format!("{val}")
+    match val {
+        JsValue::BigInt(b) => b.value.to_string(),
+        _ => format!("{val}"),
+    }
 }
 
 /// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.

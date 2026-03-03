@@ -1784,12 +1784,6 @@ impl Interpreter {
                         }
                     }
                 }
-                // Fallback: check for primitive_value (wrapper objects)
-                if let Some(obj) = self.get_object(o.id)
-                    && let Some(pv) = obj.borrow().primitive_value.clone()
-                {
-                    return Ok(pv);
-                }
                 Err(self.create_type_error("Cannot convert object to primitive value"))
             }
             _ => Ok(val.clone()),
@@ -9143,7 +9137,7 @@ impl Interpreter {
         if !strict {
             // §19.2.1.4 step 5.a: if varEnv is global, check for lexical conflicts
             // Only check for true lexical declarations (let/const/class), not built-in
-            // value properties like NaN/Infinity/undefined which are stored as Const
+            // value properties like NaN/Infinity/undefined which are stored as ImmutableValue
             // but are part of the object environment record, not the declarative record.
             if is_global {
                 let all_names: Vec<String> = declared_func_names

@@ -449,6 +449,9 @@ pub(crate) enum BindingKind {
     Let,
     Const,
     FunctionName,
+    /// Non-writable global value property (NaN, Infinity, undefined).
+    /// Strict mode: throws TypeError. Sloppy mode: silently fails.
+    ImmutableValue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -624,7 +627,10 @@ impl Environment {
                     "Assignment to constant variable.",
                 )));
             }
-            if binding.kind == BindingKind::FunctionName && binding.initialized {
+            if (binding.kind == BindingKind::FunctionName
+                || binding.kind == BindingKind::ImmutableValue)
+                && binding.initialized
+            {
                 if self.strict {
                     return Err(JsValue::String(JsString::from_str(
                         "Assignment to constant variable.",
@@ -699,7 +705,10 @@ impl Environment {
             if binding.kind == BindingKind::Const && binding.initialized {
                 return SetBindingCheck::ConstAssign;
             }
-            if binding.kind == BindingKind::FunctionName && binding.initialized {
+            if (binding.kind == BindingKind::FunctionName
+                || binding.kind == BindingKind::ImmutableValue)
+                && binding.initialized
+            {
                 return SetBindingCheck::FunctionNameAssign;
             }
             return SetBindingCheck::Ok;
@@ -2497,7 +2506,7 @@ fn to_uint32_modular(n: f64) -> u32 {
     let n = if n < 0.0 { n + 4294967296.0 } else { n };
     n as u32
 }
-fn to_int32_modular(n: f64) -> i32 {
+pub(crate) fn to_int32_modular(n: f64) -> i32 {
     if n.is_nan() || n.is_infinite() || n == 0.0 {
         return 0;
     }

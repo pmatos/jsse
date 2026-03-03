@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 91,986 (48,002 files, dual strict/non-strict per spec)
-**Current pass rate:** 90,258 / 91,986 (98.12%)
+**Current pass rate:** 90,327 / 91,986 (98.20%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -43,10 +43,10 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | annexB | 99% | 1,362/1,377 |
 | RegExp | 98% | 3,682/3,756 |
 | DisposableStack | 99% | 180/182 |
-| String | 99.8% | 2,423/2,427 |
+| String | 100% | 2,427/2,427 |
 | arguments | 100% | 460/460 |
 | DataView | 97% | 1,090/1,122 |
-| Set | 97% | 742/764 |
+| Set | 100% | 764/764 |
 | Math | 100% | 654/654 |
 | Object | 99.7% | 6,645/6,664 |
 | Promise | 96% | 1,224/1,272 |

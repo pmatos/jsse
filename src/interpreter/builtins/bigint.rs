@@ -34,9 +34,6 @@ impl Interpreter {
     pub(crate) fn setup_bigint_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "BigInt".to_string();
-        proto.borrow_mut().primitive_value = Some(JsValue::BigInt(JsBigInt {
-            value: num_bigint::BigInt::from(0),
-        }));
 
         fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
             match this {
@@ -62,7 +59,7 @@ impl Interpreter {
         )> = vec![
             (
                 "toString",
-                1,
+                0,
                 Rc::new(|interp, this, args| {
                     let Some(n) = this_bigint_value(interp, this) else {
                         return Completion::Throw(
@@ -145,11 +142,16 @@ impl Interpreter {
             ),
         );
 
-        // BigInt() function (NOT a constructor)
+        // BigInt() — is a constructor but throws TypeError when called with new
         self.register_global_fn(
             "BigInt",
             BindingKind::Var,
-            JsFunction::native("BigInt".to_string(), 1, |interp, _this, args| {
+            JsFunction::constructor("BigInt".to_string(), 1, |interp, _this, args| {
+                if interp.new_target.is_some() {
+                    return Completion::Throw(
+                        interp.create_type_error("BigInt is not a constructor"),
+                    );
+                }
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 match &val {
                     JsValue::BigInt(_) => Completion::Normal(val),

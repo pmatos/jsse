@@ -876,12 +876,6 @@ impl Interpreter {
                         let msg_raw = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         let options = args.get(2).cloned().unwrap_or(JsValue::Undefined);
 
-                        let errors_vec = match interp.iterate_to_vec(&errors_arg) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let errors_arr = interp.create_array(errors_vec);
-
                         // OrdinaryCreateFromConstructor — realm-aware prototype
                         let proto = match interp.get_prototype_from_new_target_realm(|realm| {
                             realm.aggregate_error_prototype.clone()
@@ -890,6 +884,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
 
+                        // §20.5.7.1 step 3: ToString(message) BEFORE iterating errors
                         let msg_str = if !matches!(msg_raw, JsValue::Undefined) {
                             match interp.to_string_value(&msg_raw) {
                                 Ok(s) => Some(JsValue::String(JsString::from_str(&s))),
@@ -898,6 +893,13 @@ impl Interpreter {
                         } else {
                             None
                         };
+
+                        // §20.5.7.1 step 6: IteratorToList(GetIterator(errors))
+                        let errors_vec = match interp.iterate_to_vec(&errors_arg) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let errors_arr = interp.create_array(errors_vec);
                         // §20.5.8.1 InstallErrorCause — use proxy-aware HasProperty
                         let cause_val = if let JsValue::Object(opts) = &options {
                             match interp.proxy_has_property(opts.id, "cause") {
@@ -1518,12 +1520,12 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let radix_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let radix_num = interp.to_number_coerce(&radix_val);
-                let mut radix = if radix_num.is_nan() || radix_num == 0.0 {
-                    0i32
-                } else {
-                    radix_num as i32
+                // §19.2.5 step 6: Let R be 𝔽(? ToInt32(radix))
+                let radix_num = match interp.to_number_value(&radix_val) {
+                    Ok(n) => n,
+                    Err(e) => return Completion::Throw(e),
                 };
+                let mut radix = crate::interpreter::types::to_int32_modular(radix_num);
                 let s = s.trim();
                 let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
                     (true, rest)
@@ -2860,6 +2862,13 @@ impl Interpreter {
             if let JsValue::Object(af_obj) = &af_ctor
                 && let Some(af) = self.get_object(af_obj.id)
             {
+                // §27.7.1 %AsyncFunction% inherits from %Function%
+                let function_ctor = self.realm().global_env.borrow().get("Function").unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(fc) = &function_ctor {
+                    if let Some(fc_obj) = self.get_object(fc.id) {
+                        af.borrow_mut().prototype = Some(fc_obj.clone());
+                    }
+                }
                 let proto_id = af_proto.borrow().id.unwrap();
                 // Set AsyncFunction.prototype
                 af.borrow_mut().insert_property(
@@ -2874,7 +2883,7 @@ impl Interpreter {
                 // Set constructor back-reference on AsyncFunction.prototype
                 af_proto.borrow_mut().insert_property(
                     "constructor".to_string(),
-                    PropertyDescriptor::data(af_ctor.clone(), true, false, true),
+                    PropertyDescriptor::data(af_ctor.clone(), false, false, true),
                 );
             }
         }
@@ -2979,6 +2988,13 @@ impl Interpreter {
             if let JsValue::Object(gf_obj) = &gf_ctor
                 && let Some(gf) = self.get_object(gf_obj.id)
             {
+                // §27.3.1 %GeneratorFunction% inherits from %Function%
+                let function_ctor = self.realm().global_env.borrow().get("Function").unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(fc) = &function_ctor {
+                    if let Some(fc_obj) = self.get_object(fc.id) {
+                        gf.borrow_mut().prototype = Some(fc_obj.clone());
+                    }
+                }
                 let proto_id = gf_proto.borrow().id.unwrap();
                 // Set GeneratorFunction.prototype
                 gf.borrow_mut().insert_property(
@@ -2993,7 +3009,7 @@ impl Interpreter {
                 // Set constructor back-reference on GeneratorFunction.prototype
                 gf_proto.borrow_mut().insert_property(
                     "constructor".to_string(),
-                    PropertyDescriptor::data(gf_ctor.clone(), true, false, true),
+                    PropertyDescriptor::data(gf_ctor.clone(), false, false, true),
                 );
             }
         }
@@ -3100,6 +3116,13 @@ impl Interpreter {
             if let JsValue::Object(agf_obj) = &agf_ctor
                 && let Some(agf) = self.get_object(agf_obj.id)
             {
+                // §27.4.1 %AsyncGeneratorFunction% inherits from %Function%
+                let function_ctor = self.realm().global_env.borrow().get("Function").unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(fc) = &function_ctor {
+                    if let Some(fc_obj) = self.get_object(fc.id) {
+                        agf.borrow_mut().prototype = Some(fc_obj.clone());
+                    }
+                }
                 let proto_id = agf_proto.borrow().id.unwrap();
                 // Set AsyncGeneratorFunction.prototype
                 agf.borrow_mut().insert_property(
@@ -3114,7 +3137,7 @@ impl Interpreter {
                 // Set constructor back-reference on AsyncGeneratorFunction.prototype
                 agf_proto.borrow_mut().insert_property(
                     "constructor".to_string(),
-                    PropertyDescriptor::data(agf_ctor.clone(), true, false, true),
+                    PropertyDescriptor::data(agf_ctor.clone(), false, false, true),
                 );
             }
         }

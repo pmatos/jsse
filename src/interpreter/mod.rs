@@ -82,7 +82,7 @@ impl Interpreter {
                     name.to_string(),
                     Binding {
                         value,
-                        kind: BindingKind::Const,
+                        kind: BindingKind::ImmutableValue,
                         initialized: true,
                         deletable: false,
                     },
@@ -157,7 +157,7 @@ impl Interpreter {
                     name.to_string(),
                     Binding {
                         value,
-                        kind: BindingKind::Const,
+                        kind: BindingKind::ImmutableValue,
                         initialized: true,
                         deletable: false,
                     },
