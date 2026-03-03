@@ -43,6 +43,12 @@ impl Completion {
     }
 }
 
+pub(crate) enum GeneratorResumeKind {
+    Next,
+    Return(JsValue),
+    Throw(JsValue),
+}
+
 pub(crate) struct GeneratorContext {
     pub(crate) target_yield: usize,
     pub(crate) current_yield: usize,
@@ -50,6 +56,7 @@ pub(crate) struct GeneratorContext {
     /// Values sent to previous yields (index k = value passed to next() after yield k)
     pub(crate) prev_sent_values: Vec<JsValue>,
     pub(crate) is_async: bool,
+    pub(crate) resume_kind: GeneratorResumeKind,
 }
 
 #[derive(Debug, Clone)]

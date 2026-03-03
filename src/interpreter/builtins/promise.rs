@@ -149,7 +149,7 @@ impl Interpreter {
 
     /// PromiseResolve(C, x) - spec 27.2.4.7
     /// Like promise_resolve_value but uses C as the constructor
-    fn promise_resolve_with_constructor(
+    pub(crate) fn promise_resolve_with_constructor(
         &mut self,
         constructor: &JsValue,
         value: &JsValue,
@@ -891,7 +891,7 @@ impl Interpreter {
         }));
     }
 
-    fn promise_then(
+    pub(crate) fn promise_then(
         &mut self,
         promise_val: &JsValue,
         on_fulfilled: &JsValue,

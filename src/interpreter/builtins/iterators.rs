@@ -3201,7 +3201,7 @@ impl Interpreter {
         // next(value)
         let next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
-            0,
+            1,
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
@@ -3227,7 +3227,7 @@ impl Interpreter {
         // return(value)
         let return_fn = self.create_function(JsFunction::native(
             "return".to_string(),
-            0,
+            1,
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
