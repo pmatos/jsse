@@ -4988,6 +4988,21 @@ impl Interpreter {
                 Completion::Normal(self.create_iter_result_object(v, false))
             }
             Completion::Return(v) => {
+                // §14.4.8: DisposeResources when generator completes
+                let disp = self.dispose_resources(&func_env, Completion::Return(v));
+                let v = match disp {
+                    Completion::Return(v) => v,
+                    Completion::Throw(e) => {
+                        obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                            body,
+                            func_env,
+                            is_strict,
+                            execution_state: GeneratorExecutionState::Completed,
+                        });
+                        return Completion::Throw(e);
+                    }
+                    _ => JsValue::Undefined,
+                };
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                     body,
                     func_env,
@@ -4997,6 +5012,17 @@ impl Interpreter {
                 Completion::Normal(self.create_iter_result_object(v, true))
             }
             Completion::Normal(_) | Completion::Empty => {
+                // §14.4.8: DisposeResources when generator completes
+                let disp = self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined));
+                if let Completion::Throw(e) = disp {
+                    obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
+                        body,
+                        func_env,
+                        is_strict,
+                        execution_state: GeneratorExecutionState::Completed,
+                    });
+                    return Completion::Throw(e);
+                }
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                     body,
                     func_env,
@@ -5006,13 +5032,17 @@ impl Interpreter {
                 Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true))
             }
             Completion::Throw(e) => {
+                let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                     body,
                     func_env,
                     is_strict,
                     execution_state: GeneratorExecutionState::Completed,
                 });
-                Completion::Throw(e)
+                match disp {
+                    Completion::Throw(e) => Completion::Throw(e),
+                    _ => Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true)),
+                }
             }
             other => other,
         }

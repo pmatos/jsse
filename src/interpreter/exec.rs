@@ -1292,8 +1292,7 @@ impl Interpreter {
                     };
                     let comp = self.exec_variable_declaration(decl, decl_env);
                     if comp.is_abrupt() {
-                        // Init failed — no resources were registered, skip disposal.
-                        return comp;
+                        return self.dispose_resources(&for_env, comp);
                     }
                 }
                 ForInit::Expression(expr) => {
@@ -1742,6 +1741,8 @@ impl Interpreter {
     fn exec_try(&mut self, t: &TryStatement, env: &EnvRef) -> Completion {
         let block_env = Environment::new(Some(env.clone()));
         let result = self.exec_statements(&t.block, &block_env);
+        // §14.2.2: DisposeResources for the try block's scope (using declarations)
+        let result = self.dispose_resources(&block_env, result);
         let result = match result {
             Completion::Throw(val) => {
                 if let Some(handler) = &t.handler {
@@ -1901,6 +1902,7 @@ impl Interpreter {
         value: &JsValue,
         hint: DisposeHint,
     ) -> Result<(), JsValue> {
+        // §AddDisposableResource step 1: early return for null/undefined
         if matches!(value, JsValue::Null | JsValue::Undefined) {
             return Ok(());
         }

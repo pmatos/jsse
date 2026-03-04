@@ -994,6 +994,20 @@ impl<'a> Lexer<'a> {
         self.offset
     }
 
+    pub fn save_state(&self) -> (usize, Option<char>, u32, u32, usize, bool) {
+        (self.offset, self.current, self.line, self.column, self.token_start, self.had_line_terminator)
+    }
+
+    pub fn restore_state(&mut self, state: (usize, Option<char>, u32, u32, usize, bool)) {
+        self.offset = state.0;
+        self.current = state.1;
+        self.line = state.2;
+        self.column = state.3;
+        self.token_start = state.4;
+        self.had_line_terminator = state.5;
+        self.chars = self.source[self.offset..].chars();
+    }
+
     pub fn next_token(&mut self) -> Result<Token, LexError> {
         loop {
             self.skip_whitespace();

@@ -120,7 +120,7 @@
         "No regressions in explicit resource management tests"
       ],
       "priority": 8,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-009",

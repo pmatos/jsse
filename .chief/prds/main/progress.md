@@ -129,3 +129,23 @@
   - OptionalChain returns a Reference Record per spec — the `this` context (reference base) must be preserved through nested chains and when used as callee
   - Super property access in optional chain must use the same `get_super_base_id()` resolution as `eval_member` — `eval_expr(Super)` returns `__super__` (the constructor), not the super base
 ---
+
+## 2026-03-04 - US-008
+- **What was implemented**: Fixed `using`/`await using` remaining edge cases across parser and interpreter
+  1. **exec_try dispose_resources**: Added `dispose_resources` call after try block execution for `using` declarations in try bodies (§14.2.2).
+  2. **exec_for init failure dispose**: Init failure in for-loops with using declarations now disposes for-scope resources before returning abrupt completion.
+  3. **generator_next dispose_resources**: Added `dispose_resources` calls in Return, Normal/Empty, and Throw completion branches of replay-based generators (§14.4.8). Yield branch correctly skips disposal.
+  4. **is_await_using_declaration rewrite**: Used lexer `save_state`/`restore_state` for proper two-token lookahead past `await using` to check binding identifier.
+  5. **Module top-level using/await using**: Added `self.is_module` checks so using/await using are allowed at module top-level (not just block/function scope).
+  6. **for-using-of disambiguation**: Special-case lookahead in `parse_for_statement` to recognize `of` as binding identifier in `for (using of = init;...)` and `for (await using of of [])`, separate from `is_using_declaration()` which excludes `Keyword::Of` to avoid `for (using of iterable)` ambiguity.
+  7. **Sloppy-mode `let` disambiguation**: `parse_statement_or_declaration` now checks next token before routing `let` to lexical declaration — uses `current_identifier_name()` plus explicit `Keyword::Yield`/`Keyword::Await`/`IdentifierWithEscape` checks. Handles `using\nlet = ...` (two expression statements via ASI) and `let yield`/`let await` in generator/async context (no ASI per §14.3.1).
+- **Files changed**: `src/parser/statements.rs`, `src/interpreter/exec.rs`, `src/interpreter/eval.rs`, `src/lexer.rs`, `README.md`, `test262-pass.txt`
+- **Results**: 18 new passes, 0 regressions. 90,560/91,986 (98.45%)
+  - using/await-using: 300→318/336 (94.6%)
+  - future-reserved-words: preserved 100% pass rate
+  - let/syntax: preserved 100% pass rate
+- **Learnings for future iterations:**
+  - `for (using of ...)` is ALWAYS a for-of with `using` as identifier per spec. `of` as binding name requires `=` after it: `for (using of = init; ...)`. Need multi-token lookahead.
+  - Lexer `save_state`/`restore_state` enables multi-token lookahead without pushback slot limitations
+  - `current_identifier_name()` returns None for `yield`/`await` in generator/async context, but per spec §14.3.1 they are still grammatically valid BindingIdentifiers — ASI must not apply between `let` and these tokens
+---
