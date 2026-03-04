@@ -372,31 +372,13 @@ fn to_temporal_plain_month_day(
                     ));
                 }
             };
-            // For ISO calendar, reference year is always 1972 (a leap year)
-            if cal == "iso8601" {
-                Ok((parsed.0, parsed.1, 1972, cal))
-            } else {
-                // Non-ISO: convert to calendar month_code+day, then find reference year
-                let iso_year = parsed.2.unwrap_or(1972);
-                let iso_month = parsed.0;
-                let iso_day = parsed.1;
-                if let Some(cf) = super::iso_to_calendar_fields(iso_year, iso_month, iso_day, &cal)
-                {
-                    if let Some((iy, im, id)) = super::calendar_month_day_to_iso(
-                        &cf.month_code,
-                        cf.day,
-                        None,
-                        &cal,
-                        "constrain",
-                    ) {
-                        Ok((im, id, iy, cal))
-                    } else {
-                        Ok((iso_month, iso_day, iso_year, cal))
-                    }
-                } else {
-                    Ok((parsed.0, parsed.1, iso_year, cal))
-                }
+            // Reject non-iso8601 calendar from string
+            if cal != "iso8601" {
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "PlainMonthDay from string requires iso8601 calendar, got: {cal}"
+                ))));
             }
+            Ok((parsed.0, parsed.1, 1972, cal))
         }
         _ => Err(Completion::Throw(
             interp.create_type_error("Cannot convert to Temporal.PlainMonthDay"),

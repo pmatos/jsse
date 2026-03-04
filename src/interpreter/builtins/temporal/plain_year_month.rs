@@ -352,13 +352,19 @@ fn to_temporal_plain_year_month(
                     ));
                 }
             };
+            // §13.35 step 5.h: reject non-iso8601 calendar from string
+            if cal != "iso8601" {
+                return Err(Completion::Throw(interp.create_range_error(&format!(
+                    "PlainYearMonth from string requires iso8601 calendar, got: {cal}"
+                ))));
+            }
             if !super::iso_year_month_within_limits(parsed.0, parsed.1) {
                 return Err(Completion::Throw(
                     interp.create_range_error("Date outside representable range"),
                 ));
             }
-            let ref_day = parsed.2.unwrap_or(1);
-            Ok((parsed.0, parsed.1, ref_day, cal))
+            // referenceISODay is always 1 when parsing from string
+            Ok((parsed.0, parsed.1, 1, cal))
         }
         _ => Err(Completion::Throw(
             interp.create_type_error("Cannot convert to Temporal.PlainYearMonth"),

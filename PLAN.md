@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 91,986 (48,002 files, dual strict/non-strict per spec)
-**Current pass rate:** 90,698 / 91,986 (98.60%)
+**Current pass rate:** 90,893 / 91,986 (98.81%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -38,7 +38,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Symbol | 100% | 184/184 |
 | WeakRef | 100% | 58/58 |
 | FinalizationRegistry | 100% | 94/94 |
-| Temporal | 99% | 8,898/8,964 |
+| Temporal | 99.8% | 8,948/8,964 |
 | Number | 100% | 670/670 |
 | annexB | 99% | 1,362/1,377 |
 | RegExp | 99% | 3,730/3,756 |
@@ -246,6 +246,8 @@ These features block significant numbers of tests:
 
 106. ~~**Function built-in edge cases + test runner CR normalization**~~ — ✅ Done (+12 new passes, 98.74% → 98.76%). Six fixes: (1) Getter/setter functions non-constructable: object literal getter/setter expressions now set `is_method: true` via `next_function_is_method` flag, preventing prototype property creation and making them non-constructable (§15.4.5). Fixes `Symbol.hasInstance` poisoned prototype test. (2) `GetFunctionRealm` (§7.3.22): changed return type to `Result<usize, JsValue>`, throws TypeError for revoked proxies (step 4a: handler is null). Fixed revoked proxy detection — checks `proxy_revoked` flag directly since `proxy_target` is cleared on revocation. (3) Array literal parser: added missing comma/closing-bracket check after each element expression, rejecting `[a b]` as SyntaxError. Fixes `new Function({})` → `[object Object]` parse failure. (4) Template literal TRV CR normalization (§12.9.6): raw template values now normalize `\r\n`→`\n` and `\r`→`\n` in both bare line terminators and escape sequence line continuations. (5) Test runner CR preservation: switched file reading to `newline=""` to preserve CR/CRLF line terminators in test source; normalized frontmatter regex matching for CR-only files. (6) `Function.prototype.toString` CR preservation: correctly returns original source text with CR line endings when source files use CR or CRLF. Function: 873→883/893 (99%). Files: `src/interpreter/mod.rs`, `src/interpreter/eval.rs`, `src/interpreter/builtins/array.rs`, `src/parser/expressions.rs`, `src/lexer.rs`, `scripts/run-test262.py`.
 
+107. ~~**Temporal PlainYearMonth/PlainMonthDay string parsing compliance**~~ — ✅ Done (+50 new passes, 98.76% → 98.81%). Two fixes for Temporal string parsing: (1) PlainYearMonth referenceISODay: when creating PlainYearMonth from a string containing a full date (e.g. "2019-10-31" or "2016-12-31T23:59:60"), the referenceISODay must always be 1 (not the day from the string). Previously stored the parsed day, causing toString({calendarName:'always'}) to emit wrong reference date, compare() to return non-zero for same year-month, and equals() to return false for equivalent PlainYearMonths. (2) Non-iso8601 calendar rejection: both PlainYearMonth and PlainMonthDay string parsing now reject non-iso8601 calendar annotations (e.g. "[u-ca=gregory]", "[u-ca=hebrew]") with RangeError per spec. Previously accepted any supported calendar from string input. PlainYearMonth: 950→992/992 (100%). PlainMonthDay: 380→388/388 (100%). Temporal overall: 8,898→8,948/8,964 (99.8%). Files: `src/interpreter/builtins/temporal/plain_year_month.rs`, `src/interpreter/builtins/temporal/plain_month_day.rs`.
+
 92. ~~**Proto-from-ctor-realm: Realm-Aware Constructors (§10.2.4)**~~ — ✅ Done (+105 new passes, 97.95% → 98.06%). Fixed `GetPrototypeFromConstructor` to use `GetFunctionRealm(newTarget)` intrinsic when `newTarget.prototype` is not an Object. (1) Indirect eval realm switching: `perform_eval` now runs with `current_realm_id = eval_realm_id` during execution, not just for `global_env` lookup. (2) Constructor realm-aware prototype: Error, native errors (SyntaxError/TypeError/ReferenceError/RangeError/URIError/EvalError), AggregateError, SuppressedError, Boolean, Number, Function, Map, Set, WeakMap, WeakSet, Date, Promise, ArrayBuffer, SharedArrayBuffer, DataView, Iterator, DisposableStack, AsyncDisposableStack, plus all 9 Intl constructors now use `get_prototype_from_new_target_realm()` instead of hardcoded prototypes. Native error prototypes now stored on Realm struct. (3) ArraySpeciesCreate cross-realm: §9.4.2.3 step 5-6 check — when constructor C is from a different realm and equals that realm's intrinsic %Array%, set C to undefined. Files: `builtins/mod.rs`, `builtins/collections.rs`, `builtins/date.rs`, `builtins/promise.rs`, `builtins/typedarray.rs`, `builtins/iterators.rs`, `builtins/disposable.rs`, `builtins/array.rs`, `builtins/intl/*.rs`.
 
 ---
@@ -291,7 +293,7 @@ These are tracked across all phases:
 | `language/types` | 113 | |
 | `language/asi` | 102 | |
 | `language/` (other) | ~400 | white-space, comments, keywords, etc. |
-| `built-ins/Temporal` | 8,964 | 8,898 (99.3%) |
+| `built-ins/Temporal` | 8,964 | 8,948 (99.8%) |
 | `built-ins/Object` | 6,802 | 6,565 (96.5%) |
 | `built-ins/Array` | 6,111 | 6,072 (99.4%) |
 | `built-ins/RegExp` | 3,756 | 3,682 (98.0%) |
