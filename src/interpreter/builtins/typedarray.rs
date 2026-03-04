@@ -3790,25 +3790,31 @@ impl Interpreter {
                             interp.create_type_error(&format!("{} is not a constructor", kind.name())),
                         );
                     }
-                    // OrdinaryCreateFromConstructor: get prototype from NewTarget's realm
-                    let proto = match interp.get_prototype_from_new_target_realm(|realm| match kind {
-                        TypedArrayKind::Int8 => realm.int8array_prototype.clone(),
-                        TypedArrayKind::Uint8 => realm.uint8array_prototype.clone(),
-                        TypedArrayKind::Uint8Clamped => realm.uint8clampedarray_prototype.clone(),
-                        TypedArrayKind::Int16 => realm.int16array_prototype.clone(),
-                        TypedArrayKind::Uint16 => realm.uint16array_prototype.clone(),
-                        TypedArrayKind::Int32 => realm.int32array_prototype.clone(),
-                        TypedArrayKind::Uint32 => realm.uint32array_prototype.clone(),
-                        TypedArrayKind::Float32 => realm.float32array_prototype.clone(),
-                        TypedArrayKind::Float64 => realm.float64array_prototype.clone(),
-                        TypedArrayKind::BigInt64 => realm.bigint64array_prototype.clone(),
-                        TypedArrayKind::BigUint64 => realm.biguint64array_prototype.clone(),
-                    }) {
-                        Ok(p) => p.unwrap_or_else(|| type_proto_clone.clone()),
-                        Err(e) => return Completion::Throw(e),
+                    // Helper closure to get prototype from NewTarget's realm (deferred)
+                    let get_proto = |interp: &mut Interpreter| -> Result<Rc<RefCell<JsObjectData>>, JsValue> {
+                        match interp.get_prototype_from_new_target_realm(|realm| match kind {
+                            TypedArrayKind::Int8 => realm.int8array_prototype.clone(),
+                            TypedArrayKind::Uint8 => realm.uint8array_prototype.clone(),
+                            TypedArrayKind::Uint8Clamped => realm.uint8clampedarray_prototype.clone(),
+                            TypedArrayKind::Int16 => realm.int16array_prototype.clone(),
+                            TypedArrayKind::Uint16 => realm.uint16array_prototype.clone(),
+                            TypedArrayKind::Int32 => realm.int32array_prototype.clone(),
+                            TypedArrayKind::Uint32 => realm.uint32array_prototype.clone(),
+                            TypedArrayKind::Float32 => realm.float32array_prototype.clone(),
+                            TypedArrayKind::Float64 => realm.float64array_prototype.clone(),
+                            TypedArrayKind::BigInt64 => realm.bigint64array_prototype.clone(),
+                            TypedArrayKind::BigUint64 => realm.biguint64array_prototype.clone(),
+                        }) {
+                            Ok(p) => Ok(p.unwrap_or_else(|| type_proto_clone.clone())),
+                            Err(e) => Err(e),
+                        }
                     };
                     if args.is_empty() {
                         // new XArray() -> length 0
+                        let proto = match get_proto(interp) {
+                            Ok(p) => p,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         return interp.create_typed_array_from_length(kind, 0, &proto);
                     }
                     let first = &args[0];
@@ -3884,6 +3890,10 @@ impl Interpreter {
                                         is_detached: detached,
                                         is_length_tracking,
                                     };
+                                    let proto = match get_proto(interp) {
+                                        Ok(p) => p,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
                                     let buf_val = first.clone();
                                     let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
                                     let id = result.borrow().id.unwrap();
@@ -3902,6 +3912,11 @@ impl Interpreter {
                                     if src_ta.is_detached.get() {
                                         return Completion::Throw(interp.create_type_error(
                                             "source typed array is detached",
+                                        ));
+                                    }
+                                    if is_typed_array_out_of_bounds(&src_ta) {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "source typed array is out of bounds",
                                         ));
                                     }
                                     let len = typed_array_length(&src_ta);
@@ -3929,6 +3944,10 @@ impl Interpreter {
                                         ab.arraybuffer_data = Some(new_buf_rc);
                                         ab.arraybuffer_detached = Some(new_detached);
                                     }
+                                    let proto = match get_proto(interp) {
+                                        Ok(p) => p,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
                                     let ab_id = ab_obj.borrow().id.unwrap();
                                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                                     let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &proto);
@@ -3970,6 +3989,10 @@ impl Interpreter {
                                     ab.arraybuffer_data = Some(new_buf_rc);
                                     ab.arraybuffer_detached = Some(new_detached);
                                 }
+                                let proto = match get_proto(interp) {
+                                    Ok(p) => p,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                 let ab_id = ab_obj.borrow().id.unwrap();
                                 let buf_val = JsValue::Object(JsObject { id: ab_id });
                                 let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &proto);
@@ -3979,18 +4002,30 @@ impl Interpreter {
                             Completion::Throw(interp.create_type_error("invalid argument"))
                         }
                         _ => {
-                            // §22.2.5.1: If firstArgument is not an Object, treat as length
+                            // §23.2.5.1 step 6c: ToIndex before AllocateTypedArray
                             let len_val = match interp.to_index(first) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 _ => return Completion::Normal(JsValue::Undefined),
                             };
                             let len = if let JsValue::Number(n) = len_val { n as usize } else { 0 };
+                            let proto = match get_proto(interp) {
+                                Ok(p) => p,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             interp.create_typed_array_from_length(kind, len, &proto)
                         }
                     }
                 },
             ));
+
+            // Set deferred_construct so construct_with_new_target doesn't access
+            // newTarget.prototype before the constructor body runs (spec ordering)
+            if let JsValue::Object(o) = &ctor
+                && let Some(obj) = self.get_object(o.id)
+            {
+                obj.borrow_mut().deferred_construct = true;
+            }
 
             // Set BYTES_PER_ELEMENT on constructor
             if let JsValue::Object(o) = &ctor
@@ -4588,11 +4623,20 @@ impl Interpreter {
             other => return other,
         };
         if let JsValue::Object(ref o) = new_obj {
-            if self
-                .get_object(o.id)
-                .is_some_and(|obj| obj.borrow().typed_array_info.is_some())
-            {
-                return Completion::Normal(new_obj);
+            if let Some(obj) = self.get_object(o.id) {
+                let ta_len = obj
+                    .borrow()
+                    .typed_array_info
+                    .as_ref()
+                    .map(|ti| ti.array_length);
+                if let Some(ta_len) = ta_len {
+                    if ta_len < len {
+                        return Completion::Throw(self.create_type_error(
+                            "TypedArray created from constructor is too small",
+                        ));
+                    }
+                    return Completion::Normal(new_obj);
+                }
             }
         }
         Completion::Throw(
@@ -4738,26 +4782,26 @@ impl Interpreter {
         val: &JsValue,
     ) -> Result<Vec<JsValue>, Completion> {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(_obj) = self.get_object(o.id)
         {
-            let obj_ref = obj.borrow();
-            // Check for Symbol.iterator
-            let has_iterator = obj_ref.has_property("Symbol(Symbol.iterator)");
-            // Check for array_elements
-            if let Some(ref elems) = obj_ref.array_elements {
-                return Ok(elems.clone());
-            }
-            drop(obj_ref);
+            // Step 5: Let usingIterator be ? GetMethod(object, @@iterator).
+            let iter_fn = match self.get_object_property(o.id, "Symbol(Symbol.iterator)", val) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(Completion::Throw(e)),
+                _ => JsValue::Undefined,
+            };
+            // GetMethod: if null or undefined, treat as no iterator (array-like)
+            let using_iterator = if matches!(iter_fn, JsValue::Undefined | JsValue::Null) {
+                None
+            } else if self.is_callable(&iter_fn) {
+                Some(iter_fn)
+            } else {
+                return Err(Completion::Throw(
+                    self.create_type_error("@@iterator is not a function"),
+                ));
+            };
 
-            if has_iterator {
-                // Use iterator protocol
-                let iter_fn = match self.get_object_property(o.id, "Symbol(Symbol.iterator)", val) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(Completion::Throw(e)),
-                    _ => {
-                        return Err(Completion::Throw(self.create_type_error("bad iterator")));
-                    }
-                };
+            if let Some(iter_fn) = using_iterator {
                 let iter = match self.call_function(&iter_fn, val, &[]) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(Completion::Throw(e)),
