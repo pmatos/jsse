@@ -182,7 +182,9 @@ def make_adapter(engine_name: str, binary: str | None = None) -> EngineAdapter:
 # ---------------------------------------------------------------------------
 
 def parse_frontmatter(text: str) -> dict:
-    m = FRONTMATTER_RE.search(text)
+    # Normalize line endings for frontmatter regex matching
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    m = FRONTMATTER_RE.search(normalized)
     if not m:
         return {}
 
@@ -245,7 +247,8 @@ def compute_scenarios(test_file: str, metadata: dict) -> list[tuple[str, str]]:
 
 def read_harness_file(test262_dir: Path, name: str) -> str:
     path = test262_dir / "harness" / name
-    return path.read_text(encoding="utf-8", errors="replace")
+    with open(path, encoding="utf-8", errors="replace", newline="") as f:
+        return f.read()
 
 
 def get_harness_files(
@@ -280,10 +283,12 @@ def build_test_source(
     is_async = "async" in flags
 
     if mode == "module":
-        return test_file.read_text(encoding="utf-8", errors="replace")
+        with open(test_file, encoding="utf-8", errors="replace", newline="") as f:
+            return f.read()
 
     parts: list[str] = []
-    source = test_file.read_text(encoding="utf-8", errors="replace")
+    with open(test_file, encoding="utf-8", errors="replace", newline="") as f:
+        source = f.read()
 
     if mode == "strict":
         parts.append('"use strict";\n')
@@ -322,7 +327,8 @@ def run_single_test(
     adapter = make_adapter(engine_name, engine_binary)
 
     try:
-        head = test_file.read_text(encoding="utf-8", errors="replace")[:8192]
+        with open(test_file, encoding="utf-8", errors="replace", newline="") as f:
+            head = f.read(8192)
     except OSError:
         return (scenario_id, False, "read_error")
 
@@ -348,7 +354,7 @@ def run_single_test(
 
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".js", delete=False, encoding="utf-8",
-            dir=str(test_file.parent)
+            newline="", dir=str(test_file.parent)
         ) as tmp:
             tmp.write(combined)
             tmp_path = tmp.name
@@ -581,7 +587,8 @@ def main():
     scenarios = []
     for t in tests:
         try:
-            head = t.read_text(encoding="utf-8", errors="replace")[:8192]
+            with open(t, encoding="utf-8", errors="replace", newline="") as f:
+                head = f.read(8192)
         except OSError:
             scenarios.append((str(t), "default"))
             continue

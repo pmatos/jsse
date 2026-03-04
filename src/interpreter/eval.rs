@@ -386,6 +386,7 @@ impl Interpreter {
                     env.clone()
                 };
                 let enclosing_strict = env.borrow().strict;
+                let force_method = self.next_function_is_method;
                 let func = JsFunction::User {
                     name: f.name.clone(),
                     params: f.params.clone(),
@@ -395,7 +396,7 @@ impl Interpreter {
                     is_strict: f.body_is_strict || enclosing_strict,
                     is_generator: f.is_generator,
                     is_async: f.is_async,
-                    is_method: false,
+                    is_method: force_method,
                     source_text: f.source_text.clone(),
                 };
                 let func_val = self.create_function(func);
@@ -9053,7 +9054,10 @@ impl Interpreter {
                             }
                             if !proto_set {
                                 // GetFunctionRealm(fn) to find the right realm's proto
-                                let fn_realm_id = self.get_function_realm(func_val);
+                                let fn_realm_id = match self.get_function_realm(func_val) {
+                                    Ok(r) => r,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                 gen_obj.borrow_mut().prototype =
                                     self.realms[fn_realm_id].async_generator_prototype.clone();
                             }
@@ -9176,7 +9180,10 @@ impl Interpreter {
                                 }
                             }
                             if !proto_set {
-                                let fn_realm_id = self.get_function_realm(func_val);
+                                let fn_realm_id = match self.get_function_realm(func_val) {
+                                    Ok(r) => r,
+                                    Err(e) => return Completion::Throw(e),
+                                };
                                 gen_obj.borrow_mut().prototype =
                                     self.realms[fn_realm_id].generator_prototype.clone();
                             }
@@ -10805,7 +10812,10 @@ impl Interpreter {
                         new_obj.borrow_mut().prototype = Some(proto_rc);
                     } else {
                         // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
-                        let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()));
+                        let nt_realm_id = match self.get_function_realm(&JsValue::Object(nt_o.clone())) {
+                            Ok(r) => r,
+                            Err(e) => return Completion::Throw(e),
+                        };
                         if let Some(proto_rc) = self.realms[nt_realm_id].object_prototype.clone() {
                             new_obj.borrow_mut().prototype = Some(proto_rc);
                         }
@@ -10990,7 +11000,10 @@ impl Interpreter {
                     obj_rc.borrow_mut().prototype = Some(proto_rc);
                 } else {
                     // proto is not an Object: GetFunctionRealm(newTarget) → realm's intrinsic
-                    let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()));
+                    let nt_realm_id = match self.get_function_realm(&JsValue::Object(nt_o.clone())) {
+                        Ok(r) => r,
+                        Err(_) => return,
+                    };
                     if let Some(proto_rc) = realm_fallback(&self.realms[nt_realm_id]) {
                         if let Some(obj_rc) = self.get_object(obj_id) {
                             obj_rc.borrow_mut().prototype = Some(proto_rc);
@@ -14106,10 +14119,18 @@ impl Interpreter {
                     );
                 }
             };
+            let is_accessor = matches!(prop.kind, PropertyKind::Get | PropertyKind::Set);
+            if is_accessor {
+                self.next_function_is_method = true;
+            }
             let value = match self.eval_expr(&prop.value, env) {
                 Completion::Normal(v) => v,
-                other => return other,
+                other => {
+                    self.next_function_is_method = false;
+                    return other;
+                }
             };
+            self.next_function_is_method = false;
             // Handle spread — CopyDataProperties (§7.3.26)
             if let Expression::Spread(inner) = &prop.value {
                 let spread_val = match self.eval_expr(inner, env) {
@@ -14671,7 +14692,10 @@ impl Interpreter {
             )
         };
 
-        let target_realm_id = self.get_function_realm(&target);
+        let target_realm_id = match self.get_function_realm(&target) {
+            Ok(r) => r,
+            Err(e) => return Completion::Throw(e),
+        };
 
         // Wrap arguments into target realm
         let mut wrapped_args = Vec::with_capacity(args.len());

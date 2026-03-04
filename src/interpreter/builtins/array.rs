@@ -396,7 +396,10 @@ fn array_species_create(
     // equals that realm's intrinsic %Array%, set C to undefined
     if interp.is_constructor(&c) {
         if let JsValue::Object(co) = &c {
-            let c_realm = interp.get_function_realm(&JsValue::Object(co.clone()));
+            let c_realm = match interp.get_function_realm(&JsValue::Object(co.clone())) {
+                Ok(r) => r,
+                Err(e) => return Err(Completion::Throw(e)),
+            };
             if c_realm != interp.current_realm_id {
                 let realm_array = interp.realms[c_realm].global_env.borrow().get("Array");
                 if let Some(ref ra) = realm_array {

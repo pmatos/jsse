@@ -1184,25 +1184,25 @@ impl<'a> Lexer<'a> {
                     let before_offset = self.offset;
                     match self.read_escape_sequence() {
                         Ok(esc) => {
-                            raw.push_str(&self.source[before_offset..self.offset]);
+                            // §12.9.6: TRV normalizes <CR><LF> and <CR> to <LF>
+                            let raw_slice = &self.source[before_offset..self.offset];
+                            let normalized = raw_slice.replace("\r\n", "\n").replace('\r', "\n");
+                            raw.push_str(&normalized);
                             if let Some(ref mut c) = cooked {
                                 c.push_str(&esc);
                             }
                         }
                         Err(_) => {
-                            // Invalid escape: cooked becomes undefined, raw gets source chars
-                            raw.push_str(&self.source[before_offset..self.offset]);
+                            let raw_slice = &self.source[before_offset..self.offset];
+                            let normalized = raw_slice.replace("\r\n", "\n").replace('\r', "\n");
+                            raw.push_str(&normalized);
                             cooked = None;
                         }
                     }
                 }
                 Some(ch) if Self::is_line_terminator(ch) => {
-                    if ch == '\r' && self.peek() == Some('\n') {
-                        raw.push('\r');
-                        raw.push('\n');
-                    } else {
-                        raw.push(ch);
-                    }
+                    // §12.9.6: TRV normalizes <CR><LF> and <CR> to <LF>
+                    raw.push('\n');
                     self.handle_newline(ch);
                     if let Some(ref mut c) = cooked {
                         c.push('\n');

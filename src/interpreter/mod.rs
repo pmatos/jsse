@@ -56,6 +56,7 @@ pub struct Interpreter {
     pub(crate) regexp_constructor_id: Option<u64>,
     pub(crate) function_realm_map: HashMap<u64, usize>,
     pub(crate) in_tail_position: bool,
+    pub(crate) next_function_is_method: bool,
 }
 
 pub struct LoadedModule {
@@ -128,6 +129,7 @@ impl Interpreter {
             regexp_constructor_id: None,
             function_realm_map: HashMap::new(),
             in_tail_position: false,
+            next_function_is_method: false,
         };
         interp.setup_globals();
         interp
@@ -319,7 +321,7 @@ impl Interpreter {
     }
 
     // GetFunctionRealm — §10.2.4
-    pub(crate) fn get_function_realm(&self, func_val: &JsValue) -> usize {
+    pub(crate) fn get_function_realm(&mut self, func_val: &JsValue) -> Result<usize, JsValue> {
         if let JsValue::Object(o) = func_val
             && let Some(obj) = self.get_object(o.id)
         {
@@ -330,10 +332,12 @@ impl Interpreter {
                 drop(obj_ref);
                 return self.get_function_realm(&target_clone);
             }
-            // Proxy: recurse on [[ProxyTarget]]
-            if let Some(ref target) = obj_ref.proxy_target
-                && !obj_ref.proxy_revoked
-            {
+            // Proxy: §7.3.22 step 4
+            if obj_ref.proxy_revoked {
+                drop(obj_ref);
+                return Err(self.create_type_error("Cannot perform operation on a revoked proxy"));
+            }
+            if let Some(ref target) = obj_ref.proxy_target {
                 let target_id = target.borrow().id.unwrap();
                 drop(obj_ref);
                 return self.get_function_realm(&JsValue::Object(crate::types::JsObject {
@@ -343,10 +347,10 @@ impl Interpreter {
             drop(obj_ref);
             // Check function_realm_map
             if let Some(&realm_id) = self.function_realm_map.get(&o.id) {
-                return realm_id;
+                return Ok(realm_id);
             }
         }
-        self.current_realm_id
+        Ok(self.current_realm_id)
     }
 
     // GetPrototypeFromConstructor — §10.2.4
@@ -400,7 +404,7 @@ impl Interpreter {
                 return Ok(Some(proto_rc));
             }
             // proto is not an object: use realm of newTarget
-            let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()));
+            let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()))?;
             let proto = get_realm_proto(&self.realms[nt_realm_id]);
             return Ok(proto);
         }

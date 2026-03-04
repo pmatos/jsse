@@ -1212,6 +1212,8 @@ impl<'a> Parser<'a> {
             }
             if self.current == Token::Comma {
                 self.advance()?;
+            } else if self.current != Token::RightBracket {
+                return Err(self.error("Expected ',' or ']' in array literal"));
             }
         }
         self.eat(&Token::RightBracket)?;
