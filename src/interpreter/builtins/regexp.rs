@@ -3440,14 +3440,31 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
         let mut j = 0;
         let mut in_class = false;
         while j < len {
-            if chars[j] == '\\' { j += 2; continue; }
-            if chars[j] == '[' { in_class = true; j += 1; continue; }
-            if chars[j] == ']' { in_class = false; j += 1; continue; }
+            if chars[j] == '\\' {
+                j += 2;
+                continue;
+            }
+            if chars[j] == '[' {
+                in_class = true;
+                j += 1;
+                continue;
+            }
+            if chars[j] == ']' {
+                in_class = false;
+                j += 1;
+                continue;
+            }
             if !in_class && chars[j] == '(' && j + 1 < len && chars[j + 1] != '?' {
                 count += 1;
             }
-            if !in_class && chars[j] == '(' && j + 2 < len && chars[j + 1] == '?' && chars[j + 2] == '<'
-                && j + 3 < len && chars[j + 3] != '=' && chars[j + 3] != '!'
+            if !in_class
+                && chars[j] == '('
+                && j + 2 < len
+                && chars[j + 1] == '?'
+                && chars[j + 2] == '<'
+                && j + 3 < len
+                && chars[j + 3] != '='
+                && chars[j + 3] != '!'
             {
                 count += 1;
             }
@@ -7282,7 +7299,8 @@ impl Interpreter {
                 let code_units = match &arg {
                     JsValue::String(s) => s.code_units.clone(),
                     _ => {
-                        let err = interp.create_type_error("RegExp.escape requires a string argument");
+                        let err =
+                            interp.create_type_error("RegExp.escape requires a string argument");
                         return Completion::Throw(err);
                     }
                 };
@@ -7328,7 +7346,9 @@ impl Interpreter {
                     }
                     is_first = false;
                 }
-                Completion::Normal(JsValue::String(JsString { code_units: result_units }))
+                Completion::Normal(JsValue::String(JsString {
+                    code_units: result_units,
+                }))
             },
         ));
 

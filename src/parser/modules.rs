@@ -8,6 +8,7 @@ impl<'a> Parser<'a> {
         if let Token::StringLiteral(source) = &self.current {
             let source = String::from_utf16_lossy(source);
             self.advance()?;
+            self.skip_import_attributes()?;
             self.eat_semicolon()?;
             return Ok(ImportDeclaration {
                 specifiers: vec![],
@@ -86,9 +87,55 @@ impl<'a> Parser<'a> {
 
         self.eat_from()?;
         let source = self.parse_module_specifier()?;
+        self.skip_import_attributes()?;
         self.eat_semicolon()?;
 
         Ok(ImportDeclaration { specifiers, source })
+    }
+
+    /// Skip `with { ... }` import attributes if present.
+    fn skip_import_attributes(&mut self) -> Result<(), ParseError> {
+        let is_with = self.current_identifier_name().as_deref() == Some("with")
+            || self.current == Token::Keyword(Keyword::With);
+        if is_with && !self.prev_line_terminator {
+            self.advance()?; // with
+            self.eat(&Token::LeftBrace)?;
+            let mut seen_keys = std::collections::HashSet::new();
+            while self.current != Token::RightBrace {
+                // AttributeKey: IdentifierName | StringLiteral
+                let key = if let Token::StringLiteral(s) = &self.current {
+                    let k = String::from_utf16_lossy(s);
+                    self.advance()?;
+                    k
+                } else if let Some(name) = self.current_identifier_name() {
+                    self.advance()?;
+                    name
+                } else if let Token::Keyword(kw) = &self.current {
+                    let k = kw.to_string();
+                    self.advance()?;
+                    k
+                } else if let Token::IdentifierWithEscape(name) = &self.current {
+                    let k = name.clone();
+                    self.advance()?;
+                    k
+                } else {
+                    return Err(self.error("Expected attribute key"));
+                };
+                if !seen_keys.insert(key.clone()) {
+                    return Err(self.error(&format!("Duplicate attribute key '{}'", key)));
+                }
+                self.eat(&Token::Colon)?;
+                if !matches!(&self.current, Token::StringLiteral(_)) {
+                    return Err(self.error("Expected string literal as attribute value"));
+                }
+                self.advance()?;
+                if self.current == Token::Comma {
+                    self.advance()?;
+                }
+            }
+            self.eat(&Token::RightBrace)?;
+        }
+        Ok(())
     }
 
     fn parse_named_imports(
@@ -142,6 +189,7 @@ impl<'a> Parser<'a> {
             };
             self.eat_from()?;
             let source = self.parse_module_specifier()?;
+            self.skip_import_attributes()?;
             self.eat_semicolon()?;
             return Ok(ExportDeclaration::All { exported, source });
         }
@@ -150,13 +198,21 @@ impl<'a> Parser<'a> {
         // export { named } from "module"
         if self.current == Token::LeftBrace {
             self.advance()?;
-            let specifiers = self.parse_export_specifiers()?;
+            let (specifiers, has_string_local) = self.parse_export_specifiers_with_info()?;
             self.eat(&Token::RightBrace)?;
 
             let source = if self.is_from_keyword() {
                 self.advance()?;
-                Some(self.parse_module_specifier()?)
+                let s = self.parse_module_specifier()?;
+                self.skip_import_attributes()?;
+                Some(s)
             } else {
+                // §16.2.3: without `from`, string literal local names are SyntaxError
+                if has_string_local {
+                    return Err(self.error(
+                        "A string literal cannot be used as an exported local name without 'from'",
+                    ));
+                }
                 None
             };
             self.eat_semicolon()?;
@@ -212,9 +268,21 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_export_specifiers(&mut self) -> Result<Vec<ExportSpecifier>, ParseError> {
+        let (specs, _) = self.parse_export_specifiers_with_info()?;
+        Ok(specs)
+    }
+
+    fn parse_export_specifiers_with_info(
+        &mut self,
+    ) -> Result<(Vec<ExportSpecifier>, bool), ParseError> {
         let mut specifiers = Vec::new();
+        let mut has_string_local = false;
         while self.current != Token::RightBrace {
+            let is_string = matches!(self.current, Token::StringLiteral(_));
             let local = self.parse_module_export_name()?;
+            if is_string {
+                has_string_local = true;
+            }
 
             let exported = if self.is_as_keyword() {
                 self.advance()?;
@@ -231,7 +299,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        Ok(specifiers)
+        Ok((specifiers, has_string_local))
     }
 
     fn parse_export_declaration_statement(&mut self) -> Result<Statement, ParseError> {

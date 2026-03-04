@@ -995,7 +995,14 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn save_state(&self) -> (usize, Option<char>, u32, u32, usize, bool) {
-        (self.offset, self.current, self.line, self.column, self.token_start, self.had_line_terminator)
+        (
+            self.offset,
+            self.current,
+            self.line,
+            self.column,
+            self.token_start,
+            self.had_line_terminator,
+        )
     }
 
     pub fn restore_state(&mut self, state: (usize, Option<char>, u32, u32, usize, bool)) {

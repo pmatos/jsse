@@ -377,6 +377,7 @@ impl Interpreter {
                         arguments_immutable: false,
                         has_simple_params: true,
                         is_simple_catch_scope: false,
+                        indirect_bindings: None,
                     }));
                     func_env
                         .borrow_mut()
@@ -1072,11 +1073,10 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&s)))
             }
             Expression::OptionalChain(base, prop) => {
-                let (base_val, base_this) =
-                    match self.eval_oc_base(base, prop, env) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
+                let (base_val, base_this) = match self.eval_oc_base(base, prop, env) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 if matches!(base_val, JsValue::Null | JsValue::Undefined) {
                     return Completion::Normal(JsValue::Undefined);
                 }
@@ -1314,15 +1314,12 @@ impl Interpreter {
                                         if matches!(v, JsValue::Null | JsValue::Undefined) {
                                             return Ok((JsValue::Undefined, JsValue::Undefined));
                                         }
-                                        return self.eval_oc_tail_with_this(
-                                            &v, chain, env,
-                                        );
+                                        return self.eval_oc_tail_with_this(&v, chain, env);
                                     }
                                     Some(PrivateElement::Accessor { get, .. }) => {
                                         if let Some(getter) = get {
-                                            let v = match self.call_function(
-                                                &getter, &obj_val, &[],
-                                            ) {
+                                            let v = match self.call_function(&getter, &obj_val, &[])
+                                            {
                                                 Completion::Normal(v) => v,
                                                 other => return Err(other),
                                             };
@@ -1332,9 +1329,7 @@ impl Interpreter {
                                                     JsValue::Undefined,
                                                 ));
                                             }
-                                            return self.eval_oc_tail_with_this(
-                                                &v, chain, env,
-                                            );
+                                            return self.eval_oc_tail_with_this(&v, chain, env);
                                         }
                                         return Ok((JsValue::Undefined, JsValue::Undefined));
                                     }
@@ -2519,9 +2514,9 @@ impl Interpreter {
                 let super_base_id = match self.get_super_base_id(env) {
                     Some(id) => id,
                     None => {
-                        return Completion::Throw(self.create_type_error(
-                            "Cannot read properties of null",
-                        ));
+                        return Completion::Throw(
+                            self.create_type_error("Cannot read properties of null"),
+                        );
                     }
                 };
 
@@ -2914,9 +2909,8 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        return self.super_set_property(
-                            base_id, &key, final_val, &this_val, strict,
-                        );
+                        return self
+                            .super_set_property(base_id, &key, final_val, &this_val, strict);
                     }
                 }
 
@@ -4572,28 +4566,27 @@ impl Interpreter {
         // Handle super() calls - call parent constructor with current this
         if matches!(callee, Expression::Super) {
             // §13.3.7.2 GetSuperConstructor: dynamically resolve via activeFunction.__proto__
-            let super_ctor =
-                if let Some(ctor_func) = env.borrow().get("__constructor_func__") {
-                    if let JsValue::Object(o) = &ctor_func {
-                        if let Some(obj_rc) = self.get_object(o.id) {
-                            if let Some(proto) = &obj_rc.borrow().prototype {
-                                if let Some(id) = proto.borrow().id {
-                                    JsValue::Object(crate::types::JsObject { id })
-                                } else {
-                                    JsValue::Undefined
-                                }
+            let super_ctor = if let Some(ctor_func) = env.borrow().get("__constructor_func__") {
+                if let JsValue::Object(o) = &ctor_func {
+                    if let Some(obj_rc) = self.get_object(o.id) {
+                        if let Some(proto) = &obj_rc.borrow().prototype {
+                            if let Some(id) = proto.borrow().id {
+                                JsValue::Object(crate::types::JsObject { id })
                             } else {
-                                JsValue::Null
+                                JsValue::Undefined
                             }
                         } else {
-                            JsValue::Undefined
+                            JsValue::Null
                         }
                     } else {
                         JsValue::Undefined
                     }
                 } else {
-                    env.borrow().get("__super__").unwrap_or(JsValue::Undefined)
-                };
+                    JsValue::Undefined
+                }
+            } else {
+                env.borrow().get("__super__").unwrap_or(JsValue::Undefined)
+            };
             let arg_vals = match self.eval_spread_args(args, env) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
@@ -5014,7 +5007,8 @@ impl Interpreter {
             }
             Completion::Normal(_) | Completion::Empty => {
                 // §14.4.8: DisposeResources when generator completes
-                let disp = self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined));
+                let disp =
+                    self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined));
                 if let Completion::Throw(e) = disp {
                     obj_rc.borrow_mut().iterator_state = Some(IteratorState::Generator {
                         body,
@@ -5042,7 +5036,9 @@ impl Interpreter {
                 });
                 match disp {
                     Completion::Throw(e) => Completion::Throw(e),
-                    _ => Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true)),
+                    _ => {
+                        Completion::Normal(self.create_iter_result_object(JsValue::Undefined, true))
+                    }
                 }
             }
             other => other,
@@ -10812,10 +10808,11 @@ impl Interpreter {
                         new_obj.borrow_mut().prototype = Some(proto_rc);
                     } else {
                         // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
-                        let nt_realm_id = match self.get_function_realm(&JsValue::Object(nt_o.clone())) {
-                            Ok(r) => r,
-                            Err(e) => return Completion::Throw(e),
-                        };
+                        let nt_realm_id =
+                            match self.get_function_realm(&JsValue::Object(nt_o.clone())) {
+                                Ok(r) => r,
+                                Err(e) => return Completion::Throw(e),
+                            };
                         if let Some(proto_rc) = self.realms[nt_realm_id].object_prototype.clone() {
                             new_obj.borrow_mut().prototype = Some(proto_rc);
                         }
@@ -11000,7 +10997,8 @@ impl Interpreter {
                     obj_rc.borrow_mut().prototype = Some(proto_rc);
                 } else {
                     // proto is not an Object: GetFunctionRealm(newTarget) → realm's intrinsic
-                    let nt_realm_id = match self.get_function_realm(&JsValue::Object(nt_o.clone())) {
+                    let nt_realm_id = match self.get_function_realm(&JsValue::Object(nt_o.clone()))
+                    {
                         Ok(r) => r,
                         Err(_) => return,
                     };
@@ -11264,6 +11262,113 @@ impl Interpreter {
         Completion::Normal(JsValue::Boolean(false))
     }
 
+    /// Resolve a module export value by following re-export chains recursively.
+    /// Used by namespace [[Get]] to dynamically resolve live bindings.
+    fn resolve_module_export_value(
+        &mut self,
+        binding_name: &str,
+        env: &crate::interpreter::types::EnvRef,
+        module_path: Option<&std::path::Path>,
+        original_key: &str,
+    ) -> Result<JsValue, JsValue> {
+        self.resolve_module_export_value_inner(
+            binding_name,
+            env,
+            module_path,
+            original_key,
+            &mut std::collections::HashSet::new(),
+        )
+    }
+
+    fn resolve_module_export_value_inner(
+        &mut self,
+        binding_name: &str,
+        env: &crate::interpreter::types::EnvRef,
+        module_path: Option<&std::path::Path>,
+        original_key: &str,
+        visited: &mut std::collections::HashSet<(std::path::PathBuf, String)>,
+    ) -> Result<JsValue, JsValue> {
+        if let Some(mp) = module_path {
+            let key = (mp.to_path_buf(), binding_name.to_string());
+            if visited.contains(&key) {
+                return Err(self.create_reference_error(&format!(
+                    "Cannot access '{}' before initialization",
+                    original_key
+                )));
+            }
+            visited.insert(key);
+        }
+
+        // Handle *ns: bindings (namespace re-export)
+        if binding_name.starts_with("*ns:") {
+            if let Some(val) = env.borrow().get(original_key) {
+                return Ok(val);
+            }
+            if let Some(mp) = module_path
+                && let Some(module) = self.module_registry.get(mp)
+                && let Some(val) = module.borrow().exports.get(original_key)
+            {
+                return Ok(val.clone());
+            }
+            return Ok(JsValue::Undefined);
+        }
+
+        // Handle *reexport:source:name — follow the chain recursively
+        if let Some(rest) = binding_name.strip_prefix("*reexport:") {
+            if let Some(colon_idx) = rest.rfind(':') {
+                let source = &rest[..colon_idx];
+                let export_name = &rest[colon_idx + 1..];
+                if let Some(mp) = module_path {
+                    if let Ok(resolved) = self.resolve_module_specifier(source, Some(mp)) {
+                        if let Ok(source_mod) = self.load_module(&resolved) {
+                            let source_ref = source_mod.borrow();
+                            let source_env = source_ref.env.clone();
+                            let source_path = source_ref.path.clone();
+                            // Look up what this export resolves to in the source module
+                            if let Some(next_binding) = source_ref.export_bindings.get(export_name)
+                            {
+                                let next_binding = next_binding.clone();
+                                drop(source_ref);
+                                return self.resolve_module_export_value_inner(
+                                    &next_binding,
+                                    &source_env,
+                                    Some(&source_path),
+                                    original_key,
+                                    visited,
+                                );
+                            }
+                            drop(source_ref);
+                            // No binding info — try direct env lookup
+                            if source_env.borrow().is_in_tdz(export_name) {
+                                return Err(self.create_reference_error(&format!(
+                                    "Cannot access '{}' before initialization",
+                                    original_key
+                                )));
+                            }
+                            if let Some(val) = source_env.borrow().get(export_name) {
+                                return Ok(val);
+                            }
+                        }
+                    }
+                }
+            }
+            return Ok(JsValue::Undefined);
+        }
+
+        // Local binding: look up in the provided environment
+        if env.borrow().is_in_tdz(binding_name) {
+            return Err(self.create_reference_error(&format!(
+                "Cannot access '{}' before initialization",
+                original_key
+            )));
+        }
+        if let Some(val) = env.borrow().get(binding_name) {
+            return Ok(val);
+        }
+
+        Ok(JsValue::Undefined)
+    }
+
     /// Check if accessing `key` on a module namespace object would hit TDZ.
     /// Returns Err(ReferenceError) if the binding is uninitialized.
     /// Returns Ok(()) if the key is safe to access or the object is not a namespace.
@@ -11380,78 +11485,19 @@ impl Interpreter {
         if let Some(obj) = self.get_object(obj_id)
             && let Some(ref ns_data) = obj.borrow().module_namespace.clone()
         {
-            // First try local binding lookup
             if let Some(binding_name) = ns_data.export_to_binding.get(key) {
-                // Handle re-export binding format: *reexport:source:name
-                if let Some(rest) = binding_name.strip_prefix("*reexport:") {
-                    // Parse source:name format
-                    if let Some(colon_idx) = rest.rfind(':') {
-                        let source = &rest[..colon_idx];
-                        let export_name = &rest[colon_idx + 1..];
-                        // Resolve the source module
-                        if let Some(ref module_path) = ns_data.module_path
-                            && let Ok(resolved) =
-                                self.resolve_module_specifier(source, Some(module_path))
-                            && let Ok(source_mod) = self.load_module(&resolved)
-                        {
-                            // Get the source module's export binding to find the env variable
-                            let source_ref = source_mod.borrow();
-                            // Try environment lookup first for live bindings
-                            if let Some(binding) = source_ref.export_bindings.get(export_name) {
-                                let env = source_ref.env.borrow();
-                                if env.is_in_tdz(binding) {
-                                    drop(env);
-                                    drop(source_ref);
-                                    return Completion::Throw(self.create_reference_error(
-                                        &format!("Cannot access '{key}' before initialization"),
-                                    ));
-                                }
-                                if let Some(val) = env.get(binding) {
-                                    return Completion::Normal(val);
-                                }
-                            }
-                            // Fallback: direct environment lookup
-                            {
-                                let env = source_ref.env.borrow();
-                                if env.is_in_tdz(export_name) {
-                                    drop(env);
-                                    drop(source_ref);
-                                    return Completion::Throw(self.create_reference_error(
-                                        &format!("Cannot access '{key}' before initialization"),
-                                    ));
-                                }
-                                if let Some(val) = env.get(export_name) {
-                                    return Completion::Normal(val);
-                                }
-                            }
-                            // Fallback: check exports map
-                            if let Some(val) = source_ref.exports.get(export_name) {
-                                return Completion::Normal(val.clone());
-                            }
-                        }
-                    }
-                } else if binding_name.starts_with("*ns:") {
-                    // export * as ns from './mod' — binding stored in module.exports
-                    if let Some(ref module_path) = ns_data.module_path
-                        && let Some(module) = self.module_registry.get(module_path)
-                        && let Some(val) = module.borrow().exports.get(key)
-                    {
-                        return Completion::Normal(val.clone());
-                    }
-                } else {
-                    let env_ref = ns_data.env.borrow();
-                    if env_ref.is_in_tdz(binding_name) {
-                        drop(env_ref);
-                        return Completion::Throw(self.create_reference_error(&format!(
-                            "Cannot access '{key}' before initialization"
-                        )));
-                    }
-                    let val = env_ref.get(binding_name).unwrap_or(JsValue::Undefined);
-                    drop(env_ref);
-                    return Completion::Normal(val);
+                let module_path = ns_data.module_path.clone();
+                match self.resolve_module_export_value(
+                    binding_name,
+                    &ns_data.env,
+                    module_path.as_deref(),
+                    key,
+                ) {
+                    Ok(val) => return Completion::Normal(val),
+                    Err(e) => return Completion::Throw(e),
                 }
             }
-            // Fallback: check module's exports directly (for re-exports)
+            // Fallback: check module's exports directly
             if let Some(ref module_path) = ns_data.module_path
                 && let Some(module) = self.module_registry.get(module_path)
                 && let Some(val) = module.borrow().exports.get(key)
@@ -13005,7 +13051,11 @@ impl Interpreter {
                 if desc.is_some() {
                     break;
                 }
-                current_id = obj.borrow().prototype.as_ref().map(|p| p.borrow().id.unwrap());
+                current_id = obj
+                    .borrow()
+                    .prototype
+                    .as_ref()
+                    .map(|p| p.borrow().id.unwrap());
             } else {
                 break;
             }
@@ -14319,21 +14369,22 @@ impl Interpreter {
                 if let JsValue::Object(fo) = val
                     && let Some(func_obj) = self.get_object(fo.id)
                 {
-                    let old_closure =
-                        if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
-                        {
-                            Some(closure.clone())
-                        } else {
-                            None
-                        };
+                    let old_closure = if let Some(JsFunction::User { ref closure, .. }) =
+                        func_obj.borrow().callable
+                    {
+                        Some(closure.clone())
+                    } else {
+                        None
+                    };
                     if let Some(old_closure) = old_closure {
                         let wrapper = Environment::new(Some(old_closure));
                         wrapper
                             .borrow_mut()
                             .declare("__home_object__", BindingKind::Const);
                         let _ = wrapper.borrow_mut().set("__home_object__", obj_val.clone());
-                        if let Some(JsFunction::User { ref mut closure, .. }) =
-                            func_obj.borrow_mut().callable
+                        if let Some(JsFunction::User {
+                            ref mut closure, ..
+                        }) = func_obj.borrow_mut().callable
                         {
                             *closure = wrapper;
                         }

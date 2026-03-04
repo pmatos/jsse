@@ -583,7 +583,7 @@ impl<'a> Parser<'a> {
     fn parse_for_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // for
         let is_await = if self.current == Token::Keyword(Keyword::Await) {
-            if !self.in_async {
+            if !self.in_async && !self.is_module {
                 return Err(self.error("for await...of is only valid in async functions"));
             }
             self.advance()?;
@@ -714,47 +714,48 @@ impl<'a> Parser<'a> {
         // Special case: `for (await using of ...)` — `of` as binding identifier.
         // `is_await_using_declaration()` doesn't include Keyword::Of, so check separately:
         // peek three tokens: if `await` `using` `of` (`=` or `of`), it's an await using declaration.
-        let is_for_await_using = if matches!(&self.current, Token::Keyword(Keyword::Await))
-            && self.in_async
-        {
-            if self.is_await_using_declaration() {
-                true
-            } else {
-                let saved_current = self.current.clone();
-                let saved_lt = self.prev_line_terminator;
-                let saved_ts = self.current_token_start;
-                let saved_te = self.current_token_end;
-                let saved_pushback = self.pushback.take();
-                let saved_lexer = self.lexer.save_state();
-                let mut result = false;
-                // peek past `await`
-                if self.advance().is_ok() && !self.prev_line_terminator
-                    && matches!(&self.current, Token::Identifier(n) if n == "using")
-                {
-                    // peek past `using`
-                    if self.advance().is_ok() && !self.prev_line_terminator
-                        && matches!(&self.current, Token::Keyword(Keyword::Of))
+        let is_for_await_using =
+            if matches!(&self.current, Token::Keyword(Keyword::Await)) && self.in_async {
+                if self.is_await_using_declaration() {
+                    true
+                } else {
+                    let saved_current = self.current.clone();
+                    let saved_lt = self.prev_line_terminator;
+                    let saved_ts = self.current_token_start;
+                    let saved_te = self.current_token_end;
+                    let saved_pushback = self.pushback.take();
+                    let saved_lexer = self.lexer.save_state();
+                    let mut result = false;
+                    // peek past `await`
+                    if self.advance().is_ok()
+                        && !self.prev_line_terminator
+                        && matches!(&self.current, Token::Identifier(n) if n == "using")
                     {
-                        // peek past `of` — if `=` or `of` (for-of keyword), it's a declaration
+                        // peek past `using`
                         if self.advance().is_ok()
-                            && (self.current == Token::Assign
-                                || matches!(&self.current, Token::Keyword(Keyword::Of)))
+                            && !self.prev_line_terminator
+                            && matches!(&self.current, Token::Keyword(Keyword::Of))
                         {
-                            result = true;
+                            // peek past `of` — if `=` or `of` (for-of keyword), it's a declaration
+                            if self.advance().is_ok()
+                                && (self.current == Token::Assign
+                                    || matches!(&self.current, Token::Keyword(Keyword::Of)))
+                            {
+                                result = true;
+                            }
                         }
                     }
+                    self.current = saved_current;
+                    self.prev_line_terminator = saved_lt;
+                    self.current_token_start = saved_ts;
+                    self.current_token_end = saved_te;
+                    self.pushback = saved_pushback;
+                    self.lexer.restore_state(saved_lexer);
+                    result
                 }
-                self.current = saved_current;
-                self.prev_line_terminator = saved_lt;
-                self.current_token_start = saved_ts;
-                self.current_token_end = saved_te;
-                self.pushback = saved_pushback;
-                self.lexer.restore_state(saved_lexer);
-                result
-            }
-        } else {
-            false
-        };
+            } else {
+                false
+            };
         if is_for_await_using {
             self.advance()?; // await
             self.advance()?; // using

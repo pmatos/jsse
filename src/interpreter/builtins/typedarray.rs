@@ -52,12 +52,7 @@ impl Interpreter {
                         {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
-                        let len = obj_ref
-                            .arraybuffer_data
-                            .as_ref()
-                            .unwrap()
-                            .borrow()
-                            .len();
+                        let len = obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len();
                         return Completion::Normal(JsValue::Number(len as f64));
                     }
                 }
@@ -189,169 +184,171 @@ impl Interpreter {
         );
 
         // slice
-        let slice_fn = self.create_function(JsFunction::native(
-            "slice".to_string(),
-            2,
-            |interp, this_val, args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
+        let slice_fn =
+            self.create_function(JsFunction::native(
+                "slice".to_string(),
+                2,
+                |interp, this_val, args| {
+                    if let JsValue::Object(o) = this_val
+                        && let Some(obj) = interp.get_object(o.id)
                     {
-                        let obj_ref = obj.borrow();
-                        if !obj_ref.arraybuffer_data.is_some() {
-                            return Completion::Throw(
-                                interp.create_type_error("not an ArrayBuffer"),
-                            );
-                        }
-                        if obj_ref.arraybuffer_is_shared {
-                            return Completion::Throw(
-                                interp.create_type_error("not an ArrayBuffer"),
-                            );
-                        }
-                        if let Some(ref det) = obj_ref.arraybuffer_detached
-                            && det.get()
                         {
-                            return Completion::Throw(
-                                interp.create_type_error("ArrayBuffer is detached"),
-                            );
+                            let obj_ref = obj.borrow();
+                            if !obj_ref.arraybuffer_data.is_some() {
+                                return Completion::Throw(
+                                    interp.create_type_error("not an ArrayBuffer"),
+                                );
+                            }
+                            if obj_ref.arraybuffer_is_shared {
+                                return Completion::Throw(
+                                    interp.create_type_error("not an ArrayBuffer"),
+                                );
+                            }
+                            if let Some(ref det) = obj_ref.arraybuffer_detached
+                                && det.get()
+                            {
+                                return Completion::Throw(
+                                    interp.create_type_error("ArrayBuffer is detached"),
+                                );
+                            }
                         }
-                    }
-                    let buf_len = {
-                        let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
-                    };
-                    let len = buf_len as f64;
-                    let start_arg = if let Some(a) = args.first() {
-                        match interp.to_number_value(a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        0.0
-                    };
-                    let start = if start_arg.is_nan() {
-                        0
-                    } else if start_arg < 0.0 {
-                        ((len + start_arg) as isize).max(0) as usize
-                    } else {
-                        (start_arg as usize).min(buf_len)
-                    };
-                    let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                        match interp.to_number_value(&args[1]) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        len
-                    };
-                    let end = if end_arg.is_nan() {
-                        0
-                    } else if end_arg < 0.0 {
-                        ((len + end_arg) as isize).max(0) as usize
-                    } else {
-                        (end_arg as usize).min(buf_len)
-                    };
-                    let new_len = end.saturating_sub(start);
+                        let buf_len = {
+                            let obj_ref = obj.borrow();
+                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                        };
+                        let len = buf_len as f64;
+                        let start_arg = if let Some(a) = args.first() {
+                            match interp.to_number_value(a) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else {
+                            0.0
+                        };
+                        let start = if start_arg.is_nan() {
+                            0
+                        } else if start_arg < 0.0 {
+                            ((len + start_arg) as isize).max(0) as usize
+                        } else {
+                            (start_arg as usize).min(buf_len)
+                        };
+                        let end_arg = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
+                            match interp.to_number_value(&args[1]) {
+                                Ok(n) => n,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        } else {
+                            len
+                        };
+                        let end = if end_arg.is_nan() {
+                            0
+                        } else if end_arg < 0.0 {
+                            ((len + end_arg) as isize).max(0) as usize
+                        } else {
+                            (end_arg as usize).min(buf_len)
+                        };
+                        let new_len = end.saturating_sub(start);
 
-                    // SpeciesConstructor(O, %ArrayBuffer%)
-                    let ab_ctor = interp
-                        .realm()
-                        .global_env
-                        .borrow()
-                        .get("ArrayBuffer")
-                        .unwrap_or(JsValue::Undefined);
-                    let ctor = match interp.species_constructor(this_val, &ab_ctor) {
-                        Ok(c) => c,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    // Construct(ctor, «newLen»)
-                    let new_val = match interp.construct_with_new_target(
-                        &ctor,
-                        &[JsValue::Number(new_len as f64)],
-                        ctor.clone(),
-                    ) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => return Completion::Normal(JsValue::Undefined),
-                    };
-                    // Validate: must be an ArrayBuffer, not shared, not detached, not same, byteLength >= newLen
-                    let new_id = if let JsValue::Object(ref no) = new_val {
-                        no.id
-                    } else {
-                        return Completion::Throw(
-                            interp.create_type_error("species constructor must return an ArrayBuffer"),
-                        );
-                    };
-                    if let Some(new_rc) = interp.get_object(new_id) {
-                        let new_ref = new_rc.borrow();
-                        if !new_ref.arraybuffer_data.is_some() {
-                            return Completion::Throw(
-                                interp.create_type_error("species constructor must return an ArrayBuffer"),
-                            );
+                        // SpeciesConstructor(O, %ArrayBuffer%)
+                        let ab_ctor = interp
+                            .realm()
+                            .global_env
+                            .borrow()
+                            .get("ArrayBuffer")
+                            .unwrap_or(JsValue::Undefined);
+                        let ctor = match interp.species_constructor(this_val, &ab_ctor) {
+                            Ok(c) => c,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        // Construct(ctor, «newLen»)
+                        let new_val = match interp.construct_with_new_target(
+                            &ctor,
+                            &[JsValue::Number(new_len as f64)],
+                            ctor.clone(),
+                        ) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => return Completion::Normal(JsValue::Undefined),
+                        };
+                        // Validate: must be an ArrayBuffer, not shared, not detached, not same, byteLength >= newLen
+                        let new_id = if let JsValue::Object(ref no) = new_val {
+                            no.id
+                        } else {
+                            return Completion::Throw(interp.create_type_error(
+                                "species constructor must return an ArrayBuffer",
+                            ));
+                        };
+                        if let Some(new_rc) = interp.get_object(new_id) {
+                            let new_ref = new_rc.borrow();
+                            if !new_ref.arraybuffer_data.is_some() {
+                                return Completion::Throw(interp.create_type_error(
+                                    "species constructor must return an ArrayBuffer",
+                                ));
+                            }
+                            if new_ref.arraybuffer_is_shared {
+                                return Completion::Throw(interp.create_type_error(
+                                    "species constructor must return an ArrayBuffer",
+                                ));
+                            }
+                            if new_ref.arraybuffer_is_immutable {
+                                return Completion::Throw(interp.create_type_error(
+                                    "species constructor must not return an immutable ArrayBuffer",
+                                ));
+                            }
+                            if let Some(ref det) = new_ref.arraybuffer_detached
+                                && det.get()
+                            {
+                                return Completion::Throw(interp.create_type_error(
+                                    "species constructor returned a detached ArrayBuffer",
+                                ));
+                            }
+                        } else {
+                            return Completion::Throw(interp.create_type_error(
+                                "species constructor must return an ArrayBuffer",
+                            ));
                         }
-                        if new_ref.arraybuffer_is_shared {
-                            return Completion::Throw(
-                                interp.create_type_error("species constructor must return an ArrayBuffer"),
-                            );
+                        if new_id == o.id {
+                            return Completion::Throw(interp.create_type_error(
+                                "species constructor must not return the same ArrayBuffer",
+                            ));
                         }
-                        if new_ref.arraybuffer_is_immutable {
-                            return Completion::Throw(
-                                interp.create_type_error("species constructor must not return an immutable ArrayBuffer"),
-                            );
-                        }
-                        if let Some(ref det) = new_ref.arraybuffer_detached
-                            && det.get()
                         {
-                            return Completion::Throw(
-                                interp.create_type_error("species constructor returned a detached ArrayBuffer"),
-                            );
+                            let new_rc = interp.get_object(new_id).unwrap();
+                            let new_ref = new_rc.borrow();
+                            let new_byte_len =
+                                new_ref.arraybuffer_data.as_ref().unwrap().borrow().len();
+                            if new_byte_len < new_len {
+                                return Completion::Throw(interp.create_type_error(
+                                    "species constructor returned an ArrayBuffer that is too small",
+                                ));
+                            }
                         }
-                    } else {
-                        return Completion::Throw(
-                            interp.create_type_error("species constructor must return an ArrayBuffer"),
-                        );
-                    }
-                    if new_id == o.id {
-                        return Completion::Throw(
-                            interp.create_type_error("species constructor must not return the same ArrayBuffer"),
-                        );
-                    }
-                    {
-                        let new_rc = interp.get_object(new_id).unwrap();
-                        let new_ref = new_rc.borrow();
-                        let new_byte_len = new_ref.arraybuffer_data.as_ref().unwrap().borrow().len();
-                        if new_byte_len < new_len {
-                            return Completion::Throw(
-                                interp.create_type_error("species constructor returned an ArrayBuffer that is too small"),
-                            );
+                        // Re-check source is not detached after species constructor
+                        let buf_data = {
+                            let obj_ref = obj.borrow();
+                            if let Some(ref det) = obj_ref.arraybuffer_detached
+                                && det.get()
+                            {
+                                return Completion::Throw(
+                                    interp.create_type_error("ArrayBuffer is detached"),
+                                );
+                            }
+                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                        };
+                        // Copy data
+                        if new_len > 0 {
+                            let new_obj = interp.get_object(new_id).unwrap();
+                            let new_ref = new_obj.borrow();
+                            let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
+                            let mut new_buf_ref = new_buf.borrow_mut();
+                            new_buf_ref[..new_len]
+                                .copy_from_slice(&buf_data[start..start + new_len]);
                         }
+                        return Completion::Normal(new_val);
                     }
-                    // Re-check source is not detached after species constructor
-                    let buf_data = {
-                        let obj_ref = obj.borrow();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached
-                            && det.get()
-                        {
-                            return Completion::Throw(
-                                interp.create_type_error("ArrayBuffer is detached"),
-                            );
-                        }
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
-                    };
-                    // Copy data
-                    if new_len > 0 {
-                        let new_obj = interp.get_object(new_id).unwrap();
-                        let new_ref = new_obj.borrow();
-                        let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
-                        let mut new_buf_ref = new_buf.borrow_mut();
-                        new_buf_ref[..new_len]
-                            .copy_from_slice(&buf_data[start..start + new_len]);
-                    }
-                    return Completion::Normal(new_val);
-                }
-                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-            },
-        ));
+                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                },
+            ));
         ab_proto
             .borrow_mut()
             .insert_builtin("slice".to_string(), slice_fn);
@@ -366,7 +363,10 @@ impl Interpreter {
                 {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
-                        (obj_ref.arraybuffer_data.is_some(), obj_ref.arraybuffer_is_shared)
+                        (
+                            obj_ref.arraybuffer_data.is_some(),
+                            obj_ref.arraybuffer_is_shared,
+                        )
                     };
                     if !is_ab {
                         return Completion::Throw(interp.create_type_error("not an ArrayBuffer"));
@@ -398,7 +398,11 @@ impl Interpreter {
                             .arraybuffer_detached
                             .as_ref()
                             .is_some_and(|d| d.get());
-                        (det, obj_ref.arraybuffer_is_immutable, obj_ref.arraybuffer_max_byte_length)
+                        (
+                            det,
+                            obj_ref.arraybuffer_is_immutable,
+                            obj_ref.arraybuffer_max_byte_length,
+                        )
                     };
                     if is_detached {
                         return Completion::Throw(
@@ -456,7 +460,10 @@ impl Interpreter {
                 {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
-                        (obj_ref.arraybuffer_data.is_some(), obj_ref.arraybuffer_is_shared)
+                        (
+                            obj_ref.arraybuffer_data.is_some(),
+                            obj_ref.arraybuffer_is_shared,
+                        )
                     };
                     if !is_ab {
                         return Completion::Throw(interp.create_type_error("not an ArrayBuffer"));
@@ -534,7 +541,10 @@ impl Interpreter {
                 {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
-                        (obj_ref.arraybuffer_data.is_some(), obj_ref.arraybuffer_is_shared)
+                        (
+                            obj_ref.arraybuffer_data.is_some(),
+                            obj_ref.arraybuffer_is_shared,
+                        )
                     };
                     if !is_ab {
                         return Completion::Throw(interp.create_type_error("not an ArrayBuffer"));
@@ -694,15 +704,13 @@ impl Interpreter {
                 let max_byte_length = if args.len() > 1 {
                     if let JsValue::Object(opts_o) = &args[1] {
                         let opts_val = JsValue::Object(opts_o.clone());
-                        let max_val = match interp.get_object_property(
-                            opts_o.id,
-                            "maxByteLength",
-                            &opts_val,
-                        ) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
-                        };
+                        let max_val =
+                            match interp.get_object_property(opts_o.id, "maxByteLength", &opts_val)
+                            {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
+                            };
                         if !matches!(max_val, JsValue::Undefined) {
                             let max = match interp.to_index(&max_val) {
                                 Completion::Normal(JsValue::Number(n)) => n as usize,
@@ -1209,15 +1217,13 @@ impl Interpreter {
                     if let JsValue::Object(opts_o) = &args[1] {
                         let opts_val = JsValue::Object(opts_o.clone());
                         // Use Get() (get_object_property) to trigger getters
-                        let max_val = match interp.get_object_property(
-                            opts_o.id,
-                            "maxByteLength",
-                            &opts_val,
-                        ) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
-                        };
+                        let max_val =
+                            match interp.get_object_property(opts_o.id, "maxByteLength", &opts_val)
+                            {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
+                            };
                         if !matches!(max_val, JsValue::Undefined) {
                             let max = match interp.to_index(&max_val) {
                                 Completion::Normal(JsValue::Number(n)) => n as usize,
@@ -5204,11 +5210,9 @@ impl Interpreter {
                                 if let Some(ref dv) = obj_ref.data_view_info
                                     && dv.is_immutable
                                 {
-                                    return Completion::Throw(
-                                        interp.create_type_error(
-                                            "Cannot modify data in an immutable ArrayBuffer",
-                                        ),
-                                    );
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot modify data in an immutable ArrayBuffer",
+                                    ));
                                 }
                             }
                             // Step 4: ToIndex(byteOffset) — before detach check
@@ -5295,11 +5299,9 @@ impl Interpreter {
                                 if let Some(ref dv) = obj_ref.data_view_info
                                     && dv.is_immutable
                                 {
-                                    return Completion::Throw(
-                                        interp.create_type_error(
-                                            "Cannot modify data in an immutable ArrayBuffer",
-                                        ),
-                                    );
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot modify data in an immutable ArrayBuffer",
+                                    ));
                                 }
                             }
                             // Step 2: ToIndex(byteOffset) — before detach check
@@ -5579,8 +5581,11 @@ impl Interpreter {
                                 "Cannot construct DataView from detached ArrayBuffer",
                             ));
                         }
-                        let new_buf_len = obj_ref.arraybuffer_data.as_ref()
-                            .map(|b| b.borrow().len()).unwrap_or(0);
+                        let new_buf_len = obj_ref
+                            .arraybuffer_data
+                            .as_ref()
+                            .map(|b| b.borrow().len())
+                            .unwrap_or(0);
                         if byte_offset > new_buf_len {
                             return Completion::Throw(interp.create_error(
                                 "RangeError",
@@ -5588,10 +5593,9 @@ impl Interpreter {
                             ));
                         }
                         if has_byte_length && byte_offset + byte_length > new_buf_len {
-                            return Completion::Throw(interp.create_error(
-                                "RangeError",
-                                "invalid DataView length",
-                            ));
+                            return Completion::Throw(
+                                interp.create_error("RangeError", "invalid DataView length"),
+                            );
                         }
                     }
                     let result = interp.create_object();

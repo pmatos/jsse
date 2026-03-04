@@ -314,7 +314,12 @@ impl Interpreter {
         }
     }
 
-    fn hoist_vars_from_stmt(&self, stmt: &Statement, var_scope: &EnvRef, is_global: bool) {
+    pub(crate) fn hoist_vars_from_stmt(
+        &self,
+        stmt: &Statement,
+        var_scope: &EnvRef,
+        is_global: bool,
+    ) {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
@@ -820,6 +825,7 @@ impl Interpreter {
                             arguments_immutable: false,
                             has_simple_params: true,
                             is_simple_catch_scope: false,
+                            indirect_bindings: None,
                         }));
                         let c = self.exec_statement(body, &with_env);
                         // UpdateEmpty(C, undefined) per §14.11.2 step 9

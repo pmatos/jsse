@@ -213,9 +213,17 @@ pub(crate) fn create_data_property_or_throw(
                     elems.push(value.clone());
                 }
                 // Update length if index >= current length (exotic array behavior)
-                let cur_len = borrow.properties.get("length")
+                let cur_len = borrow
+                    .properties
+                    .get("length")
                     .and_then(|d| d.value.as_ref())
-                    .and_then(|v| if let JsValue::Number(n) = v { Some(*n as usize) } else { None })
+                    .and_then(|v| {
+                        if let JsValue::Number(n) = v {
+                            Some(*n as usize)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or(0);
                 if idx >= cur_len {
                     borrow.set_property_value("length", JsValue::Number((idx + 1) as f64));
@@ -1964,7 +1972,12 @@ impl Interpreter {
                     }
                 }
                 // Step 12: Perform ? Set(A, "length", actualDeleteCount, true).
-                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(actual_delete_count as f64)) {
+                if let Err(e) = obj_set_throw(
+                    interp,
+                    &a,
+                    "length",
+                    JsValue::Number(actual_delete_count as f64),
+                ) {
                     interp.gc_unroot_value(&a);
                     return Completion::Throw(e);
                 }
@@ -2430,7 +2443,11 @@ impl Interpreter {
                 } else {
                     1.0
                 };
-                let depth = if depth_num < 0.0 { 0i64 } else { depth_num as i64 };
+                let depth = if depth_num < 0.0 {
+                    0i64
+                } else {
+                    depth_num as i64
+                };
                 // Step 5: ArraySpeciesCreate BEFORE flattening (spec order)
                 let a = match array_species_create(interp, &o, 0) {
                     Ok(v) => v,
@@ -2447,8 +2464,8 @@ impl Interpreter {
                 ) -> Result<(), Completion> {
                     for k in 0..source_len {
                         let pk = k.to_string();
-                        let exists = obj_has_throw(interp, source, &pk)
-                            .map_err(Completion::Throw)?;
+                        let exists =
+                            obj_has_throw(interp, source, &pk).map_err(Completion::Throw)?;
                         if exists {
                             let elem = match obj_get(interp, source, &pk) {
                                 Ok(v) => v,
@@ -2465,10 +2482,22 @@ impl Interpreter {
                             };
                             if should_flatten {
                                 let elem_len = length_of_array_like(interp, &elem)?;
-                                flatten_into(interp, target, target_index, &elem, elem_len, depth - 1)?;
+                                flatten_into(
+                                    interp,
+                                    target,
+                                    target_index,
+                                    &elem,
+                                    elem_len,
+                                    depth - 1,
+                                )?;
                             } else {
-                                create_data_property_or_throw(interp, target, &target_index.to_string(), elem)
-                                    .map_err(Completion::Throw)?;
+                                create_data_property_or_throw(
+                                    interp,
+                                    target,
+                                    &target_index.to_string(),
+                                    elem,
+                                )
+                                .map_err(Completion::Throw)?;
                                 *target_index += 1;
                             }
                         }
@@ -2563,7 +2592,12 @@ impl Interpreter {
                                                             return c;
                                                         }
                                                     };
-                                                    if let Err(e) = create_data_property_or_throw(interp, &a, &target_index.to_string(), jval) {
+                                                    if let Err(e) = create_data_property_or_throw(
+                                                        interp,
+                                                        &a,
+                                                        &target_index.to_string(),
+                                                        jval,
+                                                    ) {
                                                         interp.gc_unroot_value(&a);
                                                         return Completion::Throw(e);
                                                     }
@@ -2577,7 +2611,12 @@ impl Interpreter {
                                             }
                                         }
                                     } else {
-                                        if let Err(e) = create_data_property_or_throw(interp, &a, &target_index.to_string(), v) {
+                                        if let Err(e) = create_data_property_or_throw(
+                                            interp,
+                                            &a,
+                                            &target_index.to_string(),
+                                            v,
+                                        ) {
                                             interp.gc_unroot_value(&a);
                                             return Completion::Throw(e);
                                         }

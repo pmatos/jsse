@@ -409,6 +409,8 @@ pub struct Environment {
     pub(crate) arguments_immutable: bool,
     pub(crate) has_simple_params: bool,
     pub(crate) is_simple_catch_scope: bool,
+    // §9.1.1.5.5 CreateImportBinding: indirect bindings for module imports
+    pub(crate) indirect_bindings: Option<HashMap<String, (EnvRef, String)>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -496,6 +498,7 @@ impl Environment {
             arguments_immutable: false,
             has_simple_params: true,
             is_simple_catch_scope: false,
+            indirect_bindings: None,
         }))
     }
 
@@ -516,6 +519,7 @@ impl Environment {
             arguments_immutable: false,
             has_simple_params: true,
             is_simple_catch_scope: false,
+            indirect_bindings: None,
         }))
     }
 
@@ -541,6 +545,54 @@ impl Environment {
                 deletable: false,
             },
         );
+    }
+
+    /// §9.1.1.5.5 CreateImportBinding(N, M, N2)
+    /// Creates an immutable indirect binding that references another module's environment.
+    pub fn create_import_binding(
+        &mut self,
+        local_name: &str,
+        source_env: EnvRef,
+        source_name: String,
+    ) {
+        let map = self.indirect_bindings.get_or_insert_with(HashMap::new);
+        map.insert(local_name.to_string(), (source_env, source_name));
+    }
+
+    /// Resolve an indirect binding, returning the current value from the source environment.
+    pub fn resolve_indirect_binding(&self, name: &str) -> Option<Option<JsValue>> {
+        if let Some(ref indirect) = self.indirect_bindings {
+            if let Some((source_env, source_name)) = indirect.get(name) {
+                let source = source_env.borrow();
+                if let Some(binding) = source.bindings.get(source_name.as_str()) {
+                    if !binding.initialized {
+                        return Some(None); // TDZ
+                    }
+                    return Some(Some(binding.value.clone()));
+                }
+                // Binding not found in direct bindings, try its own indirect bindings
+                if let Some(ref src_indirect) = source.indirect_bindings {
+                    if let Some((src2_env, src2_name)) = src_indirect.get(source_name.as_str()) {
+                        let src2 = src2_env.borrow();
+                        if let Some(binding) = src2.bindings.get(src2_name.as_str()) {
+                            if !binding.initialized {
+                                return Some(None); // TDZ
+                            }
+                            return Some(Some(binding.value.clone()));
+                        }
+                    }
+                }
+                return Some(None); // binding not found = TDZ
+            }
+        }
+        None
+    }
+
+    /// Check if name is an indirect binding.
+    pub fn is_indirect_binding(&self, name: &str) -> bool {
+        self.indirect_bindings
+            .as_ref()
+            .is_some_and(|m| m.contains_key(name))
     }
 
     pub fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
@@ -655,6 +707,12 @@ impl Environment {
     }
 
     pub fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
+        // Indirect bindings (module imports) are immutable
+        if self.is_indirect_binding(name) {
+            return Err(JsValue::String(JsString::from_str(
+                "Assignment to constant variable.",
+            )));
+        }
         if let Some(binding) = self.bindings.get_mut(name) {
             if binding.kind == BindingKind::Const && binding.initialized {
                 return Err(JsValue::String(JsString::from_str(
@@ -704,6 +762,10 @@ impl Environment {
     }
 
     pub fn get(&self, name: &str) -> Option<JsValue> {
+        // Check indirect bindings first (module imports)
+        if let Some(resolved) = self.resolve_indirect_binding(name) {
+            return resolved; // None = TDZ, Some(v) = value
+        }
         if let Some(binding) = self.bindings.get(name) {
             if !binding.initialized {
                 return None; // TDZ
@@ -726,6 +788,10 @@ impl Environment {
     /// Check if a binding exists but is uninitialized (in TDZ).
     /// Only checks the current environment, not parents.
     pub fn is_in_tdz(&self, name: &str) -> bool {
+        // Check indirect bindings first
+        if let Some(resolved) = self.resolve_indirect_binding(name) {
+            return resolved.is_none(); // None means TDZ
+        }
         if let Some(binding) = self.bindings.get(name) {
             !binding.initialized
         } else {
@@ -736,6 +802,10 @@ impl Environment {
     /// Walk the scope chain and check what error (if any) setting a binding would produce.
     pub fn check_set_binding(env: &EnvRef, name: &str) -> SetBindingCheck {
         let e = env.borrow();
+        // Indirect bindings (module imports) are immutable
+        if e.is_indirect_binding(name) {
+            return SetBindingCheck::ConstAssign;
+        }
         if let Some(binding) = e.bindings.get(name) {
             if !binding.initialized && binding.kind != BindingKind::Var {
                 return SetBindingCheck::TdzError;
@@ -764,7 +834,9 @@ impl Environment {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        if self.bindings.contains_key(name) {
+        if self.is_indirect_binding(name) {
+            true
+        } else if self.bindings.contains_key(name) {
             true
         } else if let Some(parent) = &self.parent {
             parent.borrow().has(name)
@@ -777,7 +849,7 @@ impl Environment {
 
     pub fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
         let e = env.borrow();
-        if e.bindings.contains_key(name) {
+        if e.is_indirect_binding(name) || e.bindings.contains_key(name) {
             return Some(env.clone());
         }
         if e.global_object.is_some() {

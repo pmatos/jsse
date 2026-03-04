@@ -66,6 +66,8 @@ pub struct LoadedModule {
     pub export_bindings: HashMap<String, String>, // export_name -> binding_name
     pub cached_namespace: Option<JsValue>, // cached namespace object (same identity on re-import)
     pub error: Option<JsValue>,            // if module evaluation threw, the error
+    pub namespace_imports: HashMap<String, PathBuf>, // local_name -> source module path (for `import * as ns`)
+    pub star_export_sources: Vec<String>, // source specifiers from `export * from '...'`
 }
 
 impl Interpreter {
@@ -1019,6 +1021,8 @@ impl Interpreter {
             export_bindings: HashMap::new(),
             cached_namespace: None,
             error: None,
+            namespace_imports: HashMap::new(),
+            star_export_sources: Vec::new(),
         }));
         if let Some(ref path) = module_path {
             let canon_path = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -1040,6 +1044,12 @@ impl Interpreter {
                         .export_bindings
                         .insert(export_name, binding_name);
                 }
+                if let ExportDeclaration::All { source, exported: None } = export {
+                    loaded_module
+                        .borrow_mut()
+                        .star_export_sources
+                        .push(source.clone());
+                }
             }
         }
 
@@ -1053,6 +1063,27 @@ impl Interpreter {
                     self.hoist_export_declaration(export, &module_env);
                 }
                 _ => {}
+            }
+        }
+
+        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
+        for item in &program.module_items {
+            let specifier = match item {
+                ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
+                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
+                    Some(source.as_str())
+                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    source: Some(source),
+                    ..
+                }) => Some(source.as_str()),
+                _ => None,
+            };
+            if let Some(spec) = specifier {
+                let module_path = self.current_module_path.clone();
+                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
+                    let _ = self.load_module(&resolved);
+                }
             }
         }
 
@@ -1078,7 +1109,7 @@ impl Interpreter {
             }
         }
 
-        // Third-and-half pass: validate named re-exports (export { x } from './mod')
+        // Validate named re-exports (export { x } from './mod')
         if let Some(ref canon_path) = module_path {
             for item in &program.module_items {
                 if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
@@ -1134,36 +1165,27 @@ impl Interpreter {
         for spec in &import.specifiers {
             match spec {
                 ImportSpecifier::Default(local) => {
-                    let exports = loaded.borrow().exports.clone();
-                    if let Some(val) = exports.get("default") {
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        let _ = env.borrow_mut().set(local, val.clone());
-                    } else {
-                        return Err(JsValue::String(JsString::from_str(&format!(
-                            "Module '{}' has no default export",
-                            import.source
-                        ))));
-                    }
+                    self.create_import_binding_for(local, "default", &loaded, &resolved, env)?;
                 }
                 ImportSpecifier::Named { imported, local } => {
-                    let exports = loaded.borrow().exports.clone();
-                    if let Some(val) = exports.get(imported) {
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        let _ = env.borrow_mut().set(local, val.clone());
-                    } else {
-                        return Err(JsValue::String(JsString::from_str(&format!(
-                            "Module '{}' has no export named '{}'",
-                            import.source, imported
-                        ))));
-                    }
+                    self.create_import_binding_for(local, imported, &loaded, &resolved, env)?;
                 }
                 ImportSpecifier::Namespace(local) => {
                     let ns = self.create_module_namespace(&loaded);
                     env.borrow_mut().declare(local, BindingKind::Const);
                     let _ = env.borrow_mut().set(local, ns);
+                    // Record namespace import for ambiguity detection in resolve_export_binding
+                    if let Some(ref mp) = self.current_module_path {
+                        let canon = mp.canonicalize().unwrap_or_else(|_| mp.clone());
+                        if let Some(current_mod) = self.module_registry.get(&canon) {
+                            current_mod
+                                .borrow_mut()
+                                .namespace_imports
+                                .insert(local.clone(), resolved.clone());
+                        }
+                    }
                 }
                 ImportSpecifier::DeferredNamespace(local) => {
-                    // For now, treat deferred namespace as eager namespace
                     let ns = self.create_module_namespace(&loaded);
                     env.borrow_mut().declare(local, BindingKind::Const);
                     let _ = env.borrow_mut().set(local, ns);
@@ -1171,6 +1193,52 @@ impl Interpreter {
             }
         }
 
+        Ok(())
+    }
+
+    fn create_import_binding_for(
+        &mut self,
+        local: &str,
+        imported: &str,
+        loaded: &Rc<RefCell<LoadedModule>>,
+        resolved: &Path,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        let binding_info = loaded.borrow().export_bindings.get(imported).cloned();
+        if let Some(ref binding) = binding_info {
+            if binding.starts_with("*ns:") {
+                // Namespace re-export: copy the namespace value directly
+                if let Some(val) = loaded.borrow().exports.get(imported).cloned() {
+                    env.borrow_mut().declare(local, BindingKind::Const);
+                    let _ = env.borrow_mut().set(local, val);
+                }
+                return Ok(());
+            }
+        }
+        let has_export = binding_info.is_some();
+        if has_export {
+            let mut visited = std::collections::HashSet::new();
+            match self.resolve_export_binding(resolved, imported, &mut visited) {
+                Ok((source_env, binding_name)) => {
+                    if binding_name == "*namespace*" {
+                        // Resolved to a namespace — find the module and create its namespace object
+                        let ns = self.create_namespace_for_env(&source_env);
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        let _ = env.borrow_mut().set(local, ns);
+                    } else {
+                        env.borrow_mut()
+                            .create_import_binding(local, source_env, binding_name);
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            return Err(JsValue::String(JsString::from_str(&format!(
+                "Module '{}' has no export named '{}'",
+                loaded.borrow().path.display(),
+                imported
+            ))));
+        }
         Ok(())
     }
 
@@ -1187,25 +1255,72 @@ impl Interpreter {
         if let Some(name) = exported_as {
             // export * as ns from './mod' - create namespace object
             let ns = self.create_module_namespace(&source_module);
-            module.borrow_mut().exports.insert(name.clone(), ns);
+            module.borrow_mut().exports.insert(name.clone(), ns.clone());
             module
                 .borrow_mut()
                 .export_bindings
                 .insert(name.clone(), format!("*ns:{}", source));
+            // Store in module env so indirect bindings can reference it
+            let mod_env = module.borrow().env.clone();
+            mod_env.borrow_mut().declare(name, BindingKind::Const);
+            let _ = mod_env.borrow_mut().set(name, ns);
         } else {
             // export * from './mod' - re-export all non-default exports
             let source_exports = source_module.borrow().exports.clone();
-            let source_bindings = source_module.borrow().export_bindings.clone();
+            let module_path = self.current_module_path.clone();
             for (export_name, val) in source_exports {
                 if export_name != "default" {
-                    module.borrow_mut().exports.insert(export_name.clone(), val);
-                    // For bindings, use a special marker for re-exports
-                    if let Some(binding) = source_bindings.get(&export_name) {
-                        module
-                            .borrow_mut()
-                            .export_bindings
-                            .insert(export_name, binding.clone());
+                    let existing_binding =
+                        module.borrow().export_bindings.get(&export_name).cloned();
+                    let new_reexport = format!("*reexport:{}:{}", source, export_name);
+                    if let Some(ref existing) = existing_binding {
+                        if existing == "*ambiguous*" {
+                            continue;
+                        }
+                        // Local/indirect exports take precedence over star exports
+                        if !existing.starts_with("*reexport:") {
+                            continue;
+                        }
+                        // §16.2.1.6.3 step 8d.ii: two star exports with same name
+                        // — check if they resolve to the same (module, binding)
+                        if existing != &new_reexport {
+                            let is_ambiguous = if let Some(ref mp) = module_path {
+                                let mut v1 = std::collections::HashSet::new();
+                                let r1 = self.resolve_export_binding(mp, &export_name, &mut v1);
+                                module
+                                    .borrow_mut()
+                                    .export_bindings
+                                    .insert(export_name.clone(), new_reexport.clone());
+                                let mut v2 = std::collections::HashSet::new();
+                                let r2 = self.resolve_export_binding(mp, &export_name, &mut v2);
+                                module
+                                    .borrow_mut()
+                                    .export_bindings
+                                    .insert(export_name.clone(), existing.clone());
+                                match (r1, r2) {
+                                    (Ok((env1, name1)), Ok((env2, name2))) => {
+                                        !std::rc::Rc::ptr_eq(&env1, &env2) || name1 != name2
+                                    }
+                                    _ => true,
+                                }
+                            } else {
+                                true
+                            };
+                            if is_ambiguous {
+                                module.borrow_mut().exports.remove(&export_name);
+                                module
+                                    .borrow_mut()
+                                    .export_bindings
+                                    .insert(export_name.clone(), "*ambiguous*".to_string());
+                            }
+                            continue;
+                        }
                     }
+                    module.borrow_mut().exports.insert(export_name.clone(), val);
+                    module
+                        .borrow_mut()
+                        .export_bindings
+                        .insert(export_name.clone(), new_reexport);
                 }
             }
         }
@@ -1298,6 +1413,8 @@ impl Interpreter {
                 },
                 cached_namespace: None,
                 error: None,
+                namespace_imports: HashMap::new(),
+                star_export_sources: Vec::new(),
             }));
             module_env
                 .borrow_mut()
@@ -1317,21 +1434,25 @@ impl Interpreter {
             )))
         })?;
 
-        let mut parser = parser::Parser::new(&source).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
-                "Parse error in '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
+        let mut parser = match parser::Parser::new(&source) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(self.create_error(
+                    "SyntaxError",
+                    &format!("Parse error in '{}': {:?}", path.display(), e),
+                ));
+            }
+        };
 
-        let program = parser.parse_program_as_module().map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
-                "Parse error in '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
+        let program = match parser.parse_program_as_module() {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(self.create_error(
+                    "SyntaxError",
+                    &format!("{}", e.message),
+                ));
+            }
+        };
 
         // Create module environment
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
@@ -1349,6 +1470,8 @@ impl Interpreter {
             export_bindings: HashMap::new(),
             cached_namespace: None,
             error: None,
+            namespace_imports: HashMap::new(),
+            star_export_sources: Vec::new(),
         }));
         self.module_registry
             .insert(canon_path.clone(), loaded_module.clone());
@@ -1366,6 +1489,12 @@ impl Interpreter {
                         .borrow_mut()
                         .export_bindings
                         .insert(export_name, binding_name);
+                }
+                if let ExportDeclaration::All { source, exported: None } = export {
+                    loaded_module
+                        .borrow_mut()
+                        .star_export_sources
+                        .push(source.clone());
                 }
             }
         }
@@ -1387,7 +1516,29 @@ impl Interpreter {
             }
         }
 
-        // Second pass: process imports (after hoisting)
+        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
+        // This ensures evaluation order matches source order for all RequestedModules.
+        for item in &program.module_items {
+            let specifier = match item {
+                ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
+                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
+                    Some(source.as_str())
+                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    source: Some(source),
+                    ..
+                }) => Some(source.as_str()),
+                _ => None,
+            };
+            if let Some(spec) = specifier {
+                let module_path = self.current_module_path.clone();
+                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
+                    let _ = self.load_module(&resolved);
+                }
+            }
+        }
+
+        // Second pass: process imports (create bindings)
         for item in &program.module_items {
             if let ModuleItem::ImportDeclaration(import) = item {
                 self.process_import(import, &module_env)?;
@@ -1402,15 +1553,22 @@ impl Interpreter {
             }
         }
 
-        // Third-and-half pass: validate named re-exports (export { x } from './mod')
-        for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                specifiers,
-                source: Some(source),
-                ..
-            }) = item
-            {
-                self.validate_named_reexports(&canon_path, source, specifiers)?;
+        // Validate named re-exports (export { x } from './mod')
+        {
+            let canon = canon_path.clone();
+            for item in &program.module_items {
+                if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    specifiers,
+                    source: Some(source),
+                    ..
+                }) = item
+                {
+                    if let Err(e) = self.validate_named_reexports(&canon, source, specifiers) {
+                        self.current_module_path = prev_path;
+                        loaded_module.borrow_mut().error = Some(e.clone());
+                        return Err(e);
+                    }
+                }
             }
         }
 
@@ -1458,6 +1616,95 @@ impl Interpreter {
         Ok(())
     }
 
+    /// Resolve an export to its source environment and binding name.
+    /// Returns (source_env, binding_name) for creating indirect import bindings.
+    fn resolve_export_binding(
+        &mut self,
+        module_path: &Path,
+        export_name: &str,
+        visited: &mut std::collections::HashSet<(PathBuf, String)>,
+    ) -> Result<(EnvRef, String), JsValue> {
+        let canon_path = module_path
+            .canonicalize()
+            .unwrap_or_else(|_| module_path.to_path_buf());
+        let key = (canon_path.clone(), export_name.to_string());
+
+        if visited.contains(&key) {
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!("Circular re-export of '{}'", export_name),
+            ));
+        }
+        visited.insert(key);
+
+        let module = self.load_module(&canon_path)?;
+
+        let reexport_info = {
+            let module_ref = module.borrow();
+            if let Some(binding) = module_ref.export_bindings.get(export_name) {
+                if let Some(ns_source) = binding.strip_prefix("*ns:") {
+                    // Namespace re-export — resolve to the actual source module's env
+                    // so that two re-exports of the same namespace compare equal
+                    let ns_source = ns_source.to_string();
+                    drop(module_ref);
+                    if let Ok(resolved) =
+                        self.resolve_module_specifier(&ns_source, Some(&canon_path))
+                    {
+                        if let Ok(ns_mod) = self.load_module(&resolved) {
+                            return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
+                        }
+                    }
+                    let module_ref = module.borrow();
+                    return Ok((module_ref.env.clone(), export_name.to_string()));
+                }
+                if let Some(info) = binding.strip_prefix("*reexport:") {
+                    if let Some(colon_idx) = info.rfind(':') {
+                        let source = info[..colon_idx].to_string();
+                        let name = info[colon_idx + 1..].to_string();
+                        Some((source, name))
+                    } else {
+                        None
+                    }
+                } else {
+                    let binding_name = binding.clone();
+                    let env = module_ref.env.clone();
+                    let ns_path = module_ref.namespace_imports.get(&binding_name).cloned();
+                    drop(module_ref);
+                    // Namespace import (import * as foo) resolves to the source module
+                    if let Some(ns_path) = ns_path {
+                        if let Ok(ns_mod) = self.load_module(&ns_path) {
+                            return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
+                        }
+                    }
+                    // Check if it's an indirect (imported) binding
+                    if let Some(ref indirect_map) = env.borrow().indirect_bindings {
+                        if let Some((src_env, src_name)) = indirect_map.get(&binding_name) {
+                            return Ok((src_env.clone(), src_name.clone()));
+                        }
+                    }
+                    return Ok((env, binding_name));
+                }
+            } else {
+                // Check star re-exports
+                None
+            }
+        };
+
+        if let Some((source_specifier, source_export)) = reexport_info {
+            let resolved = self.resolve_module_specifier(&source_specifier, Some(&canon_path))?;
+            return self.resolve_export_binding(&resolved, &source_export, visited);
+        }
+
+        Err(self.create_error(
+            "SyntaxError",
+            &format!(
+                "Module '{}' has no export named '{}'",
+                canon_path.display(),
+                export_name
+            ),
+        ))
+    }
+
     fn resolve_export(
         &mut self,
         module_path: &Path,
@@ -1469,24 +1716,24 @@ impl Interpreter {
             .unwrap_or_else(|_| module_path.to_path_buf());
         let key = (canon_path.clone(), export_name.to_string());
 
-        // Check for circular reference
+        // §16.2.1.6.3 step 2: circular reference → return null (not an error)
         if visited.contains(&key) {
-            return Err(self.create_error(
-                "SyntaxError",
-                &format!("Circular re-export of '{}'", export_name),
-            ));
+            return Ok(());
         }
         visited.insert(key);
 
         // Load the module if not already loaded
         let module = self.load_module(&canon_path)?;
 
-        // Check if this export is a local binding or a re-export
-        let reexport_info = {
+        // Check if this export is a local binding or a re-export (steps 4-5)
+        let (reexport_info, star_sources) = {
             let module_ref = module.borrow();
-            if let Some(binding) = module_ref.export_bindings.get(export_name) {
+            let reexport = if let Some(binding) = module_ref.export_bindings.get(export_name) {
+                if binding.starts_with("*ns:") || binding.starts_with("*ambiguous*") {
+                    // Namespace re-export or ambiguous — treat as found
+                    return Ok(());
+                }
                 if let Some(info) = binding.strip_prefix("*reexport:") {
-                    // Format: "source_module:export_name"
                     let parts: Vec<&str> = info.splitn(2, ':').collect();
                     if parts.len() == 2 {
                         Some((parts[0].to_string(), parts[1].to_string()))
@@ -1499,12 +1746,24 @@ impl Interpreter {
                 }
             } else {
                 None
-            }
+            };
+            let stars = module_ref.star_export_sources.clone();
+            (reexport, stars)
         };
 
+        // Step 5: follow indirect re-exports
         if let Some((source_specifier, source_export)) = reexport_info {
             let resolved = self.resolve_module_specifier(&source_specifier, Some(&canon_path))?;
             return self.resolve_export(&resolved, &source_export, visited);
+        }
+
+        // §16.2.1.6.3 step 8: check star re-exports
+        for star_source in &star_sources {
+            let resolved = self.resolve_module_specifier(star_source, Some(&canon_path))?;
+            // Try resolving — if it succeeds, the export exists
+            if self.resolve_export(&resolved, export_name, visited).is_ok() {
+                return Ok(());
+            }
         }
 
         // Export not found
@@ -1697,7 +1956,17 @@ impl Interpreter {
             } else {
                 Some(module_ref.path.clone())
             };
-            let mut export_names: Vec<String> = module_ref.exports.keys().cloned().collect();
+            let mut export_names: Vec<String> = module_ref
+                .exports
+                .keys()
+                .filter(|k| {
+                    module_ref
+                        .export_bindings
+                        .get(*k)
+                        .map_or(true, |b| b != "*ambiguous*")
+                })
+                .cloned()
+                .collect();
             export_names.sort();
             (env, export_bindings, module_path, export_names)
         }; // module_ref borrow dropped here
@@ -1742,6 +2011,18 @@ impl Interpreter {
         let ns = JsValue::Object(crate::types::JsObject { id });
         module.borrow_mut().cached_namespace = Some(ns.clone());
         ns
+    }
+
+    fn create_namespace_for_env(&mut self, target_env: &EnvRef) -> JsValue {
+        let found = self
+            .module_registry
+            .values()
+            .find(|m| Rc::ptr_eq(&m.borrow().env, target_env))
+            .cloned();
+        if let Some(module) = found {
+            return self.create_module_namespace(&module);
+        }
+        JsValue::Undefined
     }
 
     fn hoist_module_statement(&mut self, stmt: &Statement, env: &EnvRef) {
@@ -1792,7 +2073,9 @@ impl Interpreter {
                     env.borrow_mut().declare(&c.name, BindingKind::Const);
                 }
             }
-            _ => {}
+            other => {
+                self.hoist_vars_from_stmt(other, env, false);
+            }
         }
     }
 

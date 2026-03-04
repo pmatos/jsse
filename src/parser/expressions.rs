@@ -649,9 +649,8 @@ impl<'a> Parser<'a> {
                                 prop = Expression::Call(Box::new(prop), args);
                             }
                             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
-                                return Err(self.error(
-                                    "Tagged template cannot be used in an optional chain",
-                                ));
+                                return Err(self
+                                    .error("Tagged template cannot be used in an optional chain"));
                             }
                             _ => break,
                         }
@@ -758,7 +757,9 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 Ok(Expression::Identifier("yield".to_string()))
             }
-            Token::Keyword(Keyword::Await) if !self.in_async && !self.in_static_block => {
+            Token::Keyword(Keyword::Await)
+                if !self.in_async && !self.in_static_block && !self.is_module =>
+            {
                 self.advance()?;
                 Ok(Expression::Identifier("await".to_string()))
             }

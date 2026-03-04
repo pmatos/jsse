@@ -217,7 +217,11 @@ impl Interpreter {
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => return Completion::Normal(JsValue::Undefined),
                 };
-                let obj_id = if let JsValue::Object(ref o) = obj { o.id } else { 0 };
+                let obj_id = if let JsValue::Object(ref o) = obj {
+                    o.id
+                } else {
+                    0
+                };
                 let then_method = match interp.get_object_property(obj_id, "then", &obj) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
@@ -835,7 +839,11 @@ impl Interpreter {
         self.trigger_promise_reactions(reactions, reason);
     }
 
-    pub(crate) fn trigger_promise_reactions(&mut self, reactions: Vec<PromiseReaction>, argument: JsValue) {
+    pub(crate) fn trigger_promise_reactions(
+        &mut self,
+        reactions: Vec<PromiseReaction>,
+        argument: JsValue,
+    ) {
         for reaction in reactions {
             let arg = argument.clone();
             self.microtask_queue.push(Box::new(move |interp| {
@@ -1162,7 +1170,11 @@ impl Interpreter {
             ));
 
             let reject_fn_clone = cap.reject.clone();
-            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
@@ -1188,7 +1200,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor { o.id } else { 0 };
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
@@ -1273,7 +1289,10 @@ impl Interpreter {
                     let obj = interp.create_object();
                     {
                         let mut o = obj.borrow_mut();
-                        o.insert_value("status".to_string(), JsValue::String(JsString::from_str("fulfilled")));
+                        o.insert_value(
+                            "status".to_string(),
+                            JsValue::String(JsString::from_str("fulfilled")),
+                        );
                         o.insert_value("value".to_string(), val);
                     }
                     let oid = obj.borrow().id.unwrap();
@@ -1305,7 +1324,10 @@ impl Interpreter {
                     let obj = interp.create_object();
                     {
                         let mut o = obj.borrow_mut();
-                        o.insert_value("status".to_string(), JsValue::String(JsString::from_str("rejected")));
+                        o.insert_value(
+                            "status".to_string(),
+                            JsValue::String(JsString::from_str("rejected")),
+                        );
                         o.insert_value("reason".to_string(), val);
                     }
                     let oid = obj.borrow().id.unwrap();
@@ -1325,7 +1347,11 @@ impl Interpreter {
                 },
             ));
 
-            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
@@ -1351,7 +1377,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor { o.id } else { 0 };
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
@@ -1394,7 +1424,11 @@ impl Interpreter {
                 _ => JsValue::Undefined,
             };
 
-            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
@@ -1418,7 +1452,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor { o.id } else { 0 };
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
@@ -1509,7 +1547,11 @@ impl Interpreter {
                 },
             ));
 
-            let p_id = if let JsValue::Object(ref o) = p { o.id } else { 0 };
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {

@@ -4779,9 +4779,9 @@ impl Interpreter {
                                 };
                                 // §7.3.8 DefinePropertyOrThrow: throw if [[DefineOwnProperty]] returns false
                                 if !obj.borrow_mut().define_own_property(key.clone(), new_desc) {
-                                    return Completion::Throw(interp.create_type_error(
-                                        &format!("Cannot freeze property '{key}'"),
-                                    ));
+                                    return Completion::Throw(interp.create_type_error(&format!(
+                                        "Cannot freeze property '{key}'"
+                                    )));
                                 }
                             }
                         }
