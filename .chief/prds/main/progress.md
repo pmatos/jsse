@@ -149,3 +149,26 @@
   - Lexer `save_state`/`restore_state` enables multi-token lookahead without pushback slot limitations
   - `current_identifier_name()` returns None for `yield`/`await` in generator/async context, but per spec §14.3.1 they are still grammatically valid BindingIdentifiers — ASI must not apply between `let` and these tokens
 ---
+
+## 2026-03-04 - US-009
+- **What was implemented**: Fixed Promise combinator iterator protocol compliance + constructor sequencing
+  1. **Lazy iteration for all 4 combinators (§27.2.4.1-4)**: Rewrote `promise_all`, `promise_all_settled`, `promise_race`, `promise_any` from eager `iterate_to_vec` to lazy `get_iterator`/`iterator_step`/`iterator_value` loop. Each combinator now processes elements one-at-a-time and handles errors mid-iteration.
+  2. **IteratorClose semantics**: When `IteratorStep` or `IteratorValue` throws, `iteratorRecord.[[done]]` is set to true per spec, so `IteratorClose` is NOT called. Only call `IteratorClose` when other operations (resolve call, `.then` access/call) throw while iterator is still open.
+  3. **`if_abrupt_reject_promise` helper**: New helper method implements the `IfAbruptRejectPromise` spec abstract operation — rejects the capability promise and returns early instead of throwing.
+  4. **Promise constructor NewTarget check (§27.2.3.1 step 1)**: Added `new_target.is_none()` check at start of Promise constructor — `Promise(fn)` without `new` now throws TypeError.
+  5. **Promise.prototype.catch coercible this (§27.2.5.1)**: Changed from throwing on non-object `this` to using `to_object(this)` for GetV per spec Invoke semantics (§7.3.20).
+  6. **`deferred_construct` flag**: New `bool` field on `JsObjectData` — when true, `construct_with_new_target` passes `JsValue::Undefined` as `this` instead of creating object with prototype. Allows constructors to run pre-construction checks (callable validation, argument coercion) before `OrdinaryCreateFromConstructor`.
+  7. **ArrayBuffer/SharedArrayBuffer data allocation ordering (§25.1.4.1)**: Moved `vec![0u8; len]` data allocation AFTER `get_prototype_from_new_target_realm` so prototype getter side effects happen before allocation.
+  8. **DataView re-validation (§25.3.1 steps 11-14)**: After `get_prototype_from_new_target_realm` (which may trigger prototype getter that detaches/resizes buffer), re-check `IsDetachedBuffer`, buffer length, offset bounds, and byteLength bounds.
+- **Files changed**: `src/interpreter/builtins/promise.rs`, `src/interpreter/builtins/typedarray.rs`, `src/interpreter/eval.rs`, `src/interpreter/types.rs`, `README.md`, `PLAN.md`, `test262-pass.txt`
+- **Results**: 52 new passes, 0 regressions. 90,612/91,986 (98.51%)
+  - Promise: 1,272/1,272 (100%)
+  - ArrayBuffer: preserved 100% (data-allocation-after-object-creation now passes)
+  - SharedArrayBuffer: preserved pass rate
+  - DataView: custom-proto-access tests now pass
+- **Learnings for future iterations:**
+  - Per spec, `IteratorStep`/`IteratorValue` errors set `iteratorRecord.[[done]] = true` — callers must NOT call `IteratorClose` after these errors
+  - `deferred_construct` is needed for constructors that have pre-construction validation steps (Promise: callable check; ArrayBuffer/SharedArrayBuffer: length coercion; DataView: buffer validation)
+  - DataView constructor must re-validate buffer state after `OrdinaryCreateFromConstructor` because the prototype getter can detach or resize the underlying ArrayBuffer
+  - `IfAbruptRejectPromise` is a common pattern in Promise internals — centralizing it in a helper reduces code duplication and error-proneness
+---

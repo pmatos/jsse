@@ -135,7 +135,7 @@
         "No regressions in Promise tests"
       ],
       "priority": 9,
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-010",

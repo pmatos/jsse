@@ -1348,6 +1348,7 @@ pub struct JsObjectData {
     pub(crate) is_immutable_prototype: bool,
     pub(crate) regexp_original_source: Option<JsString>,
     pub(crate) regexp_original_flags: Option<JsString>,
+    pub(crate) deferred_construct: bool,
 }
 
 #[derive(Clone)]
@@ -1411,6 +1412,7 @@ impl JsObjectData {
             is_immutable_prototype: false,
             regexp_original_source: None,
             regexp_original_flags: None,
+            deferred_construct: false,
         }
     }
 

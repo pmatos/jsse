@@ -10777,30 +10777,43 @@ impl Interpreter {
                 other => other,
             }
         } else {
-            let new_obj = self.create_object();
-            // Use new_target's .prototype for the new object's [[Prototype]]
-            // Must use get_object_property to invoke proxy get traps
-            if let JsValue::Object(nt_o) = &new_target {
-                let nt_val = new_target.clone();
-                let proto = match self.get_object_property(nt_o.id, "prototype", &nt_val) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Completion::Throw(e),
-                    _ => JsValue::Undefined,
-                };
-                if let JsValue::Object(proto_obj) = proto
-                    && let Some(proto_rc) = self.get_object(proto_obj.id)
-                {
-                    new_obj.borrow_mut().prototype = Some(proto_rc);
-                } else {
-                    // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
-                    let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()));
-                    if let Some(proto_rc) = self.realms[nt_realm_id].object_prototype.clone() {
+            // Constructors with deferred_construct skip the early prototype access
+            // to let their body run pre-construction checks first (e.g., Promise checks
+            // executor callable before OrdinaryCreateFromConstructor).
+            let deferred = if let Some(func_obj) = self.get_object(co.id) {
+                func_obj.borrow().deferred_construct
+            } else {
+                false
+            };
+
+            let (this_val, new_obj_id) = if deferred {
+                (JsValue::Undefined, 0)
+            } else {
+                let new_obj = self.create_object();
+                // Use new_target's .prototype for the new object's [[Prototype]]
+                // Must use get_object_property to invoke proxy get traps
+                if let JsValue::Object(nt_o) = &new_target {
+                    let nt_val = new_target.clone();
+                    let proto = match self.get_object_property(nt_o.id, "prototype", &nt_val) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => JsValue::Undefined,
+                    };
+                    if let JsValue::Object(proto_obj) = proto
+                        && let Some(proto_rc) = self.get_object(proto_obj.id)
+                    {
                         new_obj.borrow_mut().prototype = Some(proto_rc);
+                    } else {
+                        // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
+                        let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()));
+                        if let Some(proto_rc) = self.realms[nt_realm_id].object_prototype.clone() {
+                            new_obj.borrow_mut().prototype = Some(proto_rc);
+                        }
                     }
                 }
-            }
-            let new_obj_id = new_obj.borrow().id.unwrap();
-            let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
+                let id = new_obj.borrow().id.unwrap();
+                (JsValue::Object(crate::types::JsObject { id }), id)
+            };
 
             // Initialize instance fields from the constructor's class_instance_field_defs.
             let instance_field_defs = if let JsValue::Object(co) = constructor

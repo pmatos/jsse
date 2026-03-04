@@ -479,6 +479,13 @@ impl Interpreter {
                 } else {
                     None
                 };
+                // OrdinaryCreateFromConstructor BEFORE data allocation (spec ordering)
+                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
+                    realm.arraybuffer_prototype.clone()
+                }) {
+                    Ok(p) => Some(p.unwrap_or_else(|| ab_proto_clone.clone())),
+                    Err(e) => return Completion::Throw(e),
+                };
                 let buf = if let Some(max_len) = max_byte_length {
                     let mut v = Vec::with_capacity(max_len);
                     v.resize(len, 0u8);
@@ -488,13 +495,6 @@ impl Interpreter {
                 };
                 let buf_rc = Rc::new(RefCell::new(buf));
                 let detached = Rc::new(Cell::new(false));
-                // OrdinaryCreateFromConstructor — realm-aware prototype
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.arraybuffer_prototype.clone()
-                }) {
-                    Ok(p) => Some(p.unwrap_or_else(|| ab_proto_clone.clone())),
-                    Err(e) => return Completion::Throw(e),
-                };
                 let obj = interp.create_object();
                 {
                     let mut o = obj.borrow_mut();
@@ -563,6 +563,13 @@ impl Interpreter {
             "constructor".to_string(),
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
+
+        // Mark deferred_construct: ArrayBuffer validates args before OrdinaryCreateFromConstructor
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj.borrow_mut().deferred_construct = true;
+        }
 
         self.realm()
             .global_env
@@ -917,15 +924,15 @@ impl Interpreter {
                 } else {
                     None
                 };
-                let buf = vec![0u8; len];
-                let buf_rc = Rc::new(RefCell::new(buf));
-                // OrdinaryCreateFromConstructor — realm-aware prototype
+                // OrdinaryCreateFromConstructor BEFORE data allocation (spec ordering)
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
                     realm.shared_arraybuffer_prototype.clone()
                 }) {
                     Ok(p) => Some(p.unwrap_or_else(|| sab_proto_clone.clone())),
                     Err(e) => return Completion::Throw(e),
                 };
+                let buf = vec![0u8; len];
+                let buf_rc = Rc::new(RefCell::new(buf));
                 let obj = interp.create_object();
                 {
                     let mut o = obj.borrow_mut();
@@ -976,6 +983,12 @@ impl Interpreter {
             "constructor".to_string(),
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
+
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj.borrow_mut().deferred_construct = true;
+        }
 
         self.realm()
             .global_env
@@ -5166,6 +5179,32 @@ impl Interpreter {
                         Ok(p) => p.unwrap_or_else(|| dv_proto_clone.clone()),
                         Err(e) => return Completion::Throw(e),
                     };
+                    // Re-validate after OrdinaryCreateFromConstructor (prototype getter
+                    // may have detached/resized the buffer) — spec steps 11-14
+                    {
+                        let obj_ref = obj.borrow();
+                        if let Some(ref det) = obj_ref.arraybuffer_detached
+                            && det.get()
+                        {
+                            return Completion::Throw(interp.create_type_error(
+                                "Cannot construct DataView from detached ArrayBuffer",
+                            ));
+                        }
+                        let new_buf_len = obj_ref.arraybuffer_data.as_ref()
+                            .map(|b| b.borrow().len()).unwrap_or(0);
+                        if byte_offset > new_buf_len {
+                            return Completion::Throw(interp.create_error(
+                                "RangeError",
+                                "offset is outside the bounds of the buffer",
+                            ));
+                        }
+                        if has_byte_length && byte_offset + byte_length > new_buf_len {
+                            return Completion::Throw(interp.create_error(
+                                "RangeError",
+                                "invalid DataView length",
+                            ));
+                        }
+                    }
                     let result = interp.create_object();
                     {
                         let mut r = result.borrow_mut();
@@ -5202,6 +5241,12 @@ impl Interpreter {
             "constructor".to_string(),
             PropertyDescriptor::data(ctor.clone(), true, false, true),
         );
+
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj.borrow_mut().deferred_construct = true;
+        }
 
         self.realm()
             .global_env
