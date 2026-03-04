@@ -835,7 +835,7 @@ impl Interpreter {
         self.trigger_promise_reactions(reactions, reason);
     }
 
-    fn trigger_promise_reactions(&mut self, reactions: Vec<PromiseReaction>, argument: JsValue) {
+    pub(crate) fn trigger_promise_reactions(&mut self, reactions: Vec<PromiseReaction>, argument: JsValue) {
         for reaction in reactions {
             let arg = argument.clone();
             self.microtask_queue.push(Box::new(move |interp| {
