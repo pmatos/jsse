@@ -1033,7 +1033,7 @@ impl Interpreter {
                         let err = interp.create_range_error("Invalid array length");
                         return Completion::Throw(err);
                     }
-                    interp.create_array_with_holes(vec![None; uint32_len as usize])
+                    interp.create_array_with_length(uint32_len as usize)
                 } else {
                     interp.create_array(args.to_vec())
                 };
@@ -3839,6 +3839,7 @@ impl Interpreter {
                         }
                     },
                 ));
+                self.realm_mut().object_prototype_tostring = Some(obj_tostring_fn.clone());
                 proto_obj
                     .borrow_mut()
                     .insert_builtin("toString".to_string(), obj_tostring_fn);

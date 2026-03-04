@@ -212,6 +212,14 @@ pub(crate) fn create_data_property_or_throw(
                     }
                     elems.push(value.clone());
                 }
+                // Update length if index >= current length (exotic array behavior)
+                let cur_len = borrow.properties.get("length")
+                    .and_then(|d| d.value.as_ref())
+                    .and_then(|v| if let JsValue::Number(n) = v { Some(*n as usize) } else { None })
+                    .unwrap_or(0);
+                if idx >= cur_len {
+                    borrow.set_property_value("length", JsValue::Number((idx + 1) as f64));
+                }
             }
             borrow.define_own_property(key.to_string(), PropertyDescriptor::data_default(value));
         }
@@ -290,7 +298,10 @@ fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
     if let Some(obj) = get_obj(interp, o) {
         let mut borrow = obj.borrow_mut();
         if let Some(ref mut elems) = borrow.array_elements {
-            elems.resize(len, JsValue::Undefined);
+            if len <= elems.len() {
+                elems.truncate(len);
+            }
+            // Don't pre-allocate for sparse arrays
         }
         borrow.set_property_value("length", JsValue::Number(len as f64));
     }
@@ -301,6 +312,12 @@ fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result
     if let Some(obj) = get_obj(interp, o)
         && obj.borrow().array_elements.is_some()
     {
+        // ArraySetLength §10.4.2.4: ToUint32(len) must equal ToNumber(len)
+        let len_f64 = len as f64;
+        let len_u32 = len_f64 as u32;
+        if (len_u32 as f64) != len_f64 {
+            return Err(interp.create_range_error("Invalid array length"));
+        }
         // Check if length is writable
         let desc = obj.borrow().get_own_property("length");
         if let Some(ref d) = desc
@@ -322,7 +339,10 @@ fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result
         }
         let mut borrow = obj.borrow_mut();
         if let Some(ref mut elems) = borrow.array_elements {
-            elems.resize(len, JsValue::Undefined);
+            if len <= elems.len() {
+                elems.truncate(len);
+            }
+            // Don't pre-allocate for sparse arrays
         }
         borrow.set_property_value("length", JsValue::Number(len as f64));
         return Ok(());
@@ -432,6 +452,7 @@ impl Interpreter {
     pub(crate) fn setup_array_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Array".to_string();
+        proto.borrow_mut().array_elements = Some(Vec::new());
         proto.borrow_mut().insert_property(
             "length".to_string(),
             PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
@@ -841,13 +862,9 @@ impl Interpreter {
                 if interp.is_callable(&join_fn) {
                     return interp.call_function(&join_fn, &o, &[]);
                 }
-                // Fall back to %Object.prototype.toString%
-                if let Some(proto) = &interp.realm().object_prototype {
-                    let proto_ref = proto.clone();
-                    let ts = proto_ref.borrow().get_property("toString");
-                    if interp.is_callable(&ts) {
-                        return interp.call_function(&ts, &o, &[]);
-                    }
+                // Fall back to intrinsic %Object.prototype.toString%
+                if let Some(intrinsic_tostring) = interp.realm().object_prototype_tostring.clone() {
+                    return interp.call_function(&intrinsic_tostring, &o, &[]);
                 }
                 Completion::Normal(JsValue::String(JsString::from_str("[object Array]")))
             },
@@ -1141,11 +1158,8 @@ impl Interpreter {
                     let upper = len - lower - 1;
                     let lower_s = lower.to_string();
                     let upper_s = upper.to_string();
+                    // Spec §22.1.3.28 step 7: Has then Get for lower, then Has then Get for upper
                     let lower_exists = match obj_has_throw(interp, &o, &lower_s) {
-                        Ok(b) => b,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let upper_exists = match obj_has_throw(interp, &o, &upper_s) {
                         Ok(b) => b,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -1156,6 +1170,10 @@ impl Interpreter {
                         }
                     } else {
                         JsValue::Undefined
+                    };
+                    let upper_exists = match obj_has_throw(interp, &o, &upper_s) {
+                        Ok(b) => b,
+                        Err(e) => return Completion::Throw(e),
                     };
                     let upper_val = if upper_exists {
                         match obj_get(interp, &o, &upper_s) {
@@ -1172,14 +1190,14 @@ impl Interpreter {
                         if let Err(e) = obj_set_throw(interp, &o, &upper_s, lower_val) {
                             return Completion::Throw(e);
                         }
-                    } else if upper_exists {
+                    } else if !lower_exists && upper_exists {
                         if let Err(e) = obj_set_throw(interp, &o, &lower_s, upper_val) {
                             return Completion::Throw(e);
                         }
                         if let Err(e) = obj_delete_throw(interp, &o, &upper_s) {
                             return Completion::Throw(e);
                         }
-                    } else if lower_exists {
+                    } else if lower_exists && !upper_exists {
                         if let Err(e) = obj_delete_throw(interp, &o, &lower_s) {
                             return Completion::Throw(e);
                         }
@@ -1942,7 +1960,11 @@ impl Interpreter {
                         _ => {}
                     }
                 }
-                set_length(interp, &a, actual_delete_count);
+                // Step 12: Perform ? Set(A, "length", actualDeleteCount, true).
+                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(actual_delete_count as f64)) {
+                    interp.gc_unroot_value(&a);
+                    return Completion::Throw(e);
+                }
                 let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
                 if insert_count < actual_delete_count {
                     for k in actual_start..((len as usize) - actual_delete_count) {
@@ -2406,9 +2428,16 @@ impl Interpreter {
                     1.0
                 };
                 let depth = if depth_num < 0.0 { 0i64 } else { depth_num as i64 };
+                // Step 5: ArraySpeciesCreate BEFORE flattening (spec order)
+                let a = match array_species_create(interp, &o, 0) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                interp.gc_root_value(&a);
                 fn flatten_into(
                     interp: &mut Interpreter,
-                    target: &mut Vec<JsValue>,
+                    target: &JsValue,
+                    target_index: &mut usize,
                     source: &JsValue,
                     source_len: usize,
                     depth: i64,
@@ -2422,35 +2451,32 @@ impl Interpreter {
                                 Ok(v) => v,
                                 Err(c) => return Err(c),
                             };
-                            let should_flatten = depth > 0
-                                && matches!(&elem, JsValue::Object(eo) if interp.get_object(eo.id).is_some_and(|o| o.borrow().array_elements.is_some()));
+                            let should_flatten = if depth > 0 {
+                                if let JsValue::Object(eo) = &elem {
+                                    is_array_check(interp, eo.id).map_err(Completion::Throw)?
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
                             if should_flatten {
                                 let elem_len = length_of_array_like(interp, &elem)?;
-                                flatten_into(interp, target, &elem, elem_len, depth - 1)?;
+                                flatten_into(interp, target, target_index, &elem, elem_len, depth - 1)?;
                             } else {
-                                target.push(elem);
+                                create_data_property_or_throw(interp, target, &target_index.to_string(), elem)
+                                    .map_err(Completion::Throw)?;
+                                *target_index += 1;
                             }
                         }
                     }
                     Ok(())
                 }
-                let mut result = Vec::new();
-                if let Err(c) = flatten_into(interp, &mut result, &o, len, depth) {
+                let mut target_index = 0usize;
+                if let Err(c) = flatten_into(interp, &a, &mut target_index, &o, len, depth) {
+                    interp.gc_unroot_value(&a);
                     return c;
                 }
-                let result_len = result.len();
-                let a = match array_species_create(interp, &o, 0) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                interp.gc_root_value(&a);
-                for (i, val) in result.into_iter().enumerate() {
-                    if let Err(e) = create_data_property_or_throw(interp, &a, &i.to_string(), val) {
-                        interp.gc_unroot_value(&a);
-                        return Completion::Throw(e);
-                    }
-                }
-                set_length(interp, &a, result_len);
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
@@ -2479,14 +2505,23 @@ impl Interpreter {
                     return c;
                 }
                 let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let mut result = Vec::new();
+                // Step 5: ArraySpeciesCreate BEFORE iteration (spec order)
+                let a = match array_species_create(interp, &o, 0) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                interp.gc_root_value(&a);
+                let mut target_index = 0usize;
                 for k in 0..len {
                     let pk = k.to_string();
                     match obj_has_throw(interp, &o, &pk) {
                         Ok(true) => {
                             let kvalue = match obj_get(interp, &o, &pk) {
                                 Ok(v) => v,
-                                Err(c) => return c,
+                                Err(c) => {
+                                    interp.gc_unroot_value(&a);
+                                    return c;
+                                }
                             };
                             let mapped = interp.call_function(
                                 &callback,
@@ -2495,48 +2530,71 @@ impl Interpreter {
                             );
                             match mapped {
                                 Completion::Normal(v) => {
-                                    if let JsValue::Object(mo) = &v
-                                        && let Some(mobj) = interp.get_object(mo.id)
-                                        && mobj.borrow().array_elements.is_some()
-                                    {
-                                        let mlen = length_of_array_like(interp, &v).unwrap_or(0);
+                                    let elem_is_array = if let JsValue::Object(mo) = &v {
+                                        match is_array_check(interp, mo.id) {
+                                            Ok(b) => b,
+                                            Err(e) => {
+                                                interp.gc_unroot_value(&a);
+                                                return Completion::Throw(e);
+                                            }
+                                        }
+                                    } else {
+                                        false
+                                    };
+                                    if elem_is_array {
+                                        let mlen = match length_of_array_like(interp, &v) {
+                                            Ok(l) => l,
+                                            Err(c) => {
+                                                interp.gc_unroot_value(&a);
+                                                return c;
+                                            }
+                                        };
                                         for j in 0..mlen {
                                             let jpk = j.to_string();
                                             match obj_has_throw(interp, &v, &jpk) {
                                                 Ok(true) => {
-                                                    result.push(match obj_get(interp, &v, &jpk) {
+                                                    let jval = match obj_get(interp, &v, &jpk) {
                                                         Ok(v) => v,
-                                                        Err(c) => return c,
-                                                    });
+                                                        Err(c) => {
+                                                            interp.gc_unroot_value(&a);
+                                                            return c;
+                                                        }
+                                                    };
+                                                    if let Err(e) = create_data_property_or_throw(interp, &a, &target_index.to_string(), jval) {
+                                                        interp.gc_unroot_value(&a);
+                                                        return Completion::Throw(e);
+                                                    }
+                                                    target_index += 1;
                                                 }
-                                                Err(e) => return Completion::Throw(e),
+                                                Err(e) => {
+                                                    interp.gc_unroot_value(&a);
+                                                    return Completion::Throw(e);
+                                                }
                                                 _ => {}
                                             }
                                         }
-                                        continue;
+                                    } else {
+                                        if let Err(e) = create_data_property_or_throw(interp, &a, &target_index.to_string(), v) {
+                                            interp.gc_unroot_value(&a);
+                                            return Completion::Throw(e);
+                                        }
+                                        target_index += 1;
                                     }
-                                    result.push(v);
                                 }
-                                other => return other,
+                                other => {
+                                    interp.gc_unroot_value(&a);
+                                    return other;
+                                }
                             }
                         }
-                        Err(e) => return Completion::Throw(e),
+                        Err(e) => {
+                            interp.gc_unroot_value(&a);
+                            return Completion::Throw(e);
+                        }
                         _ => {}
                     }
                 }
-                let result_len = result.len();
-                let a = match array_species_create(interp, &o, 0) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                interp.gc_root_value(&a);
-                for (i, val) in result.into_iter().enumerate() {
-                    if let Err(e) = create_data_property_or_throw(interp, &a, &i.to_string(), val) {
-                        interp.gc_unroot_value(&a);
-                        return Completion::Throw(e);
-                    }
-                }
-                set_length(interp, &a, result_len);
+                set_length(interp, &a, target_index);
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
@@ -3487,6 +3545,25 @@ impl Interpreter {
             PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
         );
         obj_data.array_elements = Some(array_elements);
+        let obj = Rc::new(RefCell::new(obj_data));
+        let id = self.allocate_object_slot(obj);
+        JsValue::Object(crate::types::JsObject { id })
+    }
+
+    pub(crate) fn create_array_with_length(&mut self, len: usize) -> JsValue {
+        let mut obj_data = JsObjectData::new();
+        obj_data.prototype = self
+            .realm()
+            .array_prototype
+            .clone()
+            .or(self.realm().object_prototype.clone());
+        obj_data.class_name = "Array".to_string();
+        obj_data.insert_property(
+            "length".to_string(),
+            PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
+        );
+        // Use a small Vec for sparse arrays — don't pre-allocate huge arrays
+        obj_data.array_elements = Some(Vec::new());
         let obj = Rc::new(RefCell::new(obj_data));
         let id = self.allocate_object_slot(obj);
         JsValue::Object(crate::types::JsObject { id })

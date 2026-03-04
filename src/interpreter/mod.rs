@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::parser;
 use crate::types::{JsBigInt, JsString, JsValue, bigint_ops, number_ops};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -827,8 +827,16 @@ impl Interpreter {
                 );
 
                 let mut map = HashMap::new();
-                for (i, name) in param_names.iter().enumerate() {
-                    map.insert(i.to_string(), (env.clone(), name.clone()));
+                let mut mapped_names: HashSet<&str> = HashSet::new();
+                for i in (0..param_names.len()).rev() {
+                    let name = &param_names[i];
+                    if mapped_names.contains(name.as_str()) {
+                        continue;
+                    }
+                    mapped_names.insert(name.as_str());
+                    if i < args.len() {
+                        map.insert(i.to_string(), (env.clone(), name.clone()));
+                    }
                 }
                 if !map.is_empty() {
                     o.parameter_map = Some(map);
@@ -2030,12 +2038,16 @@ impl Interpreter {
         let desc_value = desc.value.clone().unwrap();
         let mut new_len_desc = desc;
 
-        // 3. Let newLen be ? ToUint32(Desc.[[Value]])
-        let number_len = self.to_number_value(&desc_value)?;
-        let new_len = to_uint32_f64(number_len);
+        // 3. Let newLen be ? ToUint32(Desc.[[Value]]).
+        //    ToUint32 internally calls ToNumber — this is valueOf call #1
+        let num_for_uint32 = self.to_number_value(&desc_value)?;
+        let new_len = to_uint32_f64(num_for_uint32);
 
-        // 4. If SameValueZero(newLen, numberLen) is false, throw RangeError.
-        //    The spec actually says: If newLen != numberLen (as Number values), throw RangeError.
+        // 4. Let numberLen be ? ToNumber(Desc.[[Value]]).
+        //    This is a separate ToNumber call — valueOf call #2
+        let number_len = self.to_number_value(&desc_value)?;
+
+        // 5. If SameValueZero(newLen, numberLen) is false, throw RangeError.
         if (new_len as f64) != number_len {
             return Err(self.create_error("RangeError", "Invalid array length"));
         }

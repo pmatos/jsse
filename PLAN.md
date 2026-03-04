@@ -51,7 +51,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Math | 100% | 654/654 |
 | Object | 100% | 6,802/6,802 |
 | Promise | 100% | 1,272/1,272 |
-| Array | 98.9% | 6,042/6,111 |
+| Array | 99.4% | 6,072/6,111 |
 | Iterator | 96% | 980/1,020 |
 | TypedArray | 100% | 2,860/2,860 |
 | Date | 100% | 1,188/1,188 |
@@ -285,7 +285,7 @@ These are tracked across all phases:
 | `language/` (other) | ~400 | white-space, comments, keywords, etc. |
 | `built-ins/Temporal` | 8,964 | 8,898 (99.3%) |
 | `built-ins/Object` | 6,802 | 6,565 (96.5%) |
-| `built-ins/Array` | 6,111 | 5,874 (96.1%) |
+| `built-ins/Array` | 6,111 | 6,072 (99.4%) |
 | `built-ins/RegExp` | 3,756 | 3,682 (98.0%) |
 | `built-ins/TypedArray` | 2,864 | 2,864 (100.0%) |
 | `built-ins/TypedArrayConstructors` | 1,442 | 1,280 (88.8%) |

@@ -187,6 +187,7 @@ pub struct Realm {
     pub(crate) async_disposable_stack_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) suppressed_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) shadow_realm_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) object_prototype_tostring: Option<JsValue>,
 }
 
 impl Realm {
@@ -278,6 +279,7 @@ impl Realm {
             async_disposable_stack_prototype: None,
             suppressed_error_prototype: None,
             shadow_realm_prototype: None,
+            object_prototype_tostring: None,
         }
     }
 
@@ -375,6 +377,9 @@ impl Realm {
             }
         }
         if let Some(JsValue::Object(o)) = &self.throw_type_error {
+            worklist.push(o.id);
+        }
+        if let Some(JsValue::Object(o)) = &self.object_prototype_tostring {
             worklist.push(o.id);
         }
         if let Some(ref go) = self.global_object
@@ -2198,57 +2203,59 @@ impl JsObjectData {
             }
             if let JsValue::Number(new_len_f) = &value {
                 let new_len_u32 = *new_len_f as u32;
-                if (new_len_u32 as f64) == *new_len_f {
-                    let mut actual_new_len = new_len_u32;
-                    let old_len = self
+                if (new_len_u32 as f64) != *new_len_f {
+                    // ArraySetLength §10.4.2.4 step 5: invalid length
+                    return false;
+                }
+                let mut actual_new_len = new_len_u32;
+                let old_len = self
+                    .properties
+                    .get("length")
+                    .and_then(|d| d.value.as_ref())
+                    .and_then(|v| {
+                        if let JsValue::Number(n) = v {
+                            Some(*n as u32)
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(old_len) = old_len
+                    && new_len_u32 < old_len
+                {
+                    let mut idx_keys: Vec<(u32, String)> = self
                         .properties
-                        .get("length")
-                        .and_then(|d| d.value.as_ref())
-                        .and_then(|v| {
-                            if let JsValue::Number(n) = v {
-                                Some(*n as u32)
-                            } else {
-                                None
-                            }
-                        });
-                    if let Some(old_len) = old_len
-                        && new_len_u32 < old_len
-                    {
-                        let mut idx_keys: Vec<(u32, String)> = self
-                            .properties
-                            .keys()
-                            .filter_map(|k| {
-                                k.parse::<u64>()
-                                    .ok()
-                                    .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == *k)
-                                    .map(|idx| idx as u32)
-                                    .filter(|&idx| idx >= new_len_u32)
-                                    .map(|idx| (idx, k.clone()))
-                            })
-                            .collect();
-                        idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
+                        .keys()
+                        .filter_map(|k| {
+                            k.parse::<u64>()
+                                .ok()
+                                .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == *k)
+                                .map(|idx| idx as u32)
+                                .filter(|&idx| idx >= new_len_u32)
+                                .map(|idx| (idx, k.clone()))
+                        })
+                        .collect();
+                    idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
 
-                        for (idx, k) in &idx_keys {
-                            let is_non_configurable = self
-                                .properties
-                                .get(k.as_str())
-                                .is_some_and(|d| d.configurable == Some(false));
-                            if is_non_configurable {
-                                actual_new_len = idx + 1;
-                                break;
-                            } else {
-                                self.properties.remove(k.as_str());
-                                self.property_order.retain(|p| p != k);
-                            }
-                        }
-                        if let Some(ref mut elements) = self.array_elements {
-                            elements.truncate(actual_new_len as usize);
+                    for (idx, k) in &idx_keys {
+                        let is_non_configurable = self
+                            .properties
+                            .get(k.as_str())
+                            .is_some_and(|d| d.configurable == Some(false));
+                        if is_non_configurable {
+                            actual_new_len = idx + 1;
+                            break;
+                        } else {
+                            self.properties.remove(k.as_str());
+                            self.property_order.retain(|p| p != k);
                         }
                     }
-                    if let Some(desc) = self.properties.get_mut("length") {
-                        desc.value = Some(JsValue::Number(actual_new_len as f64));
-                        return true;
+                    if let Some(ref mut elements) = self.array_elements {
+                        elements.truncate(actual_new_len as usize);
                     }
+                }
+                if let Some(desc) = self.properties.get_mut("length") {
+                    desc.value = Some(JsValue::Number(actual_new_len as f64));
+                    return true;
                 }
             }
         }
@@ -2270,9 +2277,13 @@ impl JsObjectData {
                     elements.push(JsValue::Undefined);
                 }
                 elements.push(value.clone());
-                let new_len = elements.len();
-                if let Some(len_desc) = self.properties.get_mut("length") {
-                    len_desc.value = Some(JsValue::Number(new_len as f64));
+                // Only update length if idx+1 exceeds the current property length
+                let new_idx_len = (idx + 1) as f64;
+                if let Some(len_desc) = self.properties.get_mut("length")
+                    && let Some(JsValue::Number(cur_len)) = &len_desc.value
+                    && new_idx_len > *cur_len
+                {
+                    len_desc.value = Some(JsValue::Number(new_idx_len));
                 }
             } else if idx < 0xFFFF_FFFF {
                 // Valid array index but too sparse for array_elements — update length
