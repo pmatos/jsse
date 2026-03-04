@@ -41,7 +41,8 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Temporal | 99% | 8,898/8,964 |
 | Number | 100% | 670/670 |
 | annexB | 99% | 1,362/1,377 |
-| RegExp | 98% | 3,682/3,756 |
+| RegExp | 99% | 3,730/3,756 |
+| RegExpStringIteratorPrototype | 100% | 34/34 |
 | DisposableStack | 100% | 182/182 |
 | String | 100% | 2,427/2,427 |
 | arguments | 100% | 460/460 |
