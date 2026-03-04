@@ -14568,52 +14568,117 @@ impl Interpreter {
     }
 
     pub(crate) fn await_value(&mut self, val: &JsValue) -> Completion {
-        if self.is_promise(val) {
-            let promise_id = if let JsValue::Object(o) = val {
-                o.id
-            } else {
-                0
-            };
-            self.drain_microtasks();
-            match self.get_promise_state(promise_id) {
-                Some(PromiseState::Fulfilled(v)) => Completion::Normal(v),
-                Some(PromiseState::Rejected(r)) => Completion::Throw(r),
-                Some(PromiseState::Pending) => {
-                    for _ in 0..1000 {
-                        if self.microtask_queue.is_empty() {
-                            break;
-                        }
-                        self.drain_microtasks();
-                        match self.get_promise_state(promise_id) {
-                            Some(PromiseState::Fulfilled(v)) => return Completion::Normal(v),
-                            Some(PromiseState::Rejected(r)) => return Completion::Throw(r),
-                            _ => {}
-                        }
-                    }
-                    Completion::Normal(JsValue::Undefined)
-                }
-                None => Completion::Normal(val.clone()),
-            }
-        } else if matches!(val, JsValue::Object(_)) {
-            // Check for thenable using [[Get]] which triggers getters
-            let then_val = match self.obj_get(val, "then") {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
-            if self.is_callable(&then_val) {
-                // Resolve thenable: create promise, call then(resolve, reject), await
-                let promise = self.create_promise_object();
-                let promise_id = if let JsValue::Object(ref o) = promise {
-                    o.id
-                } else {
-                    0
-                };
-                self.promise_resolve_thenable(promise_id, val.clone(), then_val);
-                return self.await_value(&promise);
-            }
-            Completion::Normal(val.clone())
+        use std::cell::Cell;
+
+        // §27.7.5.3 Await — every await goes through PromiseResolve and schedules
+        // its continuation as a microtask, ensuring proper interleaving.
+        let promise = self.promise_resolve_value(val);
+        let promise_id = if let JsValue::Object(ref o) = promise {
+            o.id
         } else {
-            Completion::Normal(val.clone())
+            0
+        };
+
+        self.gc_root_value(&promise);
+
+        let done = Rc::new(Cell::new(false));
+        let result: Rc<RefCell<Option<Result<JsValue, JsValue>>>> = Rc::new(RefCell::new(None));
+
+        let state = self.get_promise_state(promise_id);
+        match state {
+            Some(PromiseState::Fulfilled(v)) => {
+                let done_c = done.clone();
+                let result_c = result.clone();
+                let value = v.clone();
+                self.microtask_queue.push(Box::new(move |_interp| {
+                    done_c.set(true);
+                    *result_c.borrow_mut() = Some(Ok(value));
+                    Completion::Normal(JsValue::Undefined)
+                }));
+            }
+            Some(PromiseState::Rejected(r)) => {
+                let done_c = done.clone();
+                let result_c = result.clone();
+                let reason = r.clone();
+                self.microtask_queue.push(Box::new(move |_interp| {
+                    done_c.set(true);
+                    *result_c.borrow_mut() = Some(Err(reason));
+                    Completion::Normal(JsValue::Undefined)
+                }));
+            }
+            Some(PromiseState::Pending) => {
+                let done_f = done.clone();
+                let result_f = result.clone();
+                let done_r = done.clone();
+                let result_r = result.clone();
+
+                let fulfill_handler =
+                    self.create_function(JsFunction::native(
+                        "awaitFulfill".to_string(),
+                        1,
+                        move |_interp, _this, args| {
+                            let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            done_f.set(true);
+                            *result_f.borrow_mut() = Some(Ok(v));
+                            Completion::Normal(JsValue::Undefined)
+                        },
+                    ));
+                let reject_handler =
+                    self.create_function(JsFunction::native(
+                        "awaitReject".to_string(),
+                        1,
+                        move |_interp, _this, args| {
+                            let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            done_r.set(true);
+                            *result_r.borrow_mut() = Some(Err(v));
+                            Completion::Normal(JsValue::Undefined)
+                        },
+                    ));
+
+                if let Some(obj) = self.get_object(promise_id) {
+                    let mut o = obj.borrow_mut();
+                    if let Some(ref mut pd) = o.promise_data {
+                        pd.is_handled = true;
+                        pd.fulfill_reactions.push(PromiseReaction {
+                            handler: Some(fulfill_handler),
+                            promise_id: None,
+                            resolve: JsValue::Undefined,
+                            reject: JsValue::Undefined,
+                            reaction_type: PromiseReactionType::Fulfill,
+                        });
+                        pd.reject_reactions.push(PromiseReaction {
+                            handler: Some(reject_handler),
+                            promise_id: None,
+                            resolve: JsValue::Undefined,
+                            reject: JsValue::Undefined,
+                            reaction_type: PromiseReactionType::Reject,
+                        });
+                    }
+                }
+            }
+            None => {
+                self.gc_unroot_value(&promise);
+                return Completion::Normal(val.clone());
+            }
+        }
+
+        for _ in 0..10_000 {
+            if done.get() {
+                break;
+            }
+            if self.microtask_queue.is_empty() {
+                break;
+            }
+            let job = self.microtask_queue.remove(0);
+            let _ = job(self);
+        }
+
+        self.gc_unroot_value(&promise);
+
+        match result.borrow_mut().take() {
+            Some(Ok(v)) => Completion::Normal(v),
+            Some(Err(e)) => Completion::Throw(e),
+            None => Completion::Normal(JsValue::Undefined),
         }
     }
 

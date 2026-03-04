@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Test Files | Scenarios | Passing | Failing | Pass Rate |
 |------------|-----------|---------|---------|-----------|
-| 48,002     | 91,986    | 90,994  | 992     | 98.92%    |
+| 48,002     | 91,986    | 91,001  | 985     | 98.93%    |
 
 Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution, expanding 48,286 test files into 92,550 scenarios.
 
