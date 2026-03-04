@@ -100,3 +100,19 @@
   - `closeOnRejection` true for next(), false for return()/throw() — the onRejected callback should close the sync iterator only when appropriate
   - for-await-of's `? Await(nextResult)` at §14.7.5.7 step c does NOT include IteratorClose — removing the spurious close fixed the double-close regression
 ---
+
+## 2026-03-04 - US-006
+- **What was implemented**: Fixed `super` expression evaluation order per spec §13.3.7
+  1. **`__home_object__` scope pollution fix**: Object literal method creation was setting `__home_object__` directly on the method's captured closure (parent scope), so nested object literals like `var k = { toString() {...} }` inside a method would overwrite the outer method's `__home_object__`. Fixed by wrapping the closure in a new intermediate scope.
+  2. **GetSuperBase before ToPropertyKey (§13.3.7.1 + §6.2.5.5/§6.2.5.6)**: Restructured `eval_member`, `eval_assign`, and `eval_update` for super[expr] to capture the super base (HomeObject.__proto__) BEFORE calling `to_property_key` on the key expression.
+  3. **This TDZ check before key expression**: `GetThisBinding()` now checked BEFORE evaluating the key expression in super property access, so `super[super()]` in an uninitialized constructor throws ReferenceError without evaluating the inner `super()`.
+  4. **Super property [[Set]] via OrdinarySet**: `super[key] = val` now calls `[[Set]]` on the super base with `this` as receiver (invoking setters correctly), instead of directly setting on `this`.
+  5. **Receiver extensibility check**: When creating a new property on a frozen/non-extensible receiver via super assignment, the operation correctly fails (TypeError in strict mode).
+- **Files changed**: `src/interpreter/eval.rs`, `README.md`, `test262-pass.txt`
+- **Results**: 22 new passes, 0 regressions. 90,528/91,986 (98.41%)
+  - Super expressions: 166→184/184 (100%)
+- **Learnings for future iterations:**
+  - Object literal method creation must wrap the closure in a NEW scope for `__home_object__` — setting it directly on the existing closure pollutes the parent scope when nested object literals have methods
+  - `set_property_value` on JsObjectData does NOT check extensibility — must check explicitly when creating new properties on a frozen/non-extensible receiver
+  - Per spec, super property [[Set]] starts at the super base (HomeObject.__proto__) with receiver = this; setters found in the prototype chain are called with receiver as `this`
+---

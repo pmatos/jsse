@@ -2410,6 +2410,72 @@ impl Interpreter {
             }
             Completion::Normal(if prefix { new_val } else { old_val })
         } else if let Expression::Member(obj_expr, prop) = arg {
+            // §13.3.7.1: super[expr]++ — special evaluation order
+            if matches!(obj_expr.as_ref(), Expression::Super)
+                && !matches!(prop, MemberProperty::Private(_))
+            {
+                // Step 2: GetThisBinding — throw if uninitialized
+                if Self::this_is_in_tdz(env) {
+                    return Completion::Throw(self.create_reference_error(
+                        "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                    ));
+                }
+                let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+
+                // Evaluate key expression (raw)
+                let raw_key = match prop {
+                    MemberProperty::Dot(name) => {
+                        JsValue::String(crate::types::JsString::from_str(name))
+                    }
+                    MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    },
+                    MemberProperty::Private(_) => unreachable!(),
+                };
+
+                // GetSuperBase — capture BEFORE ToPropertyKey
+                let super_base_id = match self.get_super_base_id(env) {
+                    Some(id) => id,
+                    None => {
+                        return Completion::Throw(self.create_type_error(
+                            "Cannot read properties of null",
+                        ));
+                    }
+                };
+
+                // ToPropertyKey
+                let key = match self.to_property_key(&raw_key) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
+
+                // GetValue from super base
+                let cur_val = match self.get_object_property(super_base_id, &key, &this_val) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+
+                let (old_val, new_val) = match self.apply_update_numeric(&cur_val, op) {
+                    Ok(pair) => pair,
+                    Err(e) => return Completion::Throw(e),
+                };
+
+                // PutValue on super base
+                let strict = env.borrow().strict;
+                match self.super_set_property(
+                    super_base_id,
+                    &key,
+                    new_val.clone(),
+                    &this_val,
+                    strict,
+                ) {
+                    Completion::Normal(_) => {}
+                    other => return other,
+                }
+                return Completion::Normal(if prefix { new_val } else { old_val });
+            }
+
             let obj_val = match self.eval_expr(obj_expr, env) {
                 Completion::Normal(v) => v,
                 other => return other,
@@ -2695,6 +2761,84 @@ impl Interpreter {
                 self.put_value_by_ref(name, final_val, &id_ref, env)
             }
             Expression::Member(obj_expr, prop) => {
+                // §13.3.7.1: super[expr] = val — special evaluation order
+                if matches!(obj_expr.as_ref(), Expression::Super)
+                    && !matches!(prop, MemberProperty::Private(_))
+                {
+                    // Step 2: GetThisBinding — throw if uninitialized (before key eval)
+                    if Self::this_is_in_tdz(env) {
+                        return Completion::Throw(self.create_reference_error(
+                            "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                        ));
+                    }
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+
+                    // Evaluate key expression (raw, no ToPropertyKey yet)
+                    let raw_key = match prop {
+                        MemberProperty::Dot(name) => {
+                            JsValue::String(crate::types::JsString::from_str(name))
+                        }
+                        MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        },
+                        MemberProperty::Private(_) => unreachable!(),
+                    };
+
+                    // §13.3.7.3 step 3: GetSuperBase — capture BEFORE ToPropertyKey
+                    let super_base_id = self.get_super_base_id(env);
+                    let strict = env.borrow().strict;
+
+                    if op == AssignOp::Assign {
+                        // Simple: eval RHS first, then ToPropertyKey in PutValue
+                        let rval = match self.eval_expr(right, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let key = match self.to_property_key(&raw_key) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        return match super_base_id {
+                            Some(base_id) => {
+                                self.super_set_property(base_id, &key, rval, &this_val, strict)
+                            }
+                            None => Completion::Throw(self.create_type_error(&format!(
+                                "Cannot set properties of null (setting '{key}')"
+                            ))),
+                        };
+                    } else {
+                        // Compound: ToPropertyKey + GetValue first, then RHS, apply, PutValue
+                        let key = match self.to_property_key(&raw_key) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let base_id = match super_base_id {
+                            Some(id) => id,
+                            None => {
+                                return Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot read properties of null (reading '{key}')"
+                                )));
+                            }
+                        };
+                        let lval = match self.get_object_property(base_id, &key, &this_val) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let rval = match self.eval_expr(right, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let final_val = match self.apply_compound_assign(op, &lval, &rval) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        return self.super_set_property(
+                            base_id, &key, final_val, &this_val, strict,
+                        );
+                    }
+                }
+
                 let obj_val = match self.eval_expr(obj_expr, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -2859,65 +3003,7 @@ impl Interpreter {
                 } else {
                     key
                 };
-                // super.x = val: check that the super reference base is valid,
-                // then set the property on `this` (the receiver)
-                if matches!(obj_expr.as_ref(), Expression::Super) {
-                    // Check HomeObject's prototype exists (the reference base)
-                    let home = env.borrow().get("__home_object__");
-                    let has_valid_base = if let Some(JsValue::Object(ref ho)) = home
-                        && let Some(home_obj) = self.get_object(ho.id)
-                    {
-                        home_obj.borrow().prototype.is_some()
-                    } else {
-                        // Fallback: check __super__.prototype
-                        if let JsValue::Object(ref o) = obj_val
-                            && let Some(sup_obj) = self.get_object(o.id)
-                        {
-                            matches!(
-                                sup_obj.borrow().get_property("prototype"),
-                                JsValue::Object(_)
-                            )
-                        } else {
-                            false
-                        }
-                    };
-                    if !has_valid_base {
-                        return Completion::Throw(self.create_type_error(&format!(
-                            "Cannot set properties of null (setting '{}')",
-                            key
-                        )));
-                    }
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = this_val
-                        && let Some(obj) = self.get_object(o.id)
-                    {
-                        let final_val = if op == AssignOp::Assign {
-                            rval
-                        } else {
-                            match self.apply_compound_assign(op, &lval_for_compound.unwrap(), &rval)
-                            {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            }
-                        };
-                        let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
-                        if !success && env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}'"
-                            )));
-                        }
-                        return Completion::Normal(final_val);
-                    }
-                    return Completion::Throw(self.create_type_error(&format!(
-                        "Cannot set properties of {} (setting '{}')",
-                        if this_val.is_null() {
-                            "null"
-                        } else {
-                            "undefined"
-                        },
-                        key
-                    )));
-                }
+                // Note: super[key] = val is handled by the early return above
                 // Throw for null/undefined base
                 if obj_val.is_null() || obj_val.is_undefined() {
                     return Completion::Throw(self.create_type_error(&format!(
@@ -4404,7 +4490,29 @@ impl Interpreter {
 
         // Handle super() calls - call parent constructor with current this
         if matches!(callee, Expression::Super) {
-            let super_ctor = env.borrow().get("__super__").unwrap_or(JsValue::Undefined);
+            // §13.3.7.2 GetSuperConstructor: dynamically resolve via activeFunction.__proto__
+            let super_ctor =
+                if let Some(ctor_func) = env.borrow().get("__constructor_func__") {
+                    if let JsValue::Object(o) = &ctor_func {
+                        if let Some(obj_rc) = self.get_object(o.id) {
+                            if let Some(proto) = &obj_rc.borrow().prototype {
+                                if let Some(id) = proto.borrow().id {
+                                    JsValue::Object(crate::types::JsObject { id })
+                                } else {
+                                    JsValue::Undefined
+                                }
+                            } else {
+                                JsValue::Null
+                            }
+                        } else {
+                            JsValue::Undefined
+                        }
+                    } else {
+                        JsValue::Undefined
+                    }
+                } else {
+                    env.borrow().get("__super__").unwrap_or(JsValue::Undefined)
+                };
             let arg_vals = match self.eval_spread_args(args, env) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
@@ -12632,7 +12740,222 @@ impl Interpreter {
         }
     }
 
+    /// Get the super base object ID from __home_object__.__proto__ in the given env.
+    /// Returns Ok(Some(id)) for a valid super base, Ok(None) for null prototype, or
+    /// falls back to __super__.prototype.
+    fn get_super_base_id(&self, env: &EnvRef) -> Option<u64> {
+        let home = env.borrow().get("__home_object__");
+        if let Some(JsValue::Object(ref ho)) = home
+            && let Some(home_obj) = self.get_object(ho.id)
+        {
+            if let Some(ref proto_rc) = home_obj.borrow().prototype.clone() {
+                return Some(proto_rc.borrow().id.unwrap());
+            }
+            return None;
+        }
+        // Fallback: __super__.prototype
+        let obj_val = env.borrow().get("__super__").unwrap_or(JsValue::Undefined);
+        if let JsValue::Object(ref o) = obj_val
+            && let Some(sup_obj) = self.get_object(o.id)
+        {
+            let proto_val = sup_obj.borrow().get_property("prototype");
+            if let JsValue::Object(ref p) = proto_val {
+                return Some(p.id);
+            }
+        }
+        None
+    }
+
+    /// OrdinarySet (§10.1.9) starting at `base_id` with a separate `receiver`.
+    /// Used for super property assignment: `super[key] = val`.
+    fn super_set_property(
+        &mut self,
+        base_id: u64,
+        key: &str,
+        val: JsValue,
+        receiver: &JsValue,
+        strict: bool,
+    ) -> Completion {
+        // Find the property descriptor starting from base_id, walking prototype chain
+        let mut current_id = Some(base_id);
+        let mut desc: Option<PropertyDescriptor> = None;
+        while let Some(id) = current_id {
+            if let Some(obj) = self.get_object(id) {
+                desc = obj.borrow().get_own_property_full(key);
+                if desc.is_some() {
+                    break;
+                }
+                current_id = obj.borrow().prototype.as_ref().map(|p| p.borrow().id.unwrap());
+            } else {
+                break;
+            }
+        }
+
+        match &desc {
+            Some(d) if d.is_accessor_descriptor() => {
+                if let Some(ref setter) = d.set {
+                    if !matches!(setter, JsValue::Undefined) {
+                        let setter = setter.clone();
+                        let recv = receiver.clone();
+                        return match self.call_function(&setter, &recv, &[val.clone()]) {
+                            Completion::Normal(_) => Completion::Normal(val),
+                            other => other,
+                        };
+                    }
+                }
+                if strict {
+                    return Completion::Throw(self.create_type_error(&format!(
+                        "Cannot set property '{key}' which has only a getter"
+                    )));
+                }
+                Completion::Normal(val)
+            }
+            Some(d) if d.is_data_descriptor() && d.writable == Some(false) => {
+                if strict {
+                    return Completion::Throw(self.create_type_error(&format!(
+                        "Cannot assign to read only property '{key}'"
+                    )));
+                }
+                Completion::Normal(val)
+            }
+            _ => {
+                // §10.1.9.2 OrdinarySetWithOwnDescriptor: set on Receiver
+                if let JsValue::Object(o) = receiver {
+                    if let Some(obj) = self.get_object(o.id) {
+                        let existing = obj.borrow().get_own_property_full(key);
+                        match &existing {
+                            Some(ed) if ed.is_accessor_descriptor() => {
+                                if strict {
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot set property '{key}'"
+                                    )));
+                                }
+                                return Completion::Normal(val);
+                            }
+                            Some(ed) if ed.writable == Some(false) => {
+                                if strict {
+                                    return Completion::Throw(self.create_type_error(&format!(
+                                        "Cannot assign to read only property '{key}'"
+                                    )));
+                                }
+                                return Completion::Normal(val);
+                            }
+                            Some(_) => {
+                                let _ = obj.borrow_mut().set_property_value(key, val.clone());
+                            }
+                            None => {
+                                // CreateDataProperty: checks extensibility
+                                if !obj.borrow().extensible {
+                                    if strict {
+                                        return Completion::Throw(
+                                            self.create_type_error(&format!(
+                                                "Cannot add property '{key}', object is not extensible"
+                                            )),
+                                        );
+                                    }
+                                    return Completion::Normal(val);
+                                }
+                                let _ = obj.borrow_mut().set_property_value(key, val.clone());
+                            }
+                        }
+                    }
+                }
+                Completion::Normal(val)
+            }
+        }
+    }
+
     fn eval_member(&mut self, obj: &Expression, prop: &MemberProperty, env: &EnvRef) -> Completion {
+        // §13.3.7.1: super[expr] — special evaluation order:
+        // 1. GetThisBinding (throws if uninitialized) — before key expression
+        // 2. Evaluate key expression
+        // 3. GetSuperBase (HomeObject.__proto__) — before ToPropertyKey
+        // 4. ToPropertyKey (in GetValue on the reference)
+        // 5. Property lookup on captured super base
+        if matches!(obj, Expression::Super) {
+            if let MemberProperty::Private(name) = prop {
+                if Self::this_is_in_tdz(env) {
+                    return Completion::Throw(self.create_reference_error(
+                        "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                    ));
+                }
+                let obj_val = match self.eval_expr(obj, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                let branded = self.resolve_private_name(name, env);
+                return match &obj_val {
+                    JsValue::Object(o) => {
+                        if let Some(obj_rc) = self.get_object(o.id) {
+                            let elem = obj_rc.borrow().private_fields.get(&branded).cloned();
+                            match elem {
+                                Some(PrivateElement::Field(v))
+                                | Some(PrivateElement::Method(v)) => Completion::Normal(v),
+                                Some(PrivateElement::Accessor { get, .. }) => {
+                                    if let Some(getter) = get {
+                                        self.call_function(&getter, &obj_val, &[])
+                                    } else {
+                                        Completion::Throw(self.create_type_error(&format!(
+                                            "Cannot read private member #{name} which has no getter"
+                                        )))
+                                    }
+                                }
+                                None => Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot read private member #{name} from an object whose class did not declare it"
+                                ))),
+                            }
+                        } else {
+                            Completion::Normal(JsValue::Undefined)
+                        }
+                    }
+                    _ => Completion::Throw(self.create_type_error(&format!(
+                        "Cannot read private member #{name} from a non-object"
+                    ))),
+                };
+            }
+
+            // Step 2: GetThisBinding — throws ReferenceError if this is in TDZ
+            if Self::this_is_in_tdz(env) {
+                return Completion::Throw(self.create_reference_error(
+                    "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                ));
+            }
+            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+
+            // Steps 3-4: Evaluate key expression (without ToPropertyKey yet)
+            let raw_key = match prop {
+                MemberProperty::Dot(name) => {
+                    JsValue::String(crate::types::JsString::from_str(name))
+                }
+                MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                },
+                MemberProperty::Private(_) => unreachable!(),
+            };
+
+            // Step 7 → §13.3.7.3 step 3: GetSuperBase — capture BEFORE ToPropertyKey
+            let super_base_id = self.get_super_base_id(env);
+
+            // §6.2.5.5 GetValue step 3.c.i: ToPropertyKey (deferred until after GetSuperBase)
+            let key = match self.to_property_key(&raw_key) {
+                Ok(s) => s,
+                Err(e) => return Completion::Throw(e),
+            };
+
+            // Property lookup on captured super base
+            match super_base_id {
+                Some(base_id) => {
+                    return self.get_object_property(base_id, &key, &this_val);
+                }
+                None => {
+                    return Completion::Throw(self.create_type_error(&format!(
+                        "Cannot read properties of null (reading '{key}')"
+                    )));
+                }
+            }
+        }
+
         let obj_val = match self.eval_expr(obj, env) {
             Completion::Normal(v) => v,
             other => return other,
@@ -12679,10 +13002,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // Check for null/undefined base before ToPropertyKey (skip for super)
-                if !matches!(obj, Expression::Super)
-                    && matches!(&obj_val, JsValue::Null | JsValue::Undefined)
-                {
+                if matches!(&obj_val, JsValue::Null | JsValue::Undefined) {
                     let err = self.create_type_error(&format!(
                         "Cannot read properties of {obj_val} (reading property)"
                     ));
@@ -12697,38 +13017,6 @@ impl Interpreter {
             MemberProperty::Private(_) => unreachable!(),
         };
         let _ = computed_raw;
-        // super.x - look up on [[Prototype]] of HomeObject
-        if matches!(obj, Expression::Super) {
-            // Per spec §13.5.6: GetThisBinding() throws ReferenceError if this is in TDZ
-            if Self::this_is_in_tdz(env) {
-                return Completion::Throw(self.create_reference_error(
-                    "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
-                ));
-            }
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
-            let home = env.borrow().get("__home_object__");
-            if let Some(JsValue::Object(ref ho)) = home
-                && let Some(home_obj) = self.get_object(ho.id)
-            {
-                if let Some(ref proto_rc) = home_obj.borrow().prototype.clone() {
-                    let proto_id = proto_rc.borrow().id.unwrap();
-                    return self.get_object_property(proto_id, &key, &this_val);
-                }
-                return Completion::Throw(self.create_type_error(&format!(
-                    "Cannot read properties of null (reading '{key}')"
-                )));
-            }
-            // Fallback: __super__.prototype for class super
-            if let JsValue::Object(ref o) = obj_val
-                && let Some(sup_obj) = self.get_object(o.id)
-            {
-                let proto_val = sup_obj.borrow().get_property("prototype");
-                if let JsValue::Object(ref p) = proto_val {
-                    return self.get_object_property(p.id, &key, &this_val);
-                }
-            }
-            return Completion::Normal(JsValue::Undefined);
-        }
         match &obj_val {
             JsValue::Object(o) => self.get_object_property(o.id, &key, &obj_val.clone()),
             JsValue::String(s) => {
@@ -12988,6 +13276,16 @@ impl Interpreter {
         // Initialize class name binding (pre-declared above; spec §15.7.14 step 18.c/26.d)
         if !name.is_empty() {
             let _ = class_env.borrow_mut().set(name, ctor_val.clone());
+        }
+
+        // Store constructor func for dynamic GetSuperConstructor (§13.3.7.2)
+        if super_val.is_some() {
+            class_env
+                .borrow_mut()
+                .declare("__constructor_func__", BindingKind::Const);
+            let _ = class_env
+                .borrow_mut()
+                .set("__constructor_func__", ctor_val.clone());
         }
 
         // Get the prototype object that was auto-created by create_function
@@ -13793,11 +14091,24 @@ impl Interpreter {
                 if let JsValue::Object(fo) = val
                     && let Some(func_obj) = self.get_object(fo.id)
                 {
-                    if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
-                        closure
+                    let old_closure =
+                        if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
+                        {
+                            Some(closure.clone())
+                        } else {
+                            None
+                        };
+                    if let Some(old_closure) = old_closure {
+                        let wrapper = Environment::new(Some(old_closure));
+                        wrapper
                             .borrow_mut()
                             .declare("__home_object__", BindingKind::Const);
-                        let _ = closure.borrow_mut().set("__home_object__", obj_val.clone());
+                        let _ = wrapper.borrow_mut().set("__home_object__", obj_val.clone());
+                        if let Some(JsFunction::User { ref mut closure, .. }) =
+                            func_obj.borrow_mut().callable
+                        {
+                            *closure = wrapper;
+                        }
                     }
                     // Methods must not have own caller/arguments (spec §15.4)
                     func_obj.borrow_mut().properties.remove("caller");
