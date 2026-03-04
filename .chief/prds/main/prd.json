@@ -170,7 +170,8 @@
         "No regressions in RegExp suite"
       ],
       "priority": 11,
-      "passes": false
+      "passes": false,
+      "inProgress": true
     },
     {
       "id": "US-012",
