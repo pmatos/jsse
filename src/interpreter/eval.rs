@@ -11264,6 +11264,59 @@ impl Interpreter {
         Completion::Normal(JsValue::Boolean(false))
     }
 
+    /// Check if accessing `key` on a module namespace object would hit TDZ.
+    /// Returns Err(ReferenceError) if the binding is uninitialized.
+    /// Returns Ok(()) if the key is safe to access or the object is not a namespace.
+    pub(crate) fn check_namespace_tdz(&mut self, obj_id: u64, key: &str) -> Result<(), JsValue> {
+        if key.starts_with("Symbol(") {
+            return Ok(());
+        }
+        let ns_data = if let Some(obj) = self.get_object(obj_id) {
+            obj.borrow().module_namespace.clone()
+        } else {
+            None
+        };
+        if let Some(ns_data) = ns_data {
+            if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+                if binding_name.starts_with("*ns:") {
+                    return Ok(());
+                }
+                if let Some(rest) = binding_name.strip_prefix("*reexport:") {
+                    // Check TDZ in source module's environment
+                    if let Some(colon_idx) = rest.rfind(':') {
+                        let source = &rest[..colon_idx];
+                        let export_name = &rest[colon_idx + 1..];
+                        if let Some(ref module_path) = ns_data.module_path
+                            && let Ok(resolved) =
+                                self.resolve_module_specifier(source, Some(module_path))
+                            && let Ok(source_mod) = self.load_module(&resolved)
+                        {
+                            let source_ref = source_mod.borrow();
+                            if let Some(binding) = source_ref.export_bindings.get(export_name) {
+                                if source_ref.env.borrow().is_in_tdz(binding) {
+                                    return Err(self.create_reference_error(&format!(
+                                        "Cannot access '{key}' before initialization"
+                                    )));
+                                }
+                            } else if source_ref.env.borrow().is_in_tdz(export_name) {
+                                return Err(self.create_reference_error(&format!(
+                                    "Cannot access '{key}' before initialization"
+                                )));
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+                if ns_data.env.borrow().is_in_tdz(binding_name) {
+                    return Err(self.create_reference_error(&format!(
+                        "Cannot access '{key}' before initialization"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn get_object_property(
         &mut self,
         obj_id: u64,
@@ -11344,14 +11397,32 @@ impl Interpreter {
                             // Get the source module's export binding to find the env variable
                             let source_ref = source_mod.borrow();
                             // Try environment lookup first for live bindings
-                            if let Some(binding) = source_ref.export_bindings.get(export_name)
-                                && let Some(val) = source_ref.env.borrow().get(binding)
-                            {
-                                return Completion::Normal(val);
+                            if let Some(binding) = source_ref.export_bindings.get(export_name) {
+                                let env = source_ref.env.borrow();
+                                if env.is_in_tdz(binding) {
+                                    drop(env);
+                                    drop(source_ref);
+                                    return Completion::Throw(self.create_reference_error(
+                                        &format!("Cannot access '{key}' before initialization"),
+                                    ));
+                                }
+                                if let Some(val) = env.get(binding) {
+                                    return Completion::Normal(val);
+                                }
                             }
                             // Fallback: direct environment lookup
-                            if let Some(val) = source_ref.env.borrow().get(export_name) {
-                                return Completion::Normal(val);
+                            {
+                                let env = source_ref.env.borrow();
+                                if env.is_in_tdz(export_name) {
+                                    drop(env);
+                                    drop(source_ref);
+                                    return Completion::Throw(self.create_reference_error(
+                                        &format!("Cannot access '{key}' before initialization"),
+                                    ));
+                                }
+                                if let Some(val) = env.get(export_name) {
+                                    return Completion::Normal(val);
+                                }
                             }
                             // Fallback: check exports map
                             if let Some(val) = source_ref.exports.get(export_name) {
@@ -11368,11 +11439,15 @@ impl Interpreter {
                         return Completion::Normal(val.clone());
                     }
                 } else {
-                    let val = ns_data
-                        .env
-                        .borrow()
-                        .get(binding_name)
-                        .unwrap_or(JsValue::Undefined);
+                    let env_ref = ns_data.env.borrow();
+                    if env_ref.is_in_tdz(binding_name) {
+                        drop(env_ref);
+                        return Completion::Throw(self.create_reference_error(&format!(
+                            "Cannot access '{key}' before initialization"
+                        )));
+                    }
+                    let val = env_ref.get(binding_name).unwrap_or(JsValue::Undefined);
+                    drop(env_ref);
                     return Completion::Normal(val);
                 }
             }
@@ -12464,6 +12539,8 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // §10.4.6.4 [[GetOwnProperty]] step 4: namespace [[Get]] can throw for TDZ
+            self.check_namespace_tdz(obj_id, key)?;
             let desc = obj.borrow().get_own_property(key);
             match desc {
                 Some(d) => Ok(self.from_property_descriptor(&d)),

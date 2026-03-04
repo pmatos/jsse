@@ -1398,11 +1398,14 @@ impl Interpreter {
         if let JsValue::Object(ref o) = obj_val {
             let obj_id = o.id;
             let keys = {
-                let is_proxy = self
+                let needs_proxy_path = self
                     .get_object(obj_id)
-                    .map(|obj| obj.borrow().is_proxy())
+                    .map(|obj| {
+                        let b = obj.borrow();
+                        b.is_proxy() || b.module_namespace.is_some()
+                    })
                     .unwrap_or(false);
-                if is_proxy {
+                if needs_proxy_path {
                     match self.proxy_enumerable_keys_with_proto(obj_id) {
                         Ok(k) => k,
                         Err(e) => return Completion::Throw(e),

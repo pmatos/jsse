@@ -1056,21 +1056,22 @@ impl Interpreter {
             }
         }
 
-        // Second pass: process imports (after hoisting)
+        // Second pass: process re-exports (export * from) — before imports
+        // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
-            if let ModuleItem::ImportDeclaration(import) = item
-                && let Err(e) = self.process_import(import, &module_env)
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
+                && let Err(e) =
+                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
             {
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
         }
 
-        // Third pass: process re-exports (export * from)
+        // Third pass: process imports (after hoisting and re-exports)
         for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-                && let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            if let ModuleItem::ImportDeclaration(import) = item
+                && let Err(e) = self.process_import(import, &module_env)
             {
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
@@ -1750,6 +1751,25 @@ impl Interpreter {
                     self.hoist_pattern(&d.pattern, env, false);
                 }
             }
+            // §16.2.1.6.1 InitializeEnvironment: pre-declare let/const/using bindings (TDZ)
+            Statement::Variable(decl)
+                if matches!(
+                    decl.kind,
+                    VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+                ) =>
+            {
+                let kind = match decl.kind {
+                    VarKind::Let => BindingKind::Let,
+                    _ => BindingKind::Const,
+                };
+                for d in &decl.declarations {
+                    let mut names = Vec::new();
+                    self.get_pattern_names(&d.pattern, &mut names);
+                    for name in names {
+                        env.borrow_mut().declare(&name, kind);
+                    }
+                }
+            }
             Statement::FunctionDeclaration(f) => {
                 env.borrow_mut().declare(&f.name, BindingKind::Var);
                 let func = JsFunction::User {
@@ -1767,6 +1787,11 @@ impl Interpreter {
                 let val = self.create_function(func);
                 let _ = env.borrow_mut().set(&f.name, val);
             }
+            Statement::ClassDeclaration(c) => {
+                if !c.name.is_empty() {
+                    env.borrow_mut().declare(&c.name, BindingKind::Const);
+                }
+            }
             _ => {}
         }
     }
@@ -1780,22 +1805,40 @@ impl Interpreter {
                 self.hoist_module_statement(decl, env);
             }
             ExportDeclaration::DefaultFunction(f) => {
-                if !f.name.is_empty() {
-                    env.borrow_mut().declare(&f.name, BindingKind::Const);
-                    let func = JsFunction::User {
-                        name: Some(f.name.clone()),
-                        params: f.params.clone(),
-                        body: f.body.clone(),
-                        closure: env.clone(),
-                        is_arrow: false,
-                        is_strict: true,
-                        is_generator: f.is_generator,
-                        is_async: f.is_async,
-                        is_method: false,
-                        source_text: f.source_text.clone(),
-                    };
-                    let val = self.create_function(func);
-                    let _ = env.borrow_mut().set(&f.name, val);
+                // §16.2.1.6.1: function declarations are hoisted and initialized
+                let name = if f.name.is_empty() {
+                    "*default*".to_string()
+                } else {
+                    f.name.clone()
+                };
+                env.borrow_mut().declare(&name, BindingKind::Const);
+                let func = JsFunction::User {
+                    name: Some(if f.name.is_empty() {
+                        "default".to_string()
+                    } else {
+                        f.name.clone()
+                    }),
+                    params: f.params.clone(),
+                    body: f.body.clone(),
+                    closure: env.clone(),
+                    is_arrow: false,
+                    is_strict: true,
+                    is_generator: f.is_generator,
+                    is_async: f.is_async,
+                    is_method: false,
+                    source_text: f.source_text.clone(),
+                };
+                let val = self.create_function(func);
+                let _ = env.borrow_mut().set(&name, val);
+            }
+            // §16.2.1.6.1: pre-declare *default* binding for default expressions/classes (TDZ)
+            ExportDeclaration::Default(_) => {
+                env.borrow_mut().declare("*default*", BindingKind::Let);
+            }
+            ExportDeclaration::DefaultClass(c) => {
+                env.borrow_mut().declare("*default*", BindingKind::Const);
+                if !c.name.is_empty() {
+                    env.borrow_mut().declare(&c.name, BindingKind::Const);
                 }
             }
             _ => {}
