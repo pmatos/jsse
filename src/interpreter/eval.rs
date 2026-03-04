@@ -1071,100 +1071,11 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&s)))
             }
             Expression::OptionalChain(base, prop) => {
-                // When base is a Member expr and prop starts with Call(Identifier(""),...),
-                // we need to preserve the `this` binding from the member access.
-                // E.g., obj.method?.() should call method with this=obj.
-                let (base_val, base_this) = match base.as_ref() {
-                    Expression::Member(obj_expr, member_prop) => {
-                        let obj_val = match self.eval_expr(obj_expr, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        let key = match member_prop {
-                            MemberProperty::Dot(name) => name.clone(),
-                            MemberProperty::Computed(expr) => {
-                                let v = match self.eval_expr(expr, env) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                match self.to_property_key(&v) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            }
-                            MemberProperty::Private(name) => {
-                                let branded = self.resolve_private_name(name, env);
-                                if let JsValue::Object(ref o) = obj_val
-                                    && let Some(obj) = self.get_object(o.id)
-                                {
-                                    let elem = obj.borrow().private_fields.get(&branded).cloned();
-                                    match elem {
-                                        Some(PrivateElement::Field(v))
-                                        | Some(PrivateElement::Method(v)) => {
-                                            return if matches!(
-                                                v,
-                                                JsValue::Null | JsValue::Undefined
-                                            ) {
-                                                Completion::Normal(JsValue::Undefined)
-                                            } else {
-                                                match self.eval_oc_tail_with_this(&v, prop, env) {
-                                                    Ok((result, _)) => Completion::Normal(result),
-                                                    Err(c) => c,
-                                                }
-                                            };
-                                        }
-                                        Some(PrivateElement::Accessor { get, .. }) => {
-                                            if let Some(getter) = get {
-                                                let v = match self.call_function(
-                                                    &getter,
-                                                    &obj_val,
-                                                    &[],
-                                                ) {
-                                                    Completion::Normal(v) => v,
-                                                    other => return other,
-                                                };
-                                                return if matches!(
-                                                    v,
-                                                    JsValue::Null | JsValue::Undefined
-                                                ) {
-                                                    Completion::Normal(JsValue::Undefined)
-                                                } else {
-                                                    match self.eval_oc_tail_with_this(&v, prop, env)
-                                                    {
-                                                        Ok((result, _)) => {
-                                                            Completion::Normal(result)
-                                                        }
-                                                        Err(c) => c,
-                                                    }
-                                                };
-                                            }
-                                            return Completion::Normal(JsValue::Undefined);
-                                        }
-                                        None => {
-                                            return Completion::Throw(self.create_type_error(
-                                                &format!("Cannot read private member #{name}"),
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    return Completion::Normal(JsValue::Undefined);
-                                }
-                            }
-                        };
-                        let prop_val = match self.access_property_on_value(&obj_val, &key) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        (prop_val, obj_val)
-                    }
-                    _ => {
-                        let val = match self.eval_expr(base, env) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        (val, JsValue::Undefined)
-                    }
-                };
+                let (base_val, base_this) =
+                    match self.eval_oc_base(base, prop, env) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
                 if matches!(base_val, JsValue::Null | JsValue::Undefined) {
                     return Completion::Normal(JsValue::Undefined);
                 }
@@ -1286,6 +1197,175 @@ impl Interpreter {
         match self.eval_oc_tail_with_this(base_val, prop, env) {
             Ok((v, _)) => Completion::Normal(v),
             Err(c) => c,
+        }
+    }
+
+    /// Evaluate an OptionalChain expression and return (value, this_context).
+    /// Used when the optional chain result feeds into a call or nested chain.
+    fn eval_optional_chain_with_ref(
+        &mut self,
+        base: &Expression,
+        chain: &Expression,
+        env: &EnvRef,
+    ) -> Result<(JsValue, JsValue), Completion> {
+        let (base_val, base_this) = self.eval_oc_base(base, chain, env)?;
+        if matches!(base_val, JsValue::Null | JsValue::Undefined) {
+            return Ok((JsValue::Undefined, JsValue::Undefined));
+        }
+        self.eval_oc_tail_with_this_ctx(&base_val, &base_this, chain, env)
+    }
+
+    /// Evaluate the base expression of an OptionalChain, returning (value, this).
+    fn eval_oc_base(
+        &mut self,
+        base: &Expression,
+        chain: &Expression,
+        env: &EnvRef,
+    ) -> Result<(JsValue, JsValue), Completion> {
+        match base {
+            Expression::Member(obj_expr, member_prop) => {
+                if matches!(obj_expr.as_ref(), Expression::Super) {
+                    // §13.3.7.1: super property in optional chain — use HomeObject.__proto__
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                    let key = match member_prop {
+                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Computed(expr) => {
+                            let v = match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => v,
+                                other => return Err(other),
+                            };
+                            match self.to_property_key(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Err(Completion::Throw(e)),
+                            }
+                        }
+                        MemberProperty::Private(name) => {
+                            let branded = self.resolve_private_name(name, env);
+                            if let JsValue::Object(ref o) = this_val
+                                && let Some(obj) = self.get_object(o.id)
+                            {
+                                let elem = obj.borrow().private_fields.get(&branded).cloned();
+                                match elem {
+                                    Some(PrivateElement::Field(v))
+                                    | Some(PrivateElement::Method(v)) => {
+                                        return Ok((v, this_val));
+                                    }
+                                    Some(PrivateElement::Accessor { get, .. }) => {
+                                        if let Some(getter) = get {
+                                            match self.call_function(&getter, &this_val, &[]) {
+                                                Completion::Normal(v) => return Ok((v, this_val)),
+                                                other => return Err(other),
+                                            }
+                                        }
+                                        return Err(Completion::Throw(self.create_type_error(
+                                            &format!("Cannot read private member #{name}"),
+                                        )));
+                                    }
+                                    None => {
+                                        return Err(Completion::Throw(self.create_type_error(
+                                            &format!("Cannot read private member #{name}"),
+                                        )));
+                                    }
+                                }
+                            }
+                            return Ok((JsValue::Undefined, this_val));
+                        }
+                    };
+                    let super_base_id = self.get_super_base_id(env);
+                    match super_base_id {
+                        Some(base_id) => {
+                            let val = match self.get_object_property(base_id, &key, &this_val) {
+                                Completion::Normal(v) => v,
+                                other => return Err(other),
+                            };
+                            Ok((val, this_val))
+                        }
+                        None => Err(Completion::Throw(self.create_type_error(&format!(
+                            "Cannot read properties of null (reading '{key}')"
+                        )))),
+                    }
+                } else {
+                    let obj_val = match self.eval_expr(obj_expr, env) {
+                        Completion::Normal(v) => v,
+                        other => return Err(other),
+                    };
+                    let key = match member_prop {
+                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Computed(expr) => {
+                            let v = match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => v,
+                                other => return Err(other),
+                            };
+                            match self.to_property_key(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Err(Completion::Throw(e)),
+                            }
+                        }
+                        MemberProperty::Private(name) => {
+                            let branded = self.resolve_private_name(name, env);
+                            if let JsValue::Object(ref o) = obj_val
+                                && let Some(obj) = self.get_object(o.id)
+                            {
+                                let elem = obj.borrow().private_fields.get(&branded).cloned();
+                                match elem {
+                                    Some(PrivateElement::Field(v))
+                                    | Some(PrivateElement::Method(v)) => {
+                                        if matches!(v, JsValue::Null | JsValue::Undefined) {
+                                            return Ok((JsValue::Undefined, JsValue::Undefined));
+                                        }
+                                        return self.eval_oc_tail_with_this(
+                                            &v, chain, env,
+                                        );
+                                    }
+                                    Some(PrivateElement::Accessor { get, .. }) => {
+                                        if let Some(getter) = get {
+                                            let v = match self.call_function(
+                                                &getter, &obj_val, &[],
+                                            ) {
+                                                Completion::Normal(v) => v,
+                                                other => return Err(other),
+                                            };
+                                            if matches!(v, JsValue::Null | JsValue::Undefined) {
+                                                return Ok((
+                                                    JsValue::Undefined,
+                                                    JsValue::Undefined,
+                                                ));
+                                            }
+                                            return self.eval_oc_tail_with_this(
+                                                &v, chain, env,
+                                            );
+                                        }
+                                        return Ok((JsValue::Undefined, JsValue::Undefined));
+                                    }
+                                    None => {
+                                        return Err(Completion::Throw(self.create_type_error(
+                                            &format!("Cannot read private member #{name}"),
+                                        )));
+                                    }
+                                }
+                            } else {
+                                return Ok((JsValue::Undefined, JsValue::Undefined));
+                            }
+                        }
+                    };
+                    let prop_val = match self.access_property_on_value(&obj_val, &key) {
+                        Completion::Normal(v) => v,
+                        other => return Err(other),
+                    };
+                    Ok((prop_val, obj_val))
+                }
+            }
+            Expression::OptionalChain(inner_base, inner_chain) => {
+                // Nested optional chain: preserve this context from inner chain
+                self.eval_optional_chain_with_ref(inner_base, inner_chain, env)
+            }
+            _ => {
+                let val = match self.eval_expr(base, env) {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                };
+                Ok((val, JsValue::Undefined))
+            }
         }
     }
 
@@ -4761,6 +4841,13 @@ impl Interpreter {
                     return Completion::Throw(err);
                 } else {
                     (JsValue::Undefined, obj_val)
+                }
+            }
+            Expression::OptionalChain(oc_base, oc_chain) => {
+                // (a?.b)() or similar: preserve this from optional chain
+                match self.eval_optional_chain_with_ref(oc_base, oc_chain, env) {
+                    Ok((v, t)) => (v, t),
+                    Err(c) => return c,
                 }
             }
             _ => {

@@ -116,3 +116,16 @@
   - `set_property_value` on JsObjectData does NOT check extensibility — must check explicitly when creating new properties on a frozen/non-extensible receiver
   - Per spec, super property [[Set]] starts at the super base (HomeObject.__proto__) with receiver = this; setters found in the prototype chain are called with receiver as `this`
 ---
+
+## 2026-03-04 - US-007
+- **What was implemented**: Fixed optional chaining edge cases per spec §13.5.1
+  1. **Parser: tagged template after optional chain**: `OptionalChain TemplateLiteral` production now correctly reports SyntaxError. Previously the parser allowed template literals in the optional chain tail loop.
+  2. **Super base in optional chain**: `OptionalChain(Member(Super, ...), ...)` now uses `get_super_base_id()` to resolve `HomeObject.__proto__` instead of `eval_expr(Super)` which returned the constructor. Fixes `super.a?.name` and `super.method?.()`.
+  3. **`this` preservation**: Added `eval_oc_base()` and `eval_optional_chain_with_ref()` helpers that return `(value, this_context)`. Nested `OptionalChain` base evaluates recursively to preserve reference context. `eval_call` now handles `OptionalChain` callee to preserve `this` for patterns like `(a?.b)()`, `a?.b?.()`, `(a?.b)?.()`.
+- **Files changed**: `src/parser/expressions.rs`, `src/interpreter/eval.rs`, `README.md`, `test262-pass.txt`
+- **Results**: 14 new passes, 0 regressions. 90,542/91,986 (98.43%)
+  - Optional chaining: 62→76/76 (100%)
+- **Learnings for future iterations:**
+  - OptionalChain returns a Reference Record per spec — the `this` context (reference base) must be preserved through nested chains and when used as callee
+  - Super property access in optional chain must use the same `get_super_base_id()` resolution as `eval_member` — `eval_expr(Super)` returns `__super__` (the constructor), not the super base
+---

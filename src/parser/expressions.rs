@@ -649,8 +649,9 @@ impl<'a> Parser<'a> {
                                 prop = Expression::Call(Box::new(prop), args);
                             }
                             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
-                                let tmpl = self.parse_template_literal_expr(true)?;
-                                prop = Expression::TaggedTemplate(Box::new(prop), tmpl);
+                                return Err(self.error(
+                                    "Tagged template cannot be used in an optional chain",
+                                ));
                             }
                             _ => break,
                         }
