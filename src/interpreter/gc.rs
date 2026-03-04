@@ -221,6 +221,13 @@ impl Interpreter {
                 worklist.push(buf_id);
             }
 
+            // Trace GC roots from native closures
+            if let Some(ref roots) = obj.gc_native_roots {
+                for v in roots {
+                    Self::collect_value_roots(v, &mut worklist);
+                }
+            }
+
             // Trace iterator state
             if let Some(ref state) = obj.iterator_state {
                 match state {

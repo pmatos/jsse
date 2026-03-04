@@ -3572,6 +3572,7 @@ impl Interpreter {
             "AsyncDisposableStack",
             "SuppressedError",
             "ShadowRealm",
+            "Iterator",
         ];
         let vals: Vec<(String, JsValue)> = {
             let env = self.realm().global_env.borrow();

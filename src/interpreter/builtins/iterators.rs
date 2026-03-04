@@ -1,6 +1,254 @@
 use super::super::*;
 use std::collections::HashMap;
 
+type ZipState = Rc<RefCell<(Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>, bool)>>;
+
+fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
+    let (ref iters, ref exhausted, ref mode, ref padding_values, alive) = {
+        let s = state.borrow();
+        (s.0.clone(), s.1.clone(), s.2.clone(), s.3.clone(), s.4)
+    };
+    if !alive {
+        return Completion::Normal(
+            interp.create_iter_result_object(JsValue::Undefined, true),
+        );
+    }
+    if iters.is_empty() {
+        state.borrow_mut().4 = false;
+        return Completion::Normal(
+            interp.create_iter_result_object(JsValue::Undefined, true),
+        );
+    }
+
+    let mut values = Vec::with_capacity(iters.len());
+    let mut new_exhausted = exhausted.clone();
+
+    for (i, (it, nm)) in iters.iter().enumerate() {
+        if exhausted[i] {
+            values.push(padding_values.get(i).cloned().unwrap_or(JsValue::Undefined));
+            continue;
+        }
+        match iterator_step_value_getter(interp, it, nm) {
+            Ok(Some(v)) => values.push(v),
+            Ok(None) => {
+                new_exhausted[i] = true;
+
+                if mode == "shortest" {
+                    state.borrow_mut().4 = false;
+                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                        .filter(|(j, _)| !new_exhausted[*j])
+                        .map(|(_, pair)| pair.clone())
+                        .collect();
+                    if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                        return Completion::Throw(e);
+                    }
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::Undefined, true),
+                    );
+                } else if mode == "strict" {
+                    if i != 0 {
+                        state.borrow_mut().4 = false;
+                        let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                            .filter(|(j, _)| !new_exhausted[*j])
+                            .map(|(_, pair)| pair.clone())
+                            .collect();
+                        let err = interp.create_type_error(
+                            "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths");
+                        let _ = iterator_close_all(interp, &open, Err(err.clone()));
+                        return Completion::Throw(err);
+                    }
+                    for k in 1..iters.len() {
+                        if new_exhausted[k] { continue; }
+                        match iterator_step_value_getter(interp, &iters[k].0, &iters[k].1) {
+                            Ok(None) => {
+                                new_exhausted[k] = true;
+                            }
+                            Ok(Some(_)) => {
+                                state.borrow_mut().4 = false;
+                                let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                    .filter(|(j, _)| !new_exhausted[*j])
+                                    .map(|(_, pair)| pair.clone())
+                                    .collect();
+                                let err = interp.create_type_error(
+                                    "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths");
+                                let _ = iterator_close_all(interp, &open, Err(err.clone()));
+                                return Completion::Throw(err);
+                            }
+                            Err(e) => {
+                                new_exhausted[k] = true;
+                                state.borrow_mut().4 = false;
+                                let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                    .filter(|(j, _)| !new_exhausted[*j])
+                                    .map(|(_, pair)| pair.clone())
+                                    .collect();
+                                let _ = iterator_close_all(interp, &open, Err(e.clone()));
+                                return Completion::Throw(e);
+                            }
+                        }
+                    }
+                    state.borrow_mut().4 = false;
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::Undefined, true),
+                    );
+                } else {
+                    values.push(padding_values.get(i).cloned().unwrap_or(JsValue::Undefined));
+                }
+            }
+            Err(e) => {
+                state.borrow_mut().4 = false;
+                state.borrow_mut().1 = new_exhausted.clone();
+                let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                    .filter(|(j, _)| !new_exhausted[*j] && *j != i)
+                    .map(|(_, pair)| pair.clone())
+                    .collect();
+                let _ = iterator_close_all(interp, &open, Err(e.clone()));
+                return Completion::Throw(e);
+            }
+        }
+    }
+
+    state.borrow_mut().1 = new_exhausted.clone();
+
+    if mode == "longest" && new_exhausted.iter().all(|e| *e) {
+        state.borrow_mut().4 = false;
+        return Completion::Normal(
+            interp.create_iter_result_object(JsValue::Undefined, true),
+        );
+    }
+
+    let arr = interp.create_array(values);
+    Completion::Normal(interp.create_iter_result_object(arr, false))
+}
+
+type ZipKeyedState = Rc<RefCell<(Vec<String>, Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>, bool)>>;
+
+fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Completion {
+    let (ref keys, ref iters, ref exhausted, ref mode, ref padding_values, alive) = {
+        let s = state.borrow();
+        (s.0.clone(), s.1.clone(), s.2.clone(), s.3.clone(), s.4.clone(), s.5)
+    };
+    if !alive {
+        return Completion::Normal(
+            interp.create_iter_result_object(JsValue::Undefined, true),
+        );
+    }
+    if iters.is_empty() {
+        state.borrow_mut().5 = false;
+        return Completion::Normal(
+            interp.create_iter_result_object(JsValue::Undefined, true),
+        );
+    }
+
+    let mut values: Vec<(String, JsValue)> = Vec::with_capacity(iters.len());
+    let mut new_exhausted = exhausted.clone();
+
+    for (i, (it, nm)) in iters.iter().enumerate() {
+        if exhausted[i] {
+            values.push((keys[i].clone(), padding_values.get(i).cloned().unwrap_or(JsValue::Undefined)));
+            continue;
+        }
+        match iterator_step_value_getter(interp, it, nm) {
+            Ok(Some(v)) => values.push((keys[i].clone(), v)),
+            Ok(None) => {
+                new_exhausted[i] = true;
+
+                if mode == "shortest" {
+                    state.borrow_mut().5 = false;
+                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                        .filter(|(j, _)| !new_exhausted[*j])
+                        .map(|(_, pair)| pair.clone())
+                        .collect();
+                    if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
+                        return Completion::Throw(e);
+                    }
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::Undefined, true),
+                    );
+                } else if mode == "strict" {
+                    if i != 0 {
+                        state.borrow_mut().5 = false;
+                        let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                            .filter(|(j, _)| !new_exhausted[*j])
+                            .map(|(_, pair)| pair.clone())
+                            .collect();
+                        let err = interp.create_type_error(
+                            "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths");
+                        let _ = iterator_close_all(interp, &open, Err(err.clone()));
+                        return Completion::Throw(err);
+                    }
+                    for k in 1..iters.len() {
+                        if new_exhausted[k] { continue; }
+                        match iterator_step_value_getter(interp, &iters[k].0, &iters[k].1) {
+                            Ok(None) => { new_exhausted[k] = true; }
+                            Ok(Some(_)) => {
+                                state.borrow_mut().5 = false;
+                                let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                    .filter(|(j, _)| !new_exhausted[*j])
+                                    .map(|(_, pair)| pair.clone())
+                                    .collect();
+                                let err = interp.create_type_error(
+                                    "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths");
+                                let _ = iterator_close_all(interp, &open, Err(err.clone()));
+                                return Completion::Throw(err);
+                            }
+                            Err(e) => {
+                                new_exhausted[k] = true;
+                                state.borrow_mut().5 = false;
+                                let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                                    .filter(|(j, _)| !new_exhausted[*j])
+                                    .map(|(_, pair)| pair.clone())
+                                    .collect();
+                                let _ = iterator_close_all(interp, &open, Err(e.clone()));
+                                return Completion::Throw(e);
+                            }
+                        }
+                    }
+                    state.borrow_mut().5 = false;
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::Undefined, true),
+                    );
+                } else {
+                    // longest mode: append padding value
+                    values.push((keys[i].clone(), padding_values.get(i).cloned().unwrap_or(JsValue::Undefined)));
+                }
+            }
+            Err(e) => {
+                state.borrow_mut().5 = false;
+                state.borrow_mut().2 = new_exhausted.clone();
+                let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
+                    .filter(|(j, _)| !new_exhausted[*j] && *j != i)
+                    .map(|(_, pair)| pair.clone())
+                    .collect();
+                let _ = iterator_close_all(interp, &open, Err(e.clone()));
+                return Completion::Throw(e);
+            }
+        }
+    }
+
+    state.borrow_mut().2 = new_exhausted.clone();
+
+    // For longest mode: check if ALL are now exhausted
+    if mode == "longest" && new_exhausted.iter().all(|e| *e) {
+        state.borrow_mut().5 = false;
+        return Completion::Normal(
+            interp.create_iter_result_object(JsValue::Undefined, true),
+        );
+    }
+
+    // Create null-prototype result object with key-value pairs
+    let result_obj = interp.create_object();
+    result_obj.borrow_mut().prototype = None;
+    for (key, val) in &values {
+        result_obj.borrow_mut().insert_property(
+            key.clone(),
+            PropertyDescriptor::data(val.clone(), true, true, true),
+        );
+    }
+    let result_id = result_obj.borrow().id.unwrap();
+    let result_val = JsValue::Object(crate::types::JsObject { id: result_id });
+    Completion::Normal(interp.create_iter_result_object(result_val, false))
+}
+
 // GetIteratorDirect that uses get_object_property (invokes getters/Proxy traps)
 fn get_iterator_direct_getter(
     interp: &mut Interpreter,
@@ -58,12 +306,39 @@ fn get_iterator_flattenable(
                 interp.create_type_error("Iterator.prototype.flatMap mapper returned a non-object")
             );
         }
-        // iterate-strings mode: handle string primitives
+        // iterate-strings mode: GetMethod(obj, @@iterator) on primitive
         if matches!(obj, JsValue::String(_)) {
-            match interp.get_iterator(obj) {
-                Ok(iter) => return get_iterator_direct_getter(interp, &iter),
-                Err(e) => return Err(e),
+            // GetMethod on primitive: ToObject for lookup, but use original as receiver
+            let wrapped = match interp.to_object(obj) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Err(interp.create_type_error("Cannot convert to object")),
+            };
+            let sym_key = interp.get_symbol_iterator_key();
+            let method = if let JsValue::Object(ref o) = wrapped
+                && let Some(ref key) = sym_key
+            {
+                match interp.get_object_property(o.id, key, obj) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
+                }
+            } else {
+                JsValue::Undefined
+            };
+            if matches!(method, JsValue::Undefined | JsValue::Null) {
+                return Err(interp.create_type_error("String iterator method is undefined"));
             }
+            // Call(method, obj) — use original primitive as this
+            let iter_obj = match interp.call_function(&method, obj, &[]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Err(interp.create_type_error("Iterator did not return a value")),
+            };
+            if !matches!(iter_obj, JsValue::Object(_)) {
+                return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
+            }
+            return get_iterator_direct_getter(interp, &iter_obj);
         }
         return Err(interp.create_type_error("value is not an object"));
     }
@@ -907,12 +1182,86 @@ impl Interpreter {
     }
 
     fn create_iterator_helper_object(&mut self, next_fn: JsValue, return_fn: JsValue) -> JsValue {
+        // Generator state: 0=suspended-start, 1=suspended-yield, 2=executing, 3=completed
+        let state = Rc::new(std::cell::Cell::new(0u8));
+
+        // Keep references for GC rooting on the guarded wrappers
+        let next_fn_root = next_fn.clone();
+        let return_fn_root = return_fn.clone();
+
+        let state_next = state.clone();
+        let guarded_next = self.create_function(JsFunction::native(
+            "next".to_string(), 0,
+            move |interp, this, args| {
+                let s = state_next.get();
+                if s == 2 {
+                    return Completion::Throw(interp.create_type_error(
+                        "Generator is already running"));
+                }
+                if s == 3 {
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::Undefined, true));
+                }
+                state_next.set(2); // executing
+                let result = interp.call_function(&next_fn, this, args);
+                // If result is done, set completed; otherwise suspended-yield
+                let is_done = if let Completion::Normal(ref v) = result {
+                    if let JsValue::Object(o) = v {
+                        matches!(
+                            interp.get_object_property(o.id, "done", v),
+                            Completion::Normal(JsValue::Boolean(true))
+                        )
+                    } else { false }
+                } else { false };
+                state_next.set(if is_done { 3 } else { 1 });
+                result
+            },
+        ));
+        // Root the wrapped next_fn so GC can trace it
+        if let JsValue::Object(o) = &guarded_next {
+            if let Some(obj) = self.get_object(o.id) {
+                obj.borrow_mut().gc_native_roots = Some(vec![next_fn_root]);
+            }
+        }
+
+        let state_ret = state.clone();
+        let guarded_return = self.create_function(JsFunction::native(
+            "return".to_string(), 0,
+            move |interp, this, args| {
+                let s = state_ret.get();
+                if s == 2 {
+                    return Completion::Throw(interp.create_type_error(
+                        "Generator is already running"));
+                }
+                if s == 3 {
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::Undefined, true));
+                }
+                if s == 0 {
+                    // suspended-start: set to completed, then close iterators
+                    state_ret.set(3);
+                    return interp.call_function(&return_fn, this, args);
+                }
+                // suspended-yield: set to executing
+                state_ret.set(2);
+                let result = interp.call_function(&return_fn, this, args);
+                state_ret.set(3); // always completed after return
+                result
+            },
+        ));
+        // Root the wrapped return_fn so GC can trace it
+        if let JsValue::Object(o) = &guarded_return {
+            if let Some(obj) = self.get_object(o.id) {
+                obj.borrow_mut().gc_native_roots = Some(vec![return_fn_root]);
+            }
+        }
+
         let obj = self.create_object();
         obj.borrow_mut().prototype = self.realm().iterator_prototype.clone();
         obj.borrow_mut().class_name = "Iterator Helper".to_string();
-        obj.borrow_mut().insert_builtin("next".to_string(), next_fn);
+        obj.borrow_mut().insert_builtin("next".to_string(), guarded_next);
         obj.borrow_mut()
-            .insert_builtin("return".to_string(), return_fn);
+            .insert_builtin("return".to_string(), guarded_return);
         // Add @@iterator returning this
         let iter_self_fn = self.create_function(JsFunction::native(
             "[Symbol.iterator]".to_string(),
@@ -937,6 +1286,14 @@ impl Interpreter {
         );
         let id = obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })
+    }
+
+    fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
+        if let JsValue::Object(ho) = helper {
+            if let Some(obj) = self.get_object(ho.id) {
+                obj.borrow_mut().gc_native_roots = Some(roots);
+            }
+        }
     }
 
     fn setup_iterator_helper_methods(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
@@ -1396,6 +1753,10 @@ impl Interpreter {
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                {
+                    let b = state.borrow();
+                    interp.set_helper_gc_roots(&helper, vec![b.0.clone(), b.1.clone(), b.2.clone()]);
+                }
                 Completion::Normal(helper)
             },
         ));
@@ -1531,6 +1892,10 @@ impl Interpreter {
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                {
+                    let b = state.borrow();
+                    interp.set_helper_gc_roots(&helper, vec![b.0.clone(), b.1.clone(), b.2.clone()]);
+                }
                 Completion::Normal(helper)
             },
         ));
@@ -1681,6 +2046,10 @@ impl Interpreter {
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                {
+                    let b = state.borrow();
+                    interp.set_helper_gc_roots(&helper, vec![b.0.clone(), b.1.clone()]);
+                }
                 Completion::Normal(helper)
             },
         ));
@@ -1842,6 +2211,10 @@ impl Interpreter {
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                {
+                    let b = state.borrow();
+                    interp.set_helper_gc_roots(&helper, vec![b.0.clone(), b.1.clone()]);
+                }
                 Completion::Normal(helper)
             },
         ));
@@ -2063,6 +2436,13 @@ impl Interpreter {
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                {
+                    let b = state.borrow();
+                    let mut roots = vec![b.0.clone(), b.1.clone(), b.2.clone()];
+                    if let Some(ref v) = b.4 { roots.push(v.clone()); }
+                    if let Some(ref v) = b.5 { roots.push(v.clone()); }
+                    interp.set_helper_gc_roots(&helper, roots);
+                }
                 Completion::Normal(helper)
             },
         ));
@@ -2243,6 +2623,8 @@ impl Interpreter {
                 wrapper.borrow_mut().class_name = "Iterator".to_string();
 
                 let wrapper_id = wrapper.borrow().id.unwrap();
+                // Store GC roots for the wrapped iterator
+                wrapper.borrow_mut().gc_native_roots = Some(vec![iter_val.clone(), next_method.clone()]);
                 map_for_from
                     .borrow_mut()
                     .insert(wrapper_id, (iter_val, next_method, true));
@@ -2454,6 +2836,14 @@ impl Interpreter {
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                {
+                    let b = state.borrow();
+                    let mut roots = Vec::with_capacity(b.0.len() * 2 + 2);
+                    for (io, nm) in &b.0 { roots.push(io.clone()); roots.push(nm.clone()); }
+                    if let Some(ref v) = b.2 { roots.push(v.clone()); }
+                    if let Some(ref v) = b.3 { roots.push(v.clone()); }
+                    interp.set_helper_gc_roots(&helper, roots);
+                }
                 Completion::Normal(helper)
             },
         ));
@@ -2557,18 +2947,27 @@ impl Interpreter {
                 };
 
                 // Step 12: Collect all iterables using GetIteratorFlattenable(next, reject-strings)
+                // Temp-root each inner iterator as it's collected (subsequent iterations can trigger GC)
                 let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
+                let mut collection_temp_ids: Vec<u64> = Vec::new();
 
                 loop {
                     match iterator_step_value_getter(interp, &input_iter, &input_next) {
                         Ok(Some(next_val)) => {
                             match get_iterator_flattenable(interp, &next_val, true) {
-                                Ok(pair) => iters.push(pair),
+                                Ok(pair) => {
+                                    if let JsValue::Object(o) = &pair.0 { collection_temp_ids.push(o.id); interp.gc_temp_roots.push(o.id); }
+                                    if let JsValue::Object(o) = &pair.1 { collection_temp_ids.push(o.id); interp.gc_temp_roots.push(o.id); }
+                                    iters.push(pair);
+                                }
                                 Err(e) => {
                                     // IfAbruptCloseIterators(iter, « inputIter » + iters) — reverse order
                                     let mut all = vec![(input_iter.clone(), input_next.clone())];
                                     all.extend(iters.iter().cloned());
                                     let _ = iterator_close_all(interp, &all, Err(e.clone()));
+                                    for id in &collection_temp_ids {
+                                        if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) { interp.gc_temp_roots.swap_remove(pos); }
+                                    }
                                     return Completion::Throw(e);
                                 }
                             }
@@ -2577,6 +2976,9 @@ impl Interpreter {
                         Err(e) => {
                             // IfAbruptCloseIterators(next, iters) — just the collected iters
                             let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                            for id in &collection_temp_ids {
+                                if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) { interp.gc_temp_roots.swap_remove(pos); }
+                            }
                             return Completion::Throw(e);
                         }
                     }
@@ -2626,8 +3028,12 @@ impl Interpreter {
                     vec![JsValue::Undefined; iter_count]
                 };
 
+                // Also temp-root padding object ids during padding collection
+                for pad_val in &padding_values {
+                    if let JsValue::Object(o) = pad_val { collection_temp_ids.push(o.id); interp.gc_temp_roots.push(o.id); }
+                }
+
                 // State: (iters, exhausted, mode, padding, alive)
-                // exhausted tracks which iterators in openIters are exhausted
                 #[allow(clippy::type_complexity)]
                 let state: Rc<RefCell<(Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>, bool)>> =
                     Rc::new(RefCell::new((iters, vec![false; iter_count], mode, padding_values, true)));
@@ -2637,129 +3043,29 @@ impl Interpreter {
                     "next".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let (ref iters, ref exhausted, ref mode, ref padding_values, alive) = {
+                        // Temp-root all inner iterators during next() execution
+                        let gc_ids: Vec<u64> = {
                             let s = state_next.borrow();
-                            (s.0.clone(), s.1.clone(), s.2.clone(), s.3.clone(), s.4)
+                            let mut ids = Vec::new();
+                            for (io, nm) in &s.0 {
+                                if let JsValue::Object(o) = io { ids.push(o.id); }
+                                if let JsValue::Object(o) = nm { ids.push(o.id); }
+                            }
+                            for pad in &s.3 {
+                                if let JsValue::Object(o) = pad { ids.push(o.id); }
+                            }
+                            ids
                         };
-                        if !alive {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
-                            );
-                        }
-                        if iters.is_empty() {
-                            state_next.borrow_mut().4 = false;
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
-                            );
-                        }
+                        for &id in &gc_ids { interp.gc_temp_roots.push(id); }
 
-                        let mut values = Vec::with_capacity(iters.len());
-                        let mut new_exhausted = exhausted.clone();
+                        let result = zip_next_inner(interp, &state_next);
 
-                        for (i, (it, nm)) in iters.iter().enumerate() {
-                            if exhausted[i] {
-                                values.push(padding_values.get(i).cloned().unwrap_or(JsValue::Undefined));
-                                continue;
-                            }
-                            match iterator_step_value_getter(interp, it, nm) {
-                                Ok(Some(v)) => values.push(v),
-                                Ok(None) => {
-                                    // Iterator done — remove from openIters
-                                    new_exhausted[i] = true;
-
-                                    if mode == "shortest" {
-                                        // IteratorCloseAll(openIters, ReturnCompletion(undefined))
-                                        state_next.borrow_mut().4 = false;
-                                        let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                            .filter(|(j, _)| !new_exhausted[*j])
-                                            .map(|(_, pair)| pair.clone())
-                                            .collect();
-                                        if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
-                                            return Completion::Throw(e);
-                                        }
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(JsValue::Undefined, true),
-                                        );
-                                    } else if mode == "strict" {
-                                        if i != 0 {
-                                            // i ≠ 0: immediately close all open iters with TypeError
-                                            state_next.borrow_mut().4 = false;
-                                            let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                                .filter(|(j, _)| !new_exhausted[*j])
-                                                .map(|(_, pair)| pair.clone())
-                                                .collect();
-                                            let err = interp.create_type_error(
-                                                "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths");
-                                            let _ = iterator_close_all(interp, &open, Err(err.clone()));
-                                            return Completion::Throw(err);
-                                        }
-                                        // i = 0: check all other iterators
-                                        for k in 1..iters.len() {
-                                            if new_exhausted[k] { continue; }
-                                            match iterator_step_value_getter(interp, &iters[k].0, &iters[k].1) {
-                                                Ok(None) => {
-                                                    new_exhausted[k] = true;
-                                                }
-                                                Ok(Some(_)) => {
-                                                    // Mismatch — not all done
-                                                    state_next.borrow_mut().4 = false;
-                                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                                        .filter(|(j, _)| !new_exhausted[*j])
-                                                        .map(|(_, pair)| pair.clone())
-                                                        .collect();
-                                                    let err = interp.create_type_error(
-                                                        "Iterators passed to Iterator.zip with { mode: \"strict\" } have different lengths");
-                                                    let _ = iterator_close_all(interp, &open, Err(err.clone()));
-                                                    return Completion::Throw(err);
-                                                }
-                                                Err(e) => {
-                                                    // Remove iters[k] from openIters
-                                                    new_exhausted[k] = true;
-                                                    state_next.borrow_mut().4 = false;
-                                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                                        .filter(|(j, _)| !new_exhausted[*j])
-                                                        .map(|(_, pair)| pair.clone())
-                                                        .collect();
-                                                    let _ = iterator_close_all(interp, &open, Err(e.clone()));
-                                                    return Completion::Throw(e);
-                                                }
-                                            }
-                                        }
-                                        // All done together
-                                        state_next.borrow_mut().4 = false;
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(JsValue::Undefined, true),
-                                        );
-                                    } else {
-                                        // longest mode: append padding value
-                                        values.push(padding_values.get(i).cloned().unwrap_or(JsValue::Undefined));
-                                    }
-                                }
-                                Err(e) => {
-                                    state_next.borrow_mut().4 = false;
-                                    state_next.borrow_mut().1 = new_exhausted.clone();
-                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                        .filter(|(j, _)| !new_exhausted[*j] && *j != i)
-                                        .map(|(_, pair)| pair.clone())
-                                        .collect();
-                                    let _ = iterator_close_all(interp, &open, Err(e.clone()));
-                                    return Completion::Throw(e);
-                                }
+                        for id in &gc_ids {
+                            if let Some(pos) = interp.gc_temp_roots.iter().position(|x| x == id) {
+                                interp.gc_temp_roots.swap_remove(pos);
                             }
                         }
-
-                        state_next.borrow_mut().1 = new_exhausted.clone();
-
-                        // For longest mode: check if ALL are now exhausted
-                        if mode == "longest" && new_exhausted.iter().all(|e| *e) {
-                            state_next.borrow_mut().4 = false;
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
-                            );
-                        }
-
-                        let arr = interp.create_array(values);
-                        Completion::Normal(interp.create_iter_result_object(arr, false))
+                        result
                     },
                 ));
 
@@ -2789,6 +3095,19 @@ impl Interpreter {
                 ));
 
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                {
+                    let b = state.borrow();
+                    let mut roots = Vec::with_capacity(b.0.len() * 2 + b.3.len());
+                    for (io, nm) in &b.0 { roots.push(io.clone()); roots.push(nm.clone()); }
+                    for pad in &b.3 { roots.push(pad.clone()); }
+                    interp.set_helper_gc_roots(&helper, roots);
+                }
+                // Remove all temp roots from collection and padding phases
+                for id in &collection_temp_ids {
+                    if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) {
+                        interp.gc_temp_roots.swap_remove(pos);
+                    }
+                }
                 Completion::Normal(helper)
             },
         ));
@@ -2877,49 +3196,77 @@ impl Interpreter {
                     None
                 };
 
-                // Step 10: Get own property keys from iterables
-                let all_keys: Vec<String> = if let Some(od) = interp.get_object(obj_id) {
-                    od.borrow().property_order.clone()
-                } else {
-                    Vec::new()
+                // Step 10: allKeys = iterables.[[OwnPropertyKeys]]()
+                let all_keys = match interp.proxy_own_keys(obj_id) {
+                    Ok(keys) => keys,
+                    Err(e) => return Completion::Throw(e),
                 };
 
-                // Step 11-12: Filter to enumerable string keys, get values, open iterators
+                // Step 11-12: For each key, [[GetOwnProperty]], check enumerable, Get value
+                // Temp-root each inner iterator as it's collected (subsequent iterations can trigger GC)
                 let mut key_names: Vec<String> = Vec::new();
                 let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
+                let mut collection_temp_ids: Vec<u64> = Vec::new();
 
-                for key in &all_keys {
-                    // [[GetOwnProperty]](key) to check enumerable
-                    let is_enumerable = if let Some(od) = interp.get_object(obj_id) {
-                        od.borrow().properties.get(key)
-                            .and_then(|pd| pd.enumerable)
-                            .unwrap_or(false)
-                    } else {
-                        false
+                for key_val in &all_keys {
+                    let key = crate::interpreter::helpers::to_property_key_string(key_val);
+
+                    // Step 12.a: desc = iterables.[[GetOwnProperty]](key)
+                    let is_enumerable = match interp.proxy_get_own_property_descriptor(obj_id, &key) {
+                        Ok(desc_val) => {
+                            if matches!(desc_val, JsValue::Undefined) {
+                                false
+                            } else if let JsValue::Object(desc_obj) = &desc_val {
+                                // Read enumerable from descriptor object
+                                match interp.get_object_property(desc_obj.id, "enumerable", &desc_val) {
+                                    Completion::Normal(v) => crate::interpreter::helpers::to_boolean(&v),
+                                    _ => false,
+                                }
+                            } else {
+                                // Non-proxy: proxy_get_own_property_descriptor returns
+                                // the descriptor directly for ordinary objects
+                                false
+                            }
+                        }
+                        Err(e) => {
+                            // Step 12.b: IfAbruptCloseIterators
+                            let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                            for id in &collection_temp_ids {
+                                if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) { interp.gc_temp_roots.swap_remove(pos); }
+                            }
+                            return Completion::Throw(e);
+                        }
                     };
                     if !is_enumerable { continue; }
 
-                    // Get(iterables, key) — via getter-aware access
-                    let iterable = match interp.get_object_property(obj_id, key, &iterables_obj) {
+                    // Step 12.c.i: value = Get(iterables, key)
+                    let iterable = match interp.get_object_property(obj_id, &key, &iterables_obj) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                            for id in &collection_temp_ids {
+                                if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) { interp.gc_temp_roots.swap_remove(pos); }
+                            }
                             return Completion::Throw(e);
                         }
                         _ => JsValue::Undefined,
                     };
 
-                    // Step c.iii: If value is not undefined
+                    // Step 12.c.iii: If value is not undefined
                     if matches!(iterable, JsValue::Undefined) { continue; }
 
-                    // GetIteratorFlattenable(iterable, reject-primitives)
                     match get_iterator_flattenable(interp, &iterable, true) {
                         Ok(pair) => {
+                            if let JsValue::Object(o) = &pair.0 { collection_temp_ids.push(o.id); interp.gc_temp_roots.push(o.id); }
+                            if let JsValue::Object(o) = &pair.1 { collection_temp_ids.push(o.id); interp.gc_temp_roots.push(o.id); }
                             key_names.push(key.clone());
                             iters.push(pair);
                         }
                         Err(e) => {
                             let _ = iterator_close_all(interp, &iters, Err(e.clone()));
+                            for id in &collection_temp_ids {
+                                if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) { interp.gc_temp_roots.swap_remove(pos); }
+                            }
                             return Completion::Throw(e);
                         }
                     }
@@ -2954,9 +3301,12 @@ impl Interpreter {
                     vec![JsValue::Undefined; iter_count]
                 };
 
-                // state: (key_names, iters, exhausted, mode, padding_values, alive)
-                #[allow(clippy::type_complexity)]
-                let state: Rc<RefCell<(Vec<String>, Vec<(JsValue, JsValue)>, Vec<bool>, String, Vec<JsValue>, bool)>> =
+                // Also temp-root padding object ids
+                for pad_val in &padding_values {
+                    if let JsValue::Object(o) = pad_val { collection_temp_ids.push(o.id); interp.gc_temp_roots.push(o.id); }
+                }
+
+                let state: ZipKeyedState =
                     Rc::new(RefCell::new((key_names, iters, vec![false; iter_count], mode, padding_values, true)));
 
                 let state_next = state.clone();
@@ -2964,131 +3314,26 @@ impl Interpreter {
                     "next".to_string(),
                     0,
                     move |interp, _this, _args| {
-                        let (ref keys, ref iters, ref exhausted, ref mode, ref padding_values, alive) = {
+                        let gc_ids: Vec<u64> = {
                             let s = state_next.borrow();
-                            (s.0.clone(), s.1.clone(), s.2.clone(), s.3.clone(), s.4.clone(), s.5)
+                            let mut ids = Vec::new();
+                            for (io, nm) in &s.1 {
+                                if let JsValue::Object(o) = io { ids.push(o.id); }
+                                if let JsValue::Object(o) = nm { ids.push(o.id); }
+                            }
+                            for pad in &s.4 {
+                                if let JsValue::Object(o) = pad { ids.push(o.id); }
+                            }
+                            ids
                         };
-                        if !alive {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
-                            );
-                        }
-                        if iters.is_empty() {
-                            state_next.borrow_mut().5 = false;
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
-                            );
-                        }
-
-                        let mut values: Vec<(String, JsValue)> = Vec::with_capacity(iters.len());
-                        let mut new_exhausted = exhausted.clone();
-
-                        for (i, (it, nm)) in iters.iter().enumerate() {
-                            if exhausted[i] {
-                                values.push((keys[i].clone(), padding_values.get(i).cloned().unwrap_or(JsValue::Undefined)));
-                                continue;
-                            }
-                            match iterator_step_value_getter(interp, it, nm) {
-                                Ok(Some(v)) => values.push((keys[i].clone(), v)),
-                                Ok(None) => {
-                                    new_exhausted[i] = true;
-
-                                    if mode == "shortest" {
-                                        state_next.borrow_mut().5 = false;
-                                        let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                            .filter(|(j, _)| !new_exhausted[*j])
-                                            .map(|(_, pair)| pair.clone())
-                                            .collect();
-                                        if let Err(e) = iterator_close_all(interp, &open, Ok(())) {
-                                            return Completion::Throw(e);
-                                        }
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(JsValue::Undefined, true),
-                                        );
-                                    } else if mode == "strict" {
-                                        if i != 0 {
-                                            state_next.borrow_mut().5 = false;
-                                            let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                                .filter(|(j, _)| !new_exhausted[*j])
-                                                .map(|(_, pair)| pair.clone())
-                                                .collect();
-                                            let err = interp.create_type_error(
-                                                "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths");
-                                            let _ = iterator_close_all(interp, &open, Err(err.clone()));
-                                            return Completion::Throw(err);
-                                        }
-                                        // i = 0: check all other iterators
-                                        for k in 1..iters.len() {
-                                            if new_exhausted[k] { continue; }
-                                            match iterator_step_value_getter(interp, &iters[k].0, &iters[k].1) {
-                                                Ok(None) => { new_exhausted[k] = true; }
-                                                Ok(Some(_)) => {
-                                                    state_next.borrow_mut().5 = false;
-                                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                                        .filter(|(j, _)| !new_exhausted[*j])
-                                                        .map(|(_, pair)| pair.clone())
-                                                        .collect();
-                                                    let err = interp.create_type_error(
-                                                        "Iterators passed to Iterator.zipKeyed with { mode: \"strict\" } have different lengths");
-                                                    let _ = iterator_close_all(interp, &open, Err(err.clone()));
-                                                    return Completion::Throw(err);
-                                                }
-                                                Err(e) => {
-                                                    new_exhausted[k] = true;
-                                                    state_next.borrow_mut().5 = false;
-                                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                                        .filter(|(j, _)| !new_exhausted[*j])
-                                                        .map(|(_, pair)| pair.clone())
-                                                        .collect();
-                                                    let _ = iterator_close_all(interp, &open, Err(e.clone()));
-                                                    return Completion::Throw(e);
-                                                }
-                                            }
-                                        }
-                                        state_next.borrow_mut().5 = false;
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(JsValue::Undefined, true),
-                                        );
-                                    } else {
-                                        // longest mode: append padding value
-                                        values.push((keys[i].clone(), padding_values.get(i).cloned().unwrap_or(JsValue::Undefined)));
-                                    }
-                                }
-                                Err(e) => {
-                                    state_next.borrow_mut().5 = false;
-                                    state_next.borrow_mut().2 = new_exhausted.clone();
-                                    let open: Vec<(JsValue, JsValue)> = iters.iter().enumerate()
-                                        .filter(|(j, _)| !new_exhausted[*j] && *j != i)
-                                        .map(|(_, pair)| pair.clone())
-                                        .collect();
-                                    let _ = iterator_close_all(interp, &open, Err(e.clone()));
-                                    return Completion::Throw(e);
-                                }
+                        for &id in &gc_ids { interp.gc_temp_roots.push(id); }
+                        let result = zip_keyed_next_inner(interp, &state_next);
+                        for id in &gc_ids {
+                            if let Some(pos) = interp.gc_temp_roots.iter().position(|x| x == id) {
+                                interp.gc_temp_roots.swap_remove(pos);
                             }
                         }
-
-                        state_next.borrow_mut().2 = new_exhausted.clone();
-
-                        // For longest mode: check if ALL are now exhausted
-                        if mode == "longest" && new_exhausted.iter().all(|e| *e) {
-                            state_next.borrow_mut().5 = false;
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
-                            );
-                        }
-
-                        // Create null-prototype result object with key-value pairs
-                        let result_obj = interp.create_object();
-                        result_obj.borrow_mut().prototype = None;
-                        for (key, val) in &values {
-                            result_obj.borrow_mut().insert_property(
-                                key.clone(),
-                                PropertyDescriptor::data(val.clone(), true, true, true),
-                            );
-                        }
-                        let result_id = result_obj.borrow().id.unwrap();
-                        let result_val = JsValue::Object(crate::types::JsObject { id: result_id });
-                        Completion::Normal(interp.create_iter_result_object(result_val, false))
+                        result
                     },
                 ));
 
@@ -3117,7 +3362,20 @@ impl Interpreter {
                     },
                 ));
 
+                // collection_temp_ids already pushed during collection loop
                 let helper = interp.create_iterator_helper_object(next_fn, return_fn);
+                {
+                    let b = state.borrow();
+                    let mut roots = Vec::with_capacity(b.1.len() * 2 + b.4.len());
+                    for (io, nm) in &b.1 { roots.push(io.clone()); roots.push(nm.clone()); }
+                    for pad in &b.4 { roots.push(pad.clone()); }
+                    interp.set_helper_gc_roots(&helper, roots);
+                }
+                for id in &collection_temp_ids {
+                    if let Some(pos) = interp.gc_temp_roots.iter().position(|x| *x == *id) {
+                        interp.gc_temp_roots.swap_remove(pos);
+                    }
+                }
                 Completion::Normal(helper)
             },
         ));

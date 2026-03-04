@@ -1359,6 +1359,7 @@ pub struct JsObjectData {
     pub(crate) regexp_original_source: Option<JsString>,
     pub(crate) regexp_original_flags: Option<JsString>,
     pub(crate) deferred_construct: bool,
+    pub(crate) gc_native_roots: Option<Vec<JsValue>>,
 }
 
 #[derive(Clone)]
@@ -1424,6 +1425,7 @@ impl JsObjectData {
             regexp_original_source: None,
             regexp_original_flags: None,
             deferred_construct: false,
+            gc_native_roots: None,
         }
     }
 
