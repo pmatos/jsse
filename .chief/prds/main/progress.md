@@ -172,3 +172,25 @@
   - DataView constructor must re-validate buffer state after `OrdinaryCreateFromConstructor` because the prototype getter can detach or resize the underlying ArrayBuffer
   - `IfAbruptRejectPromise` is a common pattern in Promise internals — centralizing it in a helper reduces code duplication and error-proneness
 ---
+
+## 2026-03-04 - US-010
+- **What was implemented**: Resizable ArrayBuffer/SharedArrayBuffer compliance — eight categories of fixes
+  1. **IsSharedArrayBuffer checks in ArrayBuffer prototype**: byteLength, detached, resizable, maxByteLength getters and slice/transfer/transferToFixedLength now throw TypeError when called on a SharedArrayBuffer (spec RequireInternalSlot + IsSharedArrayBuffer).
+  2. **SpeciesConstructor in ArrayBuffer.prototype.slice (§25.1.4.3)**: Uses `species_constructor()` and `construct_with_new_target()`, post-construction validation (not same buffer, is ArrayBuffer, not shared, not immutable, not detached, byteLength >= newLen, re-check source not detached).
+  3. **SpeciesConstructor in SharedArrayBuffer.prototype.slice**: Same pattern for SharedArrayBuffer with is_shared validation.
+  4. **SharedArrayBuffer constructor**: `get_object_property` for maxByteLength to trigger getters; allocation limit check (> 2^53) throws RangeError.
+  5. **ArrayBuffer constructor**: Same getter-aware maxByteLength read via `get_object_property`.
+  6. **resize detach-after-coercion (§25.1.4.7)**: Reordered to spec step ordering — RequireInternalSlot → ToIndex(newLength) → IsDetachedBuffer. The ToIndex must happen BEFORE the detach check.
+  7. **Immutable ArrayBuffer**: `transferToImmutable()` method, `arraybuffer_is_immutable` flag on JsObjectData. Immutable check added to resize/transfer/transferToFixedLength. Slice validates species result is not immutable.
+  8. **DataView setters immutable check**: `is_immutable` field on DataViewInfo, SetViewValue step 3 checks IsImmutableBuffer BEFORE ToIndex(requestIndex) and ToNumber/ToBigInt(value).
+- **Files changed**: `src/interpreter/builtins/typedarray.rs`, `src/interpreter/types.rs`, `README.md`, `PLAN.md`, `test262-pass.txt`
+- **Results**: 86 new passes, 0 regressions. 90,698/91,986 (98.60%)
+  - ArrayBuffer/prototype: 252→294/294 (100%)
+  - SharedArrayBuffer: 186→204/208 (98%)
+  - DataView/prototype: 976→998/998 (100%)
+- **Learnings for future iterations:**
+  - ArrayBuffer prototype methods must check `arraybuffer_is_shared` after confirming `arraybuffer_data.is_some()` — SharedArrayBuffer objects also have `arraybuffer_data`, so the data check alone is insufficient
+  - SpeciesConstructor returns a constructor; call it with `construct_with_new_target(&ctor, args, ctor.clone())` — the new_target param is `JsValue`, not `Option`
+  - Constructor options reading must use `get_object_property` (triggers getters) not `get_property` (direct field access)
+  - `DataViewInfo` needs `is_immutable` because the immutable check must happen at DataView.set* entry point, before any argument coercion
+---

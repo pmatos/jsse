@@ -1105,6 +1105,7 @@ pub struct DataViewInfo {
     pub byte_length: usize,
     pub is_detached: Rc<Cell<bool>>,
     pub is_length_tracking: bool,
+    pub is_immutable: bool,
 }
 
 #[derive(Clone)]
@@ -1326,6 +1327,7 @@ pub struct JsObjectData {
     pub arraybuffer_detached: Option<Rc<Cell<bool>>>,
     pub arraybuffer_max_byte_length: Option<usize>,
     pub arraybuffer_is_shared: bool,
+    pub arraybuffer_is_immutable: bool,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
     pub view_buffer_object_id: Option<u64>,
@@ -1390,6 +1392,7 @@ impl JsObjectData {
             arraybuffer_detached: None,
             arraybuffer_max_byte_length: None,
             arraybuffer_is_shared: false,
+            arraybuffer_is_immutable: false,
             typed_array_info: None,
             data_view_info: None,
             view_buffer_object_id: None,
