@@ -1541,6 +1541,7 @@ pub(crate) struct ModuleNamespaceData {
     pub export_names: Vec<String>,
     pub export_to_binding: HashMap<String, String>,
     pub module_path: Option<std::path::PathBuf>,
+    pub deferred: bool,
 }
 
 #[derive(Clone, Debug)]

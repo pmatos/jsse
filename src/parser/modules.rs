@@ -33,6 +33,7 @@ impl<'a> Parser<'a> {
 
                 self.eat_from()?;
                 let source = self.parse_module_specifier()?;
+                self.skip_import_attributes()?;
                 self.eat_semicolon()?;
                 return Ok(ImportDeclaration { specifiers, source });
             }

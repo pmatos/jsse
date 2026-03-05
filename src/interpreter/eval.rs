@@ -562,15 +562,14 @@ impl Interpreter {
                         }
                         // Module namespace exotic: [[Delete]] — only for string keys (not symbols)
                         if !key.starts_with("Symbol(") {
-                            let is_ns = obj.borrow().module_namespace.is_some();
-                            if is_ns {
-                                let export_names = obj
-                                    .borrow()
-                                    .module_namespace
-                                    .as_ref()
-                                    .unwrap()
-                                    .export_names
-                                    .clone();
+                            let ns_info = obj.borrow().module_namespace.as_ref().map(|ns| (ns.deferred, ns.export_names.clone()));
+                            let ns_obj_id = obj.borrow().id.unwrap();
+                            if let Some((deferred, export_names)) = ns_info {
+                                if deferred && !Self::is_symbol_like_namespace_key(&key, true) {
+                                    if let Err(e) = self.ensure_deferred_namespace_evaluation(ns_obj_id) {
+                                        return Completion::Throw(e);
+                                    }
+                                }
                                 if export_names.contains(&key) {
                                     if env.borrow().strict {
                                         return Completion::Throw(self.create_type_error(
@@ -1009,7 +1008,19 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
-                self.dynamic_import(&source)
+                // import.defer() loads module without evaluation, returns deferred namespace
+                let module_path = self.current_module_path.clone();
+                let resolved = match self.resolve_module_specifier(&source, module_path.as_deref()) {
+                    Ok(r) => r,
+                    Err(e) => return self.create_rejected_promise(e),
+                };
+                match self.load_module_no_eval(&resolved) {
+                    Ok(module) => {
+                        let ns = self.create_deferred_module_namespace(&module);
+                        self.create_resolved_promise(ns)
+                    }
+                    Err(e) => self.create_rejected_promise(e),
+                }
             }
             Expression::ImportSource(source_expr, options_expr) => {
                 let source_val = match self.eval_expr(source_expr, env) {
@@ -11382,6 +11393,10 @@ impl Interpreter {
             None
         };
         if let Some(ns_data) = ns_data {
+            // Deferred namespaces: trigger evaluation on non-symbol-like key access
+            if ns_data.deferred && !Self::is_symbol_like_namespace_key(key, true) {
+                self.ensure_deferred_namespace_evaluation(obj_id)?;
+            }
             if let Some(binding_name) = ns_data.export_to_binding.get(key) {
                 if binding_name.starts_with("*ns:") {
                     return Ok(());
@@ -11420,6 +11435,78 @@ impl Interpreter {
             }
         }
         Ok(())
+    }
+
+    /// IsSymbolLikeNamespaceKey(P, O): true if P is a Symbol, or deferred + "then"
+    pub fn is_symbol_like_namespace_key(key: &str, deferred: bool) -> bool {
+        key.starts_with("Symbol(") || (deferred && key == "then")
+    }
+
+    /// Trigger evaluation of a deferred module namespace when a non-symbol-like key is accessed.
+    pub(crate) fn ensure_deferred_namespace_evaluation(&mut self, obj_id: u64) -> Result<(), JsValue> {
+        let (deferred, module_path) = if let Some(obj) = self.get_object(obj_id) {
+            let b = obj.borrow();
+            if let Some(ref ns) = b.module_namespace {
+                (ns.deferred, ns.module_path.clone())
+            } else {
+                return Ok(());
+            }
+        } else {
+            return Ok(());
+        };
+
+        if !deferred {
+            return Ok(());
+        }
+
+        let module_path = match module_path {
+            Some(p) => p,
+            None => return Ok(()),
+        };
+
+        let module = match self.module_registry.get(&module_path).cloned() {
+            Some(m) => m,
+            None => return Ok(()),
+        };
+
+        if module.borrow().evaluated {
+            // Already evaluated — just clear deferred flag
+            if let Some(ref err) = module.borrow().error {
+                return Err(err.clone());
+            }
+            if let Some(obj) = self.get_object(obj_id) {
+                if let Some(ref mut ns) = obj.borrow_mut().module_namespace {
+                    ns.deferred = false;
+                }
+            }
+            return Ok(());
+        }
+
+        // Check ReadyForSyncExecution
+        let mut seen = std::collections::HashSet::new();
+        if !self.ready_for_sync_execution(&module_path, &mut seen) {
+            return Err(self.create_type_error(
+                "Cannot synchronously evaluate a module with top-level await or that is currently being evaluated",
+            ));
+        }
+
+        // Save and set current_module_path for evaluation
+        let prev_path = self.current_module_path.take();
+        self.current_module_path = Some(module_path.clone());
+        let result = self.evaluate_module(&module);
+        self.current_module_path = prev_path;
+
+        match result {
+            Ok(()) => {
+                if let Some(obj) = self.get_object(obj_id) {
+                    if let Some(ref mut ns) = obj.borrow_mut().module_namespace {
+                        ns.deferred = false;
+                    }
+                }
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     pub(crate) fn get_object_property(
@@ -11482,27 +11569,35 @@ impl Interpreter {
         }
 
         // Module namespace: look up live binding from environment
-        if let Some(obj) = self.get_object(obj_id)
-            && let Some(ref ns_data) = obj.borrow().module_namespace.clone()
         {
-            if let Some(binding_name) = ns_data.export_to_binding.get(key) {
-                let module_path = ns_data.module_path.clone();
-                match self.resolve_module_export_value(
-                    binding_name,
-                    &ns_data.env,
-                    module_path.as_deref(),
-                    key,
-                ) {
-                    Ok(val) => return Completion::Normal(val),
-                    Err(e) => return Completion::Throw(e),
+            let ns_data = self.get_object(obj_id)
+                .and_then(|obj| obj.borrow().module_namespace.clone());
+            if let Some(ns_data) = ns_data {
+                // Deferred namespace: IsSymbolLikeNamespaceKey check
+                if ns_data.deferred && !Self::is_symbol_like_namespace_key(key, true) {
+                    if let Err(e) = self.ensure_deferred_namespace_evaluation(obj_id) {
+                        return Completion::Throw(e);
+                    }
                 }
-            }
-            // Fallback: check module's exports directly
-            if let Some(ref module_path) = ns_data.module_path
-                && let Some(module) = self.module_registry.get(module_path)
-                && let Some(val) = module.borrow().exports.get(key)
-            {
-                return Completion::Normal(val.clone());
+                if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+                    let module_path = ns_data.module_path.clone();
+                    match self.resolve_module_export_value(
+                        binding_name,
+                        &ns_data.env,
+                        module_path.as_deref(),
+                        key,
+                    ) {
+                        Ok(val) => return Completion::Normal(val),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+                // Fallback: check module's exports directly
+                if let Some(ref module_path) = ns_data.module_path
+                    && let Some(module) = self.module_registry.get(module_path)
+                    && let Some(val) = module.borrow().exports.get(key)
+                {
+                    return Completion::Normal(val.clone());
+                }
             }
         }
 
@@ -11586,6 +11681,13 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // Deferred namespace: trigger evaluation on [[HasProperty]] with non-symbol-like key
+            {
+                let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                if is_deferred_ns && !Self::is_symbol_like_namespace_key(key, true) {
+                    self.ensure_deferred_namespace_evaluation(obj_id)?;
+                }
+            }
             // TypedArray §10.4.5.3 [[HasProperty]]: numeric indices handled by IsValidIntegerIndex only
             {
                 let b = obj.borrow();
@@ -12466,6 +12568,14 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // Deferred namespace: trigger evaluation on [[DefineOwnProperty]] with non-symbol-like key
+            {
+                let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                if is_deferred_ns && !Self::is_symbol_like_namespace_key(&key, true) {
+                    self.ensure_deferred_namespace_evaluation(obj_id)?;
+                }
+            }
+            let obj = self.get_object(obj_id).unwrap();
             let is_array = obj.borrow().class_name == "Array";
             match self.to_property_descriptor(desc_val) {
                 Ok(desc) => {
@@ -12666,7 +12776,15 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
+            // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
+            {
+                let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                if is_deferred_ns {
+                    self.ensure_deferred_namespace_evaluation(obj_id)?;
+                }
+            }
             // OrdinaryOwnPropertyKeys: integer indices (sorted), then string keys (in creation order), then symbol keys
+            let obj = self.get_object(obj_id).unwrap();
             let b = obj.borrow();
 
             // String exotic objects (§10.4.3.3): virtual char indices included

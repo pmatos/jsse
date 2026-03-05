@@ -159,6 +159,14 @@ pub(crate) fn create_data_property_or_throw(
     value: JsValue,
 ) -> Result<(), JsValue> {
     if let JsValue::Object(obj_ref) = o {
+        // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
+        {
+            let is_deferred_ns = interp.get_object(obj_ref.id)
+                .map_or(false, |obj| obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred));
+            if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(key, true) {
+                interp.ensure_deferred_namespace_evaluation(obj_ref.id)?;
+            }
+        }
         // Check for Proxy defineProperty trap
         if let Some(obj) = interp.get_object(obj_ref.id)
             && obj.borrow().is_proxy()

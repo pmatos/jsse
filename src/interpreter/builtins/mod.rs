@@ -4385,6 +4385,16 @@ impl Interpreter {
                     if let JsValue::Object(ref o) = target
                         && let Some(obj) = interp.get_object(o.id)
                     {
+                        // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
+                        {
+                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                            if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true) {
+                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                        }
+                        let obj = interp.get_object(o.id).unwrap();
                         // Proxy defineProperty trap
                         let res = { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }; if res {
                             match interp.proxy_define_own_property(o.id, key, &desc_val) {
@@ -4484,6 +4494,20 @@ impl Interpreter {
                         }
                     };
                     if let JsValue::Object(ref o) = target {
+                        // Deferred namespace: trigger evaluation on [[GetOwnProperty]] with non-symbol-like key
+                        {
+                            let deferred_ns = interp
+                                .get_object(o.id)
+                                .and_then(|obj| {
+                                    let b = obj.borrow();
+                                    b.module_namespace.as_ref().map(|ns| ns.deferred)
+                                });
+                            if deferred_ns == Some(true) && !Interpreter::is_symbol_like_namespace_key(&key, true) {
+                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                        }
                         // Proxy getOwnPropertyDescriptor trap
                         if let Some(obj) = interp.get_object(o.id)
                             && {
@@ -5405,6 +5429,16 @@ impl Interpreter {
                         return Completion::Normal(interp.create_array(Vec::new()));
                     };
                     if let Some(obj) = interp.get_object(o.id) {
+                        // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
+                        {
+                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                            if is_deferred_ns {
+                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                        }
+                        let obj = interp.get_object(o.id).unwrap();
                         // Proxy ownKeys trap (getOwnPropertyNames returns all string keys)
                         let res = {
                             let _b = obj.borrow();
@@ -5532,6 +5566,15 @@ impl Interpreter {
                     };
                     if let JsValue::Object(ref o) = target {
                         let obj_id = o.id;
+                        // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
+                        if let Some(obj) = interp.get_object(obj_id) {
+                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                            if is_deferred_ns {
+                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(obj_id) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                        }
                         // Use [[OwnPropertyKeys]] for proxy support
                         let all_keys = if let Some(obj) = interp.get_object(obj_id) {
                             if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
@@ -7025,6 +7068,16 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
+                    {
+                        let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                        if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true) {
+                            if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
+                                return Completion::Throw(e);
+                            }
+                        }
+                    }
+                    let obj = interp.get_object(o.id).unwrap();
                     let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
@@ -7175,6 +7228,20 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if let JsValue::Object(ref o) = target {
+                        // Deferred namespace: trigger evaluation
+                        {
+                            let deferred_ns = interp
+                                .get_object(o.id)
+                                .and_then(|obj| {
+                                    let b = obj.borrow();
+                                    b.module_namespace.as_ref().map(|ns| ns.deferred)
+                                });
+                            if deferred_ns == Some(true) && !Interpreter::is_symbol_like_namespace_key(&key, true) {
+                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                        }
                         if let Some(obj) = interp.get_object(o.id)
                             && {
                                 let _b = obj.borrow();
@@ -7350,6 +7417,16 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
+                    {
+                        let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                        if is_deferred_ns {
+                            if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
+                                return Completion::Throw(e);
+                            }
+                        }
+                    }
+                    let obj = interp.get_object(o.id).unwrap();
                     let res = {
                         let _b = obj.borrow();
                         _b.is_proxy() || _b.proxy_revoked
