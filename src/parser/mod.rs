@@ -461,6 +461,54 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    pub(super) fn check_strict_assignment_pattern(&self, pat: &Pattern) -> Result<(), ParseError> {
+        if !self.strict {
+            return Ok(());
+        }
+        match pat {
+            Pattern::Identifier(name) => {
+                if name == "eval" || name == "arguments" {
+                    return Err(self.error(&format!(
+                        "Assignment to '{name}' in strict mode"
+                    )));
+                }
+            }
+            Pattern::Array(elems) => {
+                for elem in elems.iter().flatten() {
+                    match elem {
+                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                            self.check_strict_assignment_pattern(p)?;
+                        }
+                    }
+                }
+            }
+            Pattern::Object(props) => {
+                for prop in props {
+                    match prop {
+                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                            self.check_strict_assignment_pattern(p)?;
+                        }
+                        ObjectPatternProperty::Shorthand(name) => {
+                            if name == "eval" || name == "arguments" {
+                                return Err(self.error(&format!(
+                                    "Assignment to '{name}' in strict mode"
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+            Pattern::Assign(p, _) => {
+                self.check_strict_assignment_pattern(p)?;
+            }
+            Pattern::Rest(p) => {
+                self.check_strict_assignment_pattern(p)?;
+            }
+            Pattern::MemberExpression(_) => {}
+        }
+        Ok(())
+    }
+
     fn check_strict_binding_identifier(&self, name: &str) -> Result<(), ParseError> {
         self.check_strict_identifier(name)?;
         if self.strict && (name == "eval" || name == "arguments") {
@@ -849,6 +897,92 @@ impl<'a> Parser<'a> {
             }
             Pattern::Rest(p) => Self::pattern_contains_await_expression(p),
             Pattern::MemberExpression(e) => Self::expr_contains_await_expression(e),
+        }
+    }
+
+    pub(super) fn expr_contains_yield_expression(expr: &Expression) -> bool {
+        use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
+        match expr {
+            Expression::Yield(_, _) => true,
+            Expression::Array(elems, _) => elems
+                .iter()
+                .any(|e| e.as_ref().is_some_and(Self::expr_contains_yield_expression)),
+            Expression::Object(props) => props.iter().any(|p: &Property| {
+                Self::expr_contains_yield_expression(&p.value)
+                    || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_yield_expression(e))
+            }),
+            Expression::Member(object, property) => {
+                Self::expr_contains_yield_expression(object)
+                    || matches!(property, MemberProperty::Computed(e) if Self::expr_contains_yield_expression(e))
+            }
+            Expression::Call(callee, args) | Expression::New(callee, args) => {
+                Self::expr_contains_yield_expression(callee)
+                    || args.iter().any(Self::expr_contains_yield_expression)
+            }
+            Expression::Binary(_, left, right)
+            | Expression::Logical(_, left, right)
+            | Expression::Assign(_, left, right) => {
+                Self::expr_contains_yield_expression(left) || Self::expr_contains_yield_expression(right)
+            }
+            Expression::Unary(_, operand) | Expression::Update(_, _, operand) => {
+                Self::expr_contains_yield_expression(operand)
+            }
+            Expression::Conditional(test, consequent, alternate) => {
+                Self::expr_contains_yield_expression(test)
+                    || Self::expr_contains_yield_expression(consequent)
+                    || Self::expr_contains_yield_expression(alternate)
+            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                exprs.iter().any(Self::expr_contains_yield_expression)
+            }
+            Expression::Spread(inner) => Self::expr_contains_yield_expression(inner),
+            Expression::Await(inner) => Self::expr_contains_yield_expression(inner),
+            Expression::ArrowFunction(af) => {
+                af.params.iter().any(Self::pattern_contains_yield_expression)
+                    || match &af.body {
+                        ArrowBody::Expression(e) => Self::expr_contains_yield_expression(e),
+                        ArrowBody::Block(_) => false,
+                    }
+            }
+            Expression::Template(tl) => {
+                tl.expressions.iter().any(Self::expr_contains_yield_expression)
+            }
+            Expression::TaggedTemplate(tag, tl) => {
+                Self::expr_contains_yield_expression(tag)
+                    || tl.expressions.iter().any(Self::expr_contains_yield_expression)
+            }
+            Expression::Typeof(e) | Expression::Void(e) | Expression::Delete(e) => {
+                Self::expr_contains_yield_expression(e)
+            }
+            Expression::OptionalChain(object, chain) => {
+                Self::expr_contains_yield_expression(object) || Self::expr_contains_yield_expression(chain)
+            }
+            _ => false,
+        }
+    }
+
+    fn pattern_contains_yield_expression(pat: &Pattern) -> bool {
+        match pat {
+            Pattern::Identifier(_) => false,
+            Pattern::Array(elems) => elems.iter().any(|e| {
+                e.as_ref().is_some_and(|elem| match elem {
+                    ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                        Self::pattern_contains_yield_expression(p)
+                    }
+                })
+            }),
+            Pattern::Object(props) => props.iter().any(|prop| match prop {
+                ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
+                    Self::pattern_contains_yield_expression(p)
+                }
+                ObjectPatternProperty::Shorthand(_) => false,
+            }),
+            Pattern::Assign(p, default) => {
+                Self::pattern_contains_yield_expression(p)
+                    || Self::expr_contains_yield_expression(default)
+            }
+            Pattern::Rest(p) => Self::pattern_contains_yield_expression(p),
+            Pattern::MemberExpression(e) => Self::expr_contains_yield_expression(e),
         }
     }
 

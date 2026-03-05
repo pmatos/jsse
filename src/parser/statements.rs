@@ -969,11 +969,16 @@ impl<'a> Parser<'a> {
                         let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
                             ForInOfLeft::Expression(expr)
                         } else {
-                            ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                            let pat = expr_to_pattern(expr)?;
+                            self.check_strict_assignment_pattern(&pat)?;
+                            ForInOfLeft::Pattern(pat)
                         };
                         return Ok(Statement::ForIn(ForInStatement { left, right, body }));
                     }
                     if self.current == Token::Keyword(Keyword::Of) {
+                        if matches!(&expr, Expression::Identifier(n) if n == "let") {
+                            return Err(self.error("The identifier 'let' is disallowed as a left-hand side expression of a for-of loop"));
+                        }
                         self.advance()?;
                         let right = self.parse_assignment_expression()?;
                         self.eat(&Token::RightParen)?;
@@ -981,7 +986,9 @@ impl<'a> Parser<'a> {
                         let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
                             ForInOfLeft::Expression(expr)
                         } else {
-                            ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                            let pat = expr_to_pattern(expr)?;
+                            self.check_strict_assignment_pattern(&pat)?;
+                            ForInOfLeft::Pattern(pat)
                         };
                         return Ok(Statement::ForOf(ForOfStatement {
                             left,
@@ -1132,11 +1139,16 @@ impl<'a> Parser<'a> {
                     let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
                         ForInOfLeft::Expression(expr)
                     } else {
-                        ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                        let pat = expr_to_pattern(expr)?;
+                        self.check_strict_assignment_pattern(&pat)?;
+                        ForInOfLeft::Pattern(pat)
                     };
                     return Ok(Statement::ForIn(ForInStatement { left, right, body }));
                 }
                 if self.current == Token::Keyword(Keyword::Of) {
+                    if matches!(&expr, Expression::Identifier(n) if n == "let") {
+                        return Err(self.error("The identifier 'let' is disallowed as a left-hand side expression of a for-of loop"));
+                    }
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
@@ -1144,7 +1156,9 @@ impl<'a> Parser<'a> {
                     let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
                         ForInOfLeft::Expression(expr)
                     } else {
-                        ForInOfLeft::Pattern(expr_to_pattern(expr)?)
+                        let pat = expr_to_pattern(expr)?;
+                        self.check_strict_assignment_pattern(&pat)?;
+                        ForInOfLeft::Pattern(pat)
                     };
                     return Ok(Statement::ForOf(ForOfStatement {
                         left,

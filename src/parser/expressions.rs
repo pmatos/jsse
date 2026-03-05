@@ -831,21 +831,93 @@ impl<'a> Parser<'a> {
                 Ok(Expression::Super)
             }
             Token::Keyword(Keyword::Yield) if !self.in_generator && !self.strict => {
+                let ident_start = self.current_token_start;
                 self.advance()?;
+                if self.current == Token::Arrow && !self.prev_line_terminator {
+                    self.advance()?;
+                    let (body, body_is_strict) = if self.current == Token::LeftBrace {
+                        let (stmts, strict) = self.parse_arrow_function_body(false)?;
+                        (ArrowBody::Block(stmts), strict)
+                    } else {
+                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                    };
+                    let source_text = Some(self.source_since(ident_start));
+                    return Ok(Expression::ArrowFunction(ArrowFunction {
+                        params: vec![Pattern::Identifier("yield".to_string())],
+                        body,
+                        is_async: false,
+                        source_text,
+                        body_is_strict,
+                    }));
+                }
                 Ok(Expression::Identifier("yield".to_string()))
             }
             Token::Keyword(Keyword::Await)
                 if !self.in_async && !self.in_static_block && !self.is_module =>
             {
+                let ident_start = self.current_token_start;
                 self.advance()?;
+                if self.current == Token::Arrow && !self.prev_line_terminator {
+                    self.advance()?;
+                    let (body, body_is_strict) = if self.current == Token::LeftBrace {
+                        let (stmts, strict) = self.parse_arrow_function_body(false)?;
+                        (ArrowBody::Block(stmts), strict)
+                    } else {
+                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                    };
+                    let source_text = Some(self.source_since(ident_start));
+                    return Ok(Expression::ArrowFunction(ArrowFunction {
+                        params: vec![Pattern::Identifier("await".to_string())],
+                        body,
+                        is_async: false,
+                        source_text,
+                        body_is_strict,
+                    }));
+                }
                 Ok(Expression::Identifier("await".to_string()))
             }
             Token::Keyword(Keyword::Let) if !self.strict => {
+                let ident_start = self.current_token_start;
                 self.advance()?;
+                if self.current == Token::Arrow && !self.prev_line_terminator {
+                    self.advance()?;
+                    let (body, body_is_strict) = if self.current == Token::LeftBrace {
+                        let (stmts, strict) = self.parse_arrow_function_body(false)?;
+                        (ArrowBody::Block(stmts), strict)
+                    } else {
+                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                    };
+                    let source_text = Some(self.source_since(ident_start));
+                    return Ok(Expression::ArrowFunction(ArrowFunction {
+                        params: vec![Pattern::Identifier("let".to_string())],
+                        body,
+                        is_async: false,
+                        source_text,
+                        body_is_strict,
+                    }));
+                }
                 Ok(Expression::Identifier("let".to_string()))
             }
             Token::Keyword(Keyword::Static) if !self.strict => {
+                let ident_start = self.current_token_start;
                 self.advance()?;
+                if self.current == Token::Arrow && !self.prev_line_terminator {
+                    self.advance()?;
+                    let (body, body_is_strict) = if self.current == Token::LeftBrace {
+                        let (stmts, strict) = self.parse_arrow_function_body(false)?;
+                        (ArrowBody::Block(stmts), strict)
+                    } else {
+                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                    };
+                    let source_text = Some(self.source_since(ident_start));
+                    return Ok(Expression::ArrowFunction(ArrowFunction {
+                        params: vec![Pattern::Identifier("static".to_string())],
+                        body,
+                        is_async: false,
+                        source_text,
+                        body_is_strict,
+                    }));
+                }
                 Ok(Expression::Identifier("static".to_string()))
             }
             Token::Keyword(Keyword::Import) => {
@@ -1195,6 +1267,13 @@ impl<'a> Parser<'a> {
                                 }
                             }
                         }
+                        if self.in_generator {
+                            for e in &exprs {
+                                if Self::expr_contains_yield_expression(e) {
+                                    return Err(self.error("Yield expression is not allowed in formal parameters of a generator function"));
+                                }
+                            }
+                        }
                         let params: Vec<Pattern> = exprs
                             .into_iter()
                             .map(expr_to_pattern)
@@ -1401,15 +1480,18 @@ impl<'a> Parser<'a> {
                     let prev_async = self.in_async;
                     let prev_generator = self.in_generator;
                     let prev_static_block = self.in_static_block;
+                    let prev_super_property = self.allow_super_property;
                     self.in_async = true;
                     if is_generator {
                         self.in_generator = true;
                     }
                     self.in_static_block = false;
+                    self.allow_super_property = true;
                     let params = self.parse_formal_parameters()?;
                     self.in_async = prev_async;
                     self.in_generator = prev_generator;
                     self.in_static_block = prev_static_block;
+                    self.allow_super_property = prev_super_property;
                     self.set_function_param_names(&params);
                     self.in_non_arrow_function += 1;
                     let (body, body_strict) =
@@ -1482,11 +1564,14 @@ impl<'a> Parser<'a> {
             }
             let prev_generator = self.in_generator;
             let prev_static_block = self.in_static_block;
+            let prev_super_property = self.allow_super_property;
             self.in_generator = true;
             self.in_static_block = false;
+            self.allow_super_property = true;
             let params = self.parse_formal_parameters()?;
             self.in_generator = prev_generator;
             self.in_static_block = prev_static_block;
+            self.allow_super_property = prev_super_property;
             self.set_function_param_names(&params);
             self.in_non_arrow_function += 1;
             let (body, body_strict) = self.parse_function_body_inner(true, false, true, false)?;
@@ -1739,9 +1824,12 @@ impl<'a> Parser<'a> {
         // Method: { foo() {} }
         if self.current == Token::LeftParen {
             let prev_static_block = self.in_static_block;
+            let prev_super_property = self.allow_super_property;
             self.in_static_block = false;
+            self.allow_super_property = true;
             let params = self.parse_formal_parameters()?;
             self.in_static_block = prev_static_block;
+            self.allow_super_property = prev_super_property;
             self.set_function_param_names(&params);
             self.in_non_arrow_function += 1;
             let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
