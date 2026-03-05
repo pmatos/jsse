@@ -134,6 +134,17 @@ impl<'a> Parser<'a> {
                     PropertyKey::Identifier(n) => n.clone(),
                     _ => return Err(self.error("Expected identifier for shorthand pattern")),
                 };
+                if self.in_static_block && name == "await" {
+                    return Err(self.error(
+                        "'await' is not allowed as a binding identifier in class static blocks",
+                    ));
+                }
+                if (self.in_generator || self.strict) && name == "yield" {
+                    return Err(self.error(
+                        "'yield' is not allowed as a binding identifier in this context",
+                    ));
+                }
+                self.check_strict_binding_identifier(&name)?;
                 if self.current == Token::Assign {
                     self.advance()?;
                     let default = self.parse_assignment_expression()?;
@@ -716,6 +727,7 @@ impl<'a> Parser<'a> {
                 self.eat(&Token::LeftBrace)?;
                 let prev_super_property = self.allow_super_property;
                 let prev_in_function = self.in_function;
+                let prev_in_non_arrow_function = self.in_non_arrow_function;
                 let prev_in_generator = self.in_generator;
                 let prev_in_async = self.in_async;
                 let prev_in_iteration = self.in_iteration;
@@ -727,6 +739,7 @@ impl<'a> Parser<'a> {
                 self.allow_super_property = true;
                 self.allow_super_call = false;
                 self.in_function = 0;
+                self.in_non_arrow_function = 0;
                 self.in_generator = false;
                 self.in_async = false;
                 self.in_iteration = 0;
@@ -759,6 +772,7 @@ impl<'a> Parser<'a> {
                 self.allow_super_property = prev_super_property;
                 self.allow_super_call = prev_allow_super_call;
                 self.in_function = prev_in_function;
+                self.in_non_arrow_function = prev_in_non_arrow_function;
                 self.in_generator = prev_in_generator;
                 self.in_async = prev_in_async;
                 self.in_iteration = prev_in_iteration;
@@ -1113,8 +1127,10 @@ impl<'a> Parser<'a> {
         self.in_async = prev_async;
         self.in_static_block = prev_static_block;
         self.set_function_param_names(&params);
+        self.in_non_arrow_function += 1;
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
+        self.in_non_arrow_function -= 1;
         if body_strict && !Self::is_simple_parameter_list(&params) {
             return Err(self.error(
                 "Illegal 'use strict' directive in function with non-simple parameter list",
@@ -1178,7 +1194,10 @@ impl<'a> Parser<'a> {
         is_generator: bool,
         is_async: bool,
     ) -> Result<(Vec<Statement>, bool), ParseError> {
-        self.parse_function_body_inner(is_generator, is_async, false, false)
+        self.in_non_arrow_function += 1;
+        let result = self.parse_function_body_inner(is_generator, is_async, false, false);
+        self.in_non_arrow_function -= 1;
+        result
     }
 
     pub(super) fn set_function_param_names(&mut self, params: &[Pattern]) {

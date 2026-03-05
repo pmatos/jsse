@@ -43,6 +43,7 @@ pub struct Parser<'a> {
     strict: bool,
     is_module: bool,
     in_function: u32,
+    in_non_arrow_function: u32,
     in_generator: bool,
     in_async: bool,
     in_iteration: u32,
@@ -91,6 +92,7 @@ impl<'a> Parser<'a> {
             strict: false,
             is_module: false,
             in_function: 0,
+            in_non_arrow_function: 0,
             in_generator: false,
             in_async: false,
             in_iteration: 0,
@@ -199,6 +201,7 @@ impl<'a> Parser<'a> {
         self.in_field_initializer_eval = true;
         self.allow_super_property = true;
         self.in_function += 1;
+        self.in_non_arrow_function += 1;
     }
 
     pub fn set_eval_new_target_allowed(&mut self) {
@@ -871,6 +874,7 @@ impl<'a> Parser<'a> {
         let mut in_directive_prologue = true;
         let mut body_is_strict = false;
         let mut prologue_had_legacy_octal = false;
+        let mut lexical_names: Vec<String> = Vec::new();
 
         while self.current != Token::Eof {
             let stmt = self.parse_statement_or_declaration()?;
@@ -894,7 +898,48 @@ impl<'a> Parser<'a> {
                 }
             }
 
+            // §16.1.4: At script level, only let/const/class are lexically declared
+            // (function declarations are var-scoped at script level)
+            match &stmt {
+                Statement::Variable(decl) if decl.kind != VarKind::Var => {
+                    let new_names = Self::bound_names_from_decl(decl);
+                    for name in &new_names {
+                        if lexical_names.contains(name) {
+                            return Err(self.error(&format!(
+                                "Identifier '{name}' has already been declared"
+                            )));
+                        }
+                    }
+                    lexical_names.extend(new_names);
+                }
+                Statement::ClassDeclaration(cls) => {
+                    let name = &cls.name;
+                    if lexical_names.contains(name) {
+                        return Err(self.error(&format!(
+                            "Identifier '{name}' has already been declared"
+                        )));
+                    }
+                    lexical_names.push(name.clone());
+                }
+                _ => {}
+            }
+
             body.push(stmt);
+        }
+
+        // §16.1.1: VarDeclaredNames must not overlap LexicallyDeclaredNames
+        if !lexical_names.is_empty() {
+            let mut var_names = Vec::new();
+            for stmt in &body {
+                Self::collect_var_declared_names(stmt, &mut var_names);
+            }
+            for name in &var_names {
+                if lexical_names.contains(name) {
+                    return Err(self.error(&format!(
+                        "Identifier '{name}' has already been declared"
+                    )));
+                }
+            }
         }
 
         Ok(Program {

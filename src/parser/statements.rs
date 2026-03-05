@@ -314,7 +314,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn bound_names_from_decl(decl: &VariableDeclaration) -> Vec<String> {
+    pub(super) fn bound_names_from_decl(decl: &VariableDeclaration) -> Vec<String> {
         let mut names = Vec::new();
         for d in &decl.declarations {
             Self::bound_names_from_pattern(&d.pattern, &mut names);
@@ -930,9 +930,21 @@ impl<'a> Parser<'a> {
                 // `for (let in ...)` → identifier
                 // `for (let [` → destructuring declaration
                 // `for (let ident` → let declaration
+                // `for (let; ...)` → identifier (let followed by `;`, `=`, `)`, etc.)
                 let saved_lt = self.prev_line_terminator;
                 let saved = self.advance()?; // consume `let`
-                if self.current == Token::Keyword(Keyword::In) {
+                let is_let_identifier = self.current == Token::Keyword(Keyword::In)
+                    || self.current == Token::Semicolon
+                    || self.current == Token::RightParen
+                    || self.current == Token::Assign
+                    || self.current == Token::Comma
+                    || self.current == Token::Dot
+                    || self.current == Token::Increment
+                    || self.current == Token::Decrement
+                    || self.current == Token::OptionalChain
+                    || matches!(&self.current, Token::Keyword(Keyword::Of))
+                    || matches!(&self.current, Token::Identifier(n) if n == "instanceof");
+                if is_let_identifier {
                     // `for (let in expr)` — `let` is an identifier
                     self.push_back(self.current.clone(), self.prev_line_terminator);
                     self.current = Token::Identifier("let".to_string());
@@ -1163,6 +1175,25 @@ impl<'a> Parser<'a> {
         };
         self.eat(&Token::RightParen)?;
         let body = self.parse_iteration_body()?;
+        // §14.7.4.2: BoundNames of LexicalDeclaration must not overlap VarDeclaredNames of Statement
+        if let Some(ForInit::Variable(ref vd)) = init {
+            if matches!(vd.kind, VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing)
+            {
+                let mut bound = Vec::new();
+                for d in &vd.declarations {
+                    Self::bound_names_from_pattern(&d.pattern, &mut bound);
+                }
+                let mut var_names = Vec::new();
+                Self::collect_var_declared_names(&body, &mut var_names);
+                for vn in &var_names {
+                    if bound.contains(vn) {
+                        return Err(self.error(&format!(
+                            "Identifier '{vn}' has already been declared"
+                        )));
+                    }
+                }
+            }
+        }
         Ok(Statement::For(ForStatement {
             init,
             test,

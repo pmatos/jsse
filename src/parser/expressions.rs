@@ -161,7 +161,23 @@ impl<'a> Parser<'a> {
                         PropertyKind::Init => {
                             if let Expression::Assign(AssignOp::Assign, target, _) = &prop.value {
                                 self.validate_destructuring_target(target)?;
-                            } else if !prop.shorthand {
+                            } else if prop.shorthand {
+                                // Shorthand { eval } or { arguments } invalid in strict
+                                if let Expression::Identifier(name) = &prop.value {
+                                    if self.strict
+                                        && (name == "eval" || name == "arguments")
+                                    {
+                                        return Err(self.error(
+                                            "Assignment to 'eval' or 'arguments' in strict mode",
+                                        ));
+                                    }
+                                    if self.in_generator && name == "yield" {
+                                        return Err(self.error(
+                                            "'yield' is not allowed as an identifier in this context",
+                                        ));
+                                    }
+                                }
+                            } else {
                                 self.validate_destructuring_target(&prop.value)?;
                             }
                         }
@@ -186,6 +202,15 @@ impl<'a> Parser<'a> {
                 // §13.15.5.1: DestructuringAssignmentTarget must have
                 // AssignmentTargetType == simple (identifier or member expression)
                 if Self::is_simple_assignment_target(expr) {
+                    if self.strict {
+                        if let Expression::Identifier(name) = expr {
+                            if name == "eval" || name == "arguments" {
+                                return Err(self.error(
+                                    "Assignment to 'eval' or 'arguments' in strict mode",
+                                ));
+                            }
+                        }
+                    }
                     Ok(())
                 } else if !self.strict && matches!(expr, Expression::Call(_, _)) {
                     // Sloppy mode: call expressions are valid assignment targets
@@ -403,6 +428,14 @@ impl<'a> Parser<'a> {
             };
             self.advance()?;
             let right = self.parse_shift()?;
+            // §13.10: PrivateIdentifier in ShiftExpression — reject ArrowFunction
+            if matches!(&left, Expression::PrivateIdentifier(_))
+                && matches!(&right, Expression::ArrowFunction(_))
+            {
+                return Err(self.error(
+                    "Invalid right-hand side in 'in' expression",
+                ));
+            }
             left = Expression::Binary(op, Box::new(left), Box::new(right));
         }
         Ok(left)
@@ -716,7 +749,7 @@ impl<'a> Parser<'a> {
                 _ => false,
             };
             if is_target {
-                if self.in_function == 0 && !self.in_static_block && !self.eval_new_target_allowed {
+                if self.in_non_arrow_function == 0 && !self.in_static_block && !self.eval_new_target_allowed {
                     return Err(self.error("new.target expression is not allowed here"));
                 }
                 self.advance()?; // target
@@ -1085,7 +1118,7 @@ impl<'a> Parser<'a> {
                 if self.current == Token::RightParen {
                     // () => ...
                     self.advance()?;
-                    if self.current == Token::Arrow {
+                    if self.current == Token::Arrow && !self.prev_line_terminator {
                         self.advance()?;
                         let (body, body_is_strict) = if self.current == Token::LeftBrace {
                             let (stmts, strict) = self.parse_arrow_function_body(false)?;
@@ -1378,8 +1411,10 @@ impl<'a> Parser<'a> {
                     self.in_generator = prev_generator;
                     self.in_static_block = prev_static_block;
                     self.set_function_param_names(&params);
+                    self.in_non_arrow_function += 1;
                     let (body, body_strict) =
                         self.parse_function_body_inner(is_generator, true, true, false)?;
+                    self.in_non_arrow_function -= 1;
                     if body_strict && !Self::is_simple_parameter_list(&params) {
                         return Err(self.error(
                             "Illegal 'use strict' directive in function with non-simple parameter list",
@@ -1453,7 +1488,9 @@ impl<'a> Parser<'a> {
             self.in_generator = prev_generator;
             self.in_static_block = prev_static_block;
             self.set_function_param_names(&params);
+            self.in_non_arrow_function += 1;
             let (body, body_strict) = self.parse_function_body_inner(true, false, true, false)?;
+            self.in_non_arrow_function -= 1;
             if body_strict && !Self::is_simple_parameter_list(&params) {
                 return Err(self.error(
                     "Illegal 'use strict' directive in function with non-simple parameter list",
@@ -1524,8 +1561,10 @@ impl<'a> Parser<'a> {
                     return Err(self.error("Setter must have exactly one formal parameter"));
                 }
                 self.set_function_param_names(&params);
+                self.in_non_arrow_function += 1;
                 let (body, body_strict) =
                     self.parse_function_body_inner(false, false, true, false)?;
+                self.in_non_arrow_function -= 1;
                 if body_strict && !Self::is_simple_parameter_list(&params) {
                     return Err(self.error(
                         "Illegal 'use strict' directive in function with non-simple parameter list",
@@ -1625,6 +1664,18 @@ impl<'a> Parser<'a> {
                     return Err(self.error(format!("Unexpected token '{n}'")));
                 }
             }
+            // await cannot be a shorthand IdentifierReference in static blocks, async, or modules
+            if (self.in_static_block || self.in_async || self.is_module) && name == "await" {
+                return Err(self.error(
+                    "'await' is not allowed as an identifier in this context",
+                ));
+            }
+            // yield cannot be a shorthand IdentifierReference in generators or strict mode
+            if self.in_generator && name == "yield" {
+                return Err(self.error(
+                    "'yield' is not allowed as an identifier in this context",
+                ));
+            }
             // In strict mode, future reserved words cannot be IdentifierReferences
             if self.strict {
                 let n = name.as_str();
@@ -1692,7 +1743,9 @@ impl<'a> Parser<'a> {
             let params = self.parse_formal_parameters()?;
             self.in_static_block = prev_static_block;
             self.set_function_param_names(&params);
+            self.in_non_arrow_function += 1;
             let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
+            self.in_non_arrow_function -= 1;
             if body_strict && !Self::is_simple_parameter_list(&params) {
                 return Err(self.error(
                     "Illegal 'use strict' directive in function with non-simple parameter list",
