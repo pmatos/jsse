@@ -266,6 +266,7 @@ pub struct Lexer<'a> {
     pub strict: bool,
     pub is_module: bool,
     pub last_string_has_escape: bool,
+    pub last_string_has_legacy_octal: bool,
     had_line_terminator: bool,
 }
 
@@ -284,6 +285,7 @@ impl<'a> Lexer<'a> {
             strict: false,
             is_module: false,
             last_string_has_escape: false,
+            last_string_has_legacy_octal: false,
             had_line_terminator: true,
         }
     }
@@ -396,11 +398,13 @@ impl<'a> Lexer<'a> {
     fn read_string(&mut self, quote: char) -> Result<Vec<u16>, LexError> {
         let mut code_units: Vec<u16> = Vec::new();
         let mut has_escape = false;
+        let mut has_legacy_octal = false;
         loop {
             match self.advance() {
                 None => return Err(self.error("Unterminated string literal")),
                 Some(ch) if ch == quote => {
                     self.last_string_has_escape = has_escape;
+                    self.last_string_has_legacy_octal = has_legacy_octal;
                     return Ok(code_units);
                 }
                 Some('\n' | '\r') => {
@@ -408,7 +412,7 @@ impl<'a> Lexer<'a> {
                 }
                 Some('\\') => {
                     has_escape = true;
-                    self.read_string_escape_into(&mut code_units)?;
+                    self.read_string_escape_into(&mut code_units, &mut has_legacy_octal)?;
                 }
                 Some(ch) => {
                     let mut buf = [0u16; 2];
@@ -420,7 +424,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn read_string_escape_into(&mut self, out: &mut Vec<u16>) -> Result<(), LexError> {
+    fn read_string_escape_into(&mut self, out: &mut Vec<u16>, has_legacy_octal: &mut bool) -> Result<(), LexError> {
         match self.advance() {
             None => Err(self.error("Unterminated escape sequence")),
             Some('n') => {
@@ -447,6 +451,16 @@ impl<'a> Lexer<'a> {
                 out.push(0x000B);
                 Ok(())
             }
+            Some('8' | '9') => {
+                // NonOctalDecimalEscapeSequence — not allowed in strict mode
+                if self.strict {
+                    return Err(self.error("\\8 and \\9 are not allowed in strict mode"));
+                }
+                *has_legacy_octal = true;
+                // In sloppy mode, \8 and \9 are identity escapes (Annex B)
+                out.push(self.source.as_bytes()[self.offset - 1] as u16);
+                Ok(())
+            }
             Some(ch @ '0'..='7') => {
                 if ch == '0' && !self.peek().is_some_and(|c| c.is_ascii_digit()) {
                     out.push(0x0000);
@@ -455,6 +469,7 @@ impl<'a> Lexer<'a> {
                 if self.strict {
                     return Err(self.error("Octal escape sequences are not allowed in strict mode"));
                 }
+                *has_legacy_octal = true;
                 let mut val = (ch as u32) - ('0' as u32);
                 if self.peek().is_some_and(|c| ('0'..='7').contains(&c)) {
                     val = val * 8 + (self.advance().unwrap() as u32 - '0' as u32);
@@ -552,23 +567,16 @@ impl<'a> Lexer<'a> {
             Some('b') => Ok("\u{0008}".to_string()),
             Some('f') => Ok("\u{000C}".to_string()),
             Some('v') => Ok("\u{000B}".to_string()),
+            Some('8' | '9') => {
+                // NonOctalDecimalEscapeSequence — not valid in template literals
+                Err(self.error("\\8 and \\9 are not allowed in template literals"))
+            }
             Some(ch @ '0'..='7') => {
                 if ch == '0' && !self.peek().is_some_and(|c| c.is_ascii_digit()) {
                     return Ok("\0".to_string()); // \0 (null character, not octal)
                 }
-                if self.strict {
-                    return Err(self.error("Octal escape sequences are not allowed in strict mode"));
-                }
-                let mut val = (ch as u32) - ('0' as u32);
-                if self.peek().is_some_and(|c| ('0'..='7').contains(&c)) {
-                    val = val * 8 + (self.advance().unwrap() as u32 - '0' as u32);
-                    if ch <= '3' && self.peek().is_some_and(|c| ('0'..='7').contains(&c)) {
-                        val = val * 8 + (self.advance().unwrap() as u32 - '0' as u32);
-                    }
-                }
-                Ok(char::from_u32(val)
-                    .map(|c| c.to_string())
-                    .unwrap_or_default())
+                // Legacy octal — not valid in template literals
+                Err(self.error("Octal escape sequences are not allowed in template literals"))
             }
             Some('x') => {
                 let h1 = self
@@ -883,7 +891,7 @@ impl<'a> Lexer<'a> {
         Ok(Token::NumericLiteral(val as f64))
     }
 
-    fn read_identifier_chars(&mut self, first: char) -> (String, bool) {
+    fn read_identifier_chars(&mut self, first: char) -> Result<(String, bool), LexError> {
         let mut name = String::new();
         let mut has_escape = false;
         name.push(first);
@@ -895,31 +903,32 @@ impl<'a> Lexer<'a> {
                 has_escape = true;
                 self.advance(); // consume '\'
                 self.advance(); // consume 'u'
-                if let Ok(esc) = self.read_unicode_escape() {
-                    name.push_str(&esc);
-                } else {
-                    break;
+                let esc = self.read_unicode_escape()?;
+                let esc_char = esc.chars().next().unwrap();
+                if !Self::is_identifier_continue(esc_char) && !Self::is_identifier_start(esc_char) {
+                    return Err(self.error("Invalid Unicode escape in identifier"));
                 }
+                name.push_str(&esc);
             } else {
                 break;
             }
         }
-        (name, has_escape)
+        Ok((name, has_escape))
     }
 
-    fn read_identifier_with_escape(&mut self, first: char) -> Token {
-        let (name, _) = self.read_identifier_chars(first);
-        Token::IdentifierWithEscape(name)
+    fn read_identifier_with_escape(&mut self, first: char) -> Result<Token, LexError> {
+        let (name, _) = self.read_identifier_chars(first)?;
+        Ok(Token::IdentifierWithEscape(name))
     }
 
-    fn read_identifier(&mut self, first: char) -> Token {
-        let (name, has_escape) = self.read_identifier_chars(first);
+    fn read_identifier(&mut self, first: char) -> Result<Token, LexError> {
+        let (name, has_escape) = self.read_identifier_chars(first)?;
 
         if has_escape {
-            return Token::IdentifierWithEscape(name);
+            return Ok(Token::IdentifierWithEscape(name));
         }
 
-        match name.as_str() {
+        Ok(match name.as_str() {
             "true" => Token::BooleanLiteral(true),
             "false" => Token::BooleanLiteral(false),
             "null" => Token::NullLiteral,
@@ -930,7 +939,7 @@ impl<'a> Lexer<'a> {
                     Token::Identifier(name)
                 }
             }
-        }
+        })
     }
 
     pub fn lex_regex(&mut self) -> Result<Token, LexError> {
@@ -1090,7 +1099,7 @@ impl<'a> Lexer<'a> {
                 {
                     self.advance(); // consume '#'
                     self.advance(); // consume first char of identifier
-                    let tok = self.read_identifier(next);
+                    let tok = self.read_identifier(next)?;
                     let name_str = match tok {
                         Token::Identifier(s) | Token::IdentifierWithEscape(s) => s,
                         Token::Keyword(kw) => kw.to_string(),
@@ -1110,7 +1119,7 @@ impl<'a> Lexer<'a> {
                     if !Self::is_identifier_start(first) {
                         return Err(self.error("Invalid Unicode escape in private name"));
                     }
-                    let tok = self.read_identifier_with_escape(first);
+                    let tok = self.read_identifier_with_escape(first)?;
                     let name_str = match tok {
                         Token::Identifier(s) | Token::IdentifierWithEscape(s) => s,
                         Token::Keyword(kw) => kw.to_string(),
@@ -1160,13 +1169,13 @@ impl<'a> Lexer<'a> {
                 if let Ok(esc) = self.read_unicode_escape() {
                     let first = esc.chars().next().unwrap();
                     if Self::is_identifier_start(first) {
-                        return Ok(self.read_identifier_with_escape(first));
+                        return self.read_identifier_with_escape(first);
                     }
                 }
                 return Err(self.error("Invalid Unicode escape sequence"));
             }
             if Self::is_identifier_start(ch) {
-                return Ok(self.read_identifier(ch));
+                return self.read_identifier(ch);
             }
 
             // Punctuators
@@ -1490,13 +1499,20 @@ fn hex_val(ch: char) -> Option<u32> {
     }
 }
 
+fn is_other_id_start(ch: char) -> bool {
+    matches!(ch, '\u{1885}' | '\u{1886}' | '\u{2118}' | '\u{212E}' | '\u{309B}' | '\u{309C}')
+}
+
+fn is_other_id_continue(ch: char) -> bool {
+    matches!(ch, '\u{00B7}' | '\u{0387}' | '\u{1369}'..='\u{1371}' | '\u{19DA}')
+}
+
 fn unicode_id_start(ch: char) -> bool {
-    // Simplified: use Unicode properties for non-ASCII
-    !ch.is_ascii() && unicode_ident::is_xid_start(ch)
+    !ch.is_ascii() && (unicode_ident::is_xid_start(ch) || is_other_id_start(ch))
 }
 
 fn unicode_id_continue(ch: char) -> bool {
-    !ch.is_ascii() && unicode_ident::is_xid_continue(ch)
+    !ch.is_ascii() && (unicode_ident::is_xid_continue(ch) || is_other_id_continue(ch) || is_other_id_start(ch))
 }
 
 #[cfg(test)]

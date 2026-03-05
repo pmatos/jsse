@@ -1,5 +1,23 @@
 use super::*;
 
+/// StringToBigInt per spec §7.1.14 — handles empty string, hex, octal, binary.
+fn string_to_bigint_for_comparison(s: &str) -> Option<num_bigint::BigInt> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Some(num_bigint::BigInt::from(0));
+    }
+    if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+        return num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16);
+    }
+    if let Some(oct) = trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O")) {
+        return num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8);
+    }
+    if let Some(bin) = trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B")) {
+        return num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2);
+    }
+    trimmed.parse::<num_bigint::BigInt>().ok()
+}
+
 enum IdentifierRef {
     WithObject(u64),
     Binding,
@@ -358,7 +376,7 @@ impl Interpreter {
             Expression::Call(callee, args) => self.eval_call(callee, args, env),
             Expression::New(callee, args) => self.eval_new(callee, args, env),
             Expression::Member(obj, prop) => self.eval_member(obj, prop, env),
-            Expression::Array(elements) => self.eval_array_literal(elements, env),
+            Expression::Array(elements, _) => self.eval_array_literal(elements, env),
             Expression::Object(props) => self.eval_object_literal(props, env),
             Expression::Function(f) => {
                 let closure_env = if let Some(ref name) = f.name {
@@ -1672,29 +1690,41 @@ impl Interpreter {
 
     fn eval_unary(&mut self, op: UnaryOp, val: &JsValue) -> Completion {
         match op {
-            UnaryOp::Minus => match val {
-                JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
-                    value: bigint_ops::unary_minus(&b.value),
-                })),
-                _ => match self.to_number_value(val) {
-                    Ok(n) => Completion::Normal(JsValue::Number(number_ops::unary_minus(n))),
-                    Err(e) => Completion::Throw(e),
-                },
-            },
+            UnaryOp::Minus => {
+                let numeric = match self.to_numeric(val) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                match numeric {
+                    JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
+                        value: bigint_ops::unary_minus(&b.value),
+                    })),
+                    JsValue::Number(n) => {
+                        Completion::Normal(JsValue::Number(number_ops::unary_minus(n)))
+                    }
+                    _ => unreachable!(),
+                }
+            }
             UnaryOp::Plus => match self.to_number_value(val) {
                 Ok(n) => Completion::Normal(JsValue::Number(n)),
                 Err(e) => Completion::Throw(e),
             },
             UnaryOp::Not => Completion::Normal(JsValue::Boolean(!self.to_boolean_val(val))),
-            UnaryOp::BitNot => match val {
-                JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
-                    value: bigint_ops::bitwise_not(&b.value),
-                })),
-                JsValue::Object(_) => Completion::Normal(JsValue::Number(number_ops::bitwise_not(
-                    self.to_number_coerce(val),
-                ))),
-                _ => Completion::Normal(JsValue::Number(number_ops::bitwise_not(to_number(val)))),
-            },
+            UnaryOp::BitNot => {
+                let numeric = match self.to_numeric(val) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                match numeric {
+                    JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
+                        value: bigint_ops::bitwise_not(&b.value),
+                    })),
+                    JsValue::Number(n) => {
+                        Completion::Normal(JsValue::Number(number_ops::bitwise_not(n)))
+                    }
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 
@@ -1884,6 +1914,19 @@ impl Interpreter {
         }
     }
 
+    // §7.1.3 ToNumeric: ToPrimitive(number), then BigInt stays BigInt, else ToNumber
+    #[allow(clippy::wrong_self_convention)]
+    pub(crate) fn to_numeric(&mut self, val: &JsValue) -> Result<JsValue, JsValue> {
+        let prim = self.to_primitive(val, "number")?;
+        if prim.is_bigint() {
+            Ok(prim)
+        } else if matches!(prim, JsValue::Symbol(_)) {
+            Err(self.create_type_error("Cannot convert a Symbol value to a number"))
+        } else {
+            Ok(JsValue::Number(to_number(&prim)))
+        }
+    }
+
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_number_coerce(&mut self, val: &JsValue) -> f64 {
         match self.to_primitive(val, "number") {
@@ -2051,15 +2094,15 @@ impl Interpreter {
             let n_as_bigint = crate::interpreter::builtins::bigint::f64_to_bigint(*n);
             return Ok(bigint_ops::equal(&b.value, &n_as_bigint));
         }
-        // BigInt == String
+        // BigInt == String (via StringToBigInt)
         if let (JsValue::BigInt(b), JsValue::String(s)) = (left, right) {
-            if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
+            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
                 return Ok(bigint_ops::equal(&b.value, &parsed));
             }
             return Ok(false);
         }
         if let (JsValue::String(s), JsValue::BigInt(b)) = (left, right) {
-            if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
+            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
                 return Ok(bigint_ops::equal(&parsed, &b.value));
             }
             return Ok(false);
@@ -2085,11 +2128,29 @@ impl Interpreter {
         left: &JsValue,
         right: &JsValue,
     ) -> Result<Option<bool>, JsValue> {
-        let lprim = self.to_primitive(left, "number")?;
-        let rprim = self.to_primitive(right, "number")?;
+        self.abstract_relational_inner(left, right, true)
+    }
+
+    /// §7.2.13 IsLessThan(x, y, LeftFirst)
+    fn abstract_relational_inner(
+        &mut self,
+        left: &JsValue,
+        right: &JsValue,
+        left_first: bool,
+    ) -> Result<Option<bool>, JsValue> {
+        let (lprim, rprim) = if left_first {
+            let l = self.to_primitive(left, "number")?;
+            let r = self.to_primitive(right, "number")?;
+            (l, r)
+        } else {
+            let r = self.to_primitive(right, "number")?;
+            let l = self.to_primitive(left, "number")?;
+            (l, r)
+        };
         if is_string(&lprim) && is_string(&rprim) {
-            let ls = to_js_string(&lprim);
-            let rs = to_js_string(&rprim);
+            // §7.2.13 step 3: Compare by UTF-16 code units, not UTF-8 bytes
+            let ls = match &lprim { JsValue::String(s) => &s.code_units, _ => unreachable!() };
+            let rs = match &rprim { JsValue::String(s) => &s.code_units, _ => unreachable!() };
             return Ok(Some(ls < rs));
         }
         // BigInt comparisons
@@ -2138,28 +2199,55 @@ impl Interpreter {
             // n_floor == b.value, so result depends on fractional part
             return Ok(Some(*n < n_trunc));
         }
-        // BigInt vs String: try parsing
+        // BigInt vs String: try parsing via StringToBigInt
         if let (JsValue::BigInt(_), JsValue::String(s)) = (&lprim, &rprim) {
-            if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
+            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
                 return self
                     .abstract_relational(&lprim, &JsValue::BigInt(JsBigInt { value: parsed }));
             }
             return Ok(None);
         }
         if let (JsValue::String(s), JsValue::BigInt(_)) = (&lprim, &rprim) {
-            if let Ok(parsed) = s.to_rust_string().parse::<num_bigint::BigInt>() {
+            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
                 return self
                     .abstract_relational(&JsValue::BigInt(JsBigInt { value: parsed }), &rprim);
             }
             return Ok(None);
         }
-        // ToNumeric throws TypeError for Symbol
+        // ToNumeric: convert non-BigInt primitives to Number, keep BigInt as BigInt
         if matches!(lprim, JsValue::Symbol(_)) || matches!(rprim, JsValue::Symbol(_)) {
             return Err(self.create_type_error("Cannot convert a Symbol value to a number"));
         }
-        let ln = to_number(&lprim);
-        let rn = to_number(&rprim);
-        Ok(number_ops::less_than(ln, rn))
+        let lnum = if matches!(lprim, JsValue::BigInt(_)) { lprim } else { JsValue::Number(to_number(&lprim)) };
+        let rnum = if matches!(rprim, JsValue::BigInt(_)) { rprim } else { JsValue::Number(to_number(&rprim)) };
+        // After ToNumeric, re-check BigInt vs Number cases
+        if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
+            return Ok(bigint_ops::less_than(&a.value, &b.value));
+        }
+        if let (JsValue::BigInt(b), JsValue::Number(n)) = (&lnum, &rnum) {
+            if n.is_nan() { return Ok(None); }
+            if *n == f64::INFINITY { return Ok(Some(true)); }
+            if *n == f64::NEG_INFINITY { return Ok(Some(false)); }
+            let n_trunc = n.trunc();
+            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
+            if b.value < n_floor { return Ok(Some(true)); }
+            if b.value > n_floor { return Ok(Some(false)); }
+            return Ok(Some(n_trunc < *n));
+        }
+        if let (JsValue::Number(n), JsValue::BigInt(b)) = (&lnum, &rnum) {
+            if n.is_nan() { return Ok(None); }
+            if *n == f64::NEG_INFINITY { return Ok(Some(true)); }
+            if *n == f64::INFINITY { return Ok(Some(false)); }
+            let n_trunc = n.trunc();
+            let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
+            if n_floor < b.value { return Ok(Some(true)); }
+            if n_floor > b.value { return Ok(Some(false)); }
+            return Ok(Some(*n < n_trunc));
+        }
+        if let (JsValue::Number(ln), JsValue::Number(rn)) = (&lnum, &rnum) {
+            return Ok(number_ops::less_than(*ln, *rn));
+        }
+        Ok(None)
     }
 
     fn eval_binary(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
@@ -2198,15 +2286,16 @@ impl Interpreter {
                 }
             }
             BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Exp => {
-                let lprim = match self.to_primitive(left, "number") {
+                // §13.7/13.8: ToNumeric(lval) before ToNumeric(rval)
+                let lnum = match self.to_numeric(left) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let rprim = match self.to_primitive(right, "number") {
+                let rnum = match self.to_numeric(right) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+                if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
                     match op {
                         BinaryOp::Sub => Completion::Normal(JsValue::BigInt(JsBigInt {
                             value: bigint_ops::subtract(&a.value, &b.value),
@@ -2234,13 +2323,13 @@ impl Interpreter {
                         },
                         _ => unreachable!(),
                     }
-                } else if lprim.is_bigint() || rprim.is_bigint() {
+                } else if lnum.is_bigint() || rnum.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
                     ))
                 } else {
-                    let ln = to_number(&lprim);
-                    let rn = to_number(&rprim);
+                    let ln = if let JsValue::Number(n) = &lnum { *n } else { to_number(&lnum) };
+                    let rn = if let JsValue::Number(n) = &rnum { *n } else { to_number(&rnum) };
                     Completion::Normal(JsValue::Number(match op {
                         BinaryOp::Sub => number_ops::subtract(ln, rn),
                         BinaryOp::Mul => number_ops::multiply(ln, rn),
@@ -2269,11 +2358,11 @@ impl Interpreter {
                 Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(true))),
                 Err(e) => Completion::Throw(e),
             },
-            BinaryOp::Gt => match self.abstract_relational(right, left) {
+            BinaryOp::Gt => match self.abstract_relational_inner(right, left, false) {
                 Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(true))),
                 Err(e) => Completion::Throw(e),
             },
-            BinaryOp::LtEq => match self.abstract_relational(right, left) {
+            BinaryOp::LtEq => match self.abstract_relational_inner(right, left, false) {
                 Ok(r) => Completion::Normal(JsValue::Boolean(r == Some(false))),
                 Err(e) => Completion::Throw(e),
             },
@@ -2282,21 +2371,21 @@ impl Interpreter {
                 Err(e) => Completion::Throw(e),
             },
             BinaryOp::LShift | BinaryOp::RShift | BinaryOp::URShift => {
-                let lprim = match self.to_primitive(left, "number") {
+                let lnum = match self.to_numeric(left) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let rprim = match self.to_primitive(right, "number") {
+                let rnum = match self.to_numeric(right) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if lprim.is_bigint() || rprim.is_bigint() {
+                if lnum.is_bigint() || rnum.is_bigint() {
                     if op == BinaryOp::URShift {
                         return Completion::Throw(self.create_type_error(
                             "Cannot mix BigInt and other types, use explicit conversions",
                         ));
                     }
-                    if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+                    if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
                         Completion::Normal(JsValue::BigInt(JsBigInt {
                             value: match op {
                                 BinaryOp::LShift => bigint_ops::left_shift(&a.value, &b.value),
@@ -2312,8 +2401,8 @@ impl Interpreter {
                         ))
                     }
                 } else {
-                    let ln = to_number(&lprim);
-                    let rn = to_number(&rprim);
+                    let ln = if let JsValue::Number(n) = &lnum { *n } else { to_number(&lnum) };
+                    let rn = if let JsValue::Number(n) = &rnum { *n } else { to_number(&rnum) };
                     Completion::Normal(JsValue::Number(match op {
                         BinaryOp::LShift => number_ops::left_shift(ln, rn),
                         BinaryOp::RShift => number_ops::signed_right_shift(ln, rn),
@@ -2323,15 +2412,15 @@ impl Interpreter {
                 }
             }
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                let lprim = match self.to_primitive(left, "number") {
+                let lnum = match self.to_numeric(left) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let rprim = match self.to_primitive(right, "number") {
+                let rnum = match self.to_numeric(right) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
+                if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
                     Completion::Normal(JsValue::BigInt(JsBigInt {
                         value: match op {
                             BinaryOp::BitAnd => bigint_ops::bitwise_and(&a.value, &b.value),
@@ -2340,13 +2429,13 @@ impl Interpreter {
                             _ => unreachable!(),
                         },
                     }))
-                } else if lprim.is_bigint() || rprim.is_bigint() {
+                } else if lnum.is_bigint() || rnum.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
                     ))
                 } else {
-                    let ln = to_number(&lprim);
-                    let rn = to_number(&rprim);
+                    let ln = if let JsValue::Number(n) = &lnum { *n } else { to_number(&lnum) };
+                    let rn = if let JsValue::Number(n) = &rnum { *n } else { to_number(&rnum) };
                     Completion::Normal(JsValue::Number(match op {
                         BinaryOp::BitAnd => number_ops::bitwise_and(ln, rn),
                         BinaryOp::BitOr => number_ops::bitwise_or(ln, rn),
@@ -3315,7 +3404,7 @@ impl Interpreter {
                 }
                 Completion::Normal(rval)
             }
-            Expression::Array(elements) if op == AssignOp::Assign => {
+            Expression::Array(elements, _) if op == AssignOp::Assign => {
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -4012,7 +4101,7 @@ impl Interpreter {
                         })
                     })
                     .collect();
-                Expression::Array(exprs)
+                Expression::Array(exprs, false)
             }
             Pattern::Object(props) => {
                 let obj_props = props
@@ -4080,7 +4169,7 @@ impl Interpreter {
                     Err(e) => Completion::Throw(e),
                 }
             }
-            Expression::Array(elements) => self.destructure_array_assignment(elements, &val, env),
+            Expression::Array(elements, _) => self.destructure_array_assignment(elements, &val, env),
             Expression::Object(props) => self.destructure_object_assignment(props, &val, env),
             Expression::Assign(AssignOp::Assign, inner_target, default) => {
                 let v = if val.is_undefined() {
@@ -9632,7 +9721,7 @@ impl Interpreter {
         use crate::ast::*;
         match expr {
             Expression::Identifier(name) => name == "arguments",
-            Expression::Array(elems) => elems
+            Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_arguments)),
             Expression::Object(props) => props.iter().any(|p| {
@@ -9716,7 +9805,7 @@ impl Interpreter {
                     || Self::expr_contains_super_call(callee)
                     || args.iter().any(Self::expr_contains_super_call)
             }
-            Expression::Array(elems) => elems
+            Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_super_call)),
             Expression::Binary(_, l, r)
@@ -11177,9 +11266,9 @@ impl Interpreter {
 
     fn eval_instanceof(&mut self, left: &JsValue, right: &JsValue) -> Completion {
         if !matches!(right, JsValue::Object(_)) {
-            return Completion::Throw(JsValue::String(JsString::from_str(
-                "Right-hand side of instanceof is not an object",
-            )));
+            return Completion::Throw(
+                self.create_type_error("Right-hand side of instanceof is not an object"),
+            );
         }
         let rhs_obj = match right {
             JsValue::Object(o) => o.clone(),
@@ -11196,9 +11285,9 @@ impl Interpreter {
             };
             if !matches!(method, JsValue::Undefined | JsValue::Null) {
                 if !self.is_callable(&method) {
-                    return Completion::Throw(JsValue::String(JsString::from_str(
-                        "@@hasInstance is not callable",
-                    )));
+                    return Completion::Throw(
+                        self.create_type_error("@@hasInstance is not callable"),
+                    );
                 }
                 let result = self.call_function(&method, right, std::slice::from_ref(left));
                 return match result {
@@ -11210,9 +11299,9 @@ impl Interpreter {
             }
         }
         if !self.is_callable(right) {
-            return Completion::Throw(JsValue::String(JsString::from_str(
-                "Right-hand side of instanceof is not callable",
-            )));
+            return Completion::Throw(
+                self.create_type_error("Right-hand side of instanceof is not callable"),
+            );
         }
         self.ordinary_has_instance(right, left)
     }
@@ -14780,32 +14869,53 @@ impl Interpreter {
             }
         }
 
+        let await_deadline = if self.is_agent_thread {
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(120))
+        } else {
+            None
+        };
         loop {
             if done.get() {
                 break;
             }
-            if self.microtask_queue.is_empty() {
-                // Check agent async completions before giving up
-                let completions: Vec<_> = {
-                    let mut lock = self.agent_async_completions.lock().unwrap();
-                    lock.drain(..).collect()
-                };
-                if completions.is_empty() {
-                    break;
+            if !self.microtask_queue.is_empty() {
+                let (roots, job) = self.microtask_queue.remove(0);
+                for val in &roots {
+                    self.gc_root_value(val);
                 }
+                let _ = job(self);
+                for val in &roots {
+                    self.gc_unroot_value(val);
+                }
+                continue;
+            }
+            // Check agent async completions
+            let completions: Vec<_> = {
+                let mut lock = self.agent_async_completions.0.lock().unwrap();
+                lock.drain(..).collect()
+            };
+            if !completions.is_empty() {
                 for f in completions {
                     f(self);
                 }
                 continue;
             }
-            let (roots, job) = self.microtask_queue.remove(0);
-            for val in &roots {
-                self.gc_root_value(val);
+            // For agent threads, block-wait for async completions
+            if let Some(deadline) = await_deadline {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                let (ref mtx, ref cvar) = *self.agent_async_completions;
+                let lock = mtx.lock().unwrap();
+                if !lock.is_empty() {
+                    drop(lock);
+                    continue;
+                }
+                let _ = cvar.wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100))).unwrap();
+                continue;
             }
-            let _ = job(self);
-            for val in &roots {
-                self.gc_unroot_value(val);
-            }
+            break;
         }
 
         self.gc_unroot_value(&promise);

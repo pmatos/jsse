@@ -643,10 +643,12 @@ impl Interpreter {
                             }
                             let result_val = JsValue::String(JsString::from_str(result_str));
                             let resolve = resolve_clone;
-                            pending.lock().unwrap().push(Box::new(move |interp: &mut Interpreter| {
+                            let (ref mtx, ref completion_cvar) = *pending;
+                            mtx.lock().unwrap().push(Box::new(move |interp: &mut Interpreter| {
                                 let _ = interp.call_function(&resolve, &JsValue::Undefined, &[result_val]);
                                 interp.gc_unroot_value(&resolve);
                             }));
+                            completion_cvar.notify_one();
                         });
                     }
 

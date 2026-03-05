@@ -614,7 +614,7 @@ fn transform_yielding_expression(
             }
         }
 
-        Expression::Array(elements) => {
+        Expression::Array(elements, trailing_flag) => {
             let mut new_elements = Vec::new();
             for (i, elem) in elements.iter().enumerate() {
                 match elem {
@@ -637,7 +637,7 @@ fn transform_yielding_expression(
                     }
                 }
             }
-            let combined = Expression::Array(new_elements);
+            let combined = Expression::Array(new_elements, *trailing_flag);
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 

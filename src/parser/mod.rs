@@ -55,6 +55,7 @@ pub struct Parser<'a> {
     in_switch_case: bool,
     no_in: bool,
     pub last_string_literal_has_escape: bool,
+    pub last_string_literal_has_legacy_octal: bool,
     private_name_scopes: Vec<(std::collections::HashSet<String>, Vec<(String, usize)>)>,
     in_field_initializer_eval: bool,
     in_static_block: bool,
@@ -101,6 +102,7 @@ impl<'a> Parser<'a> {
             in_switch_case: false,
             no_in: false,
             last_string_literal_has_escape: false,
+            last_string_literal_has_legacy_octal: false,
             private_name_scopes: Vec::new(),
             in_field_initializer_eval: false,
             in_static_block: false,
@@ -469,7 +471,7 @@ impl<'a> Parser<'a> {
         use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
         match expr {
             Expression::Identifier(name) => name == "arguments",
-            Expression::Array(elems) => elems
+            Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::contains_arguments)),
             Expression::Object(props) => props.iter().any(|p: &Property| {
@@ -617,7 +619,7 @@ impl<'a> Parser<'a> {
         use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
         match expr {
             Expression::Identifier(name) => name == "await",
-            Expression::Array(elems) => elems
+            Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_await_identifier)),
             Expression::Object(props) => props.iter().any(|p: &Property| {
@@ -720,7 +722,7 @@ impl<'a> Parser<'a> {
         use crate::ast::{ArrowBody, Expression, MemberProperty, Property};
         match expr {
             Expression::Await(_) => true,
-            Expression::Array(elems) => elems
+            Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_contains_await_expression)),
             Expression::Object(props) => props.iter().any(|p: &Property| {
@@ -817,19 +819,32 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn is_string_literal_statement(stmt: &Statement) -> bool {
+        matches!(stmt, Statement::Expression(Expression::Literal(Literal::String(_))))
+    }
+
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut body = Vec::new();
         let mut in_directive_prologue = true;
         let mut body_is_strict = false;
+        let mut prologue_had_legacy_octal = false;
 
         while self.current != Token::Eof {
             let stmt = self.parse_statement_or_declaration()?;
 
             if in_directive_prologue {
-                if let Some(directive) = self.is_directive_prologue(&stmt) {
-                    if directive == "use strict" {
-                        self.set_strict(true);
-                        body_is_strict = true;
+                if Self::is_string_literal_statement(&stmt) {
+                    if let Some(directive) = self.is_directive_prologue(&stmt) {
+                        if directive == "use strict" {
+                            if prologue_had_legacy_octal {
+                                return Err(self.error("Octal escape sequences are not allowed in strict mode"));
+                            }
+                            self.set_strict(true);
+                            body_is_strict = true;
+                        }
+                    }
+                    if self.last_string_literal_has_legacy_octal {
+                        prologue_had_legacy_octal = true;
                     }
                 } else {
                     in_directive_prologue = false;
@@ -1192,7 +1207,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
             let pat = expr_to_pattern(*left)?;
             Ok(Pattern::Assign(Box::new(pat), right))
         }
-        Expression::Array(elements) => {
+        Expression::Array(elements, trailing_comma_after_spread) => {
             let mut pats = Vec::new();
             let mut saw_rest = false;
             for e in elements {
@@ -1223,6 +1238,11 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
                     });
                 }
                 pats.push(pat);
+            }
+            if saw_rest && trailing_comma_after_spread {
+                return Err(ParseError {
+                    message: "Rest element must be last element".to_string(),
+                });
             }
             Ok(Pattern::Array(pats))
         }

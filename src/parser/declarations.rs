@@ -19,8 +19,12 @@ impl<'a> Parser<'a> {
         };
         self.advance()?;
         let declarations = self.parse_variable_declaration_list()?;
-        // "let" cannot be a bound name in let/const declarations (§13.3.1.1)
         for d in &declarations {
+            // const declarations must have an initializer (§14.3.1.1)
+            if kind == VarKind::Const && d.init.is_none() {
+                return Err(self.error("Missing initializer in const declaration"));
+            }
+            // "let" cannot be a bound name in let/const declarations (§13.3.1.1)
             let mut names = Vec::new();
             Self::collect_bound_names(&d.pattern, &mut names);
             for name in &names {
@@ -593,7 +597,7 @@ impl<'a> Parser<'a> {
                 Self::expr_has_direct_super(callee)
                     || args.iter().any(Self::expr_has_direct_super)
             }
-            Expression::Array(elems) => elems
+            Expression::Array(elems, _) => elems
                 .iter()
                 .any(|e| e.as_ref().is_some_and(Self::expr_has_direct_super)),
             Expression::Object(props) => props.iter().any(|p| {
@@ -1209,15 +1213,24 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
         let mut in_directive_prologue = true;
         let mut has_use_strict_directive = false;
+        let mut prologue_had_legacy_octal = false;
 
         while self.current != Token::RightBrace {
             let stmt = self.parse_statement_or_declaration()?;
 
             if in_directive_prologue {
-                if let Some(directive) = self.is_directive_prologue(&stmt) {
-                    if directive == "use strict" {
-                        self.set_strict(true);
-                        has_use_strict_directive = true;
+                if Self::is_string_literal_statement(&stmt) {
+                    if let Some(directive) = self.is_directive_prologue(&stmt) {
+                        if directive == "use strict" {
+                            if prologue_had_legacy_octal {
+                                return Err(self.error("Octal escape sequences are not allowed in strict mode"));
+                            }
+                            self.set_strict(true);
+                            has_use_strict_directive = true;
+                        }
+                    }
+                    if self.last_string_literal_has_legacy_octal {
+                        prologue_had_legacy_octal = true;
                     }
                 } else {
                     in_directive_prologue = false;

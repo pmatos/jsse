@@ -1433,7 +1433,7 @@ impl Interpreter {
                 n.insert_property(
                     "MIN_VALUE".to_string(),
                     PropertyDescriptor::data(
-                        JsValue::Number(f64::MIN_POSITIVE),
+                        JsValue::Number(5e-324_f64),
                         false,
                         false,
                         false,

@@ -79,7 +79,7 @@ impl<'a> Parser<'a> {
         simple_only: bool,
         allow_call: bool,
     ) -> Result<(), ParseError> {
-        if !simple_only && matches!(expr, Expression::Array(_) | Expression::Object(_)) {
+        if !simple_only && matches!(expr, Expression::Array(..) | Expression::Object(_)) {
             if self.last_expr_parenthesized {
                 return Err(self.error("Invalid left-hand side in assignment"));
             }
@@ -103,7 +103,7 @@ impl<'a> Parser<'a> {
 
     fn validate_destructuring_pattern(&self, expr: &Expression) -> Result<(), ParseError> {
         match expr {
-            Expression::Array(elements) => {
+            Expression::Array(elements, trailing_comma_after_spread) => {
                 let mut saw_rest = false;
                 for elem in elements {
                     if let Some(e) = elem {
@@ -136,6 +136,11 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
+                if saw_rest && *trailing_comma_after_spread {
+                    return Err(self.error(
+                        "Rest element must be last element in array destructuring pattern",
+                    ));
+                }
                 Ok(())
             }
             Expression::Object(props) => {
@@ -149,6 +154,18 @@ impl<'a> Parser<'a> {
                     if let Expression::Spread(_) = &prop.value {
                         saw_rest = true;
                     }
+                    match prop.kind {
+                        PropertyKind::Get | PropertyKind::Set => {
+                            return Err(self.error("Invalid destructuring assignment target"));
+                        }
+                        PropertyKind::Init => {
+                            if let Expression::Assign(AssignOp::Assign, target, _) = &prop.value {
+                                self.validate_destructuring_target(target)?;
+                            } else if !prop.shorthand {
+                                self.validate_destructuring_target(&prop.value)?;
+                            }
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -158,7 +175,7 @@ impl<'a> Parser<'a> {
 
     fn validate_destructuring_target(&self, expr: &Expression) -> Result<(), ParseError> {
         match expr {
-            Expression::Array(_) | Expression::Object(_) => {
+            Expression::Array(..) | Expression::Object(_) => {
                 self.validate_destructuring_pattern(expr)
             }
             Expression::Sequence(_) | Expression::Comma(_) => {
@@ -668,7 +685,10 @@ impl<'a> Parser<'a> {
         if self.current == Token::Dot {
             self.advance()?; // .
             let is_target = match &self.current {
-                Token::Identifier(n) | Token::IdentifierWithEscape(n) => n == "target",
+                Token::Identifier(n) => n == "target",
+                Token::IdentifierWithEscape(n) if n == "target" => {
+                    return Err(self.error("Keyword must not contain escaped characters"));
+                }
                 _ => false,
             };
             if is_target {
@@ -990,6 +1010,7 @@ impl<'a> Parser<'a> {
             Token::StringLiteral(s) => {
                 let s = s.clone();
                 self.last_string_literal_has_escape = self.lexer.last_string_has_escape;
+                self.last_string_literal_has_legacy_octal = self.lexer.last_string_has_legacy_octal;
                 self.advance()?;
                 Ok(Expression::Literal(Literal::String(s)))
             }
@@ -1198,13 +1219,15 @@ impl<'a> Parser<'a> {
         let saved_no_in = self.no_in;
         self.no_in = false;
         let mut elements = Vec::new();
+        let mut trailing_comma_after_spread = false;
         while self.current != Token::RightBracket {
             if self.current == Token::Comma {
                 elements.push(None);
                 self.advance()?;
                 continue;
             }
-            if self.current == Token::Ellipsis {
+            let is_spread = self.current == Token::Ellipsis;
+            if is_spread {
                 self.advance()?;
                 let expr = self.parse_assignment_expression()?;
                 elements.push(Some(Expression::Spread(Box::new(expr))));
@@ -1213,13 +1236,16 @@ impl<'a> Parser<'a> {
             }
             if self.current == Token::Comma {
                 self.advance()?;
+                if is_spread && self.current == Token::RightBracket {
+                    trailing_comma_after_spread = true;
+                }
             } else if self.current != Token::RightBracket {
                 return Err(self.error("Expected ',' or ']' in array literal"));
             }
         }
         self.eat(&Token::RightBracket)?;
         self.no_in = saved_no_in;
-        Ok(Expression::Array(elements))
+        Ok(Expression::Array(elements, trailing_comma_after_spread))
     }
 
     fn has_cover_initialized_name(expr: &Expression) -> bool {
@@ -1289,7 +1315,8 @@ impl<'a> Parser<'a> {
     fn parse_object_property(&mut self) -> Result<Property, ParseError> {
         let method_source_start = self.current_token_start;
         // Check for async method: { async method() {} } or { async *method() {} }
-        let is_async_prop = matches!(&self.current, Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "async")
+        // Escaped identifiers like \u0061sync don't count as async keyword
+        let is_async_prop = matches!(&self.current, Token::Identifier(n) if n == "async")
             || matches!(&self.current, Token::Keyword(Keyword::Async));
         if is_async_prop {
             let saved_lt = self.prev_line_terminator;
@@ -1358,6 +1385,33 @@ impl<'a> Parser<'a> {
             self.prev_line_terminator = saved_lt;
         }
 
+        // Escaped \u0061sync followed by * or method name is a SyntaxError
+        if matches!(&self.current, Token::IdentifierWithEscape(n) if n == "async") {
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?;
+            if !self.prev_line_terminator {
+                let looks_like_async_method = self.current == Token::Star
+                    || matches!(
+                        &self.current,
+                        Token::Identifier(_)
+                            | Token::IdentifierWithEscape(_)
+                            | Token::StringLiteral(_)
+                            | Token::NumericLiteral(_)
+                            | Token::LegacyOctalLiteral(_)
+                            | Token::NonOctalDecimalLiteral(_)
+                            | Token::LeftBracket
+                            | Token::Keyword(_)
+                            | Token::PrivateName(_)
+                    );
+                if looks_like_async_method {
+                    return Err(self.error("Keyword must not contain escaped characters"));
+                }
+            }
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
+        }
+
         // Check for generator method: { *method() {} }
         if self.current == Token::Star {
             self.advance()?; // consume *
@@ -1399,10 +1453,10 @@ impl<'a> Parser<'a> {
         }
 
         // Check for get/set accessor
+        // Escaped identifiers like g\u0065t don't count as get/set keyword — error if used as accessor
+        let escaped_get_or_set = matches!(&self.current, Token::IdentifierWithEscape(n) if n == "get" || n == "set");
         let get_or_set_name = match &self.current {
-            Token::Identifier(n) | Token::IdentifierWithEscape(n) if n == "get" || n == "set" => {
-                Some(n.clone())
-            }
+            Token::Identifier(n) if n == "get" || n == "set" => Some(n.clone()),
             _ => None,
         };
         if let Some(n) = get_or_set_name {
@@ -1473,9 +1527,36 @@ impl<'a> Parser<'a> {
             self.prev_line_terminator = saved_lt;
         }
 
+        // Escaped get/set: advance past it to see what follows, then decide
+        if escaped_get_or_set {
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?;
+            let looks_like_accessor = matches!(
+                &self.current,
+                Token::Identifier(_)
+                    | Token::IdentifierWithEscape(_)
+                    | Token::StringLiteral(_)
+                    | Token::NumericLiteral(_)
+                    | Token::LegacyOctalLiteral(_)
+                    | Token::NonOctalDecimalLiteral(_)
+                    | Token::LeftBracket
+                    | Token::Keyword(_)
+                    | Token::PrivateName(_)
+            );
+            if looks_like_accessor {
+                return Err(self.error("Keyword must not contain escaped characters"));
+            }
+            // Not an accessor — push back and let the escaped identifier be parsed normally
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
+        }
+
         let is_escaped_reserved = matches!(&self.current, Token::IdentifierWithEscape(name)
             if Self::is_reserved_identifier(name, self.strict)
                 || name == "await" || name == "yield");
+        let was_keyword = matches!(&self.current, Token::Keyword(_) | Token::BooleanLiteral(_))
+            || self.current == Token::NullLiteral;
 
         let (key, computed) = self.parse_property_name()?;
 
@@ -1496,6 +1577,20 @@ impl<'a> Parser<'a> {
             // Reserved words cannot be used as shorthand IdentifierReferences
             if matches!(name.as_str(), "true" | "false" | "null") {
                 return Err(self.error(format!("Unexpected token '{name}'")));
+            }
+            // Keywords that are not valid IdentifierReferences cannot be shorthand
+            if was_keyword {
+                let n = name.as_str();
+                // These keywords can be identifiers in sloppy mode
+                let is_contextual = matches!(n, "let" | "static" | "yield" | "await" | "async" | "of");
+                // These are strict-mode-only reserved words
+                let is_strict_reserved = matches!(
+                    n,
+                    "implements" | "interface" | "package" | "private" | "protected" | "public"
+                );
+                if !is_contextual && !is_strict_reserved {
+                    return Err(self.error(format!("Unexpected token '{n}'")));
+                }
             }
             // In strict mode, future reserved words cannot be IdentifierReferences
             if self.strict {
@@ -1531,6 +1626,10 @@ impl<'a> Parser<'a> {
         {
             if is_escaped_reserved {
                 return Err(self.error("Keyword must not contain escaped characters"));
+            }
+            // Keywords cannot be CoverInitializedName targets
+            if was_keyword && Self::is_reserved_identifier(name, self.strict) {
+                return Err(self.error(format!("Unexpected token '{name}'")));
             }
             let ident = name.clone();
             if self.strict && (ident == "eval" || ident == "arguments") {

@@ -134,7 +134,7 @@ pub enum Expression {
     Identifier(String),
     This,
     Super,
-    Array(Vec<Option<Expression>>),
+    Array(Vec<Option<Expression>>, bool),
     Object(Vec<Property>),
     Function(FunctionExpr),
     ArrowFunction(ArrowFunction),

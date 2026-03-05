@@ -69,7 +69,7 @@ pub struct Interpreter {
     pub(crate) agent_broadcast_txs: Vec<std::sync::mpsc::Sender<AgentBroadcastMsg>>,
     pub(crate) agent_handles: Vec<std::thread::JoinHandle<()>>,
     pub(crate) agent_broadcast_rx: Option<std::sync::mpsc::Receiver<AgentBroadcastMsg>>,
-    pub(crate) agent_async_completions: std::sync::Arc<std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>>,
+    pub(crate) agent_async_completions: std::sync::Arc<(std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>, std::sync::Condvar)>,
 }
 
 pub struct LoadedModule {
@@ -157,7 +157,7 @@ impl Interpreter {
             agent_broadcast_txs: Vec::new(),
             agent_handles: Vec::new(),
             agent_broadcast_rx: None,
-            agent_async_completions: Arc::new(std::sync::Mutex::new(Vec::new())),
+            agent_async_completions: Arc::new((std::sync::Mutex::new(Vec::new()), std::sync::Condvar::new())),
         };
         interp.setup_globals();
         interp
@@ -326,7 +326,6 @@ impl Interpreter {
 
         // $262.agent.start(script)
         let reports_clone = self.agent_reports.clone();
-        let async_completions_clone = self.agent_async_completions.clone();
         let start_fn = self.create_function(JsFunction::native(
             "start".to_string(),
             1,
@@ -341,15 +340,12 @@ impl Interpreter {
                 interp.agent_broadcast_txs.push(tx);
 
                 let reports = interp.agent_reports.clone();
-                let async_comps = interp.agent_async_completions.clone();
-
                 let handle = std::thread::spawn(move || {
                     let mut agent_interp = Interpreter::new();
                     agent_interp.is_agent_thread = true;
                     agent_interp.can_block = true;
                     agent_interp.agent_reports = reports;
                     agent_interp.agent_broadcast_rx = Some(rx);
-                    agent_interp.agent_async_completions = async_comps;
 
                     // Set up agent-side $262.agent on the global
                     setup_agent_side_262(&mut agent_interp);
@@ -363,7 +359,7 @@ impl Interpreter {
                         Err(_) => return,
                     };
                     let _ = agent_interp.run(&program);
-                    agent_interp.drain_microtasks();
+                    agent_interp.drain_microtasks_blocking();
                 });
                 interp.agent_handles.push(handle);
 
@@ -528,7 +524,7 @@ impl Interpreter {
 
     pub(crate) fn drain_agent_async_completions(&mut self) {
         let completions: Vec<_> = {
-            let mut lock = self.agent_async_completions.lock().unwrap();
+            let mut lock = self.agent_async_completions.0.lock().unwrap();
             lock.drain(..).collect()
         };
         for f in completions {
@@ -2327,7 +2323,7 @@ impl Interpreter {
             Expression::OptionalChain(left, right) => {
                 Self::expr_has_await(left) || Self::expr_has_await(right)
             }
-            Expression::Array(elements) => {
+            Expression::Array(elements, _) => {
                 elements.iter().any(|e| e.as_ref().map_or(false, |e| Self::expr_has_await(e)))
             }
             Expression::Object(props) => {
@@ -3334,7 +3330,7 @@ impl Interpreter {
                 }
             }
             let completions: Vec<_> = {
-                let mut lock = self.agent_async_completions.lock().unwrap();
+                let mut lock = self.agent_async_completions.0.lock().unwrap();
                 lock.drain(..).collect()
             };
             if completions.is_empty() {
@@ -3343,6 +3339,50 @@ impl Interpreter {
             for f in completions {
                 f(self);
             }
+        }
+    }
+
+    /// Like drain_microtasks but blocks waiting for async completions via Condvar.
+    /// Used by agent threads that need to wait for waitAsync resolutions.
+    pub(crate) fn drain_microtasks_blocking(&mut self) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            while !self.microtask_queue.is_empty() {
+                let (roots, job) = self.microtask_queue.remove(0);
+                for val in &roots {
+                    self.gc_root_value(val);
+                }
+                let _ = job(self);
+                for val in &roots {
+                    self.gc_unroot_value(val);
+                }
+            }
+            let completions: Vec<_> = {
+                let mut lock = self.agent_async_completions.0.lock().unwrap();
+                lock.drain(..).collect()
+            };
+            if !completions.is_empty() {
+                for f in completions {
+                    f(self);
+                }
+                continue;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            // Wait for async completions with a timeout
+            let (ref mtx, ref cvar) = *self.agent_async_completions;
+            let lock = mtx.lock().unwrap();
+            if !lock.is_empty() {
+                drop(lock);
+                continue;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (_guard, timeout_result) = cvar.wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100))).unwrap();
+            drop(_guard);
         }
     }
 
