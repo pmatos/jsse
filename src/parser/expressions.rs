@@ -839,7 +839,7 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                        (ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)), false)
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -863,7 +863,7 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                        (ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)), false)
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -885,7 +885,7 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                        (ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)), false)
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -907,7 +907,7 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)), false)
+                        (ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)), false)
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -1015,7 +1015,7 @@ impl<'a> Parser<'a> {
                             } else {
                                 (
                                     ArrowBody::Expression(Box::new(
-                                        self.parse_assignment_expression()?,
+                                        self.parse_arrow_expression_body()?,
                                     )),
                                     false,
                                 )
@@ -1059,7 +1059,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(stmts), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
                             false,
                         )
                     };
@@ -1099,7 +1099,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(stmts), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
                             false,
                         )
                     };
@@ -1198,7 +1198,7 @@ impl<'a> Parser<'a> {
                         } else {
                             (
                                 ArrowBody::Expression(Box::new(
-                                    self.parse_assignment_expression()?,
+                                    self.parse_arrow_expression_body()?,
                                 )),
                                 false,
                             )
@@ -1227,7 +1227,7 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(stmts), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
                             false,
                         )
                     };
@@ -1288,7 +1288,7 @@ impl<'a> Parser<'a> {
                         } else {
                             (
                                 ArrowBody::Expression(Box::new(
-                                    self.parse_assignment_expression()?,
+                                    self.parse_arrow_expression_body()?,
                                 )),
                                 false,
                             )
@@ -1999,7 +1999,7 @@ impl<'a> Parser<'a> {
                     (ArrowBody::Block(stmts), strict)
                 } else {
                     (
-                        ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                        ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
                         false,
                     )
                 };
@@ -2036,7 +2036,7 @@ impl<'a> Parser<'a> {
                 (ArrowBody::Block(stmts), strict)
             } else {
                 (
-                    ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                    ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
                     false,
                 )
             };
@@ -2091,7 +2091,7 @@ impl<'a> Parser<'a> {
                     (ArrowBody::Block(stmts), strict)
                 } else {
                     (
-                        ArrowBody::Expression(Box::new(self.parse_assignment_expression()?)),
+                        ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
                         false,
                     )
                 };

@@ -1335,6 +1335,16 @@ impl<'a> Parser<'a> {
         )
     }
 
+    pub(super) fn parse_arrow_expression_body(
+        &mut self,
+    ) -> Result<Expression, ParseError> {
+        let prev_static_block = self.in_static_block;
+        self.in_static_block = false;
+        let result = self.parse_assignment_expression();
+        self.in_static_block = prev_static_block;
+        result
+    }
+
     pub(super) fn parse_arrow_body_checked(
         &mut self,
         is_async: bool,
