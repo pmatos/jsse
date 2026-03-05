@@ -4113,6 +4113,7 @@ impl Interpreter {
                             kind: PropertyKind::Init,
                             computed: matches!(key, PropertyKey::Computed(_)),
                             shorthand: false,
+                            method: false,
                         },
                         ObjectPatternProperty::Shorthand(name) => Property {
                             key: PropertyKey::Identifier(name.clone()),
@@ -4120,6 +4121,7 @@ impl Interpreter {
                             kind: PropertyKind::Init,
                             computed: false,
                             shorthand: true,
+                            method: false,
                         },
                         ObjectPatternProperty::Rest(p) => Property {
                             key: PropertyKey::Identifier("__rest__".to_string()),
@@ -4129,6 +4131,7 @@ impl Interpreter {
                             kind: PropertyKind::Init,
                             computed: false,
                             shorthand: false,
+                            method: false,
                         },
                     })
                     .collect();
@@ -14453,8 +14456,7 @@ impl Interpreter {
                     );
                 }
             };
-            let is_accessor = matches!(prop.kind, PropertyKind::Get | PropertyKind::Set);
-            if is_accessor {
+            if prop.method {
                 self.next_function_is_method = true;
             }
             let value = match self.eval_expr(&prop.value, env) {

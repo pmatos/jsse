@@ -1169,29 +1169,26 @@ impl Interpreter {
                                 );
                             }
                             let cu = string.code_units[position];
-                            // Handle surrogate pairs for full Unicode code points
-                            let (result_str, advance) = if (0xD800..=0xDBFF).contains(&cu)
+                            let (result_units, advance) = if (0xD800..=0xDBFF).contains(&cu)
                                 && position + 1 < string.code_units.len()
                             {
                                 let next_cu = string.code_units[position + 1];
                                 if (0xDC00..=0xDFFF).contains(&next_cu) {
-                                    let s = String::from_utf16_lossy(
-                                        &string.code_units[position..position + 2],
-                                    );
-                                    (s, 2)
+                                    (vec![cu, next_cu], 2)
                                 } else {
-                                    (String::from_utf16_lossy(&[cu]), 1)
+                                    (vec![cu], 1)
                                 }
                             } else {
-                                (String::from_utf16_lossy(&[cu]), 1)
+                                (vec![cu], 1)
                             };
                             obj.borrow_mut().iterator_state = Some(IteratorState::StringIterator {
                                 string: string.clone(),
                                 position: position + advance,
                                 done: false,
                             });
+                            let result_js_str = JsString { code_units: result_units };
                             Completion::Normal(interp.create_iter_result_object(
-                                JsValue::String(JsString::from_str(&result_str)),
+                                JsValue::String(result_js_str),
                                 false,
                             ))
                         } else {

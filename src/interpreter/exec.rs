@@ -747,8 +747,8 @@ impl Interpreter {
             }
             Statement::While(w) => self.exec_while(w, env),
             Statement::DoWhile(dw) => self.exec_do_while(dw, env),
-            Statement::For(f) => self.exec_for(f, env),
-            Statement::ForIn(fi) => self.exec_for_in(fi, env),
+            Statement::For(f) => self.exec_for(f, env, None),
+            Statement::ForIn(fi) => self.exec_for_in(fi, env, None),
             Statement::ForOf(fo) => self.exec_for_of(fo, env, None),
             Statement::Return(expr) => {
                 let val = if let Some(e) = expr {
@@ -783,14 +783,16 @@ impl Interpreter {
             Statement::Switch(s) => self.exec_switch(s, env),
             Statement::Labeled(label, stmt) => {
                 let comp = match stmt.as_ref() {
+                    Statement::For(f) => self.exec_for(f, env, Some(label)),
+                    Statement::ForIn(fi) => self.exec_for_in(fi, env, Some(label)),
                     Statement::ForOf(fo) => self.exec_for_of(fo, env, Some(label)),
+                    Statement::While(_) | Statement::DoWhile(_) => {
+                        self.exec_labeled_loop(stmt, env, label)
+                    }
                     _ => self.exec_statement(stmt, env),
                 };
                 match &comp {
                     Completion::Break(Some(l), val) if l == label => {
-                        Completion::Normal(val.clone().unwrap_or(JsValue::Undefined))
-                    }
-                    Completion::Continue(Some(l), val) if l == label => {
                         Completion::Normal(val.clone().unwrap_or(JsValue::Undefined))
                     }
                     _ => comp,
@@ -984,7 +986,8 @@ impl Interpreter {
                     }
                 } else {
                     env.borrow_mut().declare(name, kind);
-                    env.borrow_mut().set(name, val)
+                    env.borrow_mut().initialize_binding(name, val);
+                    Ok(())
                 }
             }
             Pattern::Assign(inner, default) => {
@@ -1285,7 +1288,85 @@ impl Interpreter {
         Completion::Normal(v)
     }
 
-    fn exec_for(&mut self, f: &ForStatement, env: &EnvRef) -> Completion {
+    fn exec_labeled_loop(&mut self, stmt: &Statement, env: &EnvRef, label: &str) -> Completion {
+        match stmt {
+            Statement::While(w) => {
+                let mut v = JsValue::Undefined;
+                loop {
+                    let test = match self.eval_expr(&w.test, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if !self.to_boolean_val(&test) {
+                        break;
+                    }
+                    match self.exec_statement(&w.body, env) {
+                        Completion::Normal(val) => {
+                            v = val;
+                        }
+                        Completion::Empty => {}
+                        Completion::Continue(None, cont_val) => {
+                            if let Some(val) = cont_val {
+                                v = val;
+                            }
+                        }
+                        Completion::Continue(Some(ref l), cont_val) if l == label => {
+                            if let Some(val) = cont_val {
+                                v = val;
+                            }
+                        }
+                        Completion::Break(None, break_val) => {
+                            if let Some(val) = break_val {
+                                v = val;
+                            }
+                            return Completion::Normal(v);
+                        }
+                        other => return other,
+                    }
+                }
+                Completion::Normal(v)
+            }
+            Statement::DoWhile(dw) => {
+                let mut v = JsValue::Undefined;
+                loop {
+                    match self.exec_statement(&dw.body, env) {
+                        Completion::Normal(val) => {
+                            v = val;
+                        }
+                        Completion::Empty => {}
+                        Completion::Continue(None, cont_val) => {
+                            if let Some(val) = cont_val {
+                                v = val;
+                            }
+                        }
+                        Completion::Continue(Some(ref l), cont_val) if l == label => {
+                            if let Some(val) = cont_val {
+                                v = val;
+                            }
+                        }
+                        Completion::Break(None, break_val) => {
+                            if let Some(val) = break_val {
+                                v = val;
+                            }
+                            return Completion::Normal(v);
+                        }
+                        other => return other,
+                    }
+                    let test = match self.eval_expr(&dw.test, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if !self.to_boolean_val(&test) {
+                        break;
+                    }
+                }
+                Completion::Normal(v)
+            }
+            _ => unreachable!("exec_labeled_loop called with non-loop statement"),
+        }
+    }
+
+    fn exec_for(&mut self, f: &ForStatement, env: &EnvRef, label: Option<&str>) -> Completion {
         let for_env = Environment::new(Some(env.clone()));
         if let Some(init) = &f.init {
             match init {
@@ -1331,6 +1412,11 @@ impl Interpreter {
                             v = val;
                         }
                     }
+                    Completion::Continue(Some(ref l), cont_val) if label == Some(l.as_str()) => {
+                        if let Some(val) = cont_val {
+                            v = val;
+                        }
+                    }
                     Completion::Break(None, break_val) => {
                         if let Some(val) = break_val {
                             v = val;
@@ -1351,7 +1437,7 @@ impl Interpreter {
         self.dispose_resources(&for_env, result)
     }
 
-    fn exec_for_in(&mut self, fi: &ForInStatement, env: &EnvRef) -> Completion {
+    fn exec_for_in(&mut self, fi: &ForInStatement, env: &EnvRef, label: Option<&str>) -> Completion {
         // Annex B: for-in initializer (sloppy mode var declarations only)
         if let ForInOfLeft::Variable(decl) = &fi.left
             && decl.kind == VarKind::Var
@@ -1492,6 +1578,11 @@ impl Interpreter {
                     }
                     Completion::Empty => {}
                     Completion::Continue(None, cont_val) => {
+                        if let Some(val) = cont_val {
+                            v = val;
+                        }
+                    }
+                    Completion::Continue(Some(ref l), cont_val) if label == Some(l.as_str()) => {
                         if let Some(val) = cont_val {
                             v = val;
                         }

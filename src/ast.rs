@@ -259,6 +259,7 @@ pub struct Property {
     pub kind: PropertyKind,
     pub computed: bool,
     pub shorthand: bool,
+    pub method: bool,
 }
 
 #[derive(Clone, Debug)]

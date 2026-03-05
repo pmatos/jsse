@@ -647,6 +647,14 @@ impl Environment {
         );
     }
 
+    /// §9.1.1.1.4 InitializeBinding — sets value and marks initialized (no TDZ check)
+    pub fn initialize_binding(&mut self, name: &str, value: JsValue) {
+        if let Some(binding) = self.bindings.get_mut(name) {
+            binding.value = value;
+            binding.initialized = true;
+        }
+    }
+
     /// §9.1.1.5.5 CreateImportBinding(N, M, N2)
     /// Creates an immutable indirect binding that references another module's environment.
     pub fn create_import_binding(

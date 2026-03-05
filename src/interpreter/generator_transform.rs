@@ -686,6 +686,7 @@ fn transform_yielding_expression(
                     kind: prop.kind,
                     computed: prop.computed,
                     shorthand: false, // Can't be shorthand anymore if we transformed
+                    method: prop.method,
                 });
             }
             let combined = Expression::Object(new_props);

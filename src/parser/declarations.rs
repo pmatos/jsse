@@ -242,6 +242,11 @@ impl<'a> Parser<'a> {
             ));
         }
         if body_strict {
+            if name == "eval" || name == "arguments" {
+                return Err(self.error(&format!(
+                    "'{name}' is not allowed as a function name in strict mode"
+                )));
+            }
             self.check_strict_params(&params)?;
         }
         if body_strict

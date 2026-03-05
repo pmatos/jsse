@@ -1277,6 +1277,7 @@ impl<'a> Parser<'a> {
                     kind: PropertyKind::Init,
                     computed: false,
                     shorthand: false,
+                    method: false,
                 });
             } else {
                 props.push(self.parse_object_property()?);
@@ -1376,6 +1377,7 @@ impl<'a> Parser<'a> {
                         kind: PropertyKind::Init,
                         computed,
                         shorthand: false,
+                        method: true,
                     });
                 }
             }
@@ -1449,6 +1451,7 @@ impl<'a> Parser<'a> {
                 kind: PropertyKind::Init,
                 computed,
                 shorthand: false,
+                method: true,
             });
         }
 
@@ -1502,6 +1505,9 @@ impl<'a> Parser<'a> {
                         "Illegal 'use strict' directive in function with non-simple parameter list",
                     ));
                 }
+                if body_strict {
+                    self.check_strict_params(&params)?;
+                }
                 if body_strict || self.strict {
                     self.check_duplicate_params_strict(&params)?;
                 }
@@ -1519,6 +1525,7 @@ impl<'a> Parser<'a> {
                     kind: saved_kind,
                     computed,
                     shorthand: false,
+                    method: true,
                 });
             }
             // Not an accessor — push back current and restore get/set as current
@@ -1616,6 +1623,7 @@ impl<'a> Parser<'a> {
                 kind: PropertyKind::Init,
                 computed: false,
                 shorthand: true,
+                method: false,
             });
         }
 
@@ -1647,6 +1655,7 @@ impl<'a> Parser<'a> {
                 kind: PropertyKind::Init,
                 computed: false,
                 shorthand: true,
+                method: false,
             });
         }
 
@@ -1666,9 +1675,8 @@ impl<'a> Parser<'a> {
             if body_strict {
                 self.check_strict_params(&params)?;
             }
-            if body_strict || self.strict {
-                self.check_duplicate_params_strict(&params)?;
-            }
+            // Methods always use UniqueFormalParameters
+            self.check_duplicate_params_strict(&params)?;
             return Ok(Property {
                 key,
                 value: Expression::Function(FunctionExpr {
@@ -1683,6 +1691,7 @@ impl<'a> Parser<'a> {
                 kind: PropertyKind::Init,
                 computed,
                 shorthand: false,
+                method: true,
             });
         }
 
@@ -1695,6 +1704,7 @@ impl<'a> Parser<'a> {
             kind: PropertyKind::Init,
             computed,
             shorthand: false,
+            method: false,
         })
     }
 
@@ -1730,6 +1740,13 @@ impl<'a> Parser<'a> {
             ));
         }
         if body_strict {
+            if let Some(ref n) = name {
+                if n == "eval" || n == "arguments" {
+                    return Err(self.error(&format!(
+                        "'{n}' is not allowed as a function name in strict mode"
+                    )));
+                }
+            }
             self.check_strict_params(&params)?;
         }
         if body_strict || self.strict || is_generator || !Self::is_simple_parameter_list(&params) {
@@ -1779,6 +1796,13 @@ impl<'a> Parser<'a> {
             ));
         }
         if body_strict {
+            if let Some(ref n) = name {
+                if n == "eval" || n == "arguments" {
+                    return Err(self.error(&format!(
+                        "'{n}' is not allowed as a function name in strict mode"
+                    )));
+                }
+            }
             self.check_strict_params(&params)?;
         }
         self.check_duplicate_params_strict(&params)?;
