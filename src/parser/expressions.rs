@@ -178,14 +178,28 @@ impl<'a> Parser<'a> {
             Expression::Array(..) | Expression::Object(_) => {
                 self.validate_destructuring_pattern(expr)
             }
+            Expression::Spread(inner) => self.validate_destructuring_target(inner),
             Expression::Sequence(_) | Expression::Comma(_) => {
                 Err(self.error("Invalid destructuring assignment target"))
             }
-            _ => Ok(()),
+            _ => {
+                // §13.15.5.1: DestructuringAssignmentTarget must have
+                // AssignmentTargetType == simple (identifier or member expression)
+                if Self::is_simple_assignment_target(expr) {
+                    Ok(())
+                } else if !self.strict && matches!(expr, Expression::Call(_, _)) {
+                    // Sloppy mode: call expressions are valid assignment targets
+                    Ok(())
+                } else {
+                    Err(self.error("Invalid destructuring assignment target"))
+                }
+            }
         }
     }
 
     pub(super) fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
+        let saved_proto_dup = self.last_obj_had_proto_dup;
+        self.last_obj_had_proto_dup = false;
         // YieldExpression in generator context
         if self.in_generator && self.current == Token::Keyword(Keyword::Yield) {
             if self.in_formal_parameters {
@@ -224,11 +238,21 @@ impl<'a> Parser<'a> {
                 op,
                 AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign
             );
+            // Assignment target: duplicate __proto__ is allowed (destructuring)
+            self.last_obj_had_proto_dup = saved_proto_dup;
             self.validate_assignment_target(&left, simple_only, !is_logical)?;
             self.advance()?;
             let right = self.parse_assignment_expression()?;
             Ok(Expression::Assign(op, Box::new(left), Box::new(right)))
         } else {
+            // Not a destructuring assignment — check for deferred __proto__ dup error
+            if self.last_obj_had_proto_dup {
+                self.last_obj_had_proto_dup = saved_proto_dup;
+                return Err(
+                    self.error("Duplicate __proto__ fields are not allowed in object literals")
+                );
+            }
+            self.last_obj_had_proto_dup = saved_proto_dup;
             Ok(left)
         }
     }
@@ -1288,6 +1312,7 @@ impl<'a> Parser<'a> {
         }
         self.eat(&Token::RightBrace)?;
         let mut has_proto = false;
+        let mut has_proto_dup = false;
         for prop in &props {
             if prop.computed || prop.shorthand || prop.kind != PropertyKind::Init {
                 continue;
@@ -1302,13 +1327,12 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 if has_proto {
-                    return Err(
-                        self.error("Duplicate __proto__ fields are not allowed in object literals")
-                    );
+                    has_proto_dup = true;
                 }
                 has_proto = true;
             }
         }
+        self.last_obj_had_proto_dup = has_proto_dup;
         self.no_in = saved_no_in;
         Ok(Expression::Object(props))
     }
@@ -1481,6 +1505,8 @@ impl<'a> Parser<'a> {
                     | Token::LeftBracket
                     | Token::Keyword(_)
                     | Token::PrivateName(_)
+                    | Token::NullLiteral
+                    | Token::BooleanLiteral(_)
             );
             if is_accessor {
                 let (key, computed) = self.parse_property_name()?;
@@ -1972,7 +1998,11 @@ impl<'a> Parser<'a> {
         };
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
             self.advance()?;
-            Some(Box::new(self.parse_left_hand_side_expression()?))
+            let heritage = self.parse_left_hand_side_expression()?;
+            if matches!(heritage, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
+                return Err(self.error("Arrow function is not allowed in class heritage"));
+            }
+            Some(Box::new(heritage))
         } else {
             None
         };

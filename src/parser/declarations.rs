@@ -361,7 +361,13 @@ impl<'a> Parser<'a> {
         };
         let super_class = if self.current == Token::Keyword(Keyword::Extends) {
             self.advance()?;
-            Some(Box::new(self.parse_left_hand_side_expression()?))
+            let heritage = self.parse_left_hand_side_expression()?;
+            // §15.7.1: ClassHeritage : extends LeftHandSideExpression
+            // ArrowFunction is not a LeftHandSideExpression
+            if matches!(heritage, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
+                return Err(self.error("Arrow function is not allowed in class heritage"));
+            }
+            Some(Box::new(heritage))
         } else {
             None
         };

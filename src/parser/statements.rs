@@ -123,6 +123,11 @@ impl<'a> Parser<'a> {
                 );
             }
         }
+        if matches!(&self.current, Token::Keyword(Keyword::Class)) {
+            return Err(
+                self.error("Class declaration cannot appear in a single-statement context")
+            );
+        }
         if matches!(&self.current, Token::Keyword(Keyword::Async)) {
             let saved_lt = self.prev_line_terminator;
             let saved = self.advance()?;
@@ -185,8 +190,17 @@ impl<'a> Parser<'a> {
                 }
                 self.labels.push((name.clone(), is_iteration));
                 let stmt = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
-                    // Annex B: labeled function declaration in sloppy mode
-                    self.parse_function_declaration()?
+                    // Annex B: labeled function declaration in sloppy mode (not generators)
+                    let fdecl = self.parse_function_declaration()?;
+                    if let Statement::FunctionDeclaration(ref f) = fdecl {
+                        if f.is_generator {
+                            self.labels.pop();
+                            return Err(self.error(
+                                "Generators can only be declared at the top level or inside a block",
+                            ));
+                        }
+                    }
+                    fdecl
                 } else {
                     self.parse_statement()?
                 };
@@ -487,10 +501,11 @@ impl<'a> Parser<'a> {
         } else {
             Box::new(self.parse_statement()?)
         };
+        // §13.6.1: IsLabelledFunction(Statement) must be false in if-statement
+        if Self::is_labelled_function(&consequent) {
+            return Err(self.error("In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement"));
+        }
         let alternate = if self.current == Token::Keyword(Keyword::Else) {
-            if Self::is_labelled_function(&consequent) {
-                return Err(self.error("In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement"));
-            }
             self.advance()?;
             if !self.strict && self.current == Token::Keyword(Keyword::Function) {
                 let fdecl = self.parse_function_declaration()?;
@@ -505,7 +520,11 @@ impl<'a> Parser<'a> {
                 }
                 Some(Box::new(Statement::Block(vec![fdecl])))
             } else {
-                Some(Box::new(self.parse_statement()?))
+                let alt = self.parse_statement()?;
+                if Self::is_labelled_function(&alt) {
+                    return Err(self.error("In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement"));
+                }
+                Some(Box::new(alt))
             }
         } else {
             None
@@ -576,7 +595,10 @@ impl<'a> Parser<'a> {
         self.eat(&Token::LeftParen)?;
         let test = self.parse_expression()?;
         self.eat(&Token::RightParen)?;
-        self.eat_semicolon()?;
+        // §12.9.1 special ASI rule: semicolon after do-while's `)` is always auto-inserted
+        if self.current == Token::Semicolon {
+            self.advance()?;
+        }
         Ok(Statement::DoWhile(DoWhileStatement { test, body }))
     }
 
@@ -1234,6 +1256,19 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+            // §13.15.1: Validate CatchParameter has no duplicate names
+            if let Some(ref p) = param {
+                let mut bound = Vec::new();
+                Self::collect_bound_names(p, &mut bound);
+                let mut seen = std::collections::HashSet::new();
+                for name in &bound {
+                    if !seen.insert(name.as_str()) {
+                        return Err(self.error(format!(
+                            "Duplicate binding '{name}' in catch clause"
+                        )));
+                    }
+                }
+            }
             self.eat(&Token::LeftBrace)?;
             let prev_block = self.in_block_or_function;
             let prev_sc = self.in_switch_case;
@@ -1246,6 +1281,25 @@ impl<'a> Parser<'a> {
             self.in_block_or_function = prev_block;
             self.in_switch_case = prev_sc;
             self.eat(&Token::RightBrace)?;
+            // §13.15.1: BoundNames of CatchParameter must not overlap
+            // LexicallyDeclaredNames of Block
+            if let Some(ref p) = param {
+                let mut bound = Vec::new();
+                Self::collect_bound_names(p, &mut bound);
+                if !bound.is_empty() {
+                    let mut lex_names = Vec::new();
+                    for stmt in &body {
+                        Self::collect_lexical_names(stmt, &mut lex_names, self.strict)?;
+                    }
+                    for name in &bound {
+                        if lex_names.contains(name) {
+                            return Err(self.error(format!(
+                                "Identifier '{name}' has already been declared"
+                            )));
+                        }
+                    }
+                }
+            }
             Some(CatchClause { param, body })
         } else {
             None

@@ -62,6 +62,7 @@ pub struct Parser<'a> {
     function_param_names: Option<std::collections::HashSet<String>>,
     eval_new_target_allowed: bool,
     last_expr_parenthesized: bool,
+    last_obj_had_proto_dup: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -109,6 +110,7 @@ impl<'a> Parser<'a> {
             function_param_names: None,
             eval_new_target_allowed: false,
             last_expr_parenthesized: false,
+            last_obj_had_proto_dup: false,
         })
     }
 
@@ -532,6 +534,16 @@ impl<'a> Parser<'a> {
             Expression::OptionalChain(object, chain) => {
                 Self::contains_arguments(object) || Self::contains_arguments(chain)
             }
+            // Class expressions: recurse into computed property names and field initializers
+            // (they are evaluated in the enclosing scope), but NOT method bodies
+            Expression::Class(cls) => {
+                if let Some(ref sc) = cls.super_class {
+                    if Self::contains_arguments(sc) {
+                        return true;
+                    }
+                }
+                Self::class_elements_contain_arguments(&cls.body)
+            }
             // Functions/classes create their own scope, don't recurse
             Expression::Literal(_)
             | Expression::This
@@ -539,9 +551,31 @@ impl<'a> Parser<'a> {
             | Expression::NewTarget
             | Expression::ImportMeta
             | Expression::Function(_)
-            | Expression::Class(_)
             | Expression::PrivateIdentifier(_) => false,
         }
+    }
+
+    fn class_elements_contain_arguments(body: &[crate::ast::ClassElement]) -> bool {
+        for elem in body {
+            match elem {
+                crate::ast::ClassElement::Method(m) => {
+                    if let crate::ast::PropertyKey::Computed(e) = &m.key {
+                        if Self::contains_arguments(e) {
+                            return true;
+                        }
+                    }
+                }
+                crate::ast::ClassElement::Property(p) => {
+                    if let crate::ast::PropertyKey::Computed(e) = &p.key {
+                        if Self::contains_arguments(e) {
+                            return true;
+                        }
+                    }
+                }
+                crate::ast::ClassElement::StaticBlock(_) => {}
+            }
+        }
+        false
     }
 
     fn stmts_contain_arguments(stmts: &[Statement]) -> bool {
@@ -610,8 +644,17 @@ impl<'a> Parser<'a> {
                 Self::contains_arguments(e) || Self::stmt_contains_arguments(s)
             }
             Statement::Break(_) | Statement::Continue(_) => false,
-            // Function/class declarations create their own scope
-            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+            // Function declarations create their own scope
+            Statement::FunctionDeclaration(_) => false,
+            // Class declarations: check computed property names (evaluated in enclosing scope)
+            Statement::ClassDeclaration(cls) => {
+                if let Some(ref sc) = cls.super_class {
+                    if Self::contains_arguments(sc) {
+                        return true;
+                    }
+                }
+                Self::class_elements_contain_arguments(&cls.body)
+            }
         }
     }
 
