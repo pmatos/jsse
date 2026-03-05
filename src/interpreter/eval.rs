@@ -1536,7 +1536,7 @@ impl Interpreter {
     }
 
     fn get_template_object(&mut self, tmpl: &TemplateLiteral) -> JsValue {
-        let cache_key = tmpl as *const TemplateLiteral as usize;
+        let cache_key = tmpl.id;
         if let Some(&obj_id) = self.realm().template_cache.get(&cache_key)
             && self.get_object(obj_id).is_some()
         {
@@ -5808,6 +5808,9 @@ impl Interpreter {
                         };
 
                         let next_method = if let JsValue::Object(io) = &iterator {
+                            if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
+                                cached
+                            } else {
                             match self.get_object_property(io.id, "next", &iterator) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => {
@@ -5842,6 +5845,7 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                                 _ => JsValue::Undefined,
+                            }
                             }
                         } else {
                             JsValue::Undefined
@@ -7417,6 +7421,9 @@ impl Interpreter {
                         };
 
                         let next_method = if let JsValue::Object(io) = &iterator {
+                            if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
+                                cached
+                            } else {
                             match self.get_object_property(io.id, "next", &iterator) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => {
@@ -7439,6 +7446,7 @@ impl Interpreter {
                                     return Completion::Normal(promise);
                                 }
                                 _ => JsValue::Undefined,
+                            }
                             }
                         } else {
                             JsValue::Undefined
@@ -10614,7 +10622,7 @@ impl Interpreter {
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
             let init_env = Environment::new(Some(env.clone()));
             init_env.borrow_mut().declare("this", BindingKind::Const);
-            let _ = init_env.borrow_mut().set("this", this_val.clone());
+            init_env.borrow_mut().initialize_binding("this", this_val.clone());
             init_env.borrow_mut().is_field_initializer = true;
             if let JsValue::Object(o) = &callee_val
                 && let Some(func_obj) = self.get_object(o.id)
@@ -10954,7 +10962,7 @@ impl Interpreter {
                     outer_env.unwrap_or_else(|| Environment::new_function_scope(None));
                 let init_env = Environment::new(Some(init_parent));
                 init_env.borrow_mut().declare("this", BindingKind::Const);
-                let _ = init_env.borrow_mut().set("this", this_val.clone());
+                init_env.borrow_mut().initialize_binding("this", this_val.clone());
                 init_env.borrow_mut().is_field_initializer = true;
                 init_env.borrow_mut().class_private_names = class_pn;
                 if matches!(&proto_val, JsValue::Object(_)) {
@@ -13682,7 +13690,7 @@ impl Interpreter {
             class_env
                 .borrow_mut()
                 .declare("__super__", BindingKind::Const);
-            let _ = class_env.borrow_mut().set("__super__", sv.clone());
+            class_env.borrow_mut().initialize_binding("__super__", sv.clone());
         }
 
         // Create constructor function (classes are always strict mode)
@@ -13755,7 +13763,7 @@ impl Interpreter {
 
         // Initialize class name binding (pre-declared above; spec §15.7.14 step 18.c/26.d)
         if !name.is_empty() {
-            let _ = class_env.borrow_mut().set(name, ctor_val.clone());
+            class_env.borrow_mut().initialize_binding(name, ctor_val.clone());
         }
 
         // Store constructor func for dynamic GetSuperConstructor (§13.3.7.2)
@@ -13763,9 +13771,9 @@ impl Interpreter {
             class_env
                 .borrow_mut()
                 .declare("__constructor_func__", BindingKind::Const);
-            let _ = class_env
+            class_env
                 .borrow_mut()
-                .set("__constructor_func__", ctor_val.clone());
+                .initialize_binding("__constructor_func__", ctor_val.clone());
         }
 
         // Get the prototype object that was auto-created by create_function
@@ -13840,7 +13848,7 @@ impl Interpreter {
         class_env
             .borrow_mut()
             .declare("__home_object__", BindingKind::Const);
-        let _ = class_env.borrow_mut().set("__home_object__", ctor_home);
+        class_env.borrow_mut().initialize_binding("__home_object__", ctor_home);
 
         // Create environment for static field initializers with `this` = constructor
         let static_field_env = Environment::new_function_scope(Some(class_env.clone()));
@@ -13931,9 +13939,9 @@ impl Interpreter {
                             method_closure
                                 .borrow_mut()
                                 .declare("__home_object__", BindingKind::Const);
-                            let _ = method_closure
+                            method_closure
                                 .borrow_mut()
-                                .set("__home_object__", priv_home_target);
+                                .initialize_binding("__home_object__", priv_home_target);
                             let method_func = JsFunction::User {
                                 name: Some(format!("#{name}")),
                                 params: m.value.params.clone(),
@@ -14103,9 +14111,9 @@ impl Interpreter {
                     method_closure
                         .borrow_mut()
                         .declare("__home_object__", BindingKind::Const);
-                    let _ = method_closure
+                    method_closure
                         .borrow_mut()
-                        .set("__home_object__", home_target);
+                        .initialize_binding("__home_object__", home_target);
                     let method_func = JsFunction::User {
                         name: Some(method_display_name),
                         params: m.value.params.clone(),
@@ -14590,7 +14598,7 @@ impl Interpreter {
                         wrapper
                             .borrow_mut()
                             .declare("__home_object__", BindingKind::Const);
-                        let _ = wrapper.borrow_mut().set("__home_object__", obj_val.clone());
+                        wrapper.borrow_mut().initialize_binding("__home_object__", obj_val.clone());
                         if let Some(JsFunction::User {
                             ref mut closure, ..
                         }) = func_obj.borrow_mut().callable

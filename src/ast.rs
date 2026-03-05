@@ -1,5 +1,12 @@
 /// AST node types for ECMAScript.
 /// Each node represents a syntactic element from the spec.
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn next_template_id() -> u64 {
+    NEXT_TEMPLATE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceType {
@@ -465,6 +472,7 @@ pub fn utf16_eq(code_units: &[u16], s: &str) -> bool {
 
 #[derive(Clone, Debug)]
 pub struct TemplateLiteral {
+    pub id: u64,
     pub quasis: Vec<Option<String>>,
     pub raw_quasis: Vec<String>,
     pub expressions: Vec<Expression>,

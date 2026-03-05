@@ -2002,6 +2002,7 @@ impl<'a> Parser<'a> {
                 }
                 self.advance()?;
                 Ok(TemplateLiteral {
+                    id: crate::ast::next_template_id(),
                     quasis: vec![cooked],
                     raw_quasis: vec![raw],
                     expressions: Vec::new(),
@@ -2048,6 +2049,7 @@ impl<'a> Parser<'a> {
                     }
                 }
                 Ok(TemplateLiteral {
+                    id: crate::ast::next_template_id(),
                     quasis,
                     raw_quasis,
                     expressions,

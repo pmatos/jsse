@@ -365,11 +365,10 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("console", BindingKind::Const);
-        let _ = self
-            .realm()
+        self.realm()
             .global_env
             .borrow_mut()
-            .set("console", console_val);
+            .initialize_binding("console", console_val);
 
         // print global (needed by test262 async harness doneprintHandle.js)
         {
@@ -2303,7 +2302,7 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Math", BindingKind::Const);
-        let _ = self.realm().global_env.borrow_mut().set("Math", math_val);
+        self.realm().global_env.borrow_mut().initialize_binding("Math", math_val);
 
         // eval
         {
@@ -6374,7 +6373,13 @@ impl Interpreter {
         };
         match self.call_function(&iter_fn, obj, &[]) {
             Completion::Normal(v) => {
-                if matches!(v, JsValue::Object(_)) {
+                if let JsValue::Object(o) = &v {
+                    let next_method = match self.get_object_property(o.id, "next", &v) {
+                        Completion::Normal(n) => n,
+                        Completion::Throw(e) => return Err(e),
+                        _ => JsValue::Undefined,
+                    };
+                    self.iterator_next_cache.insert(o.id, next_method);
                     Ok(v)
                 } else {
                     Err(self
@@ -6407,7 +6412,13 @@ impl Interpreter {
             if let Some(iter_fn) = iter_fn {
                 return match self.call_function(&iter_fn, obj, &[]) {
                     Completion::Normal(v) => {
-                        if matches!(v, JsValue::Object(_)) {
+                        if let JsValue::Object(o) = &v {
+                            let next_method = match self.get_object_property(o.id, "next", &v) {
+                                Completion::Normal(n) => n,
+                                Completion::Throw(e) => return Err(e),
+                                _ => JsValue::Undefined,
+                            };
+                            self.iterator_next_cache.insert(o.id, next_method);
                             Ok(v)
                         } else {
                             Err(self.create_type_error(
@@ -6428,9 +6439,13 @@ impl Interpreter {
     fn create_async_from_sync_iterator(&mut self, sync_iter: JsValue) -> JsValue {
         let wrapper = self.create_object();
         let cached_next = if let JsValue::Object(io) = &sync_iter {
-            match self.get_object_property(io.id, "next", &sync_iter) {
-                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => v,
-                _ => JsValue::Undefined,
+            if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
+                cached
+            } else {
+                match self.get_object_property(io.id, "next", &sync_iter) {
+                    Completion::Normal(v) if !matches!(v, JsValue::Undefined) => v,
+                    _ => JsValue::Undefined,
+                }
             }
         } else {
             JsValue::Undefined
@@ -6685,10 +6700,18 @@ impl Interpreter {
 
     pub(crate) fn iterator_next(&mut self, iterator: &JsValue) -> Result<JsValue, JsValue> {
         if let JsValue::Object(io) = iterator {
-            let next_fn = match self.get_object_property(io.id, "next", iterator) {
-                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => Some(v),
-                Completion::Throw(e) => return Err(e),
-                _ => None,
+            let next_fn = if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
+                if matches!(cached, JsValue::Undefined) {
+                    None
+                } else {
+                    Some(cached)
+                }
+            } else {
+                match self.get_object_property(io.id, "next", iterator) {
+                    Completion::Normal(v) if !matches!(v, JsValue::Undefined) => Some(v),
+                    Completion::Throw(e) => return Err(e),
+                    _ => None,
+                }
             };
             if let Some(next_fn) = next_fn {
                 match self.call_function(&next_fn, iterator, &[]) {
@@ -6717,10 +6740,18 @@ impl Interpreter {
         value: &JsValue,
     ) -> Result<JsValue, JsValue> {
         if let JsValue::Object(io) = iterator {
-            let next_fn = match self.get_object_property(io.id, "next", iterator) {
-                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => Some(v),
-                Completion::Throw(e) => return Err(e),
-                _ => None,
+            let next_fn = if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
+                if matches!(cached, JsValue::Undefined) {
+                    None
+                } else {
+                    Some(cached)
+                }
+            } else {
+                match self.get_object_property(io.id, "next", iterator) {
+                    Completion::Normal(v) if !matches!(v, JsValue::Undefined) => Some(v),
+                    Completion::Throw(e) => return Err(e),
+                    _ => None,
+                }
             };
             if let Some(next_fn) = next_fn {
                 match self.call_function(&next_fn, iterator, std::slice::from_ref(value)) {
@@ -6904,6 +6935,7 @@ impl Interpreter {
                         .map(|od| od.borrow().callable.is_some())
                         .unwrap_or(false)
                     {
+                        self.iterator_next_cache.insert(o.id, next_method.clone());
                         Ok((obj.clone(), next_method))
                     } else {
                         Err(self.create_type_error("Iterator next is not a function"))
@@ -8010,11 +8042,10 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Reflect", BindingKind::Const);
-        let _ = self
-            .realm()
+        self.realm()
             .global_env
             .borrow_mut()
-            .set("Reflect", reflect_val);
+            .initialize_binding("Reflect", reflect_val);
     }
 
     fn setup_proxy(&mut self) {

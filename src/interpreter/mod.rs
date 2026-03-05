@@ -70,6 +70,7 @@ pub struct Interpreter {
     pub(crate) agent_handles: Vec<std::thread::JoinHandle<()>>,
     pub(crate) agent_broadcast_rx: Option<std::sync::mpsc::Receiver<AgentBroadcastMsg>>,
     pub(crate) agent_async_completions: std::sync::Arc<(std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>, std::sync::Condvar)>,
+    pub(crate) iterator_next_cache: HashMap<u64, JsValue>,
 }
 
 pub struct LoadedModule {
@@ -158,6 +159,7 @@ impl Interpreter {
             agent_handles: Vec::new(),
             agent_broadcast_rx: None,
             agent_async_completions: Arc::new((std::sync::Mutex::new(Vec::new()), std::sync::Condvar::new())),
+            iterator_next_cache: HashMap::new(),
         };
         interp.setup_globals();
         interp
@@ -1452,7 +1454,7 @@ impl Interpreter {
                 ImportSpecifier::Namespace(local) => {
                     let ns = self.create_module_namespace(&loaded);
                     env.borrow_mut().declare(local, BindingKind::Const);
-                    let _ = env.borrow_mut().set(local, ns);
+                    env.borrow_mut().initialize_binding(local, ns);
                     if let Some(ref mp) = self.current_module_path {
                         let canon = mp.canonicalize().unwrap_or_else(|_| mp.clone());
                         if let Some(current_mod) = self.module_registry.get(&canon) {
@@ -1466,7 +1468,7 @@ impl Interpreter {
                 ImportSpecifier::DeferredNamespace(local) => {
                     let ns = self.create_deferred_module_namespace(&loaded);
                     env.borrow_mut().declare(local, BindingKind::Const);
-                    let _ = env.borrow_mut().set(local, ns);
+                    env.borrow_mut().initialize_binding(local, ns);
                 }
             }
         }
@@ -1488,7 +1490,7 @@ impl Interpreter {
                 // Namespace re-export: copy the namespace value directly
                 if let Some(val) = loaded.borrow().exports.get(imported).cloned() {
                     env.borrow_mut().declare(local, BindingKind::Const);
-                    let _ = env.borrow_mut().set(local, val);
+                    env.borrow_mut().initialize_binding(local, val);
                 }
                 return Ok(());
             }
@@ -1502,7 +1504,7 @@ impl Interpreter {
                         // Resolved to a namespace — find the module and create its namespace object
                         let ns = self.create_namespace_for_env(&source_env);
                         env.borrow_mut().declare(local, BindingKind::Const);
-                        let _ = env.borrow_mut().set(local, ns);
+                        env.borrow_mut().initialize_binding(local, ns);
                     } else {
                         env.borrow_mut()
                             .create_import_binding(local, source_env, binding_name);
@@ -1541,7 +1543,7 @@ impl Interpreter {
             // Store in module env so indirect bindings can reference it
             let mod_env = module.borrow().env.clone();
             mod_env.borrow_mut().declare(name, BindingKind::Const);
-            let _ = mod_env.borrow_mut().set(name, ns);
+            mod_env.borrow_mut().initialize_binding(name, ns);
         } else {
             // export * from './mod' - re-export all non-default exports
             let source_exports = source_module.borrow().exports.clone();
@@ -1709,7 +1711,7 @@ impl Interpreter {
             module_env
                 .borrow_mut()
                 .declare("*default*", BindingKind::Const);
-            let _ = module_env.borrow_mut().set("*default*", parsed);
+            module_env.borrow_mut().initialize_binding("*default*", parsed);
             self.module_registry
                 .insert(canon_path.clone(), loaded_module.clone());
             return Ok(loaded_module);
@@ -3086,7 +3088,7 @@ impl Interpreter {
                     source_text: f.source_text.clone(),
                 };
                 let val = self.create_function(func);
-                let _ = env.borrow_mut().set(&name, val);
+                env.borrow_mut().initialize_binding(&name, val);
             }
             // §16.2.1.6.1: pre-declare *default* binding for default expressions/classes (TDZ)
             ExportDeclaration::Default(_) => {
@@ -3253,7 +3255,7 @@ impl Interpreter {
                     self.set_function_name(&val, "default");
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Const);
-                let _ = env.borrow_mut().set("*default*", val);
+                env.borrow_mut().initialize_binding("*default*", val);
                 Completion::Normal(JsValue::Undefined)
             }
             ExportDeclaration::DefaultFunction(func) => {
@@ -3277,12 +3279,11 @@ impl Interpreter {
                 };
                 let fn_obj = self.create_function(js_func);
                 if !func.name.is_empty() {
-                    // export default function fn() creates a mutable binding for fn
                     env.borrow_mut().declare(&func.name, BindingKind::Let);
-                    let _ = env.borrow_mut().set(&func.name, fn_obj.clone());
+                    env.borrow_mut().initialize_binding(&func.name, fn_obj.clone());
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Let);
-                let _ = env.borrow_mut().set("*default*", fn_obj);
+                env.borrow_mut().initialize_binding("*default*", fn_obj);
                 Completion::Normal(JsValue::Undefined)
             }
             ExportDeclaration::DefaultClass(class) => {
@@ -3303,10 +3304,10 @@ impl Interpreter {
                 };
                 if !class.name.is_empty() {
                     env.borrow_mut().declare(&class.name, BindingKind::Const);
-                    let _ = env.borrow_mut().set(&class.name, class_val.clone());
+                    env.borrow_mut().initialize_binding(&class.name, class_val.clone());
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Const);
-                let _ = env.borrow_mut().set("*default*", class_val);
+                env.borrow_mut().initialize_binding("*default*", class_val);
                 Completion::Normal(JsValue::Undefined)
             }
             ExportDeclaration::All { .. } => {
@@ -3811,9 +3812,9 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         .global_env
         .borrow_mut()
         .declare("$262", BindingKind::Const);
-    let _ = interp
+    interp
         .realm()
         .global_env
         .borrow_mut()
-        .set("$262", dollar_262_val);
+        .initialize_binding("$262", dollar_262_val);
 }

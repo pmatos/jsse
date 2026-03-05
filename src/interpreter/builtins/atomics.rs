@@ -717,11 +717,10 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Atomics", BindingKind::Const);
-        let _ = self
-            .realm()
+        self.realm()
             .global_env
             .borrow_mut()
-            .set("Atomics", atomics_val);
+            .initialize_binding("Atomics", atomics_val);
     }
 }
 

@@ -60,6 +60,9 @@ impl Interpreter {
                 Self::collect_value_roots(val, &mut worklist);
             }
         }
+        for val in self.iterator_next_cache.values() {
+            Self::collect_value_roots(val, &mut worklist);
+        }
 
         // Mark phase (BFS)
         while let Some(id) = worklist.pop() {

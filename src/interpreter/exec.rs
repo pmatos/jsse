@@ -24,6 +24,10 @@ impl Interpreter {
             }
         }
 
+        // §14.2.2 BlockDeclarationInstantiation / §10.2.11 FunctionDeclarationInstantiation:
+        // Hoist let/const/class declarations as uninitialized (TDZ) bindings
+        Self::hoist_lexical_declarations(stmts, env);
+
         // Annex B.3.3: at function/global level in sloppy mode,
         // create var bindings for function declarations inside blocks.
         // Skip names that conflict with parameters or lexical bindings.
@@ -238,6 +242,36 @@ impl Interpreter {
         };
         let val = self.create_function(func);
         let _ = env.borrow_mut().set(&f.name, val);
+    }
+
+    /// §14.2.2 BlockDeclarationInstantiation: Hoist let/const/class declarations as
+    /// uninitialized (TDZ) bindings at the top of a block scope.
+    fn hoist_lexical_declarations(stmts: &[Statement], env: &EnvRef) {
+        for stmt in stmts {
+            match stmt {
+                Statement::Variable(decl)
+                    if matches!(decl.kind, VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing) =>
+                {
+                    let kind = match decl.kind {
+                        VarKind::Let => BindingKind::Let,
+                        _ => BindingKind::Const,
+                    };
+                    for d in &decl.declarations {
+                        let mut names = Vec::new();
+                        Self::collect_pattern_names(&d.pattern, &mut names);
+                        for name in names {
+                            env.borrow_mut().declare(&name, kind);
+                        }
+                    }
+                }
+                Statement::ClassDeclaration(c) => {
+                    if !c.name.is_empty() {
+                        env.borrow_mut().declare(&c.name, BindingKind::Const);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(crate) fn collect_pattern_names(pat: &Pattern, names: &mut Vec<String>) {
@@ -902,7 +936,7 @@ impl Interpreter {
                 match class_val {
                     Completion::Normal(val) => {
                         env.borrow_mut().declare(&cd.name, BindingKind::Let);
-                        let _ = env.borrow_mut().set(&cd.name, val);
+                        env.borrow_mut().initialize_binding(&cd.name, val);
                         Completion::Empty
                     }
                     other => other,
@@ -1168,10 +1202,11 @@ impl Interpreter {
                                 if !var_scope.borrow().bindings.contains_key(name) {
                                     var_scope.borrow_mut().declare(name, kind);
                                 }
-                            } else if !env.borrow().bindings.contains_key(name) {
+                                env.borrow_mut().set(name, v)?;
+                            } else {
                                 env.borrow_mut().declare(name, kind);
+                                env.borrow_mut().initialize_binding(name, v);
                             }
-                            env.borrow_mut().set(name, v)?;
                         }
                         ObjectPatternProperty::KeyValue(key, pat) => {
                             let key_str = match key {
@@ -1368,10 +1403,23 @@ impl Interpreter {
 
     fn exec_for(&mut self, f: &ForStatement, env: &EnvRef, label: Option<&str>) -> Completion {
         let for_env = Environment::new(Some(env.clone()));
+        // Collect lexical binding names for per-iteration freshness (§14.7.4.2)
+        let per_iteration_bindings: Vec<(String, BindingKind)> = if let Some(ForInit::Variable(decl)) = &f.init
+            && matches!(decl.kind, VarKind::Let | VarKind::Const)
+        {
+            let kind = if decl.kind == VarKind::Let { BindingKind::Let } else { BindingKind::Const };
+            let mut names = Vec::new();
+            for d in &decl.declarations {
+                Self::collect_pattern_names(&d.pattern, &mut names);
+            }
+            names.into_iter().map(|n| (n, kind)).collect()
+        } else {
+            Vec::new()
+        };
+
         if let Some(init) = &f.init {
             match init {
                 ForInit::Variable(decl) => {
-                    // var declarations should go in the parent scope (hoisting)
                     let decl_env = if decl.kind == VarKind::Var {
                         env
                     } else {
@@ -1390,11 +1438,26 @@ impl Interpreter {
                 }
             }
         }
+
+        // Per-iteration environment creation (§14.7.4.2 step 3.e CreatePerIterationEnvironment)
+        // For let bindings, create a fresh environment each iteration with copies of current values
+        let mut iter_env = if !per_iteration_bindings.is_empty() {
+            let new_env = Environment::new(Some(env.clone()));
+            for (name, kind) in &per_iteration_bindings {
+                let val = for_env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                new_env.borrow_mut().declare(name, *kind);
+                new_env.borrow_mut().initialize_binding(name, val);
+            }
+            new_env
+        } else {
+            for_env.clone()
+        };
+
         let mut v = JsValue::Undefined;
         let result = 'for_loop: {
             loop {
                 if let Some(test) = &f.test {
-                    let val = match self.eval_expr(test, &for_env) {
+                    let val = match self.eval_expr(test, &iter_env) {
                         Completion::Normal(v) => v,
                         other => break 'for_loop other,
                     };
@@ -1402,7 +1465,7 @@ impl Interpreter {
                         break;
                     }
                 }
-                match self.exec_statement(&f.body, &for_env) {
+                match self.exec_statement(&f.body, &iter_env) {
                     Completion::Normal(val) => {
                         v = val;
                     }
@@ -1425,8 +1488,18 @@ impl Interpreter {
                     }
                     other => break 'for_loop other,
                 }
+                // CreatePerIterationEnvironment before update
+                if !per_iteration_bindings.is_empty() {
+                    let new_env = Environment::new(Some(env.clone()));
+                    for (name, kind) in &per_iteration_bindings {
+                        let val = iter_env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                        new_env.borrow_mut().declare(name, *kind);
+                        new_env.borrow_mut().initialize_binding(name, val);
+                    }
+                    iter_env = new_env;
+                }
                 if let Some(update) = &f.update {
-                    let comp = self.eval_expr(update, &for_env);
+                    let comp = self.eval_expr(update, &iter_env);
                     if comp.is_abrupt() {
                         break 'for_loop comp;
                     }
@@ -1434,7 +1507,11 @@ impl Interpreter {
             }
             Completion::Normal(v)
         };
-        self.dispose_resources(&for_env, result)
+        if !per_iteration_bindings.is_empty() {
+            self.dispose_resources(&iter_env, result)
+        } else {
+            self.dispose_resources(&for_env, result)
+        }
     }
 
     fn exec_for_in(&mut self, fi: &ForInStatement, env: &EnvRef, label: Option<&str>) -> Completion {

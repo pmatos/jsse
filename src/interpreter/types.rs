@@ -205,7 +205,7 @@ pub struct Realm {
     pub(crate) global_env: EnvRef,
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) throw_type_error: Option<JsValue>,
-    pub(crate) template_cache: HashMap<usize, u64>,
+    pub(crate) template_cache: HashMap<u64, u64>,
     pub(crate) builtin_eval_id: Option<u64>,
     pub(crate) object_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) array_prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -822,6 +822,14 @@ impl Environment {
             )));
         }
         if let Some(binding) = self.bindings.get_mut(name) {
+            // TDZ: let/const bindings that haven't been initialized yet
+            if !binding.initialized
+                && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+            {
+                return Err(JsValue::String(JsString::from_str(&format!(
+                    "Cannot access '{name}' before initialization"
+                ))));
+            }
             if binding.kind == BindingKind::Const && binding.initialized {
                 return Err(JsValue::String(JsString::from_str(
                     "Assignment to constant variable.",
