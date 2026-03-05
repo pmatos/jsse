@@ -463,6 +463,66 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("agent".to_string(), agent_val);
 
+        // $262.AbstractModuleSource — §28.1.1.1
+        let ams_fn = self.create_function(JsFunction::native(
+            "AbstractModuleSource".to_string(),
+            0,
+            |interp, _this, _args| {
+                Completion::Throw(
+                    interp.create_error("TypeError", "AbstractModuleSource is not a constructor"),
+                )
+            },
+        ));
+        let ams_fn_id = if let JsValue::Object(o) = &ams_fn {
+            o.id
+        } else {
+            unreachable!()
+        };
+
+        // AbstractModuleSource.prototype
+        let ams_proto = self.create_object();
+        // constructor property
+        ams_proto
+            .borrow_mut()
+            .insert_builtin("constructor".to_string(), ams_fn.clone());
+        // @@toStringTag getter — returns undefined (no [[ModuleSourceClassName]] slot)
+        let tag_getter = self.create_function(JsFunction::native(
+            "get [Symbol.toStringTag]".to_string(),
+            0,
+            |_interp, this_val, _args| {
+                if let JsValue::Object(_) = this_val {
+                    return Completion::Normal(JsValue::Undefined);
+                }
+                Completion::Normal(JsValue::Undefined)
+            },
+        ));
+        ams_proto.borrow_mut().insert_property(
+            "Symbol(Symbol.toStringTag)".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(tag_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+        let ams_proto_val = JsValue::Object(crate::types::JsObject {
+            id: ams_proto.borrow().id.unwrap(),
+        });
+
+        // Wire prototype on the constructor: {writable: false, enumerable: false, configurable: false}
+        if let Some(obj) = self.get_object(ams_fn_id) {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(ams_proto_val, false, false, false),
+            );
+        }
+
+        dollar_262
+            .borrow_mut()
+            .insert_builtin("AbstractModuleSource".to_string(), ams_fn);
+
         JsValue::Object(crate::types::JsObject { id: dollar_262_id })
     }
 
