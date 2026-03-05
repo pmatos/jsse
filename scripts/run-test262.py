@@ -81,7 +81,7 @@ class EngineAdapter(ABC):
     @abstractmethod
     def build_command(
         self, test_file: Path, tmp_path: str | None, harness_files: list[Path],
-        is_module: bool,
+        is_module: bool, flags: list[str] | None = None,
     ) -> list[str]:
         """Return the command list to execute."""
 
@@ -105,15 +105,21 @@ class EngineAdapter(ABC):
 
 
 class JsseAdapter(EngineAdapter):
-    def build_command(self, test_file, tmp_path, harness_files, is_module):
+    def build_command(self, test_file, tmp_path, harness_files, is_module, flags=None):
         if is_module:
             cmd = [self.binary]
             for hf in harness_files:
                 cmd.extend(["--prelude", str(hf)])
+            if flags and "CanBlockIsTrue" in flags:
+                cmd.append("--can-block")
             cmd.append("--module")
             cmd.append(str(test_file))
             return cmd
-        return [self.binary, tmp_path]
+        cmd = [self.binary]
+        if flags and "CanBlockIsTrue" in flags:
+            cmd.append("--can-block")
+        cmd.append(tmp_path)
+        return cmd
 
     def needs_harness_in_source(self, is_module):
         return not is_module
@@ -126,7 +132,7 @@ class JsseAdapter(EngineAdapter):
 
 
 class NodeAdapter(EngineAdapter):
-    def build_command(self, test_file, tmp_path, harness_files, is_module):
+    def build_command(self, test_file, tmp_path, harness_files, is_module, flags=None):
         return [self.binary, tmp_path]
 
     def needs_harness_in_source(self, is_module):
@@ -140,7 +146,7 @@ class NodeAdapter(EngineAdapter):
 
 
 class BoaAdapter(EngineAdapter):
-    def build_command(self, test_file, tmp_path, harness_files, is_module):
+    def build_command(self, test_file, tmp_path, harness_files, is_module, flags=None):
         if is_module:
             return [self.binary, "--module", tmp_path]
         return [self.binary, tmp_path]
@@ -359,7 +365,7 @@ def run_single_test(
             tmp.write(combined)
             tmp_path = tmp.name
 
-    cmd = adapter.build_command(test_file, tmp_path, harness_files, is_module)
+    cmd = adapter.build_command(test_file, tmp_path, harness_files, is_module, flags)
 
     try:
         result = subprocess.run(

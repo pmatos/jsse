@@ -45,9 +45,11 @@ impl Interpreter {
         }
         // Temporary roots (iterators, etc.)
         worklist.extend_from_slice(&self.gc_temp_roots);
-        // Root values captured in microtask closures
-        for val in &self.microtask_roots {
-            Self::collect_value_roots(val, &mut worklist);
+        // Root values captured in pending microtask closures
+        for (roots, _) in &self.microtask_queue {
+            for val in roots {
+                Self::collect_value_roots(val, &mut worklist);
+            }
         }
         // Iterators pending close when a generator yields during destructuring
         for val in &self.pending_iter_close {
@@ -151,6 +153,16 @@ impl Interpreter {
             // Trace wrapped function target
             if let Some(target_id) = obj.wrapped_target_function_id {
                 worklist.push(target_id);
+            }
+
+            // Trace bound function target and bound args
+            if let Some(ref target) = obj.bound_target_function {
+                Self::collect_value_roots(target, &mut worklist);
+            }
+            if let Some(ref bargs) = obj.bound_args {
+                for v in bargs {
+                    Self::collect_value_roots(v, &mut worklist);
+                }
             }
 
             // Trace parameter_map environments

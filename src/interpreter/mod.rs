@@ -5,6 +5,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+
+pub struct AgentBroadcastMsg {
+    pub sab_shared: Arc<types::SharedBufferInner>,
+}
 
 mod types;
 pub use types::*;
@@ -34,7 +39,7 @@ pub struct Interpreter {
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
     pub(crate) generator_inline_iters: HashMap<u64, Vec<JsValue>>,
-    microtask_queue: Vec<Box<dyn FnOnce(&mut Interpreter) -> Completion>>,
+    microtask_queue: Vec<(Vec<JsValue>, Box<dyn FnOnce(&mut Interpreter) -> Completion>)>,
     cached_has_instance_key: Option<String>,
     module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
@@ -44,7 +49,7 @@ pub struct Interpreter {
     calling_as_construct: bool,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) gc_temp_roots: Vec<u64>,
-    pub(crate) microtask_roots: Vec<JsValue>,
+    // microtask roots are now stored inline in the microtask_queue tuples
     pub(crate) class_private_names: Vec<std::collections::HashMap<String, String>>,
     next_class_brand_id: u64,
     pub(crate) regexp_legacy_input: String,
@@ -57,6 +62,13 @@ pub struct Interpreter {
     pub(crate) function_realm_map: HashMap<u64, usize>,
     pub(crate) in_tail_position: bool,
     pub(crate) next_function_is_method: bool,
+    pub(crate) is_agent_thread: bool,
+    pub(crate) can_block: bool,
+    pub(crate) agent_reports: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    pub(crate) agent_broadcast_txs: Vec<std::sync::mpsc::Sender<AgentBroadcastMsg>>,
+    pub(crate) agent_handles: Vec<std::thread::JoinHandle<()>>,
+    pub(crate) agent_broadcast_rx: Option<std::sync::mpsc::Receiver<AgentBroadcastMsg>>,
+    pub(crate) agent_async_completions: std::sync::Arc<std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>>,
 }
 
 pub struct LoadedModule {
@@ -119,7 +131,6 @@ impl Interpreter {
             calling_as_construct: false,
             call_stack_envs: Vec::new(),
             gc_temp_roots: Vec::new(),
-            microtask_roots: Vec::new(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
             regexp_legacy_input: String::new(),
@@ -132,6 +143,13 @@ impl Interpreter {
             function_realm_map: HashMap::new(),
             in_tail_position: false,
             next_function_is_method: false,
+            is_agent_thread: false,
+            can_block: false,
+            agent_reports: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            agent_broadcast_txs: Vec::new(),
+            agent_handles: Vec::new(),
+            agent_broadcast_rx: None,
+            agent_async_completions: Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         interp.setup_globals();
         interp
@@ -294,7 +312,160 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("IsHTMLDDA".to_string(), htmldda_val);
 
+        // $262.agent
+        let agent_obj = self.create_object();
+        let agent_obj_id = agent_obj.borrow().id.unwrap();
+
+        // $262.agent.start(script)
+        let reports_clone = self.agent_reports.clone();
+        let async_completions_clone = self.agent_async_completions.clone();
+        let start_fn = self.create_function(JsFunction::native(
+            "start".to_string(),
+            1,
+            move |interp, _this, args| {
+                let script_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let script = match interp.to_string_value(&script_val) {
+                    Ok(s) => s,
+                    Err(e) => return Completion::Throw(e),
+                };
+
+                let (tx, rx) = std::sync::mpsc::channel::<AgentBroadcastMsg>();
+                interp.agent_broadcast_txs.push(tx);
+
+                let reports = interp.agent_reports.clone();
+                let async_comps = interp.agent_async_completions.clone();
+
+                let handle = std::thread::spawn(move || {
+                    let mut agent_interp = Interpreter::new();
+                    agent_interp.is_agent_thread = true;
+                    agent_interp.can_block = true;
+                    agent_interp.agent_reports = reports;
+                    agent_interp.agent_broadcast_rx = Some(rx);
+                    agent_interp.agent_async_completions = async_comps;
+
+                    // Set up agent-side $262.agent on the global
+                    setup_agent_side_262(&mut agent_interp);
+
+                    let mut p = match crate::parser::Parser::new(&script) {
+                        Ok(p) => p,
+                        Err(_) => return,
+                    };
+                    let program = match p.parse_program() {
+                        Ok(prog) => prog,
+                        Err(_) => return,
+                    };
+                    let _ = agent_interp.run(&program);
+                    agent_interp.drain_microtasks();
+                });
+                interp.agent_handles.push(handle);
+
+                Completion::Normal(JsValue::Undefined)
+            },
+        ));
+        agent_obj
+            .borrow_mut()
+            .insert_builtin("start".to_string(), start_fn);
+
+        // $262.agent.broadcast(sab)
+        let broadcast_fn = self.create_function(JsFunction::native(
+            "broadcast".to_string(),
+            1,
+            |interp, _this, args| {
+                let sab_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(o) = &sab_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let sab_shared = obj.borrow().sab_shared.clone();
+                    if let Some(inner) = sab_shared {
+                        for tx in &interp.agent_broadcast_txs {
+                            let _ = tx.send(AgentBroadcastMsg {
+                                sab_shared: inner.clone(),
+                            });
+                        }
+                    }
+                }
+                Completion::Normal(JsValue::Undefined)
+            },
+        ));
+        agent_obj
+            .borrow_mut()
+            .insert_builtin("broadcast".to_string(), broadcast_fn);
+
+        // $262.agent.getReport()
+        let get_report_fn = self.create_function(JsFunction::native(
+            "getReport".to_string(),
+            0,
+            |interp, _this, _args| {
+                let mut reports = interp.agent_reports.lock().unwrap();
+                if let Some(report) = reports.pop_front() {
+                    Completion::Normal(JsValue::String(JsString::from_str(&report)))
+                } else {
+                    Completion::Normal(JsValue::Null)
+                }
+            },
+        ));
+        agent_obj
+            .borrow_mut()
+            .insert_builtin("getReport".to_string(), get_report_fn);
+
+        // $262.agent.sleep(ms)
+        let sleep_fn = self.create_function(JsFunction::native(
+            "sleep".to_string(),
+            1,
+            |interp, _this, args| {
+                let ms_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let ms = match interp.to_number_value(&ms_val) {
+                    Ok(n) => n.max(0.0) as u64,
+                    Err(e) => return Completion::Throw(e),
+                };
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                Completion::Normal(JsValue::Undefined)
+            },
+        ));
+        agent_obj
+            .borrow_mut()
+            .insert_builtin("sleep".to_string(), sleep_fn);
+
+        // $262.agent.monotonicNow()
+        let start_time = std::time::Instant::now();
+        let monotonic_fn = self.create_function(JsFunction::native(
+            "monotonicNow".to_string(),
+            0,
+            move |_interp, _this, _args| {
+                let elapsed = start_time.elapsed().as_millis() as f64;
+                Completion::Normal(JsValue::Number(elapsed))
+            },
+        ));
+        agent_obj
+            .borrow_mut()
+            .insert_builtin("monotonicNow".to_string(), monotonic_fn);
+
+        // $262.agent.leaving()
+        let leaving_fn = self.create_function(JsFunction::native(
+            "leaving".to_string(),
+            0,
+            |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+        ));
+        agent_obj
+            .borrow_mut()
+            .insert_builtin("leaving".to_string(), leaving_fn);
+
+        let agent_val = JsValue::Object(crate::types::JsObject { id: agent_obj_id });
+        dollar_262
+            .borrow_mut()
+            .insert_builtin("agent".to_string(), agent_val);
+
         JsValue::Object(crate::types::JsObject { id: dollar_262_id })
+    }
+
+    pub(crate) fn drain_agent_async_completions(&mut self) {
+        let completions: Vec<_> = {
+            let mut lock = self.agent_async_completions.lock().unwrap();
+            lock.drain(..).collect()
+        };
+        for f in completions {
+            f(self);
+        }
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -1538,18 +1709,19 @@ impl Interpreter {
             }
         }
 
-        // Second pass: process imports (create bindings)
-        for item in &program.module_items {
-            if let ModuleItem::ImportDeclaration(import) = item {
-                self.process_import(import, &module_env)?;
-            }
-        }
-
-        // Third pass: process re-exports (export * from)
+        // Second pass: process re-exports (export * from) — before imports
+        // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
             if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
             {
                 self.process_star_reexport(source, exported.as_ref(), &loaded_module)?;
+            }
+        }
+
+        // Third pass: process imports (after re-exports)
+        for item in &program.module_items {
+            if let ModuleItem::ImportDeclaration(import) = item {
+                self.process_import(import, &module_env)?;
             }
         }
 
@@ -2343,11 +2515,29 @@ impl Interpreter {
     }
 
     pub(crate) fn drain_microtasks(&mut self) {
-        while !self.microtask_queue.is_empty() {
-            let job = self.microtask_queue.remove(0);
-            let _ = job(self);
+        loop {
+            while !self.microtask_queue.is_empty() {
+                let (roots, job) = self.microtask_queue.remove(0);
+                // Temporarily root values during job execution
+                for val in &roots {
+                    self.gc_root_value(val);
+                }
+                let _ = job(self);
+                for val in &roots {
+                    self.gc_unroot_value(val);
+                }
+            }
+            let completions: Vec<_> = {
+                let mut lock = self.agent_async_completions.lock().unwrap();
+                lock.drain(..).collect()
+            };
+            if completions.is_empty() {
+                break;
+            }
+            for f in completions {
+                f(self);
+            }
         }
-        self.microtask_roots.clear();
     }
 
     /// §10.4.2.4 ArraySetLength(A, Desc)
@@ -2654,4 +2844,130 @@ fn to_uint32_f64(n: f64) -> u32 {
         modulo
     };
     modulo as u32
+}
+
+fn setup_agent_side_262(interp: &mut Interpreter) {
+    use crate::types::{JsObject, JsString};
+
+    let dollar_262 = interp.create_object();
+    let dollar_262_id = dollar_262.borrow().id.unwrap();
+
+    let agent_obj = interp.create_object();
+    let agent_obj_id = agent_obj.borrow().id.unwrap();
+
+    // $262.agent.receiveBroadcast(callback)
+    let receive_fn = interp.create_function(JsFunction::native(
+        "receiveBroadcast".to_string(),
+        1,
+        |interp, _this, args| {
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let rx = interp.agent_broadcast_rx.take();
+            if let Some(rx) = rx {
+                if let Ok(msg) = rx.recv() {
+                    let sab_inner = msg.sab_shared;
+                    let buf = BufferData::Shared(sab_inner.clone());
+                    let buf_rc = Rc::new(RefCell::new(buf));
+                    let sab_obj = interp.create_object();
+                    {
+                        let mut o = sab_obj.borrow_mut();
+                        o.class_name = "SharedArrayBuffer".to_string();
+                        o.prototype = interp.realm().shared_arraybuffer_prototype.clone();
+                        o.arraybuffer_data = Some(buf_rc);
+                        o.arraybuffer_detached = None;
+                        o.arraybuffer_is_shared = true;
+                        o.sab_shared = Some(sab_inner);
+                    }
+                    let sab_val = JsValue::Object(JsObject {
+                        id: sab_obj.borrow().id.unwrap(),
+                    });
+                    interp.agent_broadcast_rx = Some(rx);
+                    let _ = interp.call_function(&callback, &JsValue::Undefined, &[sab_val]);
+                    interp.drain_microtasks();
+                } else {
+                    interp.agent_broadcast_rx = Some(rx);
+                }
+            }
+            Completion::Normal(JsValue::Undefined)
+        },
+    ));
+    agent_obj
+        .borrow_mut()
+        .insert_builtin("receiveBroadcast".to_string(), receive_fn);
+
+    // $262.agent.report(value)
+    let report_fn = interp.create_function(JsFunction::native(
+        "report".to_string(),
+        1,
+        |interp, _this, args| {
+            let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let s = match interp.to_string_value(&val) {
+                Ok(s) => s,
+                Err(e) => return Completion::Throw(e),
+            };
+            interp.agent_reports.lock().unwrap().push_back(s);
+            Completion::Normal(JsValue::Undefined)
+        },
+    ));
+    agent_obj
+        .borrow_mut()
+        .insert_builtin("report".to_string(), report_fn);
+
+    // $262.agent.sleep(ms)
+    let sleep_fn = interp.create_function(JsFunction::native(
+        "sleep".to_string(),
+        1,
+        |interp, _this, args| {
+            let ms_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let ms = match interp.to_number_value(&ms_val) {
+                Ok(n) => n.max(0.0) as u64,
+                Err(e) => return Completion::Throw(e),
+            };
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            Completion::Normal(JsValue::Undefined)
+        },
+    ));
+    agent_obj
+        .borrow_mut()
+        .insert_builtin("sleep".to_string(), sleep_fn);
+
+    // $262.agent.leaving()
+    let leaving_fn = interp.create_function(JsFunction::native(
+        "leaving".to_string(),
+        0,
+        |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+    ));
+    agent_obj
+        .borrow_mut()
+        .insert_builtin("leaving".to_string(), leaving_fn);
+
+    // $262.agent.monotonicNow()
+    let start_time = std::time::Instant::now();
+    let monotonic_fn = interp.create_function(JsFunction::native(
+        "monotonicNow".to_string(),
+        0,
+        move |_interp, _this, _args| {
+            let elapsed = start_time.elapsed().as_millis() as f64;
+            Completion::Normal(JsValue::Number(elapsed))
+        },
+    ));
+    agent_obj
+        .borrow_mut()
+        .insert_builtin("monotonicNow".to_string(), monotonic_fn);
+
+    let agent_val = JsValue::Object(JsObject { id: agent_obj_id });
+    dollar_262
+        .borrow_mut()
+        .insert_builtin("agent".to_string(), agent_val);
+
+    let dollar_262_val = JsValue::Object(JsObject { id: dollar_262_id });
+    interp
+        .realm()
+        .global_env
+        .borrow_mut()
+        .declare("$262", BindingKind::Const);
+    let _ = interp
+        .realm()
+        .global_env
+        .borrow_mut()
+        .set("$262", dollar_262_val);
 }

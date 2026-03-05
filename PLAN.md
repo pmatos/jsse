@@ -3,7 +3,7 @@
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
 **Total test262 scenarios:** 91,986 (48,002 files, dual strict/non-strict per spec)
-**Current pass rate:** 90,893 / 91,986 (98.81%)
+**Current pass rate:** 91,192 / 91,986 (99.14%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -52,7 +52,8 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Object | 100% | 6,802/6,802 |
 | Promise | 100% | 1,272/1,272 |
 | Array | 99.4% | 6,072/6,111 |
-| Iterator | 96% | 980/1,020 |
+| Iterator | 100% | 1,020/1,020 |
+| Atomics | 91% | 698/764 |
 | TypedArray | 100% | 2,860/2,860 |
 | Date | 100% | 1,188/1,188 |
 | Function | 99% | 883/893 |
@@ -253,6 +254,8 @@ These features block significant numbers of tests:
 109. ~~**Module early errors and evaluation semantics (§16.2.1)**~~ — ✅ Done (+574 new passes, 98.30% → 98.92%). Comprehensive module system improvements: (1) Indirect bindings (§9.1.1.5.5 CreateImportBinding): import bindings now reference source module's environment dynamically instead of copying values, enabling live bindings for re-exports. (2) Star re-export cycle resolution (§16.2.1.6.3 ResolveExport step 8): resolve_export now follows star export chains with cycle detection, fixing star-cycle tests. (3) Namespace re-export handling: `export * as ns from` and `import * as ns; export { ns }` tracked via namespace_imports; ambiguous export detection compares resolved (env, binding_name) pairs. (4) Pre-load pass (§16.2.1.6.2 step 6): all referenced modules loaded in source order before import processing. (5) Import attributes: `with { key: "value" }` syntax support with duplicate key detection. (6) Parser fixes: `for await` in module code, `await` not as identifier in module, TLA support. (7) SyntaxError objects for parse errors in load_module (not strings). (8) validate_named_reexports re-added for re-export validation. module-code: 511→587/595 (98.66%). dynamic-import: 1764/1775 (99.38%). Files: `src/interpreter/mod.rs`, `src/interpreter/eval.rs`, `src/interpreter/exec.rs`, `src/parser/modules.rs`, `src/parser/statements.rs`, `src/parser/expressions.rs`.
 
 110. ~~**Top-Level Await microtask tick ordering (§27.7.5.3)**~~ — ✅ Done (+7 new passes, 98.92% → 98.93%). Rewrote `await_value()` to follow spec's Await semantics: every await wraps through `PromiseResolve` and schedules continuation as a microtask via promise reactions, then drains microtasks one-at-a-time until the continuation fires. Previously non-promise values returned immediately (no tick), and fulfilled promises drained the entire queue at once. The new implementation ensures proper interleaving between await resumes and other pending microtasks (e.g., `.then()` chains). Fixes top-level-ticks.js, top-level-ticks-2.js, and module-async-import-async-resolution-ticks.js. One TLA test remains (async-module-does-not-block-sibling-modules) requiring coroutine-style module body suspension. top-level-await: 249→252/253 (99.6%). Files: `src/interpreter/eval.rs`.
+
+111. ~~**Ambiguous star-export fix + Atomics multi-agent support**~~ — ✅ Done (+191 new passes, 98.93% → 99.14%). Two features: (1) US-022: Fixed ambiguous star-export resolution by swapping import/re-export order in `load_module()` to process re-exports before imports (+1 pass). (2) US-023: Full Atomics multi-agent support with `$262.agent` API for test262. `BufferData` enum with `SharedBufferInner` for thread-safe SAB memory sharing via `Arc<UnsafeCell<Box<[u8]>>>`. Global `WAITER_MAP` with Condvar-based `Atomics.wait`/`notify`/`waitAsync` (real blocking, not stub). `$262.agent.start`/`broadcast`/`getReport`/`sleep`/`monotonicNow` on main thread, `receiveBroadcast`/`report`/`leaving` on agent threads. True atomic RMW operations via `AtomicI32::from_ptr()` etc. with `SeqCst` ordering for shared buffers. `--can-block` CLI flag for `[[CanBlock]]` semantics. GC fixes: `bound_target_function`/`bound_args` tracing, per-microtask rooting via `(Vec<JsValue>, Box<dyn FnOnce>)` tuples in `microtask_queue`, unlimited `await_value` loop for setTimeout polyfill busy-wait. Atomics: 508→698/764 (91%). Files: `types.rs`, `mod.rs`, `gc.rs`, `eval.rs`, `builtins/atomics.rs`, `builtins/typedarray.rs`, `builtins/promise.rs`.
 
 92. ~~**Proto-from-ctor-realm: Realm-Aware Constructors (§10.2.4)**~~ — ✅ Done (+105 new passes, 97.95% → 98.06%). Fixed `GetPrototypeFromConstructor` to use `GetFunctionRealm(newTarget)` intrinsic when `newTarget.prototype` is not an Object. (1) Indirect eval realm switching: `perform_eval` now runs with `current_realm_id = eval_realm_id` during execution, not just for `global_env` lookup. (2) Constructor realm-aware prototype: Error, native errors (SyntaxError/TypeError/ReferenceError/RangeError/URIError/EvalError), AggregateError, SuppressedError, Boolean, Number, Function, Map, Set, WeakMap, WeakSet, Date, Promise, ArrayBuffer, SharedArrayBuffer, DataView, Iterator, DisposableStack, AsyncDisposableStack, plus all 9 Intl constructors now use `get_prototype_from_new_target_realm()` instead of hardcoded prototypes. Native error prototypes now stored on Realm struct. (3) ArraySpeciesCreate cross-realm: §9.4.2.3 step 5-6 check — when constructor C is from a different realm and equals that realm's intrinsic %Array%, set C to undefined. Files: `builtins/mod.rs`, `builtins/collections.rs`, `builtins/date.rs`, `builtins/promise.rs`, `builtins/typedarray.rs`, `builtins/iterators.rs`, `builtins/disposable.rs`, `builtins/array.rs`, `builtins/intl/*.rs`.
 

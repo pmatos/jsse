@@ -30,6 +30,10 @@ struct Cli {
     /// Prelude files to run as scripts before the main file (for test harness)
     #[arg(long = "prelude")]
     prelude: Vec<PathBuf>,
+
+    /// Allow the main agent to block (Atomics.wait)
+    #[arg(long = "can-block")]
+    can_block: bool,
 }
 
 enum EngineError {
@@ -37,9 +41,11 @@ enum EngineError {
     Runtime(String),
 }
 
-fn run_source(source: &str, is_module: bool, path: Option<&Path>) -> Result<(), EngineError> {
+fn run_source(source: &str, is_module: bool, path: Option<&Path>, can_block: bool) -> Result<(), EngineError> {
+    let mut interp = interpreter::Interpreter::new();
+    interp.can_block = can_block;
     run_source_with_interp(
-        &mut interpreter::Interpreter::new(),
+        &mut interp,
         source,
         is_module,
         path,
@@ -71,8 +77,8 @@ fn run_source_with_interp(
     }
 }
 
-fn execute_code(code: &str, is_module: bool, path: Option<&Path>) -> ExitCode {
-    match run_source(code, is_module, path) {
+fn execute_code(code: &str, is_module: bool, path: Option<&Path>, can_block: bool) -> ExitCode {
+    match run_source(code, is_module, path, can_block) {
         Ok(()) => ExitCode::SUCCESS,
         Err(EngineError::Parse(msg)) => {
             eprintln!("SyntaxError: {msg}");
@@ -91,7 +97,7 @@ fn execute_code(code: &str, is_module: bool, path: Option<&Path>) -> ExitCode {
     }
 }
 
-fn run_file(path: &Path, force_module: bool) -> ExitCode {
+fn run_file(path: &Path, force_module: bool, can_block: bool) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -101,7 +107,7 @@ fn run_file(path: &Path, force_module: bool) -> ExitCode {
     };
     let is_module = force_module || path.extension().is_some_and(|ext| ext == "mjs");
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    execute_code(&source, is_module, Some(&abs_path))
+    execute_code(&source, is_module, Some(&abs_path), can_block)
 }
 
 fn run_repl() -> ExitCode {
@@ -125,7 +131,7 @@ fn run_repl() -> ExitCode {
             Ok(_) => {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
-                    match run_source(trimmed, false, None) {
+                    match run_source(trimmed, false, None, false) {
                         Ok(()) => {}
                         Err(EngineError::Parse(msg)) => eprintln!("SyntaxError: {msg}"),
                         Err(EngineError::Runtime(msg)) => eprintln!("{msg}"),
@@ -149,11 +155,11 @@ fn main() -> ExitCode {
     // If no preludes, use simpler path
     if cli.prelude.is_empty() {
         if let Some(code) = &cli.eval {
-            return execute_code(code, cli.module, None);
+            return execute_code(code, cli.module, None, cli.can_block);
         }
 
         if let Some(path) = &cli.file {
-            return run_file(path, cli.module);
+            return run_file(path, cli.module, cli.can_block);
         }
 
         return run_repl();
@@ -161,6 +167,7 @@ fn main() -> ExitCode {
 
     // With preludes, we need to use a single interpreter instance
     let mut interp = interpreter::Interpreter::new();
+    interp.can_block = cli.can_block;
 
     // Run prelude files as scripts
     for prelude_path in &cli.prelude {

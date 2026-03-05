@@ -1,5 +1,36 @@
 use super::super::*;
+use crate::interpreter::types::{BufferData, SharedBufferInner};
 use crate::types::{JsBigInt, JsObject, JsString, JsValue};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicU8, AtomicU16, AtomicU32, Ordering};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
+
+struct WaiterEntry {
+    notified: Arc<(Mutex<bool>, Condvar)>,
+}
+
+static WAITER_MAP: LazyLock<Mutex<HashMap<(u64, usize), Vec<WaiterEntry>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBufferInner>, usize)> {
+    if let JsValue::Object(o) = ta_val
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let obj_ref = obj.borrow();
+        let byte_offset = obj_ref.typed_array_info.as_ref().map(|i| i.byte_offset).unwrap_or(0);
+        if let Some(buf_id) = obj_ref.view_buffer_object_id
+            && let Some(buf_obj) = interp.get_object(buf_id)
+        {
+            let buf_ref = buf_obj.borrow();
+            if buf_ref.arraybuffer_is_shared {
+                if let Some(ref inner) = buf_ref.sab_shared {
+                    return Some((inner.clone(), byte_offset));
+                }
+            }
+        }
+    }
+    None
+}
 
 impl Interpreter {
     pub(crate) fn setup_atomics(&mut self) {
@@ -104,13 +135,14 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                 let offset = byte_offset + byte_index;
+                if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
+                    return atomic_load_shared(&sab, offset, kind, is_bigint);
+                }
                 let buf = buffer.borrow();
                 if is_bigint {
-                    let val = read_bigint_from_buffer(&buf, offset, kind);
-                    Completion::Normal(val)
+                    Completion::Normal(read_bigint_from_buffer(&buf, offset, kind))
                 } else {
-                    let val = read_number_from_buffer(&buf, offset, kind);
-                    Completion::Normal(val)
+                    Completion::Normal(read_number_from_buffer(&buf, offset, kind))
                 }
             },
         ));
@@ -131,9 +163,11 @@ impl Interpreter {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
-                // Convert value BEFORE access validation per spec
-                // For Number: use ToIntegerOrInfinity (normalizes -0 to +0)
-                // For BigInt: use ToBigInt
+                let byte_index =
+                    match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
+                        Ok(i) => i,
+                        Err(e) => return Completion::Throw(e),
+                    };
                 let (converted, return_val) = if is_bigint {
                     let v = match interp.to_bigint_value(&value) {
                         Ok(v) => v,
@@ -145,7 +179,6 @@ impl Interpreter {
                         Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     };
-                    // ToIntegerOrInfinity
                     let int_val = if n.is_nan() || n == 0.0 {
                         0.0
                     } else if n.is_infinite() {
@@ -155,12 +188,11 @@ impl Interpreter {
                     };
                     (JsValue::Number(n), JsValue::Number(int_val))
                 };
-                let byte_index =
-                    match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
-                        Ok(i) => i,
-                        Err(e) => return Completion::Throw(e),
-                    };
                 let offset = byte_offset + byte_index;
+                if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
+                    atomic_store_shared(&sab, offset, kind, is_bigint, &converted);
+                    return Completion::Normal(return_val);
+                }
                 let mut buf = buffer.borrow_mut();
                 if is_bigint {
                     write_bigint_to_buffer(&mut buf, offset, kind, &converted);
@@ -215,6 +247,9 @@ impl Interpreter {
                     (exp, rep)
                 };
                 let offset = byte_offset + byte_index;
+                if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
+                    return atomic_compare_exchange_shared(&sab, offset, kind, is_bigint, &expected, &replacement);
+                }
                 let mut buf = buffer.borrow_mut();
                 if is_bigint {
                     let old = read_bigint_raw_bytes(&buf, offset, kind);
@@ -222,16 +257,14 @@ impl Interpreter {
                     if old == exp_bytes {
                         write_bigint_to_buffer(&mut buf, offset, kind, &replacement);
                     }
-                    let old_val = bigint_from_raw_bytes(kind, &old);
-                    Completion::Normal(old_val)
+                    Completion::Normal(bigint_from_raw_bytes(kind, &old))
                 } else {
                     let old = read_number_raw_bytes(&buf, offset, kind);
                     let exp_bytes = number_to_raw_bytes(kind, &expected);
                     if old == exp_bytes {
                         write_number_to_buffer(&mut buf, offset, kind, &replacement);
                     }
-                    let old_val = number_from_raw_bytes(kind, &old);
-                    Completion::Normal(old_val)
+                    Completion::Normal(number_from_raw_bytes(kind, &old))
                 }
             },
         ));
@@ -257,7 +290,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("isLockFree".to_string(), is_lock_free_fn);
 
-        // Atomics.wait — always throws TypeError since [[CanBlock]] = false
+        // Atomics.wait
         let wait_fn = self.create_function(JsFunction::native(
             "wait".to_string(),
             4,
@@ -265,37 +298,128 @@ impl Interpreter {
                 let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                // Validate to get correct error ordering
-                let (kind, buffer, byte_offset, element_size, is_bigint) =
+                let (kind, _buffer, byte_offset, element_size, is_bigint) =
                     match validate_integer_typed_array(interp, &ta_val, true) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
-                let _ = (kind, buffer, byte_offset, is_bigint);
-                let _byte_index =
+                // Step 3: IsSharedArrayBuffer check — before index/value/timeout
+                let sab_info = get_sab_info(interp, &ta_val);
+                if sab_info.is_none() {
+                    return Completion::Throw(
+                        interp.create_type_error("Atomics.wait requires a shared typed array"),
+                    );
+                }
+                let (sab, _ta_byte_offset) = sab_info.unwrap();
+                let byte_index =
                     match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
                         Ok(i) => i,
                         Err(e) => return Completion::Throw(e),
                     };
-                // Convert value
-                if is_bigint {
-                    if let Err(e) = interp.to_bigint_value(&value) {
-                        return Completion::Throw(e);
+                let converted = if is_bigint {
+                    match interp.to_bigint_value(&value) {
+                        Ok(v) => v,
+                        Err(e) => return Completion::Throw(e),
                     }
-                } else if let Err(e) = interp.to_number_value(&value) {
-                    return Completion::Throw(e);
-                }
-                // Convert timeout
+                } else {
+                    match interp.to_number_value(&value) {
+                        Ok(n) => JsValue::Number(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                };
                 let timeout_val = args.get(3).cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(timeout_val, JsValue::Undefined)
-                    && let Err(e) = interp.to_number_value(&timeout_val)
-                {
-                    return Completion::Throw(e);
+                let timeout = if matches!(timeout_val, JsValue::Undefined) {
+                    f64::INFINITY
+                } else {
+                    match interp.to_number_value(&timeout_val) {
+                        Ok(n) => {
+                            if n.is_nan() { f64::INFINITY } else { n.max(0.0) }
+                        }
+                        Err(e) => return Completion::Throw(e),
+                    }
+                };
+
+                let offset = byte_offset + byte_index;
+
+                let current_matches = if is_bigint {
+                    let ptr = unsafe { sab.as_ptr().add(offset) as *mut i64 };
+                    let atomic = unsafe { AtomicI64::from_ptr(ptr) };
+                    let current = atomic.load(Ordering::SeqCst);
+                    let expected = match &converted {
+                        JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                        _ => 0,
+                    };
+                    current == expected
+                } else {
+                    let ptr = unsafe { sab.as_ptr().add(offset) as *mut i32 };
+                    let atomic = unsafe { AtomicI32::from_ptr(ptr) };
+                    let current = atomic.load(Ordering::SeqCst);
+                    let expected = match &converted {
+                        JsValue::Number(n) => *n as i32,
+                        _ => 0,
+                    };
+                    current == expected
+                };
+
+                if !current_matches {
+                    return Completion::Normal(JsValue::String(JsString::from_str("not-equal")));
                 }
-                // [[CanBlock]] is false for main thread
-                Completion::Throw(
-                    interp.create_type_error("Atomics.wait cannot block on the main thread"),
-                )
+
+                // §25.4.12 step 14-15: AgentCanSuspend() check
+                if !interp.can_block {
+                    return Completion::Throw(
+                        interp.create_type_error("Atomics.wait cannot block on the main thread"),
+                    );
+                }
+
+                if timeout == 0.0 {
+                    return Completion::Normal(JsValue::String(JsString::from_str("timed-out")));
+                }
+
+                let pair = Arc::new((Mutex::new(false), Condvar::new()));
+                let key = (sab.id, offset);
+                {
+                    let mut map = WAITER_MAP.lock().unwrap();
+                    map.entry(key).or_default().push(WaiterEntry {
+                        notified: pair.clone(),
+                    });
+                }
+
+                let (lock, cvar) = &*pair;
+                let mut notified = lock.lock().unwrap();
+                let result = if timeout == f64::INFINITY {
+                    while !*notified {
+                        notified = cvar.wait(notified).unwrap();
+                    }
+                    "ok"
+                } else {
+                    let duration = std::time::Duration::from_millis(timeout as u64);
+                    let deadline = std::time::Instant::now() + duration;
+                    while !*notified {
+                        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                        if remaining.is_zero() {
+                            break;
+                        }
+                        let (guard, timeout_result) = cvar.wait_timeout(notified, remaining).unwrap();
+                        notified = guard;
+                        if timeout_result.timed_out() && !*notified {
+                            break;
+                        }
+                    }
+                    if *notified { "ok" } else { "timed-out" }
+                };
+
+                if !*notified {
+                    let mut map = WAITER_MAP.lock().unwrap();
+                    if let Some(waiters) = map.get_mut(&key) {
+                        waiters.retain(|w| !Arc::ptr_eq(&w.notified, &pair));
+                        if waiters.is_empty() {
+                            map.remove(&key);
+                        }
+                    }
+                }
+
+                Completion::Normal(JsValue::String(JsString::from_str(result)))
             },
         ));
         atomics_obj
@@ -309,37 +433,59 @@ impl Interpreter {
             |interp, _this, args| {
                 let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let (kind, _buffer, _byte_offset, element_size, _is_bigint) =
+                let (kind, _buffer, byte_offset, element_size, _is_bigint) =
                     match validate_integer_typed_array(interp, &ta_val, true) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
                 let _ = kind;
-                let _byte_index =
+                let byte_index =
                     match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
                         Ok(i) => i,
                         Err(e) => return Completion::Throw(e),
                     };
-                // count argument coercion (per spec)
                 let count_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(count_val, JsValue::Undefined) {
+                let count: usize = if matches!(count_val, JsValue::Undefined) {
+                    usize::MAX
+                } else {
                     let c = match interp.to_number_value(&count_val) {
                         Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     };
-                    if c.is_nan() {
-                        // treat as 0
+                    if c.is_nan() || c <= 0.0 {
+                        0
+                    } else if c.is_infinite() {
+                        usize::MAX
                     } else {
-                        let ci = if c.is_infinite() && c > 0.0 {
-                            f64::INFINITY
-                        } else {
-                            c.trunc().max(0.0)
-                        };
-                        let _ = ci;
+                        c.trunc().max(0.0) as usize
+                    }
+                };
+
+                let sab_info = get_sab_info(interp, &ta_val);
+                if sab_info.is_none() {
+                    return Completion::Normal(JsValue::Number(0.0));
+                }
+                let (sab, _ta_byte_offset) = sab_info.unwrap();
+                let offset = byte_offset + byte_index;
+                let key = (sab.id, offset);
+
+                let mut woken = 0usize;
+                let mut map = WAITER_MAP.lock().unwrap();
+                if let Some(waiters) = map.get_mut(&key) {
+                    let to_wake = count.min(waiters.len());
+                    for entry in waiters.drain(..to_wake) {
+                        let (lock, cvar) = &*entry.notified;
+                        let mut notified = lock.lock().unwrap();
+                        *notified = true;
+                        cvar.notify_one();
+                        woken += 1;
+                    }
+                    if waiters.is_empty() {
+                        map.remove(&key);
                     }
                 }
-                // No waiting threads in single-threaded engine
-                Completion::Normal(JsValue::Number(0.0))
+
+                Completion::Normal(JsValue::Number(woken as f64))
             },
         ));
         atomics_obj
@@ -359,7 +505,7 @@ impl Interpreter {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
-                // Check buffer is shared
+                // Step 3: IsSharedArrayBuffer check — before index/value/timeout
                 let buffer_is_shared = if let JsValue::Object(o) = &ta_val
                     && let Some(obj) = interp.get_object(o.id)
                 {
@@ -378,13 +524,17 @@ impl Interpreter {
                 } else {
                     false
                 };
+                if !buffer_is_shared {
+                    return Completion::Throw(
+                        interp.create_type_error("Atomics.waitAsync requires a shared typed array"),
+                    );
+                }
                 let _ = kind;
                 let byte_index =
                     match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
                         Ok(i) => i,
                         Err(e) => return Completion::Throw(e),
                     };
-                // Convert value
                 let converted = if is_bigint {
                     match interp.to_bigint_value(&value) {
                         Ok(v) => v,
@@ -396,29 +546,18 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     }
                 };
-                // Convert timeout
                 let timeout_val = args.get(3).cloned().unwrap_or(JsValue::Undefined);
                 let timeout = if matches!(timeout_val, JsValue::Undefined) {
                     f64::INFINITY
                 } else {
                     match interp.to_number_value(&timeout_val) {
                         Ok(n) => {
-                            if n.is_nan() {
-                                f64::INFINITY
-                            } else {
-                                n.max(0.0)
-                            }
+                            if n.is_nan() { f64::INFINITY } else { n.max(0.0) }
                         }
                         Err(e) => return Completion::Throw(e),
                     }
                 };
-                if !buffer_is_shared {
-                    return Completion::Throw(
-                        interp.create_type_error("Atomics.waitAsync requires a shared typed array"),
-                    );
-                }
 
-                // Read current value and compare
                 let offset = byte_offset + byte_index;
                 let buf = buffer.borrow();
                 let current_matches = if is_bigint {
@@ -432,7 +571,6 @@ impl Interpreter {
                 };
                 drop(buf);
 
-                // Build result object { async, value }
                 let result = interp.create_object();
                 if !current_matches {
                     result.borrow_mut().insert_property(
@@ -443,9 +581,7 @@ impl Interpreter {
                         "value".to_string(),
                         PropertyDescriptor::data(
                             JsValue::String(JsString::from_str("not-equal")),
-                            true,
-                            true,
-                            true,
+                            true, true, true,
                         ),
                     );
                 } else if timeout <= 0.0 {
@@ -457,26 +593,73 @@ impl Interpreter {
                         "value".to_string(),
                         PropertyDescriptor::data(
                             JsValue::String(JsString::from_str("timed-out")),
-                            true,
-                            true,
-                            true,
+                            true, true, true,
                         ),
                     );
                 } else {
-                    // In single-threaded engine, no one will notify, so return timed-out
+                    let sab_info = get_sab_info(interp, &ta_val);
+                    let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
+                    interp.gc_root_value(&resolve_fn);
+                    interp.gc_root_value(&promise_val);
+
+                    if let Some((sab, _)) = sab_info {
+                        let key = (sab.id, offset);
+                        let pair = Arc::new((Mutex::new(false), Condvar::new()));
+                        {
+                            let mut map = WAITER_MAP.lock().unwrap();
+                            map.entry(key).or_default().push(WaiterEntry {
+                                notified: pair.clone(),
+                            });
+                        }
+                        let pair_clone = pair.clone();
+                        let resolve_clone = resolve_fn.clone();
+                        let timeout_ms = timeout;
+                        let pending = interp.agent_async_completions.clone();
+                        std::thread::spawn(move || {
+                            let (lock, cvar) = &*pair_clone;
+                            let mut notified = lock.lock().unwrap();
+                            let result_str = if timeout_ms == f64::INFINITY {
+                                while !*notified {
+                                    notified = cvar.wait(notified).unwrap();
+                                }
+                                "ok"
+                            } else {
+                                let duration = std::time::Duration::from_millis(timeout_ms as u64);
+                                let deadline = std::time::Instant::now() + duration;
+                                while !*notified {
+                                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                                    if remaining.is_zero() { break; }
+                                    let (guard, _) = cvar.wait_timeout(notified, remaining).unwrap();
+                                    notified = guard;
+                                }
+                                if *notified { "ok" } else { "timed-out" }
+                            };
+                            if !*notified {
+                                let mut map = WAITER_MAP.lock().unwrap();
+                                if let Some(waiters) = map.get_mut(&key) {
+                                    waiters.retain(|w| !Arc::ptr_eq(&w.notified, &pair_clone));
+                                    if waiters.is_empty() { map.remove(&key); }
+                                }
+                            }
+                            let result_val = JsValue::String(JsString::from_str(result_str));
+                            let resolve = resolve_clone;
+                            pending.lock().unwrap().push(Box::new(move |interp: &mut Interpreter| {
+                                let _ = interp.call_function(&resolve, &JsValue::Undefined, &[result_val]);
+                                interp.gc_unroot_value(&resolve);
+                            }));
+                        });
+                    }
+
                     result.borrow_mut().insert_property(
                         "async".to_string(),
-                        PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
+                        PropertyDescriptor::data(JsValue::Boolean(true), true, true, true),
                     );
                     result.borrow_mut().insert_property(
                         "value".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str("timed-out")),
-                            true,
-                            true,
-                            true,
-                        ),
+                        PropertyDescriptor::data(promise_val.clone(), true, true, true),
                     );
+                    // resolve_fn stays rooted until completion callback runs
+                    interp.gc_unroot_value(&promise_val);
                 }
                 let id = result.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(JsObject { id }))
@@ -495,7 +678,6 @@ impl Interpreter {
                     if let Some(arg) = args.first()
                         && !matches!(arg, JsValue::Undefined)
                     {
-                        // Step 1a: Type(iterationNumber) must be Number
                         let n = if let JsValue::Number(n) = arg {
                             *n
                         } else {
@@ -503,8 +685,6 @@ impl Interpreter {
                                 "Atomics.pause requires a non-negative integer",
                             ));
                         };
-                        // Step 1b: IsIntegralNumber(n) must be true
-                        // Step 1c: n must be >= 0
                         if n.is_nan() || n.is_infinite() || n != n.trunc() || n < 0.0 {
                             return Completion::Throw(interp.create_type_error(
                                 "Atomics.pause requires a non-negative integer",
@@ -543,6 +723,202 @@ impl Interpreter {
     }
 }
 
+// Atomic operations on shared buffers
+
+fn atomic_load_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKind, is_bigint: bool) -> Completion {
+    unsafe {
+        let base = sab.as_ptr();
+        if is_bigint {
+            let ptr = base.add(offset) as *mut i64;
+            let val = AtomicI64::from_ptr(ptr).load(Ordering::SeqCst);
+            let bv = match kind {
+                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(val) }),
+                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(val as u64) }),
+                _ => JsValue::Number(0.0),
+            };
+            Completion::Normal(bv)
+        } else {
+            let val: i64 = match kind {
+                TypedArrayKind::Int8 => AtomicI8::from_ptr(base.add(offset) as *mut i8).load(Ordering::SeqCst) as i64,
+                TypedArrayKind::Uint8 => AtomicU8::from_ptr(base.add(offset)).load(Ordering::SeqCst) as i64,
+                TypedArrayKind::Int16 => AtomicI16::from_ptr(base.add(offset) as *mut i16).load(Ordering::SeqCst) as i64,
+                TypedArrayKind::Uint16 => AtomicU16::from_ptr(base.add(offset) as *mut u16).load(Ordering::SeqCst) as i64,
+                TypedArrayKind::Int32 => AtomicI32::from_ptr(base.add(offset) as *mut i32).load(Ordering::SeqCst) as i64,
+                TypedArrayKind::Uint32 => AtomicU32::from_ptr(base.add(offset) as *mut u32).load(Ordering::SeqCst) as i64,
+                _ => 0,
+            };
+            Completion::Normal(JsValue::Number(val as f64))
+        }
+    }
+}
+
+fn atomic_store_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKind, is_bigint: bool, val: &JsValue) {
+    unsafe {
+        let base = sab.as_ptr();
+        if is_bigint {
+            let i = match val {
+                JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                _ => 0,
+            };
+            let ptr = base.add(offset) as *mut i64;
+            AtomicI64::from_ptr(ptr).store(i, Ordering::SeqCst);
+        } else {
+            let n = match val { JsValue::Number(n) => *n, _ => 0.0 };
+            let i = converted_number_to_i64_val(kind, n);
+            match kind {
+                TypedArrayKind::Int8 => AtomicI8::from_ptr(base.add(offset) as *mut i8).store(i as i8, Ordering::SeqCst),
+                TypedArrayKind::Uint8 => AtomicU8::from_ptr(base.add(offset)).store(i as u8, Ordering::SeqCst),
+                TypedArrayKind::Int16 => AtomicI16::from_ptr(base.add(offset) as *mut i16).store(i as i16, Ordering::SeqCst),
+                TypedArrayKind::Uint16 => AtomicU16::from_ptr(base.add(offset) as *mut u16).store(i as u16, Ordering::SeqCst),
+                TypedArrayKind::Int32 => AtomicI32::from_ptr(base.add(offset) as *mut i32).store(i as i32, Ordering::SeqCst),
+                TypedArrayKind::Uint32 => AtomicU32::from_ptr(base.add(offset) as *mut u32).store(i as u32, Ordering::SeqCst),
+                _ => {}
+            }
+        }
+    }
+}
+
+fn atomic_compare_exchange_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKind, is_bigint: bool, expected: &JsValue, replacement: &JsValue) -> Completion {
+    unsafe {
+        let base = sab.as_ptr();
+        if is_bigint {
+            let exp = match expected { JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0), _ => 0 };
+            let rep = match replacement { JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0), _ => 0 };
+            let ptr = base.add(offset) as *mut i64;
+            let old = AtomicI64::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+            let bv = match kind {
+                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(old) }),
+                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(old as u64) }),
+                _ => JsValue::Number(0.0),
+            };
+            Completion::Normal(bv)
+        } else {
+            match kind {
+                TypedArrayKind::Int8 => {
+                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as i8;
+                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as i8;
+                    let ptr = base.add(offset) as *mut i8;
+                    let old = AtomicI8::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    Completion::Normal(JsValue::Number(old as f64))
+                }
+                TypedArrayKind::Uint8 => {
+                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as u8;
+                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as u8;
+                    let ptr = base.add(offset);
+                    let old = AtomicU8::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    Completion::Normal(JsValue::Number(old as f64))
+                }
+                TypedArrayKind::Int16 => {
+                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as i16;
+                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as i16;
+                    let ptr = base.add(offset) as *mut i16;
+                    let old = AtomicI16::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    Completion::Normal(JsValue::Number(old as f64))
+                }
+                TypedArrayKind::Uint16 => {
+                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as u16;
+                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as u16;
+                    let ptr = base.add(offset) as *mut u16;
+                    let old = AtomicU16::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    Completion::Normal(JsValue::Number(old as f64))
+                }
+                TypedArrayKind::Int32 => {
+                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as i32;
+                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as i32;
+                    let ptr = base.add(offset) as *mut i32;
+                    let old = AtomicI32::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    Completion::Normal(JsValue::Number(old as f64))
+                }
+                TypedArrayKind::Uint32 => {
+                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as u32;
+                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as u32;
+                    let ptr = base.add(offset) as *mut u32;
+                    let old = AtomicU32::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    Completion::Normal(JsValue::Number(old as f64))
+                }
+                _ => Completion::Normal(JsValue::Number(0.0)),
+            }
+        }
+    }
+}
+
+fn atomic_rmw_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKind, is_bigint: bool, converted: &JsValue, num_op: fn(i64, i64) -> i64, bigint_op: fn(i64, i64) -> i64) -> Completion {
+    unsafe {
+        let base = sab.as_ptr();
+        if is_bigint {
+            let new_i64 = match converted {
+                JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                _ => 0,
+            };
+            let ptr = base.add(offset) as *mut i64;
+            let atomic = AtomicI64::from_ptr(ptr);
+            let old = loop {
+                let current = atomic.load(Ordering::SeqCst);
+                let result = bigint_op(current, new_i64);
+                match atomic.compare_exchange(current, result, Ordering::SeqCst, Ordering::SeqCst) {
+                    Ok(v) => break v,
+                    Err(_) => continue,
+                }
+            };
+            let bv = match kind {
+                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(old) }),
+                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(old as u64) }),
+                _ => JsValue::Number(0.0),
+            };
+            Completion::Normal(bv)
+        } else {
+            let n = match converted { JsValue::Number(n) => *n, _ => 0.0 };
+            let new_i64 = converted_number_to_i64_val(kind, n);
+            macro_rules! do_rmw {
+                ($atomic_ty:ty, $ptr_ty:ty, $cast:ty) => {{
+                    let ptr = base.add(offset) as *mut $cast;
+                    let atomic = <$atomic_ty>::from_ptr(ptr);
+                    let old = loop {
+                        let current = atomic.load(Ordering::SeqCst);
+                        let result = num_op(current as i64, new_i64) as $cast;
+                        match atomic.compare_exchange(current, result, Ordering::SeqCst, Ordering::SeqCst) {
+                            Ok(v) => break v,
+                            Err(_) => continue,
+                        }
+                    };
+                    Completion::Normal(JsValue::Number(old as f64))
+                }};
+            }
+            match kind {
+                TypedArrayKind::Int8 => do_rmw!(AtomicI8, *mut i8, i8),
+                TypedArrayKind::Uint8 => do_rmw!(AtomicU8, *mut u8, u8),
+                TypedArrayKind::Int16 => do_rmw!(AtomicI16, *mut i16, i16),
+                TypedArrayKind::Uint16 => do_rmw!(AtomicU16, *mut u16, u16),
+                TypedArrayKind::Int32 => do_rmw!(AtomicI32, *mut i32, i32),
+                TypedArrayKind::Uint32 => do_rmw!(AtomicU32, *mut u32, u32),
+                _ => Completion::Normal(JsValue::Number(0.0)),
+            }
+        }
+    }
+}
+
+fn converted_number_to_i64_val(kind: TypedArrayKind, n: f64) -> i64 {
+    if n.is_nan() || n.is_infinite() || n == 0.0 {
+        return 0;
+    }
+    let int_val = n.trunc();
+    match kind {
+        TypedArrayKind::Int8 => {
+            let v = (int_val as i64) & 0xFF;
+            if v >= 128 { v - 256 } else { v }
+        }
+        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => (int_val as i64) & 0xFF,
+        TypedArrayKind::Int16 => {
+            let v = (int_val as i64) & 0xFFFF;
+            if v >= 32768 { v - 65536 } else { v }
+        }
+        TypedArrayKind::Uint16 => (int_val as i64) & 0xFFFF,
+        TypedArrayKind::Int32 => (int_val as i64) & 0xFFFFFFFF_i64,
+        TypedArrayKind::Uint32 => (int_val as i64) & 0xFFFFFFFF_i64,
+        _ => 0,
+    }
+}
+
 // ValidateIntegerTypedArray: returns (kind, buffer, byte_offset, element_size, is_bigint)
 #[allow(clippy::type_complexity)]
 fn validate_integer_typed_array(
@@ -552,7 +928,7 @@ fn validate_integer_typed_array(
 ) -> Result<
     (
         TypedArrayKind,
-        std::rc::Rc<std::cell::RefCell<Vec<u8>>>,
+        std::rc::Rc<std::cell::RefCell<BufferData>>,
         usize,
         usize,
         bool,
@@ -607,7 +983,6 @@ fn validate_atomic_access(
         Completion::Throw(e) => return Err(e),
         _ => 0,
     };
-    // Get array length
     let array_length = if let JsValue::Object(o) = ta_val
         && let Some(obj) = interp.get_object(o.id)
     {
@@ -626,7 +1001,6 @@ fn validate_atomic_access(
     Ok(idx * element_size)
 }
 
-// Read-modify-write helper for Atomics.add/sub/and/or/xor/exchange
 fn atomics_rmw(
     interp: &mut Interpreter,
     args: &[JsValue],
@@ -641,7 +1015,10 @@ fn atomics_rmw(
             Ok(info) => info,
             Err(e) => return Completion::Throw(e),
         };
-    // Convert value before access validation (per spec)
+    let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
+        Ok(i) => i,
+        Err(e) => return Completion::Throw(e),
+    };
     let converted = if is_bigint {
         match interp.to_bigint_value(&value) {
             Ok(v) => v,
@@ -653,11 +1030,12 @@ fn atomics_rmw(
             Err(e) => return Completion::Throw(e),
         }
     };
-    let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
-        Ok(i) => i,
-        Err(e) => return Completion::Throw(e),
-    };
     let offset = byte_offset + byte_index;
+
+    if let Some((sab, _)) = get_sab_info(interp, &ta_val) {
+        return atomic_rmw_shared(&sab, offset, kind, is_bigint, &converted, num_op, bigint_op);
+    }
+
     let mut buf = buffer.borrow_mut();
     if is_bigint {
         let old_bytes = read_bigint_raw_bytes(&buf, offset, kind);
@@ -669,16 +1047,14 @@ fn atomics_rmw(
         let result_i64 = bigint_op(old_i64, new_i64);
         let result_bytes = result_i64.to_le_bytes();
         buf[offset..offset + 8].copy_from_slice(&result_bytes);
-        let old_val = bigint_from_raw_bytes(kind, &old_bytes);
-        Completion::Normal(old_val)
+        Completion::Normal(bigint_from_raw_bytes(kind, &old_bytes))
     } else {
         let old_raw = read_number_raw_bytes(&buf, offset, kind);
         let old_i64 = number_raw_to_i64(kind, &old_raw);
         let new_i64 = converted_number_to_i64(kind, &converted);
         let result_i64 = num_op(old_i64, new_i64);
         write_i64_to_buffer(&mut buf, offset, kind, result_i64);
-        let old_val = number_from_raw_bytes(kind, &old_raw);
-        Completion::Normal(old_val)
+        Completion::Normal(number_from_raw_bytes(kind, &old_raw))
     }
 }
 
@@ -817,26 +1193,7 @@ fn converted_number_to_i64(kind: TypedArrayKind, val: &JsValue) -> i64 {
         JsValue::Number(n) => *n,
         _ => 0.0,
     };
-    if n.is_nan() || n.is_infinite() || n == 0.0 {
-        return 0;
-    }
-    // Use modular integer conversion matching JS semantics (ToInt32/ToUint32 style)
-    let int_val = n.trunc();
-    match kind {
-        TypedArrayKind::Int8 => {
-            let v = (int_val as i64) & 0xFF;
-            if v >= 128 { v - 256 } else { v }
-        }
-        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => (int_val as i64) & 0xFF,
-        TypedArrayKind::Int16 => {
-            let v = (int_val as i64) & 0xFFFF;
-            if v >= 32768 { v - 65536 } else { v }
-        }
-        TypedArrayKind::Uint16 => (int_val as i64) & 0xFFFF,
-        TypedArrayKind::Int32 => (int_val as i64) & 0xFFFFFFFF_i64,
-        TypedArrayKind::Uint32 => (int_val as i64) & 0xFFFFFFFF_i64,
-        _ => 0,
-    }
+    converted_number_to_i64_val(kind, n)
 }
 
 fn write_i64_to_buffer(buf: &mut [u8], offset: usize, kind: TypedArrayKind, val: i64) {

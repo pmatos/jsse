@@ -2,9 +2,109 @@ use crate::ast::*;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+
+static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn next_sab_id() -> u64 {
+    NEXT_SAB_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub struct SharedBufferInner {
+    data: UnsafeCell<Vec<u8>>,
+    pub id: u64,
+}
+
+unsafe impl Send for SharedBufferInner {}
+unsafe impl Sync for SharedBufferInner {}
+
+impl SharedBufferInner {
+    pub fn new(data: Vec<u8>, id: u64) -> Self {
+        Self {
+            data: UnsafeCell::new(data),
+            id,
+        }
+    }
+
+    pub fn as_ptr(&self) -> *mut u8 {
+        unsafe { (*self.data.get()).as_mut_ptr() }
+    }
+
+    pub fn len(&self) -> usize {
+        unsafe { (*self.data.get()).len() }
+    }
+}
+
+impl std::fmt::Debug for SharedBufferInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedBufferInner")
+            .field("id", &self.id)
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
+#[derive(Debug)]
+pub enum BufferData {
+    Owned(Vec<u8>),
+    Shared(Arc<SharedBufferInner>),
+}
+
+impl BufferData {
+    pub fn resize(&mut self, new_len: usize, value: u8) {
+        match self {
+            BufferData::Owned(v) => v.resize(new_len, value),
+            BufferData::Shared(s) => unsafe { (*s.data.get()).resize(new_len, value) },
+        }
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        match self {
+            BufferData::Owned(v) => v.clone(),
+            BufferData::Shared(s) => unsafe { (*s.data.get()).clone() },
+        }
+    }
+
+    pub fn is_shared(&self) -> bool {
+        matches!(self, BufferData::Shared(_))
+    }
+
+    pub fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
+        match self {
+            BufferData::Shared(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
+impl Clone for BufferData {
+    fn clone(&self) -> Self {
+        BufferData::Owned(self.to_vec())
+    }
+}
+
+impl std::ops::Deref for BufferData {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            BufferData::Owned(v) => v,
+            BufferData::Shared(s) => unsafe { &*s.data.get() },
+        }
+    }
+}
+
+impl std::ops::DerefMut for BufferData {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        match self {
+            BufferData::Owned(v) => v,
+            BufferData::Shared(s) => unsafe { &mut *s.data.get() },
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum Completion {
@@ -1170,7 +1270,7 @@ impl TypedArrayKind {
 #[derive(Debug, Clone)]
 pub struct TypedArrayInfo {
     pub kind: TypedArrayKind,
-    pub buffer: Rc<RefCell<Vec<u8>>>,
+    pub buffer: Rc<RefCell<BufferData>>,
     pub byte_offset: usize,
     pub byte_length: usize,
     pub array_length: usize,
@@ -1180,7 +1280,7 @@ pub struct TypedArrayInfo {
 
 #[derive(Debug, Clone)]
 pub struct DataViewInfo {
-    pub buffer: Rc<RefCell<Vec<u8>>>,
+    pub buffer: Rc<RefCell<BufferData>>,
     pub byte_offset: usize,
     pub byte_length: usize,
     pub is_detached: Rc<Cell<bool>>,
@@ -1403,11 +1503,12 @@ pub struct JsObjectData {
     pub proxy_target: Option<Rc<RefCell<JsObjectData>>>,
     pub proxy_handler: Option<Rc<RefCell<JsObjectData>>>,
     pub proxy_revoked: bool,
-    pub arraybuffer_data: Option<Rc<RefCell<Vec<u8>>>>,
+    pub arraybuffer_data: Option<Rc<RefCell<BufferData>>>,
     pub arraybuffer_detached: Option<Rc<Cell<bool>>>,
     pub arraybuffer_max_byte_length: Option<usize>,
     pub arraybuffer_is_shared: bool,
     pub arraybuffer_is_immutable: bool,
+    pub sab_shared: Option<Arc<SharedBufferInner>>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
     pub view_buffer_object_id: Option<u64>,
@@ -1474,6 +1575,7 @@ impl JsObjectData {
             arraybuffer_max_byte_length: None,
             arraybuffer_is_shared: false,
             arraybuffer_is_immutable: false,
+            sab_shared: None,
             typed_array_info: None,
             data_view_info: None,
             view_buffer_object_id: None,

@@ -1,7 +1,9 @@
 use super::super::*;
+use crate::interpreter::types::BufferData;
 use crate::types::{JsBigInt, JsObject, JsString, JsValue};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 fn to_int32_modular(n: f64) -> i32 {
     if n.is_nan() || n.is_infinite() || n == 0.0 {
@@ -437,7 +439,7 @@ impl Interpreter {
                         if let Some(ref det) = obj_ref.arraybuffer_detached {
                             det.set(true);
                         }
-                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
+                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     let new_ab = interp.create_arraybuffer_resizable(new_data, max_byte_length);
                     let id = new_ab.borrow().id.unwrap();
@@ -518,7 +520,7 @@ impl Interpreter {
                         if let Some(ref det) = obj_ref.arraybuffer_detached {
                             det.set(true);
                         }
-                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
+                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     let new_ab = interp.create_arraybuffer(new_data);
                     let id = new_ab.borrow().id.unwrap();
@@ -599,7 +601,7 @@ impl Interpreter {
                         if let Some(ref det) = obj_ref.arraybuffer_detached {
                             det.set(true);
                         }
-                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
+                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     // Create immutable ArrayBuffer
                     let new_ab = interp.create_arraybuffer(new_data);
@@ -747,7 +749,7 @@ impl Interpreter {
                 } else {
                     vec![0u8; len]
                 };
-                let buf_rc = Rc::new(RefCell::new(buf));
+                let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
                 let detached = Rc::new(Cell::new(false));
                 let obj = interp.create_object();
                 {
@@ -845,7 +847,7 @@ impl Interpreter {
         data: Vec<u8>,
         max_byte_length: Option<usize>,
     ) -> Rc<RefCell<JsObjectData>> {
-        let buf_rc = Rc::new(RefCell::new(data));
+        let buf_rc = Rc::new(RefCell::new(BufferData::Owned(data)));
         let detached = Rc::new(Cell::new(false));
         let obj = self.create_object();
         {
@@ -873,7 +875,7 @@ impl Interpreter {
                 if let Some(ref det) = obj_ref.arraybuffer_detached {
                     det.set(true);
                 }
-                obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(Vec::new())));
+                obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                 return Completion::Normal(JsValue::Undefined);
             }
         }
@@ -885,7 +887,10 @@ impl Interpreter {
         data: Vec<u8>,
         max_byte_length: Option<usize>,
     ) -> Rc<RefCell<JsObjectData>> {
-        let buf_rc = Rc::new(RefCell::new(data));
+        use crate::interpreter::types::{next_sab_id, SharedBufferInner};
+        let sab_id = next_sab_id();
+        let inner = Arc::new(SharedBufferInner::new(data, sab_id));
+        let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
         let obj = self.create_object();
         {
             let mut o = obj.borrow_mut();
@@ -895,6 +900,7 @@ impl Interpreter {
             o.arraybuffer_detached = None;
             o.arraybuffer_max_byte_length = max_byte_length;
             o.arraybuffer_is_shared = true;
+            o.sab_shared = Some(inner);
         }
         obj
     }
@@ -1261,9 +1267,12 @@ impl Interpreter {
                     ));
                 }
                 let buf = vec![0u8; len];
-                let buf_rc = Rc::new(RefCell::new(buf));
                 let obj = interp.create_object();
                 {
+                    use crate::interpreter::types::{next_sab_id, SharedBufferInner};
+                    let sab_id = next_sab_id();
+                    let inner = Arc::new(SharedBufferInner::new(buf, sab_id));
+                    let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
                     let mut o = obj.borrow_mut();
                     o.class_name = "SharedArrayBuffer".to_string();
                     o.prototype = proto;
@@ -1271,6 +1280,7 @@ impl Interpreter {
                     o.arraybuffer_detached = None;
                     o.arraybuffer_max_byte_length = max_byte_length;
                     o.arraybuffer_is_shared = true;
+                    o.sab_shared = Some(inner);
                 }
                 let id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(JsObject { id }))
@@ -2580,7 +2590,7 @@ impl Interpreter {
                     let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
                     let new_buf = vec![0u8; len * bpe];
-                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
@@ -2721,7 +2731,7 @@ impl Interpreter {
                     let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
                     let new_buf = vec![0u8; len * bpe];
-                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
@@ -2953,7 +2963,7 @@ impl Interpreter {
 
                     let bpe = ta.kind.bytes_per_element();
                     let new_buf = vec![0u8; len as usize * bpe];
-                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
@@ -3927,7 +3937,7 @@ impl Interpreter {
                                     }
                                     let len = typed_array_length(&src_ta);
                                     let new_buf = vec![0u8; len * bpe];
-                                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                                     let new_detached = Rc::new(Cell::new(false));
                                     let new_ta = TypedArrayInfo {
                                         kind,
@@ -3969,7 +3979,7 @@ impl Interpreter {
                                 };
                                 let len = values.len();
                                 let new_buf = vec![0u8; len * bpe];
-                                let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                                let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                                 let new_detached = Rc::new(Cell::new(false));
                                 let new_ta = TypedArrayInfo {
                                     kind,
@@ -4414,7 +4424,7 @@ impl Interpreter {
         let proto = self.get_typed_array_prototype(exemplar_kind);
         let bpe = exemplar_kind.bytes_per_element();
         let buf = vec![0u8; len * bpe];
-        let buf_rc = Rc::new(RefCell::new(buf));
+        let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
         let detached = Rc::new(Cell::new(false));
         let ta_info = TypedArrayInfo {
             kind: exemplar_kind,
@@ -4469,7 +4479,7 @@ impl Interpreter {
     ) -> Completion {
         let bpe = kind.bytes_per_element();
         let buf = vec![0u8; len * bpe];
-        let buf_rc = Rc::new(RefCell::new(buf));
+        let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
         let detached = Rc::new(Cell::new(false));
         let ta_info = TypedArrayInfo {
             kind,
@@ -4586,7 +4596,7 @@ impl Interpreter {
                     let proto = self.get_typed_array_prototype(kind);
                     let bpe = kind.bytes_per_element();
                     let new_buf = vec![0u8; len * bpe];
-                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let ta = TypedArrayInfo {
                         kind,
@@ -4702,7 +4712,7 @@ impl Interpreter {
                     let proto = self.get_typed_array_prototype(kind);
                     let bpe = kind.bytes_per_element();
                     let new_buf = vec![0u8; len * bpe];
-                    let new_buf_rc = Rc::new(RefCell::new(new_buf));
+                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let ta = TypedArrayInfo {
                         kind,
@@ -6436,7 +6446,7 @@ fn encode_base64(data: &[u8], alphabet: &str, omit_padding: bool) -> String {
 fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Completion {
     let len = bytes.len();
     let buf = bytes.to_vec();
-    let buf_rc = Rc::new(RefCell::new(buf));
+    let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
     let detached = Rc::new(Cell::new(false));
     let ta_info = TypedArrayInfo {
         kind: TypedArrayKind::Uint8,

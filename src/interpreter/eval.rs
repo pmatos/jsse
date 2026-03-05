@@ -14590,21 +14590,21 @@ impl Interpreter {
                 let done_c = done.clone();
                 let result_c = result.clone();
                 let value = v.clone();
-                self.microtask_queue.push(Box::new(move |_interp| {
+                self.microtask_queue.push((vec![value.clone()], Box::new(move |_interp| {
                     done_c.set(true);
                     *result_c.borrow_mut() = Some(Ok(value));
                     Completion::Normal(JsValue::Undefined)
-                }));
+                })));
             }
             Some(PromiseState::Rejected(r)) => {
                 let done_c = done.clone();
                 let result_c = result.clone();
                 let reason = r.clone();
-                self.microtask_queue.push(Box::new(move |_interp| {
+                self.microtask_queue.push((vec![reason.clone()], Box::new(move |_interp| {
                     done_c.set(true);
                     *result_c.borrow_mut() = Some(Err(reason));
                     Completion::Normal(JsValue::Undefined)
-                }));
+                })));
             }
             Some(PromiseState::Pending) => {
                 let done_f = done.clone();
@@ -14662,15 +14662,32 @@ impl Interpreter {
             }
         }
 
-        for _ in 0..10_000 {
+        loop {
             if done.get() {
                 break;
             }
             if self.microtask_queue.is_empty() {
-                break;
+                // Check agent async completions before giving up
+                let completions: Vec<_> = {
+                    let mut lock = self.agent_async_completions.lock().unwrap();
+                    lock.drain(..).collect()
+                };
+                if completions.is_empty() {
+                    break;
+                }
+                for f in completions {
+                    f(self);
+                }
+                continue;
             }
-            let job = self.microtask_queue.remove(0);
+            let (roots, job) = self.microtask_queue.remove(0);
+            for val in &roots {
+                self.gc_root_value(val);
+            }
             let _ = job(self);
+            for val in &roots {
+                self.gc_unroot_value(val);
+            }
         }
 
         self.gc_unroot_value(&promise);
