@@ -236,12 +236,8 @@ impl<'a> Parser<'a> {
         };
         let prev_generator = self.in_generator;
         let prev_async = self.in_async;
-        if is_generator {
-            self.in_generator = true;
-        }
-        if is_async {
-            self.in_async = true;
-        }
+        self.in_generator = is_generator;
+        self.in_async = is_async;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_async = prev_async;

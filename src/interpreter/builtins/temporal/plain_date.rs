@@ -1625,26 +1625,31 @@ fn read_pd_property_bag_raw(
         }
         d_f as u8
     };
-    // era (for non-ISO calendars)
-    let era_val = match get_prop(interp, item, "era") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let era = if !is_undefined(&era_val) {
-        Some(super::to_primitive_and_require_string(
-            interp, &era_val, "era",
-        )?)
+    // era/eraYear only for non-ISO calendars (§12.5.1 CalendarFields)
+    let (era, era_year) = if cal != "iso8601" && super::calendar_has_eras(&cal) {
+        let era_val = match get_prop(interp, item, "era") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let era = if !is_undefined(&era_val) {
+            Some(super::to_primitive_and_require_string(
+                interp, &era_val, "era",
+            )?)
+        } else {
+            None
+        };
+        let era_year_val = match get_prop(interp, item, "eraYear") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let era_year = if !is_undefined(&era_year_val) {
+            Some(to_integer_with_truncation(interp, &era_year_val)? as i32)
+        } else {
+            None
+        };
+        (era, era_year)
     } else {
-        None
-    };
-    let era_year_val = match get_prop(interp, item, "eraYear") {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    let era_year = if !is_undefined(&era_year_val) {
-        Some(to_integer_with_truncation(interp, &era_year_val)? as i32)
-    } else {
-        None
+        (None, None)
     };
     let m_val = match get_prop(interp, item, "month") {
         Completion::Normal(v) => v,
@@ -1819,28 +1824,31 @@ pub(super) fn to_temporal_plain_date(
                 d_f as u8
             };
 
-            // 2b. era: get + coerce (optional, for non-ISO calendars)
-            let era_val = match get_prop(interp, &item, "era") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let era_str = if !is_undefined(&era_val) {
-                Some(super::to_primitive_and_require_string(
-                    interp, &era_val, "era",
-                )?)
+            // 2b-2c. era/eraYear: only for non-ISO calendars (§12.5.1 CalendarFields)
+            let (era_str, era_year) = if cal != "iso8601" && super::calendar_has_eras(&cal) {
+                let era_val = match get_prop(interp, &item, "era") {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                };
+                let era_s = if !is_undefined(&era_val) {
+                    Some(super::to_primitive_and_require_string(
+                        interp, &era_val, "era",
+                    )?)
+                } else {
+                    None
+                };
+                let era_year_val = match get_prop(interp, &item, "eraYear") {
+                    Completion::Normal(v) => v,
+                    other => return Err(other),
+                };
+                let era_y = if !is_undefined(&era_year_val) {
+                    Some(to_integer_with_truncation(interp, &era_year_val)? as i32)
+                } else {
+                    None
+                };
+                (era_s, era_y)
             } else {
-                None
-            };
-
-            // 2c. eraYear: get + coerce (optional, for non-ISO calendars)
-            let era_year_val = match get_prop(interp, &item, "eraYear") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let era_year = if !is_undefined(&era_year_val) {
-                Some(to_integer_with_truncation(interp, &era_year_val)? as i32)
-            } else {
-                None
+                (None, None)
             };
 
             // 3. month: get + coerce

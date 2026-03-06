@@ -737,7 +737,9 @@ impl<'a> Parser<'a> {
         // `is_await_using_declaration()` doesn't include Keyword::Of, so check separately:
         // peek three tokens: if `await` `using` `of` (`=` or `of`), it's an await using declaration.
         let is_for_await_using =
-            if matches!(&self.current, Token::Keyword(Keyword::Await)) && self.in_async {
+            if matches!(&self.current, Token::Keyword(Keyword::Await))
+                && (self.in_async || (self.is_module && self.in_function == 0))
+            {
                 if self.is_await_using_declaration() {
                     true
                 } else {
@@ -1121,6 +1123,9 @@ impl<'a> Parser<'a> {
                 }))
             }
             _ => {
+                // §14.7.1.1: `for (async of ...)` is a SyntaxError
+                // Only applies to the literal `async` keyword token, not escaped forms
+                let is_literal_async = matches!(&self.current, Token::Keyword(Keyword::Async));
                 self.no_in = true;
                 let expr = self.parse_expression()?;
                 self.no_in = false;
@@ -1148,6 +1153,11 @@ impl<'a> Parser<'a> {
                 if self.current == Token::Keyword(Keyword::Of) {
                     if matches!(&expr, Expression::Identifier(n) if n == "let") {
                         return Err(self.error("The identifier 'let' is disallowed as a left-hand side expression of a for-of loop"));
+                    }
+                    // §14.7.1.1: `for (async of ...)` is a SyntaxError (only with literal `async` keyword)
+                    // Escaped forms (\u0061sync) and parenthesized (async) are allowed
+                    if !is_await && is_literal_async && matches!(&expr, Expression::Identifier(n) if n == "async") {
+                        return Err(self.error("The identifier 'async' is disallowed as a left-hand side expression of a for-of loop"));
                     }
                     self.advance()?;
                     let right = self.parse_assignment_expression()?;

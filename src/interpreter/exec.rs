@@ -1051,6 +1051,20 @@ impl Interpreter {
             {
                 continue;
             }
+            // §13.3.2.4 step 2: ResolveBinding BEFORE evaluating Initializer
+            // Pre-resolve with-scope binding so the reference is captured before
+            // side effects in the initializer can change it.
+            let pre_resolved_with = if decl.kind == VarKind::Var
+                && d.init.is_some()
+                && let Pattern::Identifier(ref name) = d.pattern
+            {
+                match self.resolve_with_has_binding(name, env) {
+                    Ok(obj_id) => obj_id,
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                None
+            };
             let val = if let Some(init) = &d.init {
                 // For anonymous class expressions, pass the binding name into
                 // eval_class so SetFunctionName happens before static fields.
@@ -1097,7 +1111,21 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
             }
-            if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
+            // Use pre-resolved with-scope binding if available
+            if let Some(with_obj_id) = pre_resolved_with {
+                if let Pattern::Identifier(ref name) = d.pattern {
+                    let strict = env.borrow().strict;
+                    if let Err(e) =
+                        self.with_set_mutable_binding(with_obj_id, name, val, strict)
+                    {
+                        return Completion::Throw(e);
+                    }
+                } else {
+                    if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
+                        return Completion::Throw(e);
+                    }
+                }
+            } else if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
                 return Completion::Throw(e);
             }
         }
@@ -1115,7 +1143,14 @@ impl Interpreter {
             Pattern::Identifier(name) => {
                 if kind == BindingKind::Var {
                     let var_scope = Environment::find_var_scope(env);
-                    if !var_scope.borrow().bindings.contains_key(name) {
+                    let already_declared = {
+                        let vs = var_scope.borrow();
+                        vs.bindings.contains_key(name)
+                            || vs.global_object.as_ref().is_some_and(|g| {
+                                g.borrow().properties.contains_key(name)
+                            })
+                    };
+                    if !already_declared {
                         var_scope.borrow_mut().declare(name, kind);
                     }
                     // For var initializers inside with-scopes, write through with-object
@@ -2042,7 +2077,8 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     }
-                    self.exec_statements(&handler.body, &catch_env)
+                    let catch_block_env = Environment::new(Some(catch_env.clone()));
+                    self.exec_statements(&handler.body, &catch_block_env)
                 } else {
                     Completion::Throw(val)
                 }

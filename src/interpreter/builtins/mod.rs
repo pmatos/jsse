@@ -16,6 +16,51 @@ mod typedarray;
 
 use super::*;
 
+fn is_identifier_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        None => return false,
+        Some(c) => {
+            if !unicode_ident::is_xid_start(c) && c != '$' && c != '_' {
+                return false;
+            }
+        }
+    }
+    for c in chars {
+        if !unicode_ident::is_xid_continue(c) && c != '$' && c != '\u{200C}' && c != '\u{200D}' {
+            return false;
+        }
+    }
+    true
+}
+
+fn sanitize_native_fn_name(name: &str) -> String {
+    if name.is_empty() {
+        return String::new();
+    }
+    // Handle "get X" / "set X" accessor prefix
+    if let Some(rest) = name.strip_prefix("get ") {
+        if is_identifier_name(rest) {
+            return format!("get {rest}");
+        }
+        return "get ".to_string();
+    }
+    if let Some(rest) = name.strip_prefix("set ") {
+        if is_identifier_name(rest) {
+            return format!("set {rest}");
+        }
+        return "set ".to_string();
+    }
+    // Handle bracket notation like "[Symbol.iterator]"
+    if name.starts_with('[') {
+        return String::new();
+    }
+    if is_identifier_name(name) {
+        return name.to_string();
+    }
+    String::new()
+}
+
 /// Convert f64 to IEEE 754 binary16 (half-precision) and back to f64.
 /// Uses round-to-nearest-even (banker's rounding).
 fn f64_to_f16_to_f64(val: f64) -> f64 {
@@ -319,6 +364,20 @@ fn sum_precise_shewchuk(vals: &[f64]) -> f64 {
 
 impl Interpreter {
     pub(crate) fn setup_globals(&mut self) {
+        // Create a placeholder Function.prototype early so all functions created during
+        // setup get the correct [[Prototype]]. It will be adopted by Function.prototype later.
+        if self.realm().function_prototype.is_none() {
+            let fp = self.create_object();
+            fp.borrow_mut().prototype = self.realm().object_prototype.clone();
+            fp.borrow_mut().callable = Some(JsFunction::native(
+                String::new(),
+                0,
+                |_, _, _| Completion::Normal(JsValue::Undefined),
+            ));
+            fp.borrow_mut().class_name = "Function".to_string();
+            self.realm_mut().function_prototype = Some(fp);
+        }
+
         // Create %ThrowTypeError% intrinsic (§10.2.4) — must exist before anything uses it
         {
             let thrower = self.create_thrower_function();
@@ -2449,26 +2508,22 @@ impl Interpreter {
             let _ = global_env.borrow_mut().set("Function", fn_ctor_fn);
         }
 
-        // Per spec §20.2.3, Function.prototype is itself a function object
+        // Per spec §20.2.3, Function.prototype is itself a function object.
+        // If we already have an early-created function_prototype, update it;
+        // otherwise update the auto-created one from the Function constructor.
         {
-            let func_val = self.realm().global_env.borrow().get("Function");
-            if let Some(JsValue::Object(fo)) = func_val
-                && let Some(func_data) = self.get_object(fo.id)
-            {
-                let pv = func_data.borrow().get_property("prototype");
-                if let JsValue::Object(pr) = pv
-                    && let Some(proto_obj) = self.get_object(pr.id)
-                {
-                    proto_obj.borrow_mut().callable = Some(JsFunction::native(
-                        "".to_string(),
-                        0,
-                        |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
-                    ));
-                    proto_obj.borrow_mut().insert_property(
+            let fp = self.realm().function_prototype.clone();
+            if let Some(ref fp_obj) = fp {
+                // Already has callable from early init, but ensure length/name
+                let mut b = fp_obj.borrow_mut();
+                if !b.properties.contains_key("length") {
+                    b.insert_property(
                         "length".to_string(),
                         PropertyDescriptor::data(JsValue::Number(0.0), false, false, true),
                     );
-                    proto_obj.borrow_mut().insert_property(
+                }
+                if !b.properties.contains_key("name") {
+                    b.insert_property(
                         "name".to_string(),
                         PropertyDescriptor::data(
                             JsValue::String(JsString::from_str("")),
@@ -2478,39 +2533,35 @@ impl Interpreter {
                         ),
                     );
                 }
-            }
-        }
-
-        // Add Function.prototype[@@hasInstance]
-        if let Some(sym_key) = self.get_symbol_key("hasInstance") {
-            let func_val = self.realm().global_env.borrow().get("Function");
-            let proto_data = func_val.and_then(|fv| {
-                if let JsValue::Object(fo) = fv {
-                    self.get_object(fo.id).and_then(|fd| {
-                        let pv = fd.borrow().get_property("prototype");
-                        if let JsValue::Object(pr) = pv {
-                            self.get_object(pr.id)
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
+            } else {
+                let func_val = self.realm().global_env.borrow().get("Function");
+                if let Some(JsValue::Object(fo)) = func_val
+                    && let Some(func_data) = self.get_object(fo.id)
+                {
+                    let pv = func_data.borrow().get_property("prototype");
+                    if let JsValue::Object(pr) = pv
+                        && let Some(proto_obj) = self.get_object(pr.id)
+                    {
+                        proto_obj.borrow_mut().callable = Some(JsFunction::native(
+                            "".to_string(),
+                            0,
+                            |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+                        ));
+                        proto_obj.borrow_mut().insert_property(
+                            "length".to_string(),
+                            PropertyDescriptor::data(JsValue::Number(0.0), false, false, true),
+                        );
+                        proto_obj.borrow_mut().insert_property(
+                            "name".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str("")),
+                                false,
+                                false,
+                                true,
+                            ),
+                        );
+                    }
                 }
-            });
-            if let Some(proto_data) = proto_data {
-                let has_instance_fn = self.create_function(JsFunction::native(
-                    "[Symbol.hasInstance]".to_string(),
-                    1,
-                    |interp, this_val, args| {
-                        let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        interp.ordinary_has_instance(this_val, &arg)
-                    },
-                ));
-                proto_data.borrow_mut().insert_property(
-                    sym_key,
-                    PropertyDescriptor::data(has_instance_fn, false, false, false),
-                );
             }
         }
 
@@ -2520,20 +2571,59 @@ impl Interpreter {
             if let Some(JsValue::Object(fo)) = func_val
                 && let Some(func_data) = self.get_object(fo.id)
             {
-                let pv = func_data.borrow().get_property("prototype");
-                if let JsValue::Object(pr) = pv
-                    && let Some(fp) = self.get_object(pr.id)
+                // Use the early-created function_prototype if available, otherwise
+                // fall back to the auto-created one from create_function
+                let fp = if let Some(ref existing_fp) = self.realm().function_prototype {
+                    // Replace the Function constructor's .prototype with our early object
+                    let fp_id = existing_fp.borrow().id.unwrap();
+                    let fp_val =
+                        JsValue::Object(crate::types::JsObject { id: fp_id });
+                    func_data.borrow_mut().insert_property(
+                        "prototype".to_string(),
+                        PropertyDescriptor::data(fp_val, true, false, false),
+                    );
+                    // Set constructor back-link
+                    let func_obj_val = JsValue::Object(crate::types::JsObject { id: fo.id });
+                    existing_fp.borrow_mut().insert_property(
+                        "constructor".to_string(),
+                        PropertyDescriptor::data(func_obj_val, true, false, true),
+                    );
+                    existing_fp.clone()
+                } else {
+                    let pv = func_data.borrow().get_property("prototype");
+                    if let JsValue::Object(pr) = pv {
+                        self.get_object(pr.id).unwrap()
+                    } else {
+                        unreachable!()
+                    }
+                };
                 {
                     // Set Function.prototype's [[Prototype]] to Object.prototype
                     if fp.borrow().prototype.is_none() {
                         fp.borrow_mut().prototype = self.realm().object_prototype.clone();
                     }
-                    // Set function_prototype BEFORE installing methods so that
-                    // call/apply/bind themselves get Function.prototype as [[Prototype]]
+                    // Ensure function_prototype is set
                     self.realm_mut().function_prototype = Some(fp.clone());
 
                     // Install call/apply/bind/toString on Function.prototype
                     self.setup_function_prototype(&fp);
+
+                    // Add Function.prototype[@@hasInstance]
+                    if let Some(sym_key) = self.get_symbol_key("hasInstance") {
+                        let has_instance_fn = self.create_function(JsFunction::native(
+                            "[Symbol.hasInstance]".to_string(),
+                            1,
+                            |interp, this_val, args| {
+                                let arg =
+                                    args.first().cloned().unwrap_or(JsValue::Undefined);
+                                interp.ordinary_has_instance(this_val, &arg)
+                            },
+                        ));
+                        fp.borrow_mut().insert_property(
+                            sym_key,
+                            PropertyDescriptor::data(has_instance_fn, false, false, false),
+                        );
+                    }
 
                     // Function.prototype.caller and .arguments (§20.2.3.1, §20.2.3.2)
                     if let Some(ref thrower) = self.realm().throw_type_error {
@@ -8189,6 +8279,7 @@ impl Interpreter {
     }
 
     fn setup_function_prototype(&mut self, obj_proto: &Rc<RefCell<JsObjectData>>) {
+        let fn_proto_realm_id = self.current_realm_id;
         // Add call to Object.prototype (simplified - applies to all functions via prototype chain)
         let call_fn = self.create_function(JsFunction::native(
             "call".to_string(),
@@ -8207,10 +8298,10 @@ impl Interpreter {
         let apply_fn = self.create_function(JsFunction::native(
             "apply".to_string(),
             2,
-            |interp, _this, args| {
+            move |interp, _this, args| {
                 if !interp.is_callable(_this) {
                     return Completion::Throw(
-                        interp.create_type_error("Function.prototype.apply called on non-callable"),
+                        interp.create_error_in_realm(fn_proto_realm_id, "TypeError", "Function.prototype.apply called on non-callable"),
                     );
                 }
                 let this_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -8236,8 +8327,7 @@ impl Interpreter {
                     }
                     _ => {
                         return Completion::Throw(
-                            interp
-                                .create_type_error("CreateListFromArrayLike called on non-object"),
+                            interp.create_error_in_realm(fn_proto_realm_id, "TypeError", "CreateListFromArrayLike called on non-object"),
                         );
                     }
                 };
@@ -8437,7 +8527,8 @@ impl Interpreter {
                                 }
                             }
                             JsFunction::Native(name, _, _, _) => {
-                                format!("function {}() {{ [native code] }}", name)
+                                let sanitized = sanitize_native_fn_name(name);
+                                format!("function {}() {{ [native code] }}", sanitized)
                             }
                         };
                         return Completion::Normal(JsValue::String(JsString::from_str(&s)));

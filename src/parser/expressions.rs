@@ -263,11 +263,18 @@ impl<'a> Parser<'a> {
                 op,
                 AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign
             );
+            let lhs_parenthesized = self.last_expr_parenthesized;
             // Assignment target: duplicate __proto__ is allowed (destructuring)
             self.last_obj_had_proto_dup = saved_proto_dup;
             self.validate_assignment_target(&left, simple_only, !is_logical)?;
             self.advance()?;
             let right = self.parse_assignment_expression()?;
+            // When LHS is parenthesized, wrap in Sequence to prevent IsIdentifierRef
+            let left = if lhs_parenthesized && matches!(left, Expression::Identifier(_)) {
+                Expression::Sequence(vec![left])
+            } else {
+                left
+            };
             Ok(Expression::Assign(op, Box::new(left), Box::new(right)))
         } else {
             // Not a destructuring assignment — check for deferred __proto__ dup error
@@ -761,11 +768,13 @@ impl<'a> Parser<'a> {
             let inner = self.parse_new_expression()?;
             return Ok(Expression::New(Box::new(inner), Vec::new()));
         }
-        // `new import(...)` is a syntax error - import() is a CallExpression, not constructable
-        if self.current == Token::Keyword(Keyword::Import) {
+        // `new import(...)` is a syntax error (ImportCall is CallExpression, not MemberExpression)
+        // but `new (import(...))` is valid — parens make it a CoveredParenthesizedExpression
+        let is_direct_import = matches!(self.current, Token::Keyword(Keyword::Import));
+        let mut callee = self.parse_primary_expression()?;
+        if is_direct_import && matches!(&callee, Expression::Import(_, _) | Expression::ImportDefer(_,_) | Expression::ImportSource(_,_)) {
             return Err(self.error("Cannot use 'new' with import()"));
         }
-        let mut callee = self.parse_primary_expression()?;
         loop {
             match &self.current {
                 Token::Dot => {
@@ -781,6 +790,10 @@ impl<'a> Parser<'a> {
                         Box::new(callee),
                         MemberProperty::Computed(Box::new(prop)),
                     );
+                }
+                Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
+                    let tmpl = self.parse_template_literal_expr(true)?;
+                    callee = Expression::TaggedTemplate(Box::new(callee), tmpl);
                 }
                 _ => break,
             }
@@ -1003,6 +1016,8 @@ impl<'a> Parser<'a> {
                 if !self.prev_line_terminator {
                     if let Some(name) = self.current_identifier_name() {
                         let name = name.clone();
+                        let orig_token = self.current.clone();
+                        let orig_lt = self.prev_line_terminator;
                         self.advance()?;
                         if self.current == Token::Arrow && !self.prev_line_terminator {
                             self.check_strict_binding_identifier(&name)?;
@@ -1032,8 +1047,8 @@ impl<'a> Parser<'a> {
                         }
                         // Not an arrow — push back and return "async" as identifier
                         self.push_back(self.current.clone(), self.prev_line_terminator);
-                        self.current = Token::Identifier(name);
-                        self.prev_line_terminator = false;
+                        self.current = orig_token;
+                        self.prev_line_terminator = orig_lt;
                         return Ok(Expression::Identifier("async".to_string()));
                     }
                     if self.current == Token::LeftParen {
@@ -1325,8 +1340,16 @@ impl<'a> Parser<'a> {
                 }
                 Ok(expr)
             }
-            Token::LeftBracket => self.parse_array_literal(),
-            Token::LeftBrace => self.parse_object_literal(),
+            Token::LeftBracket => {
+                let result = self.parse_array_literal();
+                self.last_expr_parenthesized = false;
+                result
+            }
+            Token::LeftBrace => {
+                let result = self.parse_object_literal();
+                self.last_expr_parenthesized = false;
+                result
+            }
             Token::Keyword(Keyword::Function) => self.parse_function_expression(),
             Token::Keyword(Keyword::Class) => self.parse_class_expression(),
             Token::At => {
@@ -1420,6 +1443,8 @@ impl<'a> Parser<'a> {
             }
             if self.current == Token::Comma {
                 self.advance()?;
+            } else if self.current != Token::RightBrace {
+                return Err(self.error("Expected ',' or '}' after property definition"));
             }
         }
         self.eat(&Token::RightBrace)?;
@@ -1891,11 +1916,7 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        if is_generator {
-            self.in_generator = true;
-        } else {
-            self.in_generator = prev_generator;
-        }
+        self.in_generator = is_generator;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_static_block = prev_static_block;
@@ -1939,9 +1960,7 @@ impl<'a> Parser<'a> {
         let is_generator = self.eat_star()?;
         let prev_generator = self.in_generator;
         let prev_async = self.in_async;
-        if is_generator {
-            self.in_generator = true;
-        }
+        self.in_generator = is_generator;
         self.in_async = true;
         let name = if matches!(&self.current, Token::Keyword(Keyword::Await)) {
             return Err(self.error("'await' is not allowed as a function name in async functions"));

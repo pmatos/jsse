@@ -719,26 +719,9 @@ impl Environment {
     /// Per §9.1.1.4.17 CreateGlobalVarBinding: var declarations in global scope
     /// create non-configurable properties on the global object.
     pub fn declare_global_var(&mut self, name: &str) {
-        if !self.bindings.contains_key(name) {
-            // If property already exists on global object, initialize binding with its value
-            let existing_val = self.global_object.as_ref().and_then(|g| {
-                let gb = g.borrow();
-                gb.properties.get(name).and_then(|d| d.value.clone())
-            });
-            if let Some(val) = existing_val {
-                self.bindings.insert(
-                    name.to_string(),
-                    Binding {
-                        value: val,
-                        kind: BindingKind::Var,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
-            } else {
-                self.declare(name, BindingKind::Var);
-            }
-        }
+        // Per §9.1.1.4.17 CreateGlobalVarBinding: global vars are stored as
+        // properties on the global object, not in the environment bindings map.
+        // This ensures `this.x = val` and `x` reference the same storage.
         if let Some(ref global_obj) = self.global_object {
             let mut gb = global_obj.borrow_mut();
             if !gb.properties.contains_key(name) {
@@ -748,6 +731,8 @@ impl Environment {
                     PropertyDescriptor::data(JsValue::Undefined, true, true, false),
                 );
             }
+        } else if !self.bindings.contains_key(name) {
+            self.declare(name, BindingKind::Var);
         }
     }
 

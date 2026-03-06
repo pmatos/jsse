@@ -6381,7 +6381,8 @@ impl Interpreter {
                     return Completion::Normal(interp.create_array(a));
                 }
 
-                let size = s.len();
+                // Use UTF-16 code unit length for spec positions
+                let size: usize = s.chars().map(|c| c.len_utf16()).sum();
 
                 // 12. If size = 0, then
                 if size == 0 {
@@ -6456,8 +6457,10 @@ impl Interpreter {
                     }
 
                     //   iii. Else,
-                    // Push substring from p to q
-                    let t = &s[p..q];
+                    // Push substring from p to q (convert UTF-16 positions to byte offsets)
+                    let p_byte = utf16_to_byte_offset(&s, p);
+                    let q_byte = utf16_to_byte_offset(&s, q);
+                    let t = &s[p_byte..q_byte];
                     a.push(JsValue::String(regex_output_to_js_string(t)));
                     length_a += 1;
                     if length_a == lim {
@@ -6511,7 +6514,8 @@ impl Interpreter {
                 }
 
                 // 16. Push remaining substring
-                let t = &s[p..size];
+                let p_byte = utf16_to_byte_offset(&s, p);
+                let t = &s[p_byte..];
                 a.push(JsValue::String(JsString::from_str(t)));
                 Completion::Normal(interp.create_array(a))
             },
@@ -7395,14 +7399,6 @@ impl Interpreter {
                         format!("get ${}", idx),
                         0,
                         move |interp, this_val, _args| {
-                            let ctor_id = match interp.regexp_constructor_id {
-                                Some(id) => id,
-                                None => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "RegExp legacy accessor requires RegExp constructor",
-                                    ));
-                                }
-                            };
                             match this_val {
                                 JsValue::Object(o) if o.id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
@@ -7433,15 +7429,7 @@ impl Interpreter {
                     self.create_function(JsFunction::native(
                         format!("get {}", pn),
                         0,
-                        |interp, this_val, _args| {
-                            let ctor_id = match interp.regexp_constructor_id {
-                                Some(id) => id,
-                                None => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "RegExp legacy accessor requires RegExp constructor",
-                                    ));
-                                }
-                            };
+                        move |interp, this_val, _args| {
                             match this_val {
                                 JsValue::Object(o) if o.id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
@@ -7457,15 +7445,7 @@ impl Interpreter {
                     self.create_function(JsFunction::native(
                         format!("set {}", pn),
                         1,
-                        |interp, this_val, args| {
-                            let ctor_id = match interp.regexp_constructor_id {
-                                Some(id) => id,
-                                None => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "RegExp legacy accessor requires RegExp constructor",
-                                    ));
-                                }
-                            };
+                        move |interp, this_val, args| {
                             match this_val {
                                 JsValue::Object(o) if o.id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
@@ -7501,15 +7481,7 @@ impl Interpreter {
                     self.create_function(JsFunction::native(
                         format!("get {}", pn),
                         0,
-                        |interp, this_val, _args| {
-                            let ctor_id = match interp.regexp_constructor_id {
-                                Some(id) => id,
-                                None => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "RegExp legacy accessor requires RegExp constructor",
-                                    ));
-                                }
-                            };
+                        move |interp, this_val, _args| {
                             match this_val {
                                 JsValue::Object(o) if o.id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
@@ -7541,15 +7513,7 @@ impl Interpreter {
                     self.create_function(JsFunction::native(
                         format!("get {}", pn),
                         0,
-                        |interp, this_val, _args| {
-                            let ctor_id = match interp.regexp_constructor_id {
-                                Some(id) => id,
-                                None => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "RegExp legacy accessor requires RegExp constructor",
-                                    ));
-                                }
-                            };
+                        move |interp, this_val, _args| {
                             match this_val {
                                 JsValue::Object(o) if o.id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
@@ -7581,15 +7545,7 @@ impl Interpreter {
                     self.create_function(JsFunction::native(
                         format!("get {}", pn),
                         0,
-                        |interp, this_val, _args| {
-                            let ctor_id = match interp.regexp_constructor_id {
-                                Some(id) => id,
-                                None => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "RegExp legacy accessor requires RegExp constructor",
-                                    ));
-                                }
-                            };
+                        move |interp, this_val, _args| {
                             match this_val {
                                 JsValue::Object(o) if o.id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(
@@ -7621,15 +7577,7 @@ impl Interpreter {
                     self.create_function(JsFunction::native(
                         format!("get {}", pn),
                         0,
-                        |interp, this_val, _args| {
-                            let ctor_id = match interp.regexp_constructor_id {
-                                Some(id) => id,
-                                None => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "RegExp legacy accessor requires RegExp constructor",
-                                    ));
-                                }
-                            };
+                        move |interp, this_val, _args| {
                             match this_val {
                                 JsValue::Object(o) if o.id == ctor_id => {}
                                 _ => return Completion::Throw(interp.create_type_error(

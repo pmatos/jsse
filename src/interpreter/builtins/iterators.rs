@@ -961,24 +961,40 @@ impl Interpreter {
                                 if index >= len {
                                     (len, None)
                                 } else {
-                                    let v = match kind {
-                                        IteratorKind::Key => JsValue::Number(index as f64),
-                                        IteratorKind::Value => borrowed
+                                    let idx_str = index.to_string();
+                                    let has_accessor = borrowed.properties.get(&idx_str)
+                                        .map_or(false, |d| d.get.is_some());
+                                    let fast_val = if !has_accessor {
+                                        borrowed
                                             .array_elements
                                             .as_ref()
                                             .and_then(|e| e.get(index).cloned())
-                                            .unwrap_or_else(|| {
-                                                borrowed.get_property(&index.to_string())
-                                            }),
+                                    } else {
+                                        None
+                                    };
+                                    drop(borrowed);
+                                    let arr_val = JsValue::Object(crate::types::JsObject { id: array_id });
+                                    let v = match kind {
+                                        IteratorKind::Key => JsValue::Number(index as f64),
+                                        IteratorKind::Value => {
+                                            if let Some(fv) = fast_val {
+                                                fv
+                                            } else {
+                                                match interp.get_object_property(array_id, &idx_str, &arr_val) {
+                                                    Completion::Normal(v) => v,
+                                                    c => return c,
+                                                }
+                                            }
+                                        }
                                         IteratorKind::KeyValue => {
-                                            let elem = borrowed
-                                                .array_elements
-                                                .as_ref()
-                                                .and_then(|e| e.get(index).cloned())
-                                                .unwrap_or_else(|| {
-                                                    borrowed.get_property(&index.to_string())
-                                                });
-                                            drop(borrowed);
+                                            let elem = if let Some(fv) = fast_val {
+                                                fv
+                                            } else {
+                                                match interp.get_object_property(array_id, &idx_str, &arr_val) {
+                                                    Completion::Normal(v) => v,
+                                                    c => return c,
+                                                }
+                                            };
                                             let pair = interp.create_array(vec![
                                                 JsValue::Number(index as f64),
                                                 elem,

@@ -742,6 +742,14 @@ impl Interpreter {
                     Ok(p) => Some(p.unwrap_or_else(|| ab_proto_clone.clone())),
                     Err(e) => return Completion::Throw(e),
                 };
+                // Allocation limit: 256 MiB.
+                let alloc_len = max_byte_length.unwrap_or(len);
+                if alloc_len > 0x10_000_000 {
+                    return Completion::Throw(interp.create_error(
+                        "RangeError",
+                        "ArrayBuffer allocation failed: requested size too large",
+                    ));
+                }
                 let buf = if let Some(max_len) = max_byte_length {
                     let mut v = Vec::with_capacity(max_len);
                     v.resize(len, 0u8);
@@ -1259,8 +1267,9 @@ impl Interpreter {
                     Ok(p) => Some(p.unwrap_or_else(|| sab_proto_clone.clone())),
                     Err(e) => return Completion::Throw(e),
                 };
-                // Allocation limit check
-                if len > 0x20_0000_0000_0000 {
+                // Allocation limit: 256 MiB.
+                let alloc_size = max_byte_length.unwrap_or(len);
+                if alloc_size > 0x10_000_000 || len > 0x10_000_000 {
                     return Completion::Throw(interp.create_error(
                         "RangeError",
                         "SharedArrayBuffer allocation failed: requested size too large",

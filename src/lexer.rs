@@ -558,6 +558,65 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// For invalid escape sequences in tagged templates: advance past the
+    /// escape identifier character(s) without consuming template delimiters.
+    fn scan_invalid_template_escape(&mut self, raw: &mut String) {
+        // Helper: is this char a template delimiter that we must not consume?
+        fn is_template_delim(c: char) -> bool {
+            c == '`' || c == '\\'
+        }
+        match self.peek() {
+            Some('x') => {
+                raw.push(self.advance().unwrap());
+                // Skip up to 2 chars for hex digits
+                for _ in 0..2 {
+                    match self.peek() {
+                        Some(c) if !is_template_delim(c) => {
+                            raw.push(self.advance().unwrap());
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            Some('u') => {
+                raw.push(self.advance().unwrap());
+                if self.peek() == Some('{') {
+                    raw.push(self.advance().unwrap());
+                    while let Some(c) = self.peek() {
+                        if c == '}' {
+                            raw.push(self.advance().unwrap());
+                            break;
+                        }
+                        if is_template_delim(c) {
+                            break;
+                        }
+                        raw.push(self.advance().unwrap());
+                    }
+                } else {
+                    for _ in 0..4 {
+                        match self.peek() {
+                            Some(c) if !is_template_delim(c) => {
+                                raw.push(self.advance().unwrap());
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+            }
+            Some('0'..='9') => {
+                raw.push(self.advance().unwrap());
+                // Skip additional octal digits
+                while let Some('0'..='7') = self.peek() {
+                    raw.push(self.advance().unwrap());
+                }
+            }
+            Some(_) => {
+                raw.push(self.advance().unwrap());
+            }
+            None => {}
+        }
+    }
+
     fn read_escape_sequence(&mut self) -> Result<String, LexError> {
         match self.advance() {
             None => Err(self.error("Unterminated escape sequence")),
@@ -1198,9 +1257,10 @@ impl<'a> Lexer<'a> {
                 Some('\\') => {
                     raw.push('\\');
                     let before_offset = self.offset;
+                    let saved_line = self.line;
+                    let saved_col = self.column;
                     match self.read_escape_sequence() {
                         Ok(esc) => {
-                            // §12.9.6: TRV normalizes <CR><LF> and <CR> to <LF>
                             let raw_slice = &self.source[before_offset..self.offset];
                             let normalized = raw_slice.replace("\r\n", "\n").replace('\r', "\n");
                             raw.push_str(&normalized);
@@ -1209,19 +1269,34 @@ impl<'a> Lexer<'a> {
                             }
                         }
                         Err(_) => {
-                            let raw_slice = &self.source[before_offset..self.offset];
-                            let normalized = raw_slice.replace("\r\n", "\n").replace('\r', "\n");
-                            raw.push_str(&normalized);
+                            // Restore position so we don't consume past the escape
+                            self.offset = before_offset;
+                            self.line = saved_line;
+                            self.column = saved_col;
+                            // Re-sync chars iterator with the restored offset
+                            self.chars = self.source[self.offset..].chars();
+                            self.current = self.chars.next();
+                            // Skip the escape identifier char and scan until next
+                            // unescaped special char, collecting raw text
+                            self.scan_invalid_template_escape(&mut raw);
                             cooked = None;
                         }
                     }
                 }
                 Some(ch) if Self::is_line_terminator(ch) => {
-                    // §12.9.6: TRV normalizes <CR><LF> and <CR> to <LF>
-                    raw.push('\n');
                     self.handle_newline(ch);
-                    if let Some(ref mut c) = cooked {
-                        c.push('\n');
+                    if ch == '\r' || ch == '\n' {
+                        // §12.9.6: TV/TRV normalizes <CR><LF> and <CR> to <LF>
+                        raw.push('\n');
+                        if let Some(ref mut c) = cooked {
+                            c.push('\n');
+                        }
+                    } else {
+                        // LS (U+2028) and PS (U+2029) are preserved as-is
+                        raw.push(ch);
+                        if let Some(ref mut c) = cooked {
+                            c.push(ch);
+                        }
                     }
                 }
                 Some(ch) => {

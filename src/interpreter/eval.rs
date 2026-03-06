@@ -21,6 +21,7 @@ fn string_to_bigint_for_comparison(s: &str) -> Option<num_bigint::BigInt> {
 enum IdentifierRef {
     WithObject(u64),
     Binding,
+    Unresolvable,
     SpecificEnv(EnvRef),
 }
 
@@ -266,8 +267,10 @@ impl Interpreter {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
             Expression::Identifier(name) => {
                 let strict = env.borrow().strict;
+                self.last_identifier_with_base = None;
                 match self.resolve_with_has_binding(name, env) {
                     Ok(Some(obj_id)) => {
+                        self.last_identifier_with_base = Some(obj_id);
                         return self.with_get_binding_value(obj_id, name, strict);
                     }
                     Ok(None) => {}
@@ -898,10 +901,17 @@ impl Interpreter {
                 self.await_value(&val)
             }
             Expression::ImportMeta => {
-                // Create import.meta object - null prototype per spec §9.4.6
+                // §16.2.1.5.2: Return cached import.meta or create new one
+                if let Some(ref path) = self.current_module_path {
+                    let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    if let Some(module) = self.module_registry.get(&canon) {
+                        if let Some(ref cached) = module.borrow().cached_import_meta {
+                            return Completion::Normal(cached.clone());
+                        }
+                    }
+                }
                 let meta = self.create_object();
-                meta.borrow_mut().prototype = None; // import.meta has null prototype
-                // Set url property to the current module's file URL
+                meta.borrow_mut().prototype = None;
                 if let Some(ref path) = self.current_module_path {
                     let url = format!("file://{}", path.display());
                     meta.borrow_mut().insert_property(
@@ -915,7 +925,15 @@ impl Interpreter {
                     );
                 }
                 let id = meta.borrow().id.unwrap();
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                let meta_val = JsValue::Object(crate::types::JsObject { id });
+                // Cache in module record
+                if let Some(ref path) = self.current_module_path {
+                    let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    if let Some(module) = self.module_registry.get(&canon) {
+                        module.borrow_mut().cached_import_meta = Some(meta_val.clone());
+                    }
+                }
+                Completion::Normal(meta_val)
             }
             Expression::Import(source_expr, options_expr) => {
                 // Dynamic import() - returns a Promise
@@ -2560,6 +2578,11 @@ impl Interpreter {
                         other => return other,
                     }
                 }
+                IdentifierRef::Unresolvable => {
+                    return Completion::Throw(self.create_reference_error(
+                        &format!("{name} is not defined"),
+                    ));
+                }
                 IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
                     if let Some(result) = self.resolve_global_getter(name, env) {
                         match result {
@@ -2925,6 +2948,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         }
+                    }
+                    IdentifierRef::Unresolvable => {
+                        return Completion::Throw(self.create_reference_error(
+                            &format!("{name} is not defined"),
+                        ));
                     }
                     IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
                         if let Some(result) = self.resolve_global_getter(name, env) {
@@ -3511,6 +3539,24 @@ impl Interpreter {
                     self.create_reference_error("Invalid left-hand side in assignment"),
                 )
             }
+            // Parenthesized identifier: (x) = expr
+            // IsIdentifierRef is false, so no named evaluation
+            Expression::Sequence(exprs) if exprs.len() == 1 => {
+                if let Expression::Identifier(name) = &exprs[0] {
+                    let id_ref = match self.resolve_identifier_ref(name, env) {
+                        Ok(r) => r,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let rval = match self.eval_expr(right, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    self.put_value_by_ref(name, rval, &id_ref, env)
+                } else {
+                    // Parenthesized member expression or other — delegate
+                    self.eval_assign(op, &exprs[0], right, env)
+                }
+            }
             _ => {
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
@@ -3541,6 +3587,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         }
+                    }
+                    IdentifierRef::Unresolvable => {
+                        return Completion::Throw(self.create_reference_error(
+                            &format!("{name} is not defined"),
+                        ));
                     }
                     IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
                         if let Some(result) = self.resolve_global_getter(name, env) {
@@ -5025,6 +5076,20 @@ impl Interpreter {
                     Err(c) => return c,
                 }
             }
+            Expression::Identifier(_name) => {
+                // §12.3.4.1: EvaluateCall — resolve identifier. If the reference comes
+                // from a with-environment, thisValue = WithBaseObject.
+                // eval_expr sets last_identifier_with_base during resolution.
+                let val = match self.eval_expr(callee, env) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                let this_val = match self.last_identifier_with_base.take() {
+                    Some(obj_id) => JsValue::Object(crate::types::JsObject { id: obj_id }),
+                    None => JsValue::Undefined,
+                };
+                (val, this_val)
+            }
             _ => {
                 let val = match self.eval_expr(callee, env) {
                     Completion::Normal(v) => v,
@@ -5844,6 +5909,17 @@ impl Interpreter {
                         match self.eval_expr(expr, &func_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
+                                // Route through try-stack for proper catch/finally handling
+                                if let Some(try_info) = current_try_stack.pop() {
+                                    if let Some(catch_state) = try_info.catch_state {
+                                        pending_exception = Some(e);
+                                        current_id = catch_state;
+                                        continue;
+                                    } else if let Some(finally_state) = try_info.finally_state {
+                                        current_id = finally_state;
+                                        continue;
+                                    }
+                                }
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineGenerator {
                                         state_machine,
@@ -7549,6 +7625,17 @@ impl Interpreter {
                         match self.eval_expr(expr, &func_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
+                                // Route through try-stack for proper catch/finally handling
+                                if let Some(try_info) = current_try_stack.pop() {
+                                    if let Some(catch_state) = try_info.catch_state {
+                                        pending_exception = Some(e);
+                                        current_id = catch_state;
+                                        continue;
+                                    } else if let Some(finally_state) = try_info.finally_state {
+                                        current_id = finally_state;
+                                        continue;
+                                    }
+                                }
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -9319,9 +9406,13 @@ impl Interpreter {
             }
             let is_class_ctor = obj.borrow().is_class_constructor;
             if is_class_ctor && self.new_target.is_none() {
-                return Completion::Throw(
-                    self.create_type_error("Class constructor cannot be invoked without 'new'"),
-                );
+                let caller_realm = self.current_realm_id;
+                if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                    self.current_realm_id = fn_realm;
+                }
+                let err = self.create_type_error("Class constructor cannot be invoked without 'new'");
+                self.current_realm_id = caller_realm;
+                return Completion::Throw(err);
             }
             let callable = obj.borrow().callable.clone();
             if let Some(func) = callable {
@@ -9347,6 +9438,10 @@ impl Interpreter {
                 };
                 let result = match func {
                     JsFunction::Native(_, _, f, _) => {
+                        let caller_realm = self.current_realm_id;
+                        if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
+                            self.current_realm_id = fn_realm;
+                        }
                         // Root args and this_val so GC doesn't collect them
                         // during native function execution (e.g. Array.prototype.map callback)
                         self.gc_root_value(_this_val);
@@ -9361,6 +9456,7 @@ impl Interpreter {
                             self.gc_unroot_value(a);
                         }
                         self.gc_unroot_value(_this_val);
+                        self.current_realm_id = caller_realm;
                         result
                     }
                     JsFunction::User {
@@ -9394,30 +9490,6 @@ impl Interpreter {
                             return result;
                         }
                         if is_async && is_generator {
-                            let gen_obj = self.create_object();
-                            // Set prototype from function's .prototype property, fall back to intrinsic
-                            // Use GetPrototypeFromConstructor(fn, "%AsyncGeneratorPrototype%") semantics
-                            let mut proto_set = false;
-                            if let Some(func_obj_rc) = self.get_object(o.id) {
-                                let proto_val =
-                                    func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(JsValue::Object(ref p)) = proto_val
-                                    && let Some(proto_rc) = self.get_object(p.id)
-                                {
-                                    gen_obj.borrow_mut().prototype = Some(proto_rc);
-                                    proto_set = true;
-                                }
-                            }
-                            if !proto_set {
-                                // GetFunctionRealm(fn) to find the right realm's proto
-                                let fn_realm_id = match self.get_function_realm(func_val) {
-                                    Ok(r) => r,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                gen_obj.borrow_mut().prototype =
-                                    self.realms[fn_realm_id].async_generator_prototype.clone();
-                            }
-                            gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
                             // Create persistent function environment
                             let func_env = Environment::new_function_scope(Some(closure.clone()));
                             func_env.borrow_mut().strict = is_strict;
@@ -9440,6 +9512,7 @@ impl Interpreter {
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                             func_env.borrow_mut().arguments_immutable = true;
+                            // §14.5.10 step 1: FunctionDeclarationInstantiation (bind params)
                             for (i, param) in params.iter().enumerate() {
                                 if let Pattern::Rest(inner) = param {
                                     let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
@@ -9463,6 +9536,28 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                             }
+                            // §14.5.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
+                            let gen_obj = self.create_object();
+                            let mut proto_set = false;
+                            if let Some(func_obj_rc) = self.get_object(o.id) {
+                                let proto_val =
+                                    func_obj_rc.borrow().get_property_value("prototype");
+                                if let Some(JsValue::Object(ref p)) = proto_val
+                                    && let Some(proto_rc) = self.get_object(p.id)
+                                {
+                                    gen_obj.borrow_mut().prototype = Some(proto_rc);
+                                    proto_set = true;
+                                }
+                            }
+                            if !proto_set {
+                                let fn_realm_id = match self.get_function_realm(func_val) {
+                                    Ok(r) => r,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                gen_obj.borrow_mut().prototype =
+                                    self.realms[fn_realm_id].async_generator_prototype.clone();
+                            }
+                            gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
                             let is_simple =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let exec_env = if !is_simple {
@@ -9520,37 +9615,33 @@ impl Interpreter {
                             }));
                         }
                         if is_generator {
-                            // Create a generator object instead of executing
-                            let gen_obj = self.create_object();
-                            // Set prototype from the function's .prototype property
-                            // Use GetPrototypeFromConstructor semantics (GetFunctionRealm fallback)
-                            let mut proto_set = false;
-                            if let Some(func_obj_rc) = self.get_object(o.id) {
-                                let proto_val =
-                                    func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(JsValue::Object(ref p)) = proto_val
-                                    && let Some(proto_rc) = self.get_object(p.id)
-                                {
-                                    gen_obj.borrow_mut().prototype = Some(proto_rc);
-                                    proto_set = true;
-                                }
-                            }
-                            if !proto_set {
-                                let fn_realm_id = match self.get_function_realm(func_val) {
-                                    Ok(r) => r,
-                                    Err(e) => return Completion::Throw(e),
-                                };
-                                gen_obj.borrow_mut().prototype =
-                                    self.realms[fn_realm_id].generator_prototype.clone();
-                            }
-                            gen_obj.borrow_mut().class_name = "Generator".to_string();
                             // Create persistent function environment
                             let func_env = Environment::new_function_scope(Some(closure.clone()));
+                            let closure_strict = closure.borrow().strict;
                             func_env.borrow_mut().strict = is_strict;
+                            // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
+                            let effective_this = if !is_strict && !closure_strict {
+                                if matches!(_this_val, JsValue::Undefined | JsValue::Null) {
+                                    self.realm()
+                                        .global_env
+                                        .borrow()
+                                        .get("this")
+                                        .unwrap_or(_this_val.clone())
+                                } else if !matches!(_this_val, JsValue::Object(_)) {
+                                    match self.to_object(_this_val) {
+                                        Completion::Normal(v) => v,
+                                        _ => _this_val.clone(),
+                                    }
+                                } else {
+                                    _this_val.clone()
+                                }
+                            } else {
+                                _this_val.clone()
+                            };
                             func_env.borrow_mut().bindings.insert(
                                 "this".to_string(),
                                 Binding {
-                                    value: _this_val.clone(),
+                                    value: effective_this,
                                     kind: BindingKind::Const,
                                     initialized: true,
                                     deletable: false,
@@ -9566,6 +9657,7 @@ impl Interpreter {
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                             func_env.borrow_mut().arguments_immutable = true;
+                            // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
                             for (i, param) in params.iter().enumerate() {
                                 if let Pattern::Rest(inner) = param {
                                     let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
@@ -9589,6 +9681,28 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                             }
+                            // §14.4.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
+                            let gen_obj = self.create_object();
+                            let mut proto_set = false;
+                            if let Some(func_obj_rc) = self.get_object(o.id) {
+                                let proto_val =
+                                    func_obj_rc.borrow().get_property_value("prototype");
+                                if let Some(JsValue::Object(ref p)) = proto_val
+                                    && let Some(proto_rc) = self.get_object(p.id)
+                                {
+                                    gen_obj.borrow_mut().prototype = Some(proto_rc);
+                                    proto_set = true;
+                                }
+                            }
+                            if !proto_set {
+                                let fn_realm_id = match self.get_function_realm(func_val) {
+                                    Ok(r) => r,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                gen_obj.borrow_mut().prototype =
+                                    self.realms[fn_realm_id].generator_prototype.clone();
+                            }
+                            gen_obj.borrow_mut().class_name = "Generator".to_string();
                             let is_simple =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let exec_env = if !is_simple {
@@ -12230,9 +12344,22 @@ impl Interpreter {
             Some(obj_id) => Ok(IdentifierRef::WithObject(obj_id)),
             None => {
                 if let Some(specific_env) = Environment::find_binding_env(env, name) {
-                    Ok(IdentifierRef::SpecificEnv(specific_env))
+                    // Check if this env actually has the binding, or just has a global_object
+                    let has_binding = {
+                        let e = specific_env.borrow();
+                        e.bindings.contains_key(name)
+                            || e.is_indirect_binding(name)
+                            || e.global_object
+                                .as_ref()
+                                .is_some_and(|obj| obj.borrow().properties.contains_key(name))
+                    };
+                    if has_binding {
+                        Ok(IdentifierRef::SpecificEnv(specific_env))
+                    } else {
+                        Ok(IdentifierRef::Unresolvable)
+                    }
                 } else {
-                    Ok(IdentifierRef::Binding)
+                    Ok(IdentifierRef::Unresolvable)
                 }
             }
         }
@@ -12303,6 +12430,16 @@ impl Interpreter {
                             ),
                         }
                     }
+                }
+            }
+            IdentifierRef::Unresolvable => {
+                // Reference was unresolvable at resolve time — per §6.2.5.6 PutValue step 3
+                if env.borrow().strict {
+                    Completion::Throw(
+                        self.create_reference_error(&format!("{name} is not defined")),
+                    )
+                } else {
+                    self.set_global_implicit(name, value)
                 }
             }
             IdentifierRef::Binding => match Environment::check_set_binding(env, name) {
@@ -15492,7 +15629,42 @@ impl Interpreter {
 
         let old_realm = self.current_realm_id;
         self.current_realm_id = eval_realm_id;
-        let result = self.run(&program);
+        let is_strict = program.body_is_strict;
+        // Per spec §B.3.6.2 PerformShadowRealmEval:
+        // Strict: both var and lex are new strict envs (isolates everything)
+        // Non-strict: var goes to global, lex is fresh child of global (isolates let/const)
+        let global = self.realm().global_env.clone();
+        let (var_env, lex_env) = if is_strict {
+            let new_env = Environment::new_function_scope(Some(global));
+            new_env.borrow_mut().strict = true;
+            (new_env.clone(), new_env)
+        } else {
+            let lex_env = Environment::new(Some(global.clone()));
+            (global, lex_env)
+        };
+        // Hoist var/function declarations to var_env
+        if let Err(e) = self.eval_declaration_instantiation(
+            &program.body, &var_env, &lex_env, is_strict, false, &lex_env,
+        ) {
+            self.current_realm_id = old_realm;
+            return Completion::Throw(e);
+        }
+        // Execute body in lex_env
+        self.call_stack_envs.push(lex_env.clone());
+        let mut result = Completion::Empty;
+        for stmt in &program.body {
+            self.maybe_gc();
+            match self.exec_statement(stmt, &lex_env) {
+                Completion::Normal(v) => result = Completion::Normal(v),
+                Completion::Empty => {}
+                other => {
+                    result = other;
+                    break;
+                }
+            }
+        }
+        self.call_stack_envs.pop();
+        self.drain_microtasks();
         self.current_realm_id = old_realm;
 
         let result_val = match result {

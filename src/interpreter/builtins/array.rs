@@ -380,11 +380,6 @@ fn array_species_create(
     original_array: &JsValue,
     length: usize,
 ) -> Result<JsValue, Completion> {
-    if length as u64 > 0xFFFF_FFFF {
-        return Err(Completion::Throw(
-            interp.create_range_error("Invalid array length"),
-        ));
-    }
     let is_array = if let JsValue::Object(o) = original_array {
         match is_array_check(interp, o.id) {
             Ok(v) => v,
@@ -394,6 +389,11 @@ fn array_species_create(
         false
     };
     if !is_array {
+        if length as u64 > 0xFFFF_FFFF {
+            return Err(Completion::Throw(
+                interp.create_range_error("Invalid array length"),
+            ));
+        }
         let arr = interp.create_array(Vec::new());
         set_length(interp, &arr, length);
         return Ok(arr);
@@ -449,6 +449,11 @@ fn array_species_create(
     };
     // If C is undefined, create a default array
     if matches!(c, JsValue::Undefined) {
+        if length as u64 > 0xFFFF_FFFF {
+            return Err(Completion::Throw(
+                interp.create_range_error("Invalid array length"),
+            ));
+        }
         let arr = interp.create_array(Vec::new());
         set_length(interp, &arr, length);
         return Ok(arr);
@@ -2644,7 +2649,6 @@ impl Interpreter {
                         _ => {}
                     }
                 }
-                set_length(interp, &a, target_index);
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },

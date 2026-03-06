@@ -71,6 +71,7 @@ pub struct Interpreter {
     pub(crate) agent_broadcast_rx: Option<std::sync::mpsc::Receiver<AgentBroadcastMsg>>,
     pub(crate) agent_async_completions: std::sync::Arc<(std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>, std::sync::Condvar)>,
     pub(crate) iterator_next_cache: HashMap<u64, JsValue>,
+    last_identifier_with_base: Option<u64>,
 }
 
 pub struct LoadedModule {
@@ -80,6 +81,7 @@ pub struct LoadedModule {
     pub export_bindings: HashMap<String, String>, // export_name -> binding_name
     pub cached_namespace: Option<JsValue>, // cached namespace object (same identity on re-import)
     pub cached_deferred_namespace: Option<JsValue>, // cached deferred namespace (separate from eager)
+    pub cached_import_meta: Option<JsValue>,       // cached import.meta object per §16.2.1.5.2
     pub error: Option<JsValue>,            // if module evaluation threw, the error
     pub namespace_imports: HashMap<String, PathBuf>, // local_name -> source module path (for `import * as ns`)
     pub star_export_sources: Vec<String>, // source specifiers from `export * from '...'`
@@ -160,6 +162,7 @@ impl Interpreter {
             agent_broadcast_rx: None,
             agent_async_completions: Arc::new((std::sync::Mutex::new(Vec::new()), std::sync::Condvar::new())),
             iterator_next_cache: HashMap::new(),
+            last_identifier_with_base: None,
         };
         interp.setup_globals();
         interp
@@ -801,11 +804,14 @@ impl Interpreter {
     }
 
     fn create_thrower_function(&mut self) -> JsValue {
+        let realm_id = self.current_realm_id;
         let func = JsFunction::native(
-            "%ThrowTypeError%".to_string(),
+            String::new(),
             0,
-            |interp: &mut Interpreter, _this: &JsValue, _args: &[JsValue]| {
-                let err = interp.create_type_error(
+            move |interp: &mut Interpreter, _this: &JsValue, _args: &[JsValue]| {
+                let err = interp.create_error_in_realm(
+                    realm_id,
+                    "TypeError",
                     "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions or the arguments objects for calls to them",
                 );
                 Completion::Throw(err)
@@ -1259,6 +1265,7 @@ impl Interpreter {
             export_bindings: HashMap::new(),
             cached_namespace: None,
             cached_deferred_namespace: None,
+            cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
             star_export_sources: Vec::new(),
@@ -1273,6 +1280,9 @@ impl Interpreter {
             self.module_registry
                 .insert(canon_path, loaded_module.clone());
         }
+        // Mark as evaluating immediately to prevent circular evaluate_module calls
+        // from re-executing this module before imports are linked.
+        loaded_module.borrow_mut().is_evaluating = true;
 
         // Collect export names and bindings first (before processing imports) for namespace objects
         for item in &program.module_items {
@@ -1381,9 +1391,6 @@ impl Interpreter {
                 }
             }
         }
-
-        // Mark module as evaluating (for deferred self-referential imports)
-        loaded_module.borrow_mut().is_evaluating = true;
 
         // Fourth pass: execute statements
         for item in &program.module_items {
@@ -1699,6 +1706,7 @@ impl Interpreter {
                 },
                 cached_namespace: None,
                 cached_deferred_namespace: None,
+            cached_import_meta: None,
                 error: None,
                 namespace_imports: HashMap::new(),
                 star_export_sources: Vec::new(),
@@ -1762,6 +1770,7 @@ impl Interpreter {
             export_bindings: HashMap::new(),
             cached_namespace: None,
             cached_deferred_namespace: None,
+            cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
             star_export_sources: Vec::new(),
@@ -1956,6 +1965,7 @@ impl Interpreter {
             export_bindings: HashMap::new(),
             cached_namespace: None,
             cached_deferred_namespace: None,
+            cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
             star_export_sources: Vec::new(),
@@ -3336,10 +3346,10 @@ impl Interpreter {
     }
 
     pub(crate) fn drain_microtasks(&mut self) {
+        let mut iterations = 0u64;
         loop {
-            while !self.microtask_queue.is_empty() {
+            if !self.microtask_queue.is_empty() {
                 let (roots, job) = self.microtask_queue.remove(0);
-                // Temporarily root values during job execution
                 for val in &roots {
                     self.gc_root_value(val);
                 }
@@ -3347,6 +3357,19 @@ impl Interpreter {
                 for val in &roots {
                     self.gc_unroot_value(val);
                 }
+                iterations += 1;
+                // Periodically check agent async completions (e.g. waitAsync timeouts)
+                // so they get processed even when the microtask queue stays busy
+                if iterations % 64 == 0 {
+                    let completions: Vec<_> = {
+                        let mut lock = self.agent_async_completions.0.lock().unwrap();
+                        lock.drain(..).collect()
+                    };
+                    for f in completions {
+                        f(self);
+                    }
+                }
+                continue;
             }
             let completions: Vec<_> = {
                 let mut lock = self.agent_async_completions.0.lock().unwrap();

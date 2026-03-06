@@ -922,6 +922,12 @@ fn total_relative_duration_zdt(
         + ns as i128;
     let dest_epoch_ns = day_advanced_epoch_ns + time_ns;
 
+    // AddInstant range check: result must be within ±8.64e21 ns
+    let ns_max: i128 = 8_640_000_000_000_000_000_000;
+    if dest_epoch_ns < -ns_max || dest_epoch_ns > ns_max {
+        return Err(());
+    }
+
     match unit {
         "day" => {
             // Total days from base to dest (includes Y/M/W/D contributions)
@@ -2097,9 +2103,24 @@ impl Interpreter {
                         if matches!(largest_unit, "year" | "month" | "week")
                             || (largest_unit == "day" && (y != 0.0 || mo != 0.0 || w != 0.0))
                         {
+                            // Range check: values must fit in i32 for add_iso_date
+                            if rd.abs() > i32::MAX as f64
+                                || y.abs() > i32::MAX as f64
+                                || mo.abs() > i32::MAX as f64
+                                || w.abs() > i32::MAX as f64
+                            {
+                                return Completion::Throw(interp.create_range_error(
+                                    "duration out of range when applied to relativeTo",
+                                ));
+                            }
                             let result_date = super::add_iso_date(
                                 by, bm, bd, y as i32, mo as i32, w as i32, rd as i32,
                             );
+                            if !super::iso_date_within_limits(result_date.0, result_date.1, result_date.2) {
+                                return Completion::Throw(interp.create_range_error(
+                                    "duration out of range when applied to relativeTo",
+                                ));
+                            }
                             let (dy, dm, dw, dd) = super::difference_iso_date(
                                 by,
                                 bm,
