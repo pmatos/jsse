@@ -1055,7 +1055,10 @@ impl<'a> Parser<'a> {
     pub(super) fn parse_property_name(&mut self) -> Result<(PropertyKey, bool), ParseError> {
         if self.current == Token::LeftBracket {
             self.advance()?;
+            let saved_no_in = self.no_in;
+            self.no_in = false;
             let expr = self.parse_assignment_expression()?;
+            self.no_in = saved_no_in;
             self.eat(&Token::RightBracket)?;
             Ok((PropertyKey::Computed(Box::new(expr)), true))
         } else if let Token::PrivateName(name) = &self.current {

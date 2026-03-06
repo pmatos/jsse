@@ -239,6 +239,7 @@ impl Interpreter {
             is_async: f.is_async,
             is_method: false,
             source_text: f.source_text.clone(),
+            captured_new_target: None,
         };
         let val = self.create_function(func);
         let _ = env.borrow_mut().set(&f.name, val);
@@ -1982,6 +1983,7 @@ impl Interpreter {
                         is_async: f.is_async,
                         is_method: false,
                         source_text: f.source_text.clone(),
+                        captured_new_target: None,
                     };
                     let val = self.create_function(func);
                     let _ = switch_env.borrow_mut().set(&f.name, val);

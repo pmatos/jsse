@@ -2414,6 +2414,7 @@ impl Interpreter {
                             is_async: false,
                             is_method: false,
                             source_text: Some(fn_source_text),
+                            captured_new_target: None,
                         };
                         // Create function in the Function constructor's realm
                         let old_realm = interp.current_realm_id;
@@ -2838,6 +2839,7 @@ impl Interpreter {
                             is_async: true,
                             is_method: false,
                             source_text: Some(fn_source_text),
+                            captured_new_target: None,
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncFunction.prototype%")
@@ -2968,6 +2970,7 @@ impl Interpreter {
                             is_async: false,
                             is_method: false,
                             source_text: Some(fn_source_text),
+                            captured_new_target: None,
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%GeneratorFunction.prototype%")
@@ -3101,6 +3104,7 @@ impl Interpreter {
                             is_async: true,
                             is_method: false,
                             source_text: Some(fn_source_text),
+                            captured_new_target: None,
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncGeneratorFunction.prototype%")

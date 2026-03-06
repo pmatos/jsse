@@ -3040,6 +3040,7 @@ impl Interpreter {
                     is_async: f.is_async,
                     is_method: false,
                     source_text: f.source_text.clone(),
+                    captured_new_target: None,
                 };
                 let val = self.create_function(func);
                 let _ = env.borrow_mut().set(&f.name, val);
@@ -3086,6 +3087,7 @@ impl Interpreter {
                     is_async: f.is_async,
                     is_method: false,
                     source_text: f.source_text.clone(),
+                    captured_new_target: None,
                 };
                 let val = self.create_function(func);
                 env.borrow_mut().initialize_binding(&name, val);
@@ -3276,6 +3278,7 @@ impl Interpreter {
                     is_async: func.is_async,
                     is_method: false,
                     source_text: func.source_text.clone(),
+                    captured_new_target: None,
                 };
                 let fn_obj = self.create_function(js_func);
                 if !func.name.is_empty() {

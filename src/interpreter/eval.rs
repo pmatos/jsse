@@ -417,6 +417,7 @@ impl Interpreter {
                     is_async: f.is_async,
                     is_method: force_method,
                     source_text: f.source_text.clone(),
+                    captured_new_target: None,
                 };
                 let func_val = self.create_function(func);
                 if let Some(name) = &f.name {
@@ -443,6 +444,7 @@ impl Interpreter {
                     is_async: af.is_async,
                     is_method: false,
                     source_text: af.source_text.clone(),
+                    captured_new_target: self.new_target.clone(),
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -3396,13 +3398,73 @@ impl Interpreter {
                     }
                     return Completion::Normal(final_val);
                 }
-                // Non-object base: in strict mode, throw TypeError
-                if env.borrow().strict {
+                // Primitive base: ToObject(base).[[Set]](key, val, primitiveBase)
+                // Per §6.2.5.6 PutValue + §10.1.9.2 OrdinarySet:
+                // The receiver is the original primitive. If a setter exists in
+                // the prototype chain, call it. Otherwise [[Set]] returns false
+                // (can't create own property on primitive receiver), so strict
+                // mode throws TypeError and sloppy silently returns.
+                let final_val = if op == AssignOp::Assign {
+                    rval
+                } else {
+                    match self.apply_compound_assign(op, &lval_for_compound.unwrap(), &rval) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
+                };
+                let strict = env.borrow().strict;
+                let wrapper = match self.to_object(&obj_val) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => return Completion::Normal(final_val),
+                };
+                if let JsValue::Object(ref o) = wrapper {
+                    // Walk prototype chain looking for setter or proxy set trap
+                    let desc = if let Some(obj) = self.get_object(o.id) {
+                        obj.borrow().get_property_descriptor(&key)
+                    } else {
+                        None
+                    };
+                    if let Some(ref d) = desc {
+                        if let Some(ref setter) = d.set {
+                            if !matches!(setter, JsValue::Undefined) {
+                                let setter = setter.clone();
+                                return match self.call_function(&setter, &obj_val, &[final_val.clone()]) {
+                                    Completion::Normal(_) => Completion::Normal(final_val),
+                                    other => other,
+                                };
+                            }
+                        }
+                    }
+                    // Check for proxy in prototype chain
+                    if let Some(obj) = self.get_object(o.id) {
+                        let mut proto_opt = obj.borrow().prototype.clone();
+                        while let Some(proto_rc) = proto_opt {
+                            let proto_id = proto_rc.borrow().id.unwrap();
+                            if self.get_proxy_info(proto_id).is_some() {
+                                match self.proxy_set(proto_id, &key, final_val.clone(), &obj_val) {
+                                    Ok(success) => {
+                                        if !success && strict {
+                                            return Completion::Throw(self.create_type_error(&format!(
+                                                "Cannot create property '{key}' on {obj_val}"
+                                            )));
+                                        }
+                                        return Completion::Normal(final_val);
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                            proto_opt = proto_rc.borrow().prototype.clone();
+                        }
+                    }
+                }
+                // No setter found — [[Set]] returns false for primitive receiver
+                if strict {
                     return Completion::Throw(self.create_type_error(&format!(
                         "Cannot create property '{key}' on {obj_val}"
                     )));
                 }
-                Completion::Normal(rval)
+                Completion::Normal(final_val)
             }
             Expression::Array(elements, _) if op == AssignOp::Assign => {
                 let rval = match self.eval_expr(right, env) {
@@ -3921,7 +3983,7 @@ impl Interpreter {
                             }
                         }
                     }
-                    if self.has_proxy_in_prototype_chain(proto_id) {
+                    if self.get_proxy_info(proto_id).is_some() {
                         let receiver = obj_val.clone();
                         match self.proxy_set(proto_id, key, val, &receiver) {
                             Ok(success) => {
@@ -9094,7 +9156,12 @@ impl Interpreter {
                     }
                     Some(nt)
                 } else {
-                    None
+                    // Arrow functions inherit new.target from creation context
+                    let saved = self.new_target.take();
+                    if let JsFunction::User { captured_new_target: Some(ref cnt), .. } = func {
+                        self.new_target = Some(cnt.clone());
+                    }
+                    Some(saved)
                 };
                 let result = match func {
                     JsFunction::Native(_, _, f, _) => {
@@ -10250,6 +10317,7 @@ impl Interpreter {
                 is_async: f.is_async,
                 is_method: false,
                 source_text: f.source_text.clone(),
+                captured_new_target: None,
             };
             let val = self.create_function(func);
             if is_global {
@@ -13518,46 +13586,25 @@ impl Interpreter {
                         }
                         None => Completion::Normal(JsValue::Undefined),
                     }
-                } else if let Some(ref sp) = self.realm().string_prototype {
-                    Completion::Normal(sp.borrow().get_property(&key))
                 } else {
-                    Completion::Normal(JsValue::Undefined)
-                }
-            }
-            JsValue::Symbol(_) => {
-                if let Some(ref sp) = self.realm().symbol_prototype {
-                    let desc = sp.borrow().get_property_descriptor(&key);
-                    match desc {
-                        Some(ref d) if d.get.is_some() => {
-                            let getter = d.get.clone().unwrap();
-                            self.call_function(&getter, &obj_val, &[])
-                        }
-                        Some(ref d) => {
-                            Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined))
-                        }
-                        None => Completion::Normal(JsValue::Undefined),
+                    let wrapper = match self.to_object(&obj_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if let JsValue::Object(ref o) = wrapper {
+                        self.get_object_property(o.id, &key, &obj_val)
+                    } else {
+                        Completion::Normal(JsValue::Undefined)
                     }
-                } else {
-                    Completion::Normal(JsValue::Undefined)
                 }
             }
-            JsValue::Number(_) => {
-                if let Some(ref np) = self.realm().number_prototype {
-                    Completion::Normal(np.borrow().get_property(&key))
-                } else {
-                    Completion::Normal(JsValue::Undefined)
-                }
-            }
-            JsValue::Boolean(_) => {
-                if let Some(ref bp) = self.realm().boolean_prototype {
-                    Completion::Normal(bp.borrow().get_property(&key))
-                } else {
-                    Completion::Normal(JsValue::Undefined)
-                }
-            }
-            JsValue::BigInt(_) => {
-                if let Some(ref bp) = self.realm().bigint_prototype {
-                    Completion::Normal(bp.borrow().get_property(&key))
+            JsValue::Symbol(_) | JsValue::Number(_) | JsValue::Boolean(_) | JsValue::BigInt(_) => {
+                let wrapper = match self.to_object(&obj_val) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if let JsValue::Object(ref o) = wrapper {
+                    self.get_object_property(o.id, &key, &obj_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
@@ -13706,6 +13753,7 @@ impl Interpreter {
                 is_async: false,
                 is_method: false,
                 source_text: class_source_text.clone(),
+                captured_new_target: None,
             }
         } else if super_val.is_some() {
             JsFunction::User {
@@ -13724,6 +13772,7 @@ impl Interpreter {
                 is_async: false,
                 is_method: false,
                 source_text: class_source_text.clone(),
+                captured_new_target: None,
             }
         } else {
             JsFunction::User {
@@ -13737,6 +13786,7 @@ impl Interpreter {
                 is_async: false,
                 is_method: false,
                 source_text: class_source_text.clone(),
+                captured_new_target: None,
             }
         };
 
@@ -13953,6 +14003,7 @@ impl Interpreter {
                                 is_async: m.value.is_async,
                                 is_method: true,
                                 source_text: m.value.source_text.clone(),
+                                captured_new_target: None,
                             };
                             let method_val = self.create_function(method_func);
 
@@ -14125,6 +14176,7 @@ impl Interpreter {
                         is_async: m.value.is_async,
                         is_method: true,
                         source_text: m.value.source_text.clone(),
+                        captured_new_target: None,
                     };
                     let method_val = self.create_function(method_func);
 
