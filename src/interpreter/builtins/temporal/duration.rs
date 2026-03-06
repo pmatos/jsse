@@ -2116,7 +2116,11 @@ impl Interpreter {
                             let result_date = super::add_iso_date(
                                 by, bm, bd, y as i32, mo as i32, w as i32, rd as i32,
                             );
-                            if !super::iso_date_within_limits(result_date.0, result_date.1, result_date.2) {
+                            if !super::iso_date_within_limits(
+                                result_date.0,
+                                result_date.1,
+                                result_date.2,
+                            ) {
                                 return Completion::Throw(interp.create_range_error(
                                     "duration out of range when applied to relativeTo",
                                 ));

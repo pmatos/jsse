@@ -39,7 +39,10 @@ pub struct Interpreter {
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
     pub(crate) generator_inline_iters: HashMap<u64, Vec<JsValue>>,
-    microtask_queue: Vec<(Vec<JsValue>, Box<dyn FnOnce(&mut Interpreter) -> Completion>)>,
+    microtask_queue: Vec<(
+        Vec<JsValue>,
+        Box<dyn FnOnce(&mut Interpreter) -> Completion>,
+    )>,
     cached_has_instance_key: Option<String>,
     module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
@@ -69,7 +72,10 @@ pub struct Interpreter {
     pub(crate) agent_broadcast_txs: Vec<std::sync::mpsc::Sender<AgentBroadcastMsg>>,
     pub(crate) agent_handles: Vec<std::thread::JoinHandle<()>>,
     pub(crate) agent_broadcast_rx: Option<std::sync::mpsc::Receiver<AgentBroadcastMsg>>,
-    pub(crate) agent_async_completions: std::sync::Arc<(std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>, std::sync::Condvar)>,
+    pub(crate) agent_async_completions: std::sync::Arc<(
+        std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>,
+        std::sync::Condvar,
+    )>,
     pub(crate) iterator_next_cache: HashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
 }
@@ -81,10 +87,10 @@ pub struct LoadedModule {
     pub export_bindings: HashMap<String, String>, // export_name -> binding_name
     pub cached_namespace: Option<JsValue>, // cached namespace object (same identity on re-import)
     pub cached_deferred_namespace: Option<JsValue>, // cached deferred namespace (separate from eager)
-    pub cached_import_meta: Option<JsValue>,       // cached import.meta object per §16.2.1.5.2
-    pub error: Option<JsValue>,            // if module evaluation threw, the error
+    pub cached_import_meta: Option<JsValue>,        // cached import.meta object per §16.2.1.5.2
+    pub error: Option<JsValue>,                     // if module evaluation threw, the error
     pub namespace_imports: HashMap<String, PathBuf>, // local_name -> source module path (for `import * as ns`)
-    pub star_export_sources: Vec<String>, // source specifiers from `export * from '...'`
+    pub star_export_sources: Vec<String>,            // source specifiers from `export * from '...'`
     pub evaluated: bool,
     pub is_evaluating: bool,
     pub has_tla: bool,
@@ -160,7 +166,10 @@ impl Interpreter {
             agent_broadcast_txs: Vec::new(),
             agent_handles: Vec::new(),
             agent_broadcast_rx: None,
-            agent_async_completions: Arc::new((std::sync::Mutex::new(Vec::new()), std::sync::Condvar::new())),
+            agent_async_completions: Arc::new((
+                std::sync::Mutex::new(Vec::new()),
+                std::sync::Condvar::new(),
+            )),
             iterator_next_cache: HashMap::new(),
             last_identifier_with_base: None,
         };
@@ -1298,7 +1307,11 @@ impl Interpreter {
                         .export_bindings
                         .insert(export_name, binding_name);
                 }
-                if let ExportDeclaration::All { source, exported: None } = export {
+                if let ExportDeclaration::All {
+                    source,
+                    exported: None,
+                } = export
+                {
                     loaded_module
                         .borrow_mut()
                         .star_export_sources
@@ -1325,9 +1338,10 @@ impl Interpreter {
         for item in &program.module_items {
             let (specifier, is_deferred) = match item {
                 ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import.specifiers.iter().any(|s| {
-                        matches!(s, ImportSpecifier::DeferredNamespace(_))
-                    });
+                    let is_defer = import
+                        .specifiers
+                        .iter()
+                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
                     (Some(import.source.as_str()), is_defer)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
@@ -1438,9 +1452,10 @@ impl Interpreter {
         let module_path = self.current_module_path.clone();
         let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
 
-        let is_deferred = import.specifiers.iter().any(|s| {
-            matches!(s, ImportSpecifier::DeferredNamespace(_))
-        });
+        let is_deferred = import
+            .specifiers
+            .iter()
+            .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
 
         // For deferred imports or when loading in deferred context,
         // use load_module_no_eval to avoid premature evaluation
@@ -1706,7 +1721,7 @@ impl Interpreter {
                 },
                 cached_namespace: None,
                 cached_deferred_namespace: None,
-            cached_import_meta: None,
+                cached_import_meta: None,
                 error: None,
                 namespace_imports: HashMap::new(),
                 star_export_sources: Vec::new(),
@@ -1719,7 +1734,9 @@ impl Interpreter {
             module_env
                 .borrow_mut()
                 .declare("*default*", BindingKind::Const);
-            module_env.borrow_mut().initialize_binding("*default*", parsed);
+            module_env
+                .borrow_mut()
+                .initialize_binding("*default*", parsed);
             self.module_registry
                 .insert(canon_path.clone(), loaded_module.clone());
             return Ok(loaded_module);
@@ -1747,10 +1764,7 @@ impl Interpreter {
         let program = match parser.parse_program_as_module() {
             Ok(p) => p,
             Err(e) => {
-                return Err(self.create_error(
-                    "SyntaxError",
-                    &format!("{}", e.message),
-                ));
+                return Err(self.create_error("SyntaxError", &format!("{}", e.message)));
             }
         };
 
@@ -1797,7 +1811,11 @@ impl Interpreter {
                         .export_bindings
                         .insert(export_name, binding_name);
                 }
-                if let ExportDeclaration::All { source, exported: None } = export {
+                if let ExportDeclaration::All {
+                    source,
+                    exported: None,
+                } = export
+                {
                     loaded_module
                         .borrow_mut()
                         .star_export_sources
@@ -1836,9 +1854,10 @@ impl Interpreter {
         for item in &program.module_items {
             let (specifier, is_deferred) = match item {
                 ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import.specifiers.iter().any(|s| {
-                        matches!(s, ImportSpecifier::DeferredNamespace(_))
-                    });
+                    let is_defer = import
+                        .specifiers
+                        .iter()
+                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
                     (Some(import.source.as_str()), is_defer)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
@@ -1942,10 +1961,7 @@ impl Interpreter {
         let program = match parser.parse_program_as_module() {
             Ok(p) => p,
             Err(e) => {
-                return Err(self.create_error(
-                    "SyntaxError",
-                    &format!("{}", e.message),
-                ));
+                return Err(self.create_error("SyntaxError", &format!("{}", e.message)));
             }
         };
 
@@ -1992,7 +2008,11 @@ impl Interpreter {
                         .export_bindings
                         .insert(export_name, binding_name);
                 }
-                if let ExportDeclaration::All { source, exported: None } = export {
+                if let ExportDeclaration::All {
+                    source,
+                    exported: None,
+                } = export
+                {
                     loaded_module
                         .borrow_mut()
                         .star_export_sources
@@ -2025,9 +2045,10 @@ impl Interpreter {
         for item in &program.module_items {
             let (specifier, is_deferred) = match item {
                 ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import.specifiers.iter().any(|s| {
-                        matches!(s, ImportSpecifier::DeferredNamespace(_))
-                    });
+                    let is_defer = import
+                        .specifiers
+                        .iter()
+                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
                     (Some(import.source.as_str()), is_defer)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
@@ -2054,7 +2075,9 @@ impl Interpreter {
         for item in &program.module_items {
             if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
             {
-                if let Err(e) = self.process_star_reexport(source, exported.as_ref(), &loaded_module) {
+                if let Err(e) =
+                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+                {
                     self.loading_deferred = prev_loading_deferred;
                     return Err(e);
                 }
@@ -2131,17 +2154,16 @@ impl Interpreter {
         for item in &program.module_items {
             match item {
                 ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import.specifiers.iter().any(|s| {
-                        matches!(s, ImportSpecifier::DeferredNamespace(_))
-                    });
+                    let is_defer = import
+                        .specifiers
+                        .iter()
+                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
                     if !is_defer {
-                        if let Ok(resolved) = self.resolve_module_specifier(
-                            &import.source,
-                            Some(&canon_path),
-                        ) {
-                            let resolved_canon = resolved
-                                .canonicalize()
-                                .unwrap_or_else(|_| resolved.clone());
+                        if let Ok(resolved) =
+                            self.resolve_module_specifier(&import.source, Some(&canon_path))
+                        {
+                            let resolved_canon =
+                                resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
                             if let Some(dep) = self.module_registry.get(&resolved_canon).cloned() {
                                 if !dep.borrow().evaluated {
                                     self.evaluate_module(&dep)?;
@@ -2155,13 +2177,9 @@ impl Interpreter {
                     source: Some(source),
                     ..
                 }) => {
-                    if let Ok(resolved) = self.resolve_module_specifier(
-                        source,
-                        Some(&canon_path),
-                    ) {
-                        let resolved_canon = resolved
-                            .canonicalize()
-                            .unwrap_or_else(|_| resolved.clone());
+                    if let Ok(resolved) = self.resolve_module_specifier(source, Some(&canon_path)) {
+                        let resolved_canon =
+                            resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
                         if let Some(dep) = self.module_registry.get(&resolved_canon).cloned() {
                             if !dep.borrow().evaluated {
                                 self.evaluate_module(&dep)?;
@@ -2239,49 +2257,64 @@ impl Interpreter {
                 if matches!(decl.kind, crate::ast::VarKind::AwaitUsing) {
                     return true;
                 }
-                decl.declarations.iter().any(|d| {
-                    d.init.as_ref().map_or(false, |e| Self::expr_has_await(e))
-                })
+                decl.declarations
+                    .iter()
+                    .any(|d| d.init.as_ref().map_or(false, |e| Self::expr_has_await(e)))
             }
             Statement::Return(Some(expr)) | Statement::Throw(expr) => Self::expr_has_await(expr),
             Statement::If(if_stmt) => {
                 Self::expr_has_await(&if_stmt.test)
                     || Self::stmt_has_tla(&if_stmt.consequent)
-                    || if_stmt.alternate.as_ref().map_or(false, |s| Self::stmt_has_tla(s))
+                    || if_stmt
+                        .alternate
+                        .as_ref()
+                        .map_or(false, |s| Self::stmt_has_tla(s))
             }
             Statement::For(for_stmt) => {
                 for_stmt.init.as_ref().map_or(false, |init| match init {
                     crate::ast::ForInit::Expression(e) => Self::expr_has_await(e),
                     crate::ast::ForInit::Variable(v) => {
-                        if matches!(v.kind, crate::ast::VarKind::AwaitUsing) { return true; }
-                        v.declarations.iter().any(|d| d.init.as_ref().map_or(false, |e| Self::expr_has_await(e)))
+                        if matches!(v.kind, crate::ast::VarKind::AwaitUsing) {
+                            return true;
+                        }
+                        v.declarations
+                            .iter()
+                            .any(|d| d.init.as_ref().map_or(false, |e| Self::expr_has_await(e)))
                     }
-                })
-                    || for_stmt.test.as_ref().map_or(false, |e| Self::expr_has_await(e))
-                    || for_stmt.update.as_ref().map_or(false, |e| Self::expr_has_await(e))
+                }) || for_stmt
+                    .test
+                    .as_ref()
+                    .map_or(false, |e| Self::expr_has_await(e))
+                    || for_stmt
+                        .update
+                        .as_ref()
+                        .map_or(false, |e| Self::expr_has_await(e))
                     || Self::stmt_has_tla(&for_stmt.body)
             }
-            Statement::ForIn(fi) => {
-                Self::expr_has_await(&fi.right) || Self::stmt_has_tla(&fi.body)
-            }
+            Statement::ForIn(fi) => Self::expr_has_await(&fi.right) || Self::stmt_has_tla(&fi.body),
             Statement::ForOf(fo) => {
                 fo.is_await || Self::expr_has_await(&fo.right) || Self::stmt_has_tla(&fo.body)
             }
-            Statement::While(w) => {
-                Self::expr_has_await(&w.test) || Self::stmt_has_tla(&w.body)
-            }
+            Statement::While(w) => Self::expr_has_await(&w.test) || Self::stmt_has_tla(&w.body),
             Statement::DoWhile(dw) => {
                 Self::stmt_has_tla(&dw.body) || Self::expr_has_await(&dw.test)
             }
             Statement::Block(stmts) => stmts.iter().any(|s| Self::stmt_has_tla(s)),
             Statement::Try(t) => {
                 t.block.iter().any(|s| Self::stmt_has_tla(s))
-                    || t.handler.as_ref().map_or(false, |h| h.body.iter().any(|s| Self::stmt_has_tla(s)))
-                    || t.finalizer.as_ref().map_or(false, |f| f.iter().any(|s| Self::stmt_has_tla(s)))
+                    || t.handler
+                        .as_ref()
+                        .map_or(false, |h| h.body.iter().any(|s| Self::stmt_has_tla(s)))
+                    || t.finalizer
+                        .as_ref()
+                        .map_or(false, |f| f.iter().any(|s| Self::stmt_has_tla(s)))
             }
             Statement::Switch(sw) => {
                 Self::expr_has_await(&sw.discriminant)
-                    || sw.cases.iter().any(|c| c.consequent.iter().any(|s| Self::stmt_has_tla(s)))
+                    || sw
+                        .cases
+                        .iter()
+                        .any(|c| c.consequent.iter().any(|s| Self::stmt_has_tla(s)))
             }
             Statement::Labeled(_, body) => Self::stmt_has_tla(body),
             _ => false,
@@ -2291,7 +2324,10 @@ impl Interpreter {
     fn export_has_tla(export: &crate::ast::ExportDeclaration) -> bool {
         use crate::ast::ExportDeclaration;
         match export {
-            ExportDeclaration::Named { declaration: Some(stmt), .. } => Self::stmt_has_tla(stmt),
+            ExportDeclaration::Named {
+                declaration: Some(stmt),
+                ..
+            } => Self::stmt_has_tla(stmt),
             ExportDeclaration::Default(expr) => Self::expr_has_await(expr),
             _ => false,
         }
@@ -2430,9 +2466,7 @@ impl Interpreter {
                     _ => None,
                 };
                 if let Some(spec) = specifier {
-                    if let Ok(resolved) =
-                        self.resolve_module_specifier_pure(spec, Some(&canon))
-                    {
+                    if let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon)) {
                         self.gather_async_transitive_deps(&resolved, result, seen);
                     }
                 }
@@ -2446,7 +2480,8 @@ impl Interpreter {
         specifier: &str,
         referrer: Option<&Path>,
     ) -> Result<PathBuf, JsValue> {
-        if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/') {
+        if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')
+        {
             let base = referrer.and_then(|r| r.parent()).unwrap_or(Path::new("."));
             let resolved = base.join(specifier);
             if resolved.exists() {
@@ -2467,7 +2502,11 @@ impl Interpreter {
     }
 
     /// Check if a module and all its transitive deps are ready for synchronous execution
-    fn ready_for_sync_execution(&self, path: &Path, seen: &mut std::collections::HashSet<PathBuf>) -> bool {
+    fn ready_for_sync_execution(
+        &self,
+        path: &Path,
+        seen: &mut std::collections::HashSet<PathBuf>,
+    ) -> bool {
         let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if !seen.insert(canon.clone()) {
             return true; // cycle — spec says return true
@@ -3308,7 +3347,8 @@ impl Interpreter {
                 let fn_obj = self.create_function(js_func);
                 if !func.name.is_empty() {
                     env.borrow_mut().declare(&func.name, BindingKind::Let);
-                    env.borrow_mut().initialize_binding(&func.name, fn_obj.clone());
+                    env.borrow_mut()
+                        .initialize_binding(&func.name, fn_obj.clone());
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Let);
                 env.borrow_mut().initialize_binding("*default*", fn_obj);
@@ -3332,7 +3372,8 @@ impl Interpreter {
                 };
                 if !class.name.is_empty() {
                     env.borrow_mut().declare(&class.name, BindingKind::Const);
-                    env.borrow_mut().initialize_binding(&class.name, class_val.clone());
+                    env.borrow_mut()
+                        .initialize_binding(&class.name, class_val.clone());
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Const);
                 env.borrow_mut().initialize_binding("*default*", class_val);
@@ -3423,7 +3464,9 @@ impl Interpreter {
             if remaining.is_zero() {
                 break;
             }
-            let (_guard, timeout_result) = cvar.wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100))).unwrap();
+            let (_guard, timeout_result) = cvar
+                .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
+                .unwrap();
             drop(_guard);
         }
     }

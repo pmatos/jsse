@@ -124,9 +124,7 @@ impl<'a> Parser<'a> {
             }
         }
         if matches!(&self.current, Token::Keyword(Keyword::Class)) {
-            return Err(
-                self.error("Class declaration cannot appear in a single-statement context")
-            );
+            return Err(self.error("Class declaration cannot appear in a single-statement context"));
         }
         if matches!(&self.current, Token::Keyword(Keyword::Async)) {
             let saved_lt = self.prev_line_terminator;
@@ -736,50 +734,49 @@ impl<'a> Parser<'a> {
         // Special case: `for (await using of ...)` — `of` as binding identifier.
         // `is_await_using_declaration()` doesn't include Keyword::Of, so check separately:
         // peek three tokens: if `await` `using` `of` (`=` or `of`), it's an await using declaration.
-        let is_for_await_using =
-            if matches!(&self.current, Token::Keyword(Keyword::Await))
-                && (self.in_async || (self.is_module && self.in_function == 0))
-            {
-                if self.is_await_using_declaration() {
-                    true
-                } else {
-                    let saved_current = self.current.clone();
-                    let saved_lt = self.prev_line_terminator;
-                    let saved_ts = self.current_token_start;
-                    let saved_te = self.current_token_end;
-                    let saved_pushback = self.pushback.clone();
-                    let saved_lexer = self.lexer.save_state();
-                    let mut result = false;
-                    // peek past `await`
+        let is_for_await_using = if matches!(&self.current, Token::Keyword(Keyword::Await))
+            && (self.in_async || (self.is_module && self.in_function == 0))
+        {
+            if self.is_await_using_declaration() {
+                true
+            } else {
+                let saved_current = self.current.clone();
+                let saved_lt = self.prev_line_terminator;
+                let saved_ts = self.current_token_start;
+                let saved_te = self.current_token_end;
+                let saved_pushback = self.pushback.clone();
+                let saved_lexer = self.lexer.save_state();
+                let mut result = false;
+                // peek past `await`
+                if self.advance().is_ok()
+                    && !self.prev_line_terminator
+                    && matches!(&self.current, Token::Identifier(n) if n == "using")
+                {
+                    // peek past `using`
                     if self.advance().is_ok()
                         && !self.prev_line_terminator
-                        && matches!(&self.current, Token::Identifier(n) if n == "using")
+                        && matches!(&self.current, Token::Keyword(Keyword::Of))
                     {
-                        // peek past `using`
+                        // peek past `of` — if `=` or `of` (for-of keyword), it's a declaration
                         if self.advance().is_ok()
-                            && !self.prev_line_terminator
-                            && matches!(&self.current, Token::Keyword(Keyword::Of))
+                            && (self.current == Token::Assign
+                                || matches!(&self.current, Token::Keyword(Keyword::Of)))
                         {
-                            // peek past `of` — if `=` or `of` (for-of keyword), it's a declaration
-                            if self.advance().is_ok()
-                                && (self.current == Token::Assign
-                                    || matches!(&self.current, Token::Keyword(Keyword::Of)))
-                            {
-                                result = true;
-                            }
+                            result = true;
                         }
                     }
-                    self.current = saved_current;
-                    self.prev_line_terminator = saved_lt;
-                    self.current_token_start = saved_ts;
-                    self.current_token_end = saved_te;
-                    self.pushback = saved_pushback;
-                    self.lexer.restore_state(saved_lexer);
-                    result
                 }
-            } else {
-                false
-            };
+                self.current = saved_current;
+                self.prev_line_terminator = saved_lt;
+                self.current_token_start = saved_ts;
+                self.current_token_end = saved_te;
+                self.pushback = saved_pushback;
+                self.lexer.restore_state(saved_lexer);
+                result
+            }
+        } else {
+            false
+        };
         if is_for_await_using {
             self.advance()?; // await
             self.advance()?; // using
@@ -1156,7 +1153,10 @@ impl<'a> Parser<'a> {
                     }
                     // §14.7.1.1: `for (async of ...)` is a SyntaxError (only with literal `async` keyword)
                     // Escaped forms (\u0061sync) and parenthesized (async) are allowed
-                    if !is_await && is_literal_async && matches!(&expr, Expression::Identifier(n) if n == "async") {
+                    if !is_await
+                        && is_literal_async
+                        && matches!(&expr, Expression::Identifier(n) if n == "async")
+                    {
                         return Err(self.error("The identifier 'async' is disallowed as a left-hand side expression of a for-of loop"));
                     }
                     self.advance()?;
@@ -1201,8 +1201,10 @@ impl<'a> Parser<'a> {
         let body = self.parse_iteration_body()?;
         // §14.7.4.2: BoundNames of LexicalDeclaration must not overlap VarDeclaredNames of Statement
         if let Some(ForInit::Variable(ref vd)) = init {
-            if matches!(vd.kind, VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing)
-            {
+            if matches!(
+                vd.kind,
+                VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+            ) {
                 let mut bound = Vec::new();
                 for d in &vd.declarations {
                     Self::bound_names_from_pattern(&d.pattern, &mut bound);
@@ -1211,9 +1213,9 @@ impl<'a> Parser<'a> {
                 Self::collect_var_declared_names(&body, &mut var_names);
                 for vn in &var_names {
                     if bound.contains(vn) {
-                        return Err(self.error(&format!(
-                            "Identifier '{vn}' has already been declared"
-                        )));
+                        return Err(
+                            self.error(&format!("Identifier '{vn}' has already been declared"))
+                        );
                     }
                 }
             }
@@ -1318,9 +1320,9 @@ impl<'a> Parser<'a> {
                 let mut seen = std::collections::HashSet::new();
                 for name in &bound {
                     if !seen.insert(name.as_str()) {
-                        return Err(self.error(format!(
-                            "Duplicate binding '{name}' in catch clause"
-                        )));
+                        return Err(
+                            self.error(format!("Duplicate binding '{name}' in catch clause"))
+                        );
                     }
                 }
             }
@@ -1348,9 +1350,8 @@ impl<'a> Parser<'a> {
                     }
                     for name in &bound {
                         if lex_names.contains(name) {
-                            return Err(self.error(format!(
-                                "Identifier '{name}' has already been declared"
-                            )));
+                            return Err(self
+                                .error(format!("Identifier '{name}' has already been declared")));
                         }
                     }
                 }

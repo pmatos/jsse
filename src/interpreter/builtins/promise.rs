@@ -739,7 +739,11 @@ impl Interpreter {
 
     pub(crate) fn create_promise_parts(&mut self) -> (JsValue, JsValue, JsValue) {
         let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref o) = promise { o.id } else { 0 };
+        let promise_id = if let JsValue::Object(ref o) = promise {
+            o.id
+        } else {
+            0
+        };
         let (resolve, reject) = self.create_resolving_functions(promise_id);
         (resolve, reject, promise)
     }
@@ -853,59 +857,66 @@ impl Interpreter {
     ) {
         for reaction in reactions {
             let arg = argument.clone();
-            let mut roots = vec![arg.clone(), reaction.resolve.clone(), reaction.reject.clone()];
+            let mut roots = vec![
+                arg.clone(),
+                reaction.resolve.clone(),
+                reaction.reject.clone(),
+            ];
             if let Some(ref h) = reaction.handler {
                 roots.push(h.clone());
             }
-            self.microtask_queue.push((roots, Box::new(move |interp| {
-                let handler_result = if let Some(ref handler) = reaction.handler {
-                    if interp.is_callable(handler) {
-                        match interp.call_function(
-                            handler,
-                            &JsValue::Undefined,
-                            std::slice::from_ref(&arg),
-                        ) {
-                            Completion::Throw(e) => Err(e),
-                            Completion::Normal(v) => Ok(v),
-                            _ => Ok(JsValue::Undefined),
+            self.microtask_queue.push((
+                roots,
+                Box::new(move |interp| {
+                    let handler_result = if let Some(ref handler) = reaction.handler {
+                        if interp.is_callable(handler) {
+                            match interp.call_function(
+                                handler,
+                                &JsValue::Undefined,
+                                std::slice::from_ref(&arg),
+                            ) {
+                                Completion::Throw(e) => Err(e),
+                                Completion::Normal(v) => Ok(v),
+                                _ => Ok(JsValue::Undefined),
+                            }
+                        } else {
+                            match reaction.reaction_type {
+                                PromiseReactionType::Fulfill => Ok(arg.clone()),
+                                PromiseReactionType::Reject => Err(arg.clone()),
+                            }
                         }
                     } else {
                         match reaction.reaction_type {
                             PromiseReactionType::Fulfill => Ok(arg.clone()),
                             PromiseReactionType::Reject => Err(arg.clone()),
                         }
-                    }
-                } else {
-                    match reaction.reaction_type {
-                        PromiseReactionType::Fulfill => Ok(arg.clone()),
-                        PromiseReactionType::Reject => Err(arg.clone()),
-                    }
-                };
+                    };
 
-                if let Some(_pid) = reaction.promise_id {
-                    match handler_result {
-                        Ok(value) => {
-                            if let Completion::Throw(e) = interp.call_function(
-                                &reaction.resolve,
-                                &JsValue::Undefined,
-                                &[value],
-                            ) {
-                                return Completion::Throw(e);
+                    if let Some(_pid) = reaction.promise_id {
+                        match handler_result {
+                            Ok(value) => {
+                                if let Completion::Throw(e) = interp.call_function(
+                                    &reaction.resolve,
+                                    &JsValue::Undefined,
+                                    &[value],
+                                ) {
+                                    return Completion::Throw(e);
+                                }
                             }
-                        }
-                        Err(reason) => {
-                            if let Completion::Throw(e) = interp.call_function(
-                                &reaction.reject,
-                                &JsValue::Undefined,
-                                &[reason],
-                            ) {
-                                return Completion::Throw(e);
+                            Err(reason) => {
+                                if let Completion::Throw(e) = interp.call_function(
+                                    &reaction.reject,
+                                    &JsValue::Undefined,
+                                    &[reason],
+                                ) {
+                                    return Completion::Throw(e);
+                                }
                             }
                         }
                     }
-                }
-                Completion::Normal(JsValue::Undefined)
-            })));
+                    Completion::Normal(JsValue::Undefined)
+                }),
+            ));
         }
     }
 
@@ -916,18 +927,26 @@ impl Interpreter {
         then_fn: JsValue,
     ) {
         let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        let roots = vec![thenable.clone(), then_fn.clone(), resolve_fn.clone(), reject_fn.clone()];
-        self.microtask_queue.push((roots, Box::new(move |interp| {
-            let result =
-                interp.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]);
-            if let Completion::Throw(e) = result
-                && let Completion::Throw(e2) =
-                    interp.call_function(&reject_fn, &JsValue::Undefined, &[e])
-            {
-                return Completion::Throw(e2);
-            }
-            Completion::Normal(JsValue::Undefined)
-        })));
+        let roots = vec![
+            thenable.clone(),
+            then_fn.clone(),
+            resolve_fn.clone(),
+            reject_fn.clone(),
+        ];
+        self.microtask_queue.push((
+            roots,
+            Box::new(move |interp| {
+                let result =
+                    interp.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]);
+                if let Completion::Throw(e) = result
+                    && let Completion::Throw(e2) =
+                        interp.call_function(&reject_fn, &JsValue::Undefined, &[e])
+                {
+                    return Completion::Throw(e2);
+                }
+                Completion::Normal(JsValue::Undefined)
+            }),
+        ));
     }
 
     pub(crate) fn promise_then(

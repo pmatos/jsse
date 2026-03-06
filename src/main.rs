@@ -41,15 +41,15 @@ enum EngineError {
     Runtime(String),
 }
 
-fn run_source(source: &str, is_module: bool, path: Option<&Path>, can_block: bool) -> Result<(), EngineError> {
+fn run_source(
+    source: &str,
+    is_module: bool,
+    path: Option<&Path>,
+    can_block: bool,
+) -> Result<(), EngineError> {
     let mut interp = interpreter::Interpreter::new();
     interp.can_block = can_block;
-    run_source_with_interp(
-        &mut interp,
-        source,
-        is_module,
-        path,
-    )
+    run_source_with_interp(&mut interp, source, is_module, path)
 }
 
 fn run_source_with_interp(

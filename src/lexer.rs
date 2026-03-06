@@ -424,7 +424,11 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn read_string_escape_into(&mut self, out: &mut Vec<u16>, has_legacy_octal: &mut bool) -> Result<(), LexError> {
+    fn read_string_escape_into(
+        &mut self,
+        out: &mut Vec<u16>,
+        has_legacy_octal: &mut bool,
+    ) -> Result<(), LexError> {
         match self.advance() {
             None => Err(self.error("Unterminated escape sequence")),
             Some('n') => {
@@ -1575,11 +1579,17 @@ fn hex_val(ch: char) -> Option<u32> {
 }
 
 fn is_other_id_start(ch: char) -> bool {
-    matches!(ch, '\u{1885}' | '\u{1886}' | '\u{2118}' | '\u{212E}' | '\u{309B}' | '\u{309C}')
+    matches!(
+        ch,
+        '\u{1885}' | '\u{1886}' | '\u{2118}' | '\u{212E}' | '\u{309B}' | '\u{309C}'
+    )
 }
 
 fn is_other_id_continue(ch: char) -> bool {
-    matches!(ch, '\u{00B7}' | '\u{0387}' | '\u{1369}'..='\u{1371}' | '\u{19DA}')
+    matches!(
+        ch,
+        '\u{00B7}' | '\u{0387}' | '\u{1369}'..='\u{1371}' | '\u{19DA}'
+    )
 }
 
 fn unicode_id_start(ch: char) -> bool {
@@ -1587,7 +1597,8 @@ fn unicode_id_start(ch: char) -> bool {
 }
 
 fn unicode_id_continue(ch: char) -> bool {
-    !ch.is_ascii() && (unicode_ident::is_xid_continue(ch) || is_other_id_continue(ch) || is_other_id_start(ch))
+    !ch.is_ascii()
+        && (unicode_ident::is_xid_continue(ch) || is_other_id_continue(ch) || is_other_id_start(ch))
 }
 
 #[cfg(test)]

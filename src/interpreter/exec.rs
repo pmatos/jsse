@@ -180,9 +180,7 @@ impl Interpreter {
         let mut names = Vec::new();
         for stmt in stmts {
             match stmt {
-                Statement::Variable(decl)
-                    if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
-                {
+                Statement::Variable(decl) if matches!(decl.kind, VarKind::Let | VarKind::Const) => {
                     for d in &decl.declarations {
                         Self::collect_pattern_names(&d.pattern, &mut names);
                     }
@@ -197,10 +195,7 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.13 HasRestrictedGlobalProperty
-    fn has_restricted_global_property(
-        global_obj: &Rc<RefCell<JsObjectData>>,
-        name: &str,
-    ) -> bool {
+    fn has_restricted_global_property(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
         let gb = global_obj.borrow();
         if let Some(desc) = gb.properties.get(name) {
             desc.configurable == Some(false)
@@ -272,10 +267,7 @@ impl Interpreter {
                         if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
                             let err = self.create_error(
                                 "SyntaxError",
-                                &format!(
-                                    "Identifier '{}' has already been declared",
-                                    f.name
-                                ),
+                                &format!("Identifier '{}' has already been declared", f.name),
                             );
                             return Some(Completion::Throw(err));
                         }
@@ -338,7 +330,10 @@ impl Interpreter {
         for stmt in stmts {
             match stmt {
                 Statement::Variable(decl)
-                    if matches!(decl.kind, VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing) =>
+                    if matches!(
+                        decl.kind,
+                        VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
+                    ) =>
                 {
                     let kind = match decl.kind {
                         VarKind::Let => BindingKind::Let,
@@ -1097,7 +1092,11 @@ impl Interpreter {
                     .is_some_and(|e| e.is_anonymous_function_definition())
             {
                 // Skip for class expressions — name already set in eval_class
-                if !d.init.as_ref().is_some_and(|e| matches!(e, Expression::Class(ce) if ce.name.is_none())) {
+                if !d
+                    .init
+                    .as_ref()
+                    .is_some_and(|e| matches!(e, Expression::Class(ce) if ce.name.is_none()))
+                {
                     self.set_function_name(&val, name);
                 }
             }
@@ -1115,9 +1114,7 @@ impl Interpreter {
             if let Some(with_obj_id) = pre_resolved_with {
                 if let Pattern::Identifier(ref name) = d.pattern {
                     let strict = env.borrow().strict;
-                    if let Err(e) =
-                        self.with_set_mutable_binding(with_obj_id, name, val, strict)
-                    {
+                    if let Err(e) = self.with_set_mutable_binding(with_obj_id, name, val, strict) {
                         return Completion::Throw(e);
                     }
                 } else {
@@ -1146,9 +1143,10 @@ impl Interpreter {
                     let already_declared = {
                         let vs = var_scope.borrow();
                         vs.bindings.contains_key(name)
-                            || vs.global_object.as_ref().is_some_and(|g| {
-                                g.borrow().properties.contains_key(name)
-                            })
+                            || vs
+                                .global_object
+                                .as_ref()
+                                .is_some_and(|g| g.borrow().properties.contains_key(name))
                     };
                     if !already_declared {
                         var_scope.borrow_mut().declare(name, kind);
@@ -1548,18 +1546,23 @@ impl Interpreter {
     fn exec_for(&mut self, f: &ForStatement, env: &EnvRef, label: Option<&str>) -> Completion {
         let for_env = Environment::new(Some(env.clone()));
         // Collect lexical binding names for per-iteration freshness (§14.7.4.2)
-        let per_iteration_bindings: Vec<(String, BindingKind)> = if let Some(ForInit::Variable(decl)) = &f.init
-            && matches!(decl.kind, VarKind::Let | VarKind::Const)
-        {
-            let kind = if decl.kind == VarKind::Let { BindingKind::Let } else { BindingKind::Const };
-            let mut names = Vec::new();
-            for d in &decl.declarations {
-                Self::collect_pattern_names(&d.pattern, &mut names);
-            }
-            names.into_iter().map(|n| (n, kind)).collect()
-        } else {
-            Vec::new()
-        };
+        let per_iteration_bindings: Vec<(String, BindingKind)> =
+            if let Some(ForInit::Variable(decl)) = &f.init
+                && matches!(decl.kind, VarKind::Let | VarKind::Const)
+            {
+                let kind = if decl.kind == VarKind::Let {
+                    BindingKind::Let
+                } else {
+                    BindingKind::Const
+                };
+                let mut names = Vec::new();
+                for d in &decl.declarations {
+                    Self::collect_pattern_names(&d.pattern, &mut names);
+                }
+                names.into_iter().map(|n| (n, kind)).collect()
+            } else {
+                Vec::new()
+            };
 
         if let Some(init) = &f.init {
             match init {
@@ -1658,7 +1661,12 @@ impl Interpreter {
         }
     }
 
-    fn exec_for_in(&mut self, fi: &ForInStatement, env: &EnvRef, label: Option<&str>) -> Completion {
+    fn exec_for_in(
+        &mut self,
+        fi: &ForInStatement,
+        env: &EnvRef,
+        label: Option<&str>,
+    ) -> Completion {
         // Annex B: for-in initializer (sloppy mode var declarations only)
         if let ForInOfLeft::Variable(decl) = &fi.left
             && decl.kind == VarKind::Var

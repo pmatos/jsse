@@ -369,11 +369,9 @@ impl Interpreter {
         if self.realm().function_prototype.is_none() {
             let fp = self.create_object();
             fp.borrow_mut().prototype = self.realm().object_prototype.clone();
-            fp.borrow_mut().callable = Some(JsFunction::native(
-                String::new(),
-                0,
-                |_, _, _| Completion::Normal(JsValue::Undefined),
-            ));
+            fp.borrow_mut().callable = Some(JsFunction::native(String::new(), 0, |_, _, _| {
+                Completion::Normal(JsValue::Undefined)
+            }));
             fp.borrow_mut().class_name = "Function".to_string();
             self.realm_mut().function_prototype = Some(fp);
         }
@@ -1490,12 +1488,7 @@ impl Interpreter {
                 );
                 n.insert_property(
                     "MIN_VALUE".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::Number(5e-324_f64),
-                        false,
-                        false,
-                        false,
-                    ),
+                    PropertyDescriptor::data(JsValue::Number(5e-324_f64), false, false, false),
                 );
                 n.insert_property(
                     "NaN".to_string(),
@@ -2361,7 +2354,10 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Math", BindingKind::Const);
-        self.realm().global_env.borrow_mut().initialize_binding("Math", math_val);
+        self.realm()
+            .global_env
+            .borrow_mut()
+            .initialize_binding("Math", math_val);
 
         // eval
         {
@@ -2576,8 +2572,7 @@ impl Interpreter {
                 let fp = if let Some(ref existing_fp) = self.realm().function_prototype {
                     // Replace the Function constructor's .prototype with our early object
                     let fp_id = existing_fp.borrow().id.unwrap();
-                    let fp_val =
-                        JsValue::Object(crate::types::JsObject { id: fp_id });
+                    let fp_val = JsValue::Object(crate::types::JsObject { id: fp_id });
                     func_data.borrow_mut().insert_property(
                         "prototype".to_string(),
                         PropertyDescriptor::data(fp_val, true, false, false),
@@ -2614,8 +2609,7 @@ impl Interpreter {
                             "[Symbol.hasInstance]".to_string(),
                             1,
                             |interp, this_val, args| {
-                                let arg =
-                                    args.first().cloned().unwrap_or(JsValue::Undefined);
+                                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                                 interp.ordinary_has_instance(this_val, &arg)
                             },
                         ));
@@ -4589,13 +4583,13 @@ impl Interpreter {
                     if let JsValue::Object(ref o) = target {
                         // Deferred namespace: trigger evaluation on [[GetOwnProperty]] with non-symbol-like key
                         {
-                            let deferred_ns = interp
-                                .get_object(o.id)
-                                .and_then(|obj| {
-                                    let b = obj.borrow();
-                                    b.module_namespace.as_ref().map(|ns| ns.deferred)
-                                });
-                            if deferred_ns == Some(true) && !Interpreter::is_symbol_like_namespace_key(&key, true) {
+                            let deferred_ns = interp.get_object(o.id).and_then(|obj| {
+                                let b = obj.borrow();
+                                b.module_namespace.as_ref().map(|ns| ns.deferred)
+                            });
+                            if deferred_ns == Some(true)
+                                && !Interpreter::is_symbol_like_namespace_key(&key, true)
+                            {
                                 if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
                                     return Completion::Throw(e);
                                 }
@@ -5524,7 +5518,11 @@ impl Interpreter {
                     if let Some(obj) = interp.get_object(o.id) {
                         // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
                         {
-                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                            let is_deferred_ns = obj
+                                .borrow()
+                                .module_namespace
+                                .as_ref()
+                                .map_or(false, |ns| ns.deferred);
                             if is_deferred_ns {
                                 if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
                                     return Completion::Throw(e);
@@ -5661,9 +5659,14 @@ impl Interpreter {
                         let obj_id = o.id;
                         // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
                         if let Some(obj) = interp.get_object(obj_id) {
-                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                            let is_deferred_ns = obj
+                                .borrow()
+                                .module_namespace
+                                .as_ref()
+                                .map_or(false, |ns| ns.deferred);
                             if is_deferred_ns {
-                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(obj_id) {
+                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(obj_id)
+                                {
                                     return Completion::Throw(e);
                                 }
                             }
@@ -7196,8 +7199,13 @@ impl Interpreter {
                 {
                     // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
                     {
-                        let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
-                        if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true) {
+                        let is_deferred_ns = obj
+                            .borrow()
+                            .module_namespace
+                            .as_ref()
+                            .map_or(false, |ns| ns.deferred);
+                        if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true)
+                        {
                             if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
                                 return Completion::Throw(e);
                             }
@@ -7356,13 +7364,13 @@ impl Interpreter {
                     if let JsValue::Object(ref o) = target {
                         // Deferred namespace: trigger evaluation
                         {
-                            let deferred_ns = interp
-                                .get_object(o.id)
-                                .and_then(|obj| {
-                                    let b = obj.borrow();
-                                    b.module_namespace.as_ref().map(|ns| ns.deferred)
-                                });
-                            if deferred_ns == Some(true) && !Interpreter::is_symbol_like_namespace_key(&key, true) {
+                            let deferred_ns = interp.get_object(o.id).and_then(|obj| {
+                                let b = obj.borrow();
+                                b.module_namespace.as_ref().map(|ns| ns.deferred)
+                            });
+                            if deferred_ns == Some(true)
+                                && !Interpreter::is_symbol_like_namespace_key(&key, true)
+                            {
                                 if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
                                     return Completion::Throw(e);
                                 }
@@ -7545,7 +7553,11 @@ impl Interpreter {
                 {
                     // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
                     {
-                        let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
+                        let is_deferred_ns = obj
+                            .borrow()
+                            .module_namespace
+                            .as_ref()
+                            .map_or(false, |ns| ns.deferred);
                         if is_deferred_ns {
                             if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
                                 return Completion::Throw(e);
@@ -8300,9 +8312,11 @@ impl Interpreter {
             2,
             move |interp, _this, args| {
                 if !interp.is_callable(_this) {
-                    return Completion::Throw(
-                        interp.create_error_in_realm(fn_proto_realm_id, "TypeError", "Function.prototype.apply called on non-callable"),
-                    );
+                    return Completion::Throw(interp.create_error_in_realm(
+                        fn_proto_realm_id,
+                        "TypeError",
+                        "Function.prototype.apply called on non-callable",
+                    ));
                 }
                 let this_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let arr_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -8326,9 +8340,11 @@ impl Interpreter {
                         list
                     }
                     _ => {
-                        return Completion::Throw(
-                            interp.create_error_in_realm(fn_proto_realm_id, "TypeError", "CreateListFromArrayLike called on non-object"),
-                        );
+                        return Completion::Throw(interp.create_error_in_realm(
+                            fn_proto_realm_id,
+                            "TypeError",
+                            "CreateListFromArrayLike called on non-object",
+                        ));
                     }
                 };
                 interp.call_function(_this, &this_arg, &call_args)

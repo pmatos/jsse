@@ -2,7 +2,9 @@ use super::super::*;
 use crate::interpreter::types::{BufferData, SharedBufferInner};
 use crate::types::{JsBigInt, JsObject, JsString, JsValue};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicU8, AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{
+    AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicU8, AtomicU16, AtomicU32, Ordering,
+};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 
 struct WaiterEntry {
@@ -17,7 +19,11 @@ fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBuf
         && let Some(obj) = interp.get_object(o.id)
     {
         let obj_ref = obj.borrow();
-        let byte_offset = obj_ref.typed_array_info.as_ref().map(|i| i.byte_offset).unwrap_or(0);
+        let byte_offset = obj_ref
+            .typed_array_info
+            .as_ref()
+            .map(|i| i.byte_offset)
+            .unwrap_or(0);
         if let Some(buf_id) = obj_ref.view_buffer_object_id
             && let Some(buf_obj) = interp.get_object(buf_id)
         {
@@ -248,7 +254,14 @@ impl Interpreter {
                 };
                 let offset = byte_offset + byte_index;
                 if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
-                    return atomic_compare_exchange_shared(&sab, offset, kind, is_bigint, &expected, &replacement);
+                    return atomic_compare_exchange_shared(
+                        &sab,
+                        offset,
+                        kind,
+                        is_bigint,
+                        &expected,
+                        &replacement,
+                    );
                 }
                 let mut buf = buffer.borrow_mut();
                 if is_bigint {
@@ -333,7 +346,11 @@ impl Interpreter {
                 } else {
                     match interp.to_number_value(&timeout_val) {
                         Ok(n) => {
-                            if n.is_nan() { f64::INFINITY } else { n.max(0.0) }
+                            if n.is_nan() {
+                                f64::INFINITY
+                            } else {
+                                n.max(0.0)
+                            }
                         }
                         Err(e) => return Completion::Throw(e),
                     }
@@ -396,11 +413,13 @@ impl Interpreter {
                     let duration = std::time::Duration::from_millis(timeout as u64);
                     let deadline = std::time::Instant::now() + duration;
                     while !*notified {
-                        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                        let remaining =
+                            deadline.saturating_duration_since(std::time::Instant::now());
                         if remaining.is_zero() {
                             break;
                         }
-                        let (guard, timeout_result) = cvar.wait_timeout(notified, remaining).unwrap();
+                        let (guard, timeout_result) =
+                            cvar.wait_timeout(notified, remaining).unwrap();
                         notified = guard;
                         if timeout_result.timed_out() && !*notified {
                             break;
@@ -552,7 +571,11 @@ impl Interpreter {
                 } else {
                     match interp.to_number_value(&timeout_val) {
                         Ok(n) => {
-                            if n.is_nan() { f64::INFINITY } else { n.max(0.0) }
+                            if n.is_nan() {
+                                f64::INFINITY
+                            } else {
+                                n.max(0.0)
+                            }
                         }
                         Err(e) => return Completion::Throw(e),
                     }
@@ -581,7 +604,9 @@ impl Interpreter {
                         "value".to_string(),
                         PropertyDescriptor::data(
                             JsValue::String(JsString::from_str("not-equal")),
-                            true, true, true,
+                            true,
+                            true,
+                            true,
                         ),
                     );
                 } else if timeout <= 0.0 {
@@ -593,7 +618,9 @@ impl Interpreter {
                         "value".to_string(),
                         PropertyDescriptor::data(
                             JsValue::String(JsString::from_str("timed-out")),
-                            true, true, true,
+                            true,
+                            true,
+                            true,
                         ),
                     );
                 } else {
@@ -627,9 +654,13 @@ impl Interpreter {
                                 let duration = std::time::Duration::from_millis(timeout_ms as u64);
                                 let deadline = std::time::Instant::now() + duration;
                                 while !*notified {
-                                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                                    if remaining.is_zero() { break; }
-                                    let (guard, _) = cvar.wait_timeout(notified, remaining).unwrap();
+                                    let remaining = deadline
+                                        .saturating_duration_since(std::time::Instant::now());
+                                    if remaining.is_zero() {
+                                        break;
+                                    }
+                                    let (guard, _) =
+                                        cvar.wait_timeout(notified, remaining).unwrap();
                                     notified = guard;
                                 }
                                 if *notified { "ok" } else { "timed-out" }
@@ -638,16 +669,24 @@ impl Interpreter {
                                 let mut map = WAITER_MAP.lock().unwrap();
                                 if let Some(waiters) = map.get_mut(&key) {
                                     waiters.retain(|w| !Arc::ptr_eq(&w.notified, &pair_clone));
-                                    if waiters.is_empty() { map.remove(&key); }
+                                    if waiters.is_empty() {
+                                        map.remove(&key);
+                                    }
                                 }
                             }
                             let result_val = JsValue::String(JsString::from_str(result_str));
                             let resolve = resolve_clone;
                             let (ref mtx, ref completion_cvar) = *pending;
-                            mtx.lock().unwrap().push(Box::new(move |interp: &mut Interpreter| {
-                                let _ = interp.call_function(&resolve, &JsValue::Undefined, &[result_val]);
-                                interp.gc_unroot_value(&resolve);
-                            }));
+                            mtx.lock()
+                                .unwrap()
+                                .push(Box::new(move |interp: &mut Interpreter| {
+                                    let _ = interp.call_function(
+                                        &resolve,
+                                        &JsValue::Undefined,
+                                        &[result_val],
+                                    );
+                                    interp.gc_unroot_value(&resolve);
+                                }));
                             completion_cvar.notify_one();
                         });
                     }
@@ -726,34 +765,59 @@ impl Interpreter {
 
 // Atomic operations on shared buffers
 
-fn atomic_load_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKind, is_bigint: bool) -> Completion {
+fn atomic_load_shared(
+    sab: &SharedBufferInner,
+    offset: usize,
+    kind: TypedArrayKind,
+    is_bigint: bool,
+) -> Completion {
     unsafe {
         let base = sab.as_ptr();
         if is_bigint {
             let ptr = base.add(offset) as *mut i64;
             let val = AtomicI64::from_ptr(ptr).load(Ordering::SeqCst);
             let bv = match kind {
-                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(val) }),
-                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(val as u64) }),
+                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt {
+                    value: num_bigint::BigInt::from(val),
+                }),
+                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt {
+                    value: num_bigint::BigInt::from(val as u64),
+                }),
                 _ => JsValue::Number(0.0),
             };
             Completion::Normal(bv)
         } else {
-            let val: i64 = match kind {
-                TypedArrayKind::Int8 => AtomicI8::from_ptr(base.add(offset) as *mut i8).load(Ordering::SeqCst) as i64,
-                TypedArrayKind::Uint8 => AtomicU8::from_ptr(base.add(offset)).load(Ordering::SeqCst) as i64,
-                TypedArrayKind::Int16 => AtomicI16::from_ptr(base.add(offset) as *mut i16).load(Ordering::SeqCst) as i64,
-                TypedArrayKind::Uint16 => AtomicU16::from_ptr(base.add(offset) as *mut u16).load(Ordering::SeqCst) as i64,
-                TypedArrayKind::Int32 => AtomicI32::from_ptr(base.add(offset) as *mut i32).load(Ordering::SeqCst) as i64,
-                TypedArrayKind::Uint32 => AtomicU32::from_ptr(base.add(offset) as *mut u32).load(Ordering::SeqCst) as i64,
-                _ => 0,
-            };
+            let val: i64 =
+                match kind {
+                    TypedArrayKind::Int8 => AtomicI8::from_ptr(base.add(offset) as *mut i8)
+                        .load(Ordering::SeqCst) as i64,
+                    TypedArrayKind::Uint8 => {
+                        AtomicU8::from_ptr(base.add(offset)).load(Ordering::SeqCst) as i64
+                    }
+                    TypedArrayKind::Int16 => AtomicI16::from_ptr(base.add(offset) as *mut i16)
+                        .load(Ordering::SeqCst) as i64,
+                    TypedArrayKind::Uint16 => AtomicU16::from_ptr(base.add(offset) as *mut u16)
+                        .load(Ordering::SeqCst)
+                        as i64,
+                    TypedArrayKind::Int32 => AtomicI32::from_ptr(base.add(offset) as *mut i32)
+                        .load(Ordering::SeqCst) as i64,
+                    TypedArrayKind::Uint32 => AtomicU32::from_ptr(base.add(offset) as *mut u32)
+                        .load(Ordering::SeqCst)
+                        as i64,
+                    _ => 0,
+                };
             Completion::Normal(JsValue::Number(val as f64))
         }
     }
 }
 
-fn atomic_store_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKind, is_bigint: bool, val: &JsValue) {
+fn atomic_store_shared(
+    sab: &SharedBufferInner,
+    offset: usize,
+    kind: TypedArrayKind,
+    is_bigint: bool,
+    val: &JsValue,
+) {
     unsafe {
         let base = sab.as_ptr();
         if is_bigint {
@@ -764,77 +828,191 @@ fn atomic_store_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayK
             let ptr = base.add(offset) as *mut i64;
             AtomicI64::from_ptr(ptr).store(i, Ordering::SeqCst);
         } else {
-            let n = match val { JsValue::Number(n) => *n, _ => 0.0 };
+            let n = match val {
+                JsValue::Number(n) => *n,
+                _ => 0.0,
+            };
             let i = converted_number_to_i64_val(kind, n);
             match kind {
-                TypedArrayKind::Int8 => AtomicI8::from_ptr(base.add(offset) as *mut i8).store(i as i8, Ordering::SeqCst),
-                TypedArrayKind::Uint8 => AtomicU8::from_ptr(base.add(offset)).store(i as u8, Ordering::SeqCst),
-                TypedArrayKind::Int16 => AtomicI16::from_ptr(base.add(offset) as *mut i16).store(i as i16, Ordering::SeqCst),
-                TypedArrayKind::Uint16 => AtomicU16::from_ptr(base.add(offset) as *mut u16).store(i as u16, Ordering::SeqCst),
-                TypedArrayKind::Int32 => AtomicI32::from_ptr(base.add(offset) as *mut i32).store(i as i32, Ordering::SeqCst),
-                TypedArrayKind::Uint32 => AtomicU32::from_ptr(base.add(offset) as *mut u32).store(i as u32, Ordering::SeqCst),
+                TypedArrayKind::Int8 => {
+                    AtomicI8::from_ptr(base.add(offset) as *mut i8).store(i as i8, Ordering::SeqCst)
+                }
+                TypedArrayKind::Uint8 => {
+                    AtomicU8::from_ptr(base.add(offset)).store(i as u8, Ordering::SeqCst)
+                }
+                TypedArrayKind::Int16 => AtomicI16::from_ptr(base.add(offset) as *mut i16)
+                    .store(i as i16, Ordering::SeqCst),
+                TypedArrayKind::Uint16 => AtomicU16::from_ptr(base.add(offset) as *mut u16)
+                    .store(i as u16, Ordering::SeqCst),
+                TypedArrayKind::Int32 => AtomicI32::from_ptr(base.add(offset) as *mut i32)
+                    .store(i as i32, Ordering::SeqCst),
+                TypedArrayKind::Uint32 => AtomicU32::from_ptr(base.add(offset) as *mut u32)
+                    .store(i as u32, Ordering::SeqCst),
                 _ => {}
             }
         }
     }
 }
 
-fn atomic_compare_exchange_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKind, is_bigint: bool, expected: &JsValue, replacement: &JsValue) -> Completion {
+fn atomic_compare_exchange_shared(
+    sab: &SharedBufferInner,
+    offset: usize,
+    kind: TypedArrayKind,
+    is_bigint: bool,
+    expected: &JsValue,
+    replacement: &JsValue,
+) -> Completion {
     unsafe {
         let base = sab.as_ptr();
         if is_bigint {
-            let exp = match expected { JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0), _ => 0 };
-            let rep = match replacement { JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0), _ => 0 };
+            let exp = match expected {
+                JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                _ => 0,
+            };
+            let rep = match replacement {
+                JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                _ => 0,
+            };
             let ptr = base.add(offset) as *mut i64;
-            let old = AtomicI64::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+            let old = AtomicI64::from_ptr(ptr)
+                .compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst)
+                .unwrap_or_else(|v| v);
             let bv = match kind {
-                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(old) }),
-                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(old as u64) }),
+                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt {
+                    value: num_bigint::BigInt::from(old),
+                }),
+                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt {
+                    value: num_bigint::BigInt::from(old as u64),
+                }),
                 _ => JsValue::Number(0.0),
             };
             Completion::Normal(bv)
         } else {
             match kind {
                 TypedArrayKind::Int8 => {
-                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as i8;
-                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as i8;
+                    let exp = converted_number_to_i64_val(
+                        kind,
+                        match expected {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as i8;
+                    let rep = converted_number_to_i64_val(
+                        kind,
+                        match replacement {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as i8;
                     let ptr = base.add(offset) as *mut i8;
-                    let old = AtomicI8::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    let old = AtomicI8::from_ptr(ptr)
+                        .compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst)
+                        .unwrap_or_else(|v| v);
                     Completion::Normal(JsValue::Number(old as f64))
                 }
                 TypedArrayKind::Uint8 => {
-                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as u8;
-                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as u8;
+                    let exp = converted_number_to_i64_val(
+                        kind,
+                        match expected {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as u8;
+                    let rep = converted_number_to_i64_val(
+                        kind,
+                        match replacement {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as u8;
                     let ptr = base.add(offset);
-                    let old = AtomicU8::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    let old = AtomicU8::from_ptr(ptr)
+                        .compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst)
+                        .unwrap_or_else(|v| v);
                     Completion::Normal(JsValue::Number(old as f64))
                 }
                 TypedArrayKind::Int16 => {
-                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as i16;
-                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as i16;
+                    let exp = converted_number_to_i64_val(
+                        kind,
+                        match expected {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as i16;
+                    let rep = converted_number_to_i64_val(
+                        kind,
+                        match replacement {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as i16;
                     let ptr = base.add(offset) as *mut i16;
-                    let old = AtomicI16::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    let old = AtomicI16::from_ptr(ptr)
+                        .compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst)
+                        .unwrap_or_else(|v| v);
                     Completion::Normal(JsValue::Number(old as f64))
                 }
                 TypedArrayKind::Uint16 => {
-                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as u16;
-                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as u16;
+                    let exp = converted_number_to_i64_val(
+                        kind,
+                        match expected {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as u16;
+                    let rep = converted_number_to_i64_val(
+                        kind,
+                        match replacement {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as u16;
                     let ptr = base.add(offset) as *mut u16;
-                    let old = AtomicU16::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    let old = AtomicU16::from_ptr(ptr)
+                        .compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst)
+                        .unwrap_or_else(|v| v);
                     Completion::Normal(JsValue::Number(old as f64))
                 }
                 TypedArrayKind::Int32 => {
-                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as i32;
-                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as i32;
+                    let exp = converted_number_to_i64_val(
+                        kind,
+                        match expected {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as i32;
+                    let rep = converted_number_to_i64_val(
+                        kind,
+                        match replacement {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as i32;
                     let ptr = base.add(offset) as *mut i32;
-                    let old = AtomicI32::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    let old = AtomicI32::from_ptr(ptr)
+                        .compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst)
+                        .unwrap_or_else(|v| v);
                     Completion::Normal(JsValue::Number(old as f64))
                 }
                 TypedArrayKind::Uint32 => {
-                    let exp = converted_number_to_i64_val(kind, match expected { JsValue::Number(n) => *n, _ => 0.0 }) as u32;
-                    let rep = converted_number_to_i64_val(kind, match replacement { JsValue::Number(n) => *n, _ => 0.0 }) as u32;
+                    let exp = converted_number_to_i64_val(
+                        kind,
+                        match expected {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as u32;
+                    let rep = converted_number_to_i64_val(
+                        kind,
+                        match replacement {
+                            JsValue::Number(n) => *n,
+                            _ => 0.0,
+                        },
+                    ) as u32;
                     let ptr = base.add(offset) as *mut u32;
-                    let old = AtomicU32::from_ptr(ptr).compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst).unwrap_or_else(|v| v);
+                    let old = AtomicU32::from_ptr(ptr)
+                        .compare_exchange(exp, rep, Ordering::SeqCst, Ordering::SeqCst)
+                        .unwrap_or_else(|v| v);
                     Completion::Normal(JsValue::Number(old as f64))
                 }
                 _ => Completion::Normal(JsValue::Number(0.0)),
@@ -843,7 +1021,15 @@ fn atomic_compare_exchange_shared(sab: &SharedBufferInner, offset: usize, kind: 
     }
 }
 
-fn atomic_rmw_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKind, is_bigint: bool, converted: &JsValue, num_op: fn(i64, i64) -> i64, bigint_op: fn(i64, i64) -> i64) -> Completion {
+fn atomic_rmw_shared(
+    sab: &SharedBufferInner,
+    offset: usize,
+    kind: TypedArrayKind,
+    is_bigint: bool,
+    converted: &JsValue,
+    num_op: fn(i64, i64) -> i64,
+    bigint_op: fn(i64, i64) -> i64,
+) -> Completion {
     unsafe {
         let base = sab.as_ptr();
         if is_bigint {
@@ -862,13 +1048,20 @@ fn atomic_rmw_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKin
                 }
             };
             let bv = match kind {
-                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(old) }),
-                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt { value: num_bigint::BigInt::from(old as u64) }),
+                TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt {
+                    value: num_bigint::BigInt::from(old),
+                }),
+                TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt {
+                    value: num_bigint::BigInt::from(old as u64),
+                }),
                 _ => JsValue::Number(0.0),
             };
             Completion::Normal(bv)
         } else {
-            let n = match converted { JsValue::Number(n) => *n, _ => 0.0 };
+            let n = match converted {
+                JsValue::Number(n) => *n,
+                _ => 0.0,
+            };
             let new_i64 = converted_number_to_i64_val(kind, n);
             macro_rules! do_rmw {
                 ($atomic_ty:ty, $ptr_ty:ty, $cast:ty) => {{
@@ -877,7 +1070,12 @@ fn atomic_rmw_shared(sab: &SharedBufferInner, offset: usize, kind: TypedArrayKin
                     let old = loop {
                         let current = atomic.load(Ordering::SeqCst);
                         let result = num_op(current as i64, new_i64) as $cast;
-                        match atomic.compare_exchange(current, result, Ordering::SeqCst, Ordering::SeqCst) {
+                        match atomic.compare_exchange(
+                            current,
+                            result,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        ) {
                             Ok(v) => break v,
                             Err(_) => continue,
                         }

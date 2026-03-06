@@ -164,9 +164,7 @@ impl<'a> Parser<'a> {
                             } else if prop.shorthand {
                                 // Shorthand { eval } or { arguments } invalid in strict
                                 if let Expression::Identifier(name) = &prop.value {
-                                    if self.strict
-                                        && (name == "eval" || name == "arguments")
-                                    {
+                                    if self.strict && (name == "eval" || name == "arguments") {
                                         return Err(self.error(
                                             "Assignment to 'eval' or 'arguments' in strict mode",
                                         ));
@@ -205,9 +203,8 @@ impl<'a> Parser<'a> {
                     if self.strict {
                         if let Expression::Identifier(name) = expr {
                             if name == "eval" || name == "arguments" {
-                                return Err(self.error(
-                                    "Assignment to 'eval' or 'arguments' in strict mode",
-                                ));
+                                return Err(self
+                                    .error("Assignment to 'eval' or 'arguments' in strict mode"));
                             }
                         }
                     }
@@ -439,9 +436,7 @@ impl<'a> Parser<'a> {
             if matches!(&left, Expression::PrivateIdentifier(_))
                 && matches!(&right, Expression::ArrowFunction(_))
             {
-                return Err(self.error(
-                    "Invalid right-hand side in 'in' expression",
-                ));
+                return Err(self.error("Invalid right-hand side in 'in' expression"));
             }
             left = Expression::Binary(op, Box::new(left), Box::new(right));
         }
@@ -756,7 +751,10 @@ impl<'a> Parser<'a> {
                 _ => false,
             };
             if is_target {
-                if self.in_non_arrow_function == 0 && !self.in_static_block && !self.eval_new_target_allowed {
+                if self.in_non_arrow_function == 0
+                    && !self.in_static_block
+                    && !self.eval_new_target_allowed
+                {
                     return Err(self.error("new.target expression is not allowed here"));
                 }
                 self.advance()?; // target
@@ -772,7 +770,14 @@ impl<'a> Parser<'a> {
         // but `new (import(...))` is valid — parens make it a CoveredParenthesizedExpression
         let is_direct_import = matches!(self.current, Token::Keyword(Keyword::Import));
         let mut callee = self.parse_primary_expression()?;
-        if is_direct_import && matches!(&callee, Expression::Import(_, _) | Expression::ImportDefer(_,_) | Expression::ImportSource(_,_)) {
+        if is_direct_import
+            && matches!(
+                &callee,
+                Expression::Import(_, _)
+                    | Expression::ImportDefer(_, _)
+                    | Expression::ImportSource(_, _)
+            )
+        {
             return Err(self.error("Cannot use 'new' with import()"));
         }
         loop {
@@ -852,7 +857,10 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)), false)
+                        (
+                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            false,
+                        )
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -876,7 +884,10 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)), false)
+                        (
+                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            false,
+                        )
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -898,7 +909,10 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)), false)
+                        (
+                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            false,
+                        )
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -920,7 +934,10 @@ impl<'a> Parser<'a> {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
                         (ArrowBody::Block(stmts), strict)
                     } else {
-                        (ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)), false)
+                        (
+                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            false,
+                        )
                     };
                     let source_text = Some(self.source_since(ident_start));
                     return Ok(Expression::ArrowFunction(ArrowFunction {
@@ -1628,7 +1645,8 @@ impl<'a> Parser<'a> {
 
         // Check for get/set accessor
         // Escaped identifiers like g\u0065t don't count as get/set keyword — error if used as accessor
-        let escaped_get_or_set = matches!(&self.current, Token::IdentifierWithEscape(n) if n == "get" || n == "set");
+        let escaped_get_or_set =
+            matches!(&self.current, Token::IdentifierWithEscape(n) if n == "get" || n == "set");
         let get_or_set_name = match &self.current {
             Token::Identifier(n) if n == "get" || n == "set" => Some(n.clone()),
             _ => None,
@@ -1764,7 +1782,8 @@ impl<'a> Parser<'a> {
             if was_keyword {
                 let n = name.as_str();
                 // These keywords can be identifiers in sloppy mode
-                let is_contextual = matches!(n, "let" | "static" | "yield" | "await" | "async" | "of");
+                let is_contextual =
+                    matches!(n, "let" | "static" | "yield" | "await" | "async" | "of");
                 // These are strict-mode-only reserved words
                 let is_strict_reserved = matches!(
                     n,
@@ -1776,15 +1795,11 @@ impl<'a> Parser<'a> {
             }
             // await cannot be a shorthand IdentifierReference in static blocks, async, or modules
             if (self.in_static_block || self.in_async || self.is_module) && name == "await" {
-                return Err(self.error(
-                    "'await' is not allowed as an identifier in this context",
-                ));
+                return Err(self.error("'await' is not allowed as an identifier in this context"));
             }
             // yield cannot be a shorthand IdentifierReference in generators or strict mode
             if self.in_generator && name == "yield" {
-                return Err(self.error(
-                    "'yield' is not allowed as an identifier in this context",
-                ));
+                return Err(self.error("'yield' is not allowed as an identifier in this context"));
             }
             // In strict mode, future reserved words cannot be IdentifierReferences
             if self.strict {

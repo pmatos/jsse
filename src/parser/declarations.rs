@@ -140,9 +140,8 @@ impl<'a> Parser<'a> {
                     ));
                 }
                 if (self.in_generator || self.strict) && name == "yield" {
-                    return Err(self.error(
-                        "'yield' is not allowed as a binding identifier in this context",
-                    ));
+                    return Err(self
+                        .error("'yield' is not allowed as a binding identifier in this context"));
                 }
                 self.check_strict_binding_identifier(&name)?;
                 if self.current == Token::Assign {
@@ -1252,7 +1251,9 @@ impl<'a> Parser<'a> {
                     if let Some(directive) = self.is_directive_prologue(&stmt) {
                         if directive == "use strict" {
                             if prologue_had_legacy_octal {
-                                return Err(self.error("Octal escape sequences are not allowed in strict mode"));
+                                return Err(self.error(
+                                    "Octal escape sequences are not allowed in strict mode",
+                                ));
                             }
                             self.set_strict(true);
                             has_use_strict_directive = true;
@@ -1334,9 +1335,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub(super) fn parse_arrow_expression_body(
-        &mut self,
-    ) -> Result<Expression, ParseError> {
+    pub(super) fn parse_arrow_expression_body(&mut self) -> Result<Expression, ParseError> {
         let prev_static_block = self.in_static_block;
         self.in_static_block = false;
         let result = self.parse_assignment_expression();

@@ -808,8 +808,7 @@ impl Environment {
         }
         if let Some(binding) = self.bindings.get_mut(name) {
             // TDZ: let/const bindings that haven't been initialized yet
-            if !binding.initialized
-                && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+            if !binding.initialized && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
             {
                 return Err(JsValue::String(JsString::from_str(&format!(
                     "Cannot access '{name}' before initialization"

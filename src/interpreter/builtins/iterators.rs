@@ -962,7 +962,9 @@ impl Interpreter {
                                     (len, None)
                                 } else {
                                     let idx_str = index.to_string();
-                                    let has_accessor = borrowed.properties.get(&idx_str)
+                                    let has_accessor = borrowed
+                                        .properties
+                                        .get(&idx_str)
                                         .map_or(false, |d| d.get.is_some());
                                     let fast_val = if !has_accessor {
                                         borrowed
@@ -973,14 +975,17 @@ impl Interpreter {
                                         None
                                     };
                                     drop(borrowed);
-                                    let arr_val = JsValue::Object(crate::types::JsObject { id: array_id });
+                                    let arr_val =
+                                        JsValue::Object(crate::types::JsObject { id: array_id });
                                     let v = match kind {
                                         IteratorKind::Key => JsValue::Number(index as f64),
                                         IteratorKind::Value => {
                                             if let Some(fv) = fast_val {
                                                 fv
                                             } else {
-                                                match interp.get_object_property(array_id, &idx_str, &arr_val) {
+                                                match interp.get_object_property(
+                                                    array_id, &idx_str, &arr_val,
+                                                ) {
                                                     Completion::Normal(v) => v,
                                                     c => return c,
                                                 }
@@ -990,7 +995,9 @@ impl Interpreter {
                                             let elem = if let Some(fv) = fast_val {
                                                 fv
                                             } else {
-                                                match interp.get_object_property(array_id, &idx_str, &arr_val) {
+                                                match interp.get_object_property(
+                                                    array_id, &idx_str, &arr_val,
+                                                ) {
                                                     Completion::Normal(v) => v,
                                                     c => return c,
                                                 }
@@ -1202,11 +1209,15 @@ impl Interpreter {
                                 position: position + advance,
                                 done: false,
                             });
-                            let result_js_str = JsString { code_units: result_units };
-                            Completion::Normal(interp.create_iter_result_object(
-                                JsValue::String(result_js_str),
-                                false,
-                            ))
+                            let result_js_str = JsString {
+                                code_units: result_units,
+                            };
+                            Completion::Normal(
+                                interp.create_iter_result_object(
+                                    JsValue::String(result_js_str),
+                                    false,
+                                ),
+                            )
                         } else {
                             let err =
                                 interp.create_type_error("next called on non-string iterator");

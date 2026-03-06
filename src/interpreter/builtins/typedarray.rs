@@ -439,7 +439,8 @@ impl Interpreter {
                         if let Some(ref det) = obj_ref.arraybuffer_detached {
                             det.set(true);
                         }
-                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
+                        obj_ref.arraybuffer_data =
+                            Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     let new_ab = interp.create_arraybuffer_resizable(new_data, max_byte_length);
                     let id = new_ab.borrow().id.unwrap();
@@ -520,7 +521,8 @@ impl Interpreter {
                         if let Some(ref det) = obj_ref.arraybuffer_detached {
                             det.set(true);
                         }
-                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
+                        obj_ref.arraybuffer_data =
+                            Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     let new_ab = interp.create_arraybuffer(new_data);
                     let id = new_ab.borrow().id.unwrap();
@@ -601,7 +603,8 @@ impl Interpreter {
                         if let Some(ref det) = obj_ref.arraybuffer_detached {
                             det.set(true);
                         }
-                        obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
+                        obj_ref.arraybuffer_data =
+                            Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     // Create immutable ArrayBuffer
                     let new_ab = interp.create_arraybuffer(new_data);
@@ -883,7 +886,8 @@ impl Interpreter {
                 if let Some(ref det) = obj_ref.arraybuffer_detached {
                     det.set(true);
                 }
-                obj_ref.arraybuffer_data = Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
+                obj_ref.arraybuffer_data =
+                    Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                 return Completion::Normal(JsValue::Undefined);
             }
         }
@@ -895,7 +899,7 @@ impl Interpreter {
         data: Vec<u8>,
         max_byte_length: Option<usize>,
     ) -> Rc<RefCell<JsObjectData>> {
-        use crate::interpreter::types::{next_sab_id, SharedBufferInner};
+        use crate::interpreter::types::{SharedBufferInner, next_sab_id};
         let sab_id = next_sab_id();
         let inner = Arc::new(SharedBufferInner::new(data, sab_id));
         let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
@@ -1278,7 +1282,7 @@ impl Interpreter {
                 let buf = vec![0u8; len];
                 let obj = interp.create_object();
                 {
-                    use crate::interpreter::types::{next_sab_id, SharedBufferInner};
+                    use crate::interpreter::types::{SharedBufferInner, next_sab_id};
                     let sab_id = next_sab_id();
                     let inner = Arc::new(SharedBufferInner::new(buf, sab_id));
                     let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));

@@ -468,9 +468,7 @@ impl<'a> Parser<'a> {
         match pat {
             Pattern::Identifier(name) => {
                 if name == "eval" || name == "arguments" {
-                    return Err(self.error(&format!(
-                        "Assignment to '{name}' in strict mode"
-                    )));
+                    return Err(self.error(&format!("Assignment to '{name}' in strict mode")));
                 }
             }
             Pattern::Array(elems) => {
@@ -490,9 +488,9 @@ impl<'a> Parser<'a> {
                         }
                         ObjectPatternProperty::Shorthand(name) => {
                             if name == "eval" || name == "arguments" {
-                                return Err(self.error(&format!(
-                                    "Assignment to '{name}' in strict mode"
-                                )));
+                                return Err(
+                                    self.error(&format!("Assignment to '{name}' in strict mode"))
+                                );
                             }
                         }
                     }
@@ -1000,7 +998,10 @@ impl<'a> Parser<'a> {
     }
 
     fn is_string_literal_statement(stmt: &Statement) -> bool {
-        matches!(stmt, Statement::Expression(Expression::Literal(Literal::String(_))))
+        matches!(
+            stmt,
+            Statement::Expression(Expression::Literal(Literal::String(_)))
+        )
     }
 
     pub fn parse_program(&mut self) -> Result<Program, ParseError> {
@@ -1018,7 +1019,9 @@ impl<'a> Parser<'a> {
                     if let Some(directive) = self.is_directive_prologue(&stmt) {
                         if directive == "use strict" {
                             if prologue_had_legacy_octal {
-                                return Err(self.error("Octal escape sequences are not allowed in strict mode"));
+                                return Err(self.error(
+                                    "Octal escape sequences are not allowed in strict mode",
+                                ));
                             }
                             self.set_strict(true);
                             body_is_strict = true;
@@ -1039,9 +1042,8 @@ impl<'a> Parser<'a> {
                     let new_names = Self::bound_names_from_decl(decl);
                     for name in &new_names {
                         if lexical_names.contains(name) {
-                            return Err(self.error(&format!(
-                                "Identifier '{name}' has already been declared"
-                            )));
+                            return Err(self
+                                .error(&format!("Identifier '{name}' has already been declared")));
                         }
                     }
                     lexical_names.extend(new_names);
@@ -1049,9 +1051,9 @@ impl<'a> Parser<'a> {
                 Statement::ClassDeclaration(cls) => {
                     let name = &cls.name;
                     if lexical_names.contains(name) {
-                        return Err(self.error(&format!(
-                            "Identifier '{name}' has already been declared"
-                        )));
+                        return Err(
+                            self.error(&format!("Identifier '{name}' has already been declared"))
+                        );
                     }
                     lexical_names.push(name.clone());
                 }
@@ -1069,9 +1071,9 @@ impl<'a> Parser<'a> {
             }
             for name in &var_names {
                 if lexical_names.contains(name) {
-                    return Err(self.error(&format!(
-                        "Identifier '{name}' has already been declared"
-                    )));
+                    return Err(
+                        self.error(&format!("Identifier '{name}' has already been declared"))
+                    );
                 }
             }
         }
