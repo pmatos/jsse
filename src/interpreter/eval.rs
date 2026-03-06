@@ -2888,13 +2888,29 @@ impl Interpreter {
                         Ok(r) => r,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let rval = match self.eval_expr(right, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                    let rval = if let Expression::Class(ce) = right
+                        && ce.name.is_none()
+                    {
+                        match self.eval_class(
+                            name,
+                            &ce.super_class,
+                            &ce.body,
+                            env,
+                            ce.source_text.clone(),
+                        ) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        let v = match self.eval_expr(right, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if right.is_anonymous_function_definition() {
+                            self.set_function_name(&v, name);
+                        }
+                        v
                     };
-                    if right.is_anonymous_function_definition() {
-                        self.set_function_name(&rval, name);
-                    }
                     return self.put_value_by_ref(name, rval, &id_ref, env);
                 }
                 // Compound assignment: capture reference, read, eval RHS, write
@@ -10205,6 +10221,29 @@ impl Interpreter {
             }
         }
 
+        // §19.2.1.3 / §10.2.11: eval in parameter initializers of non-simple-param functions.
+        // Per spec, VariableEnvironment is set to the body scope before parameter binding,
+        // so EvalDeclarationInstantiation walks from the parameter scope and detects conflicts.
+        // We detect this case: direct eval where caller_env IS the var_env (function scope)
+        // and the function has non-simple params (arguments_immutable is set).
+        if direct && !is_global && !strict && Rc::ptr_eq(caller_env, var_env) {
+            if var_env.borrow().arguments_immutable {
+                let all_names: Vec<String> = declared_func_names
+                    .iter()
+                    .chain(declared_var_names.iter())
+                    .cloned()
+                    .collect();
+                for name in &all_names {
+                    if var_env.borrow().bindings.contains_key(&*name) {
+                        return Err(self.create_error(
+                            "SyntaxError",
+                            &format!("Identifier '{}' has already been declared", name),
+                        ));
+                    }
+                }
+            }
+        }
+
         if !strict {
             // §19.2.1.4 step 5.a: if varEnv is global, check for lexical conflicts
             // Only check for true lexical declarations (let/const/class), not built-in
@@ -10242,6 +10281,24 @@ impl Interpreter {
                     .chain(declared_var_names.iter())
                     .cloned()
                     .collect();
+                // §10.2.11 step 29: In sloppy mode, the spec creates a separate
+                // lexical environment for let/const/class (child of var env). Our
+                // engine merges them, so when caller_env === var_env, also check
+                // for let/const conflicts within the same function scope.
+                if direct && Rc::ptr_eq(caller_env, var_env) {
+                    let env_b = var_env.borrow();
+                    for name in &all_names {
+                        if let Some(binding) = env_b.bindings.get(name)
+                            && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+                        {
+                            drop(env_b);
+                            return Err(self.create_error(
+                                "SyntaxError",
+                                &format!("Identifier '{}' has already been declared", name),
+                            ));
+                        }
+                    }
+                }
                 // Walk from caller_env up to (but not including) var_env
                 let mut check_env: Option<EnvRef> = if direct {
                     Some(caller_env.clone())

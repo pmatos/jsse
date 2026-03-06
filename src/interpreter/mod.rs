@@ -3248,14 +3248,29 @@ impl Interpreter {
                 declaration: None, ..
             } => Completion::Normal(JsValue::Undefined),
             ExportDeclaration::Default(expr) => {
-                let val = match self.eval_expr(expr, env) {
-                    Completion::Normal(v) => v,
-                    c => return c,
+                let val = if let Expression::Class(ce) = expr.as_ref()
+                    && ce.name.is_none()
+                {
+                    match self.eval_class(
+                        "default",
+                        &ce.super_class,
+                        &ce.body,
+                        env,
+                        ce.source_text.clone(),
+                    ) {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    }
+                } else {
+                    let v = match self.eval_expr(expr, env) {
+                        Completion::Normal(v) => v,
+                        c => return c,
+                    };
+                    if expr.is_anonymous_function_definition() {
+                        self.set_function_name(&v, "default");
+                    }
+                    v
                 };
-                // §15.2.3.11: IsAnonymousFunctionDefinition => SetFunctionName(value, "default")
-                if expr.is_anonymous_function_definition() {
-                    self.set_function_name(&val, "default");
-                }
                 env.borrow_mut().declare("*default*", BindingKind::Const);
                 env.borrow_mut().initialize_binding("*default*", val);
                 Completion::Normal(JsValue::Undefined)

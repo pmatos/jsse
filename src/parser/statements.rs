@@ -627,7 +627,7 @@ impl<'a> Parser<'a> {
                 let saved_lt = self.prev_line_terminator;
                 let saved_ts = self.current_token_start;
                 let saved_te = self.current_token_end;
-                let saved_pushback = self.pushback.take();
+                let saved_pushback = self.pushback.clone();
                 let saved_lexer = self.lexer.save_state();
                 let mut result = false;
                 if self.advance().is_ok()
@@ -745,7 +745,7 @@ impl<'a> Parser<'a> {
                     let saved_lt = self.prev_line_terminator;
                     let saved_ts = self.current_token_start;
                     let saved_te = self.current_token_end;
-                    let saved_pushback = self.pushback.take();
+                    let saved_pushback = self.pushback.clone();
                     let saved_lexer = self.lexer.save_state();
                     let mut result = false;
                     // peek past `await`

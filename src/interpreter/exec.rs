@@ -965,9 +965,27 @@ impl Interpreter {
                 continue;
             }
             let val = if let Some(init) = &d.init {
-                match self.eval_expr(init, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
+                // For anonymous class expressions, pass the binding name into
+                // eval_class so SetFunctionName happens before static fields.
+                if let Pattern::Identifier(ref name) = d.pattern
+                    && let Expression::Class(ce) = init
+                    && ce.name.is_none()
+                {
+                    match self.eval_class(
+                        name,
+                        &ce.super_class,
+                        &ce.body,
+                        env,
+                        ce.source_text.clone(),
+                    ) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
+                } else {
+                    match self.eval_expr(init, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    }
                 }
             } else {
                 JsValue::Undefined
@@ -977,7 +995,10 @@ impl Interpreter {
                     .as_ref()
                     .is_some_and(|e| e.is_anonymous_function_definition())
             {
-                self.set_function_name(&val, name);
+                // Skip for class expressions — name already set in eval_class
+                if !d.init.as_ref().is_some_and(|e| matches!(e, Expression::Class(ce) if ce.name.is_none())) {
+                    self.set_function_name(&val, name);
+                }
             }
             if is_using {
                 let hint = if decl.kind == VarKind::AwaitUsing {
